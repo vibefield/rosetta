@@ -1275,6 +1275,9 @@ fn run_resumed_fresh_serve(
             root: target.root.clone(),
             roster,
             ledger: Some(ledger),
+            // Replay and the resumed backfill leave the cursor rows as the
+            // only evidence; the first poll reads them.
+            poll_evidence: Default::default(),
         });
     }
 
@@ -1335,7 +1338,8 @@ fn run_resumed_fresh_serve(
             opts.clone(),
             live.clone(),
             Some(ledger),
-        );
+        )
+        .with_poll_evidence(output.poll_evidence);
         runners.push((output.identity, runner));
     }
     let absorbed = drive_live_runners(
@@ -1578,7 +1582,8 @@ fn run_fresh_fast_serve(
             opts.clone(),
             live.clone(),
             Some(ledger),
-        );
+        )
+        .with_poll_evidence(output.poll_evidence);
         runners.push((output.identity, runner));
     }
     let absorbed = drive_live_runners(

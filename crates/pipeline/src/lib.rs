@@ -33,7 +33,9 @@ pub use closed::{ClosedSource, StreamedSetup, stream_closed_sources_into, stream
 pub use command::{RawCommandLocator, read_raw_command};
 pub use discover::{Discovery, discover, discover_root, expand_data_root};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
-pub use live::{HintMapping, LiveOptions, LiveReport, LiveRunner, map_hint, stream_live};
+pub use live::{
+    HintMapping, LiveOptions, LiveReport, LiveRunner, PollEvidence, map_hint, stream_live,
+};
 pub use meta::{
     MetaReport, SessionFile, meta_ingest, meta_ingest_into, meta_ingest_inventory_into,
 };

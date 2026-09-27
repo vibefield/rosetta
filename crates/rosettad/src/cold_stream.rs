@@ -415,7 +415,7 @@ fn write(
 /// the same publication steps the retained path runs after an apply.
 fn admit(
     runtime: ClosedColdRuntime,
-    streamed: StreamedRuntime,
+    mut streamed: StreamedRuntime,
     cx: &mut StreamedCold<'_>,
     failures: &mut Vec<String>,
 ) -> Result<Option<AppliedColdRuntime>, String> {
@@ -480,6 +480,9 @@ fn admit(
 
     let admission_started = Instant::now();
     let admission_before = cx.instrument.snapshot();
+    // Admission writes no cursor, so these stay the committed checkpoints
+    // through finalization and publication.
+    let poll_evidence = streamed.take_poll_evidence();
     let report = streamed
         .admit(cx.store, cx.instrument)
         .map_err(|error| format!("admitting {name}: {error}"))?;
@@ -535,5 +538,6 @@ fn admit(
         root: runtime.root,
         roster: runtime.roster,
         ledger: runtime.ledger,
+        poll_evidence,
     }))
 }

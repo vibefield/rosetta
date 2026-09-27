@@ -11,7 +11,7 @@
 //! the tailer's checkpoint decides what actually happened. A quiet or lying
 //! watcher degrades to the stat poll, never to wrong data.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,7 @@ use rosetta_capture::{Ledger, SourceEvent, SourceEvents};
 use rosetta_core::rows::RuntimeRow;
 use rosetta_store::Store;
 
+use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::meta::{SessionFile, meta_ingest_into};
 use crate::stream::{StreamReport, stream_backfill_into};
@@ -122,6 +123,49 @@ pub fn map_hint(
     }
 }
 
+/// What the stat poll compares a walked file against, taken from its cursor's
+/// committed checkpoint: the normalizer that wrote it and the byte length its
+/// tail observed. A runner keeps these in RAM, because reading and decoding
+/// every checkpoint on every poll re-parses tens of megabytes of adapter state
+/// for a large root only to recover two numbers the daemon itself wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PollEvidence {
+    /// `None` when the source has no cursor row or its checkpoint is expired.
+    normalizer_version: Option<u32>,
+    /// `None` before the first framed batch, and without a usable checkpoint.
+    observed_len: Option<u64>,
+}
+
+impl PollEvidence {
+    /// The evidence of one cursor checkpoint as [`PipeCheckpoint::decode`]
+    /// yields it; `None` is an absent or expired checkpoint.
+    pub fn of(checkpoint: Option<&PipeCheckpoint>) -> Self {
+        Self {
+            normalizer_version: checkpoint.map(|checkpoint| checkpoint.normalizer_version),
+            observed_len: checkpoint
+                .and_then(PipeCheckpoint::tail_checkpoint)
+                .map(|tail| tail.observed_len),
+        }
+    }
+
+    /// Read one source's evidence from its committed cursor row.
+    pub fn read(store: &Store, runtime_id: &str, path: &str) -> Result<Self, PipelineError> {
+        let checkpoint = rosetta_store::queries::cursor_state(store.conn(), runtime_id, path)?
+            .and_then(|cursor| PipeCheckpoint::decode(&cursor.checkpoint));
+        Ok(Self::of(checkpoint.as_ref()))
+    }
+
+    /// Is a file of `size` bytes behind this evidence? An adapter semantic
+    /// change counts too: quiet files must replay under a new normalizer, or
+    /// an installed projection would keep the old interpretation until the
+    /// source happened to grow or the rotating audit eventually reached it.
+    fn behind(&self, normalizer_version: u32, size: u64) -> bool {
+        self.normalizer_version
+            .is_some_and(|written| written != normalizer_version)
+            || self.observed_len != Some(size)
+    }
+}
+
 /// Does any layout stream with a driver claim this path?
 fn hint_claimed(adapter: &dyn AgentAdapter, relative_path: &str) -> bool {
     adapter
@@ -167,6 +211,11 @@ pub struct LiveRunner<'a> {
     /// not admission evidence — meta already settled its membership — so the
     /// poll admits and nominates it only when these stats move.
     physical_seen: BTreeMap<String, (u64, i64)>,
+    /// Each source's committed cursor evidence, by relative path. Only this
+    /// runner writes its runtime's cursors, so an entry stays exact until the
+    /// runner streams that source; it is forgotten just before, and the next
+    /// poll reads whatever actually committed.
+    evidence: HashMap<String, PollEvidence>,
 }
 
 impl<'a> LiveRunner<'a> {
@@ -244,7 +293,17 @@ impl<'a> LiveRunner<'a> {
             last_poll: Instant::now(),
             report: LiveReport::default(),
             physical_seen: BTreeMap::new(),
+            evidence: HashMap::new(),
         }
+    }
+
+    /// Hand the stat poll the evidence of checkpoints a cold writer has just
+    /// committed for this roster, so the startup catch-up decodes none of
+    /// them. Committed values only: the poll trusts an entry exactly as if it
+    /// had read that cursor row itself.
+    pub fn with_poll_evidence(mut self, evidence: HashMap<String, PollEvidence>) -> Self {
+        self.evidence = evidence;
+        self
     }
 
     pub fn report(&self) -> &LiveReport {
@@ -329,7 +388,9 @@ impl<'a> LiveRunner<'a> {
             self.report.events += 1;
             match event {
                 SourceEvent::Changed(path) => {
-                    let mapping = map_hint(self.adapter, &self.files, &path);
+                    let mapping = instrument.time(Metric::LiveHintNanos, || {
+                        map_hint(self.adapter, &self.files, &path)
+                    });
                     if mapping.nominated.is_empty() && !mapping.needs_admission {
                         self.report.hints_ignored += 1;
                     }
@@ -348,9 +409,30 @@ impl<'a> LiveRunner<'a> {
                 self.poll(store, &mut changed, &mut needs_admission, instrument)
             })?;
         }
+        self.settle(
+            store,
+            changed,
+            needs_admission,
+            run_audit && poll_due,
+            instrument,
+        )?;
+        Ok(budget == 0 && self.live.max_coalesced > 0)
+    }
 
+    /// Act on one tick's nominations: admit or restat, stream exactly the
+    /// changed subset, then carry the rotating audit when the tick polled.
+    fn settle(
+        &mut self,
+        store: &mut Store,
+        mut changed: BTreeSet<String>,
+        needs_admission: bool,
+        audit: bool,
+        instrument: &Instrument,
+    ) -> Result<(), PipelineError> {
         if needs_admission {
-            self.admit(store, &mut changed, instrument)?;
+            instrument.time(Metric::LiveAdmitNanos, || {
+                self.admit(store, &mut changed, instrument)
+            })?;
         } else if !changed.is_empty() {
             self.restat(&changed);
         }
@@ -366,24 +448,14 @@ impl<'a> LiveRunner<'a> {
             // that are actively growing would be the worst possible pick.
             let mut opts = self.opts.clone();
             opts.audit_files_per_run = 0;
-            let outcome = stream_backfill_into(
-                self.adapter,
-                &self.runtime,
-                &self.root,
-                store,
-                &subset,
-                &opts,
-                instrument,
-                self.ledger.as_mut(),
-            )?;
-            self.report.stream.merge_from(&outcome);
+            self.stream(store, &subset, &opts, instrument)?;
         }
 
         // The rotating audit rides poll ticks and sweeps ALL known files —
         // its duty cycle is poll_interval × (files ÷ audit_files_per_run).
         // The picks come from the store's own rotation state, so restarting
         // the process never restarts the sweep.
-        if run_audit && poll_due && self.opts.audit_files_per_run > 0 {
+        if audit && self.opts.audit_files_per_run > 0 {
             let audit_candidates: Vec<&SessionFile> = self
                 .files
                 .iter()
@@ -402,20 +474,65 @@ impl<'a> LiveRunner<'a> {
                 .cloned()
                 .collect();
             if !audit_subset.is_empty() {
-                let outcome = stream_backfill_into(
-                    self.adapter,
-                    &self.runtime,
-                    &self.root,
-                    store,
-                    &audit_subset,
-                    &self.opts,
-                    instrument,
-                    self.ledger.as_mut(),
-                )?;
-                self.report.stream.merge_from(&outcome);
+                let opts = self.opts.clone();
+                self.stream(store, &audit_subset, &opts, instrument)?;
             }
         }
-        Ok(budget == 0 && self.live.max_coalesced > 0)
+        Ok(())
+    }
+
+    /// Stream `files` through the ordinary backfill phase. Any of them may
+    /// commit a new checkpoint — or roll one back — so their poll evidence is
+    /// forgotten first, whatever the outcome, and the next poll reads what
+    /// actually committed.
+    fn stream(
+        &mut self,
+        store: &mut Store,
+        files: &[SessionFile],
+        opts: &IngestOptions,
+        instrument: &Instrument,
+    ) -> Result<(), PipelineError> {
+        for file in files {
+            self.evidence.remove(&file.relative_path);
+        }
+        let outcome = instrument.time(Metric::LiveStreamNanos, || {
+            stream_backfill_into(
+                self.adapter,
+                &self.runtime,
+                &self.root,
+                store,
+                files,
+                opts,
+                instrument,
+                self.ledger.as_mut(),
+            )
+        })?;
+        self.report.stream.merge_from(&outcome);
+        Ok(())
+    }
+
+    /// One roster source's committed evidence: from RAM when this runner
+    /// holds it, otherwise read from its cursor row once and kept.
+    fn committed_evidence(
+        &mut self,
+        store: &Store,
+        path: &str,
+        instrument: &Instrument,
+    ) -> Result<PollEvidence, PipelineError> {
+        if let Some(evidence) = self.evidence.get(path).copied() {
+            // Debug builds (every test) re-derive each entry from its cursor
+            // row: the RAM copy is exact only while no one else writes it.
+            debug_assert_eq!(
+                PollEvidence::read(store, &self.runtime.id, path).ok(),
+                Some(evidence),
+                "poll evidence for {path} diverged from its committed cursor"
+            );
+            return Ok(evidence);
+        }
+        instrument.add(Metric::LivePollCursorReads, 1);
+        let evidence = PollEvidence::read(store, &self.runtime.id, path)?;
+        self.evidence.insert(path.to_owned(), evidence);
+        Ok(evidence)
     }
 
     /// Stat scan: the fallback signal, and it must be self-healing — it
@@ -452,35 +569,16 @@ impl<'a> LiveRunner<'a> {
         for (index, file) in self.files.iter().enumerate() {
             by_path.entry(file.relative_path.clone()).or_insert(index);
         }
+        let normalizer_version = self.adapter.normalizer_version();
         for walked in &walk.files {
             match by_path.get(&walked.relative_path).copied() {
                 Some(index) => {
-                    let known = &mut self.files[index];
-                    let checkpoint = instrument.time(Metric::LivePollCheckpointNanos, || {
-                        rosetta_store::queries::cursor_state(
-                            store.conn(),
-                            &self.runtime.id,
-                            &walked.relative_path,
-                        )
-                        .map(|cursor| {
-                            cursor.and_then(|cursor| {
-                                crate::checkpoint::PipeCheckpoint::decode(&cursor.checkpoint)
-                            })
-                        })
+                    let evidence = instrument.time(Metric::LivePollCheckpointNanos, || {
+                        self.committed_evidence(store, &walked.relative_path, instrument)
                     })?;
-                    // An adapter semantic change must replay quiet files too.
-                    // Otherwise an installed projection would retain the old
-                    // interpretation until this source happened to grow or
-                    // the rotating audit eventually reached it.
-                    let normalizer_stale = checkpoint.as_ref().is_some_and(|checkpoint| {
-                        checkpoint.normalizer_version != self.adapter.normalizer_version()
-                    });
-                    let ingested_len = checkpoint
-                        .and_then(|checkpoint| checkpoint.tail_checkpoint())
-                        .map(|tail| tail.observed_len);
-                    let behind_cursor = ingested_len != Some(walked.size);
+                    let known = &mut self.files[index];
                     let touched = known.modified_ms != walked.modified_ms;
-                    if normalizer_stale || behind_cursor || touched {
+                    if evidence.behind(normalizer_version, walked.size) || touched {
                         known.size = walked.size;
                         known.modified_ms = walked.modified_ms;
                         changed.insert(known.relative_path.clone());
@@ -631,3 +729,7 @@ pub fn stream_live(
     }
     Ok(runner.into_report())
 }
+
+#[cfg(test)]
+#[path = "live_tests.rs"]
+mod tests;

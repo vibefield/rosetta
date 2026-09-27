@@ -103,9 +103,15 @@ pub enum Metric {
     LivePollWalkNanos,
     LivePollCheckpointNanos,
     LivePollFiles,
+    /// Cursor rows a poll read and decoded because its runner held no
+    /// committed evidence for the source.
+    LivePollCursorReads,
+    LiveHintNanos,
+    LiveAdmitNanos,
+    LiveStreamNanos,
 }
 
-const METRIC_COUNT: usize = 86;
+const METRIC_COUNT: usize = 90;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -206,6 +212,10 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::LivePollWalkNanos, "live poll walk time"),
     (Metric::LivePollCheckpointNanos, "live poll checkpoint time"),
     (Metric::LivePollFiles, "live poll files"),
+    (Metric::LivePollCursorReads, "live poll cursor reads"),
+    (Metric::LiveHintNanos, "live hint mapping time"),
+    (Metric::LiveAdmitNanos, "live admission time"),
+    (Metric::LiveStreamNanos, "live stream time"),
 ];
 
 fn index(metric: Metric) -> usize {

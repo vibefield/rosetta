@@ -6,7 +6,7 @@
 //! column, every message ordinal — while never exposing a runtime before its
 //! admission and never folding another runtime's facts.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use rosetta_adapter_antigravity::AntigravityAdapter;
@@ -21,9 +21,9 @@ use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    ClosedSource, IngestOptions, Instrument, SessionFile, StreamedRuntime, apply_prepared_runtime,
-    discover, expand_data_root, meta_ingest_inventory_into, prepare_captured_runtime,
-    stream_backfill, stream_closed_sources_into, streamed_setup,
+    ClosedSource, IngestOptions, Instrument, PollEvidence, SessionFile, StreamedRuntime,
+    apply_prepared_runtime, discover, expand_data_root, meta_ingest_inventory_into,
+    prepare_captured_runtime, stream_backfill, stream_closed_sources_into, streamed_setup,
 };
 use rosetta_store::Store;
 use rusqlite::types::Value;
@@ -234,7 +234,8 @@ struct StreamedSetupAndSources {
 }
 
 /// The streamed path for one runtime, applying each emission as it arrives.
-fn streamed(planned: Planned, canonical: &mut Store) {
+/// Returns the runtime id and the poll evidence its writer hands the runner.
+fn streamed(planned: Planned, canonical: &mut Store) -> (String, HashMap<String, PollEvidence>) {
     let Planned {
         adapter,
         runtime,
@@ -259,7 +260,40 @@ fn streamed(planned: Planned, canonical: &mut Store) {
         &mut |sources| writer.apply(canonical, sources, &instrument).map(|_| ()),
     )
     .unwrap();
+    let evidence = writer.take_poll_evidence();
     writer.admit(canonical, &instrument).unwrap();
+    (runtime.id, evidence)
+}
+
+/// The live runner trusts its seed as if it had read each cursor row: after
+/// admission and finalization, every cursor of the runtime must read back as
+/// exactly the evidence the writer handed over.
+fn assert_seed_matches_cursors(
+    label: &str,
+    store: &Store,
+    runtime_id: &str,
+    seed: &HashMap<String, PollEvidence>,
+) {
+    let paths: Vec<String> = store
+        .conn()
+        .prepare("SELECT path FROM ingest_cursor WHERE runtime_id = ?1")
+        .unwrap()
+        .query_map([runtime_id], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        seed.len(),
+        paths.len(),
+        "{label}: the seed covers every cursor"
+    );
+    for path in &paths {
+        assert_eq!(
+            seed.get(path).copied(),
+            Some(PollEvidence::read(store, runtime_id, path).unwrap()),
+            "{label}: {path}"
+        );
+    }
 }
 
 /// Every canonical table with surrogate ids mapped to stable identities —
@@ -422,10 +456,11 @@ fn streamed_projection_matches_the_retained_projection_for_every_fixture() {
 
             let mut candidate = cold_store();
             let planned = plan(adapter, home.path(), &mut candidate);
-            streamed(planned, &mut candidate);
+            let (runtime_id, seed) = streamed(planned, &mut candidate);
             candidate.finish_bulk_load().unwrap();
 
             assert_same_projection(&label, &reference, &candidate);
+            assert_seed_matches_cursors(&label, &candidate, &runtime_id, &seed);
             compared += 1;
         }
     }
@@ -456,8 +491,9 @@ fn streamed_projection_matches_for_generated_multi_session_corpora() {
 
         let mut candidate = cold_store();
         let planned = plan(adapter, home.path(), &mut candidate);
-        streamed(planned, &mut candidate);
+        let (runtime_id, seed) = streamed(planned, &mut candidate);
         candidate.finish_bulk_load().unwrap();
+        assert_seed_matches_cursors(adapter.kind(), &candidate, &runtime_id, &seed);
 
         assert!(
             message_count(&reference) > 500,

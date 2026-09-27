@@ -110,6 +110,9 @@ writer. The renderer waits for `canonical_ready` and hydrates project aggregates
 concurrency after publication. An existing complete projection is live immediately: watchers arm
 before one bounded current-inventory skim, then `LiveRunner::catch_up` drains queued hints and forces
 one cursor-relative stat poll before the ordinary cadence. It does not re-enter cold/backfill state.
+Polls compare files with each source's committed cursor evidence (normalizer, observed length) held
+in RAM: seeded from the cold writer's final checkpoints on a fresh start, otherwise read from a cursor
+row once, and forgotten whenever the runner streams that source.
 `--stop-after-meta` and legacy incomplete disk projections retain the disk-progressive `ColdEngine` path: its four lanes
 (live ▸ boost ▸ starter ▸ completion), slice budget, boost queue, and scoped row effects remain
 the recovery/audit topology. Finite `ingest` and explicit `rebuild` remain private, validated,

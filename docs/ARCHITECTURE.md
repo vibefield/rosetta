@@ -529,6 +529,15 @@ capture contract explicit.
   hint budget requests another fair pass immediately. Serve publishes committed effects
   after each runner, before visiting the next. Per-runtime stat polls remain on their
   30-second cadence; a dead watcher requests one rescan and then falls back to polling.
+  A poll compares each walked roster file with its cursor's committed evidence — the
+  checkpoint's normalizer version and tail-observed length — which the runner holds in RAM
+  instead of re-reading and re-decoding every checkpoint (77–94 MB of JSON, mostly adapter
+  state, for a large Claude root) on every pass. A fresh start seeds it from the final
+  checkpoints the canonical writer committed for each closed source; a warm start, a resumed
+  cold build, or any source without an entry reads its cursor row once. The runner is the
+  only writer of its runtime's cursors, so it forgets a source's entry just before streaming
+  it (hint, poll, admission or audit), whatever that pass commits or rolls back; debug builds
+  re-derive every RAM entry from its cursor row on each poll.
 - **Tailer**: per-file cursor = byte offset + line count + hash of a head prefix.
   The head hash detects rewrite/truncation (Claude Code rewrites files on compaction);
   on mismatch, the file re-ingests under a new **epoch**. Partial trailing lines are
@@ -1181,8 +1190,10 @@ readiness, before live catch-up changes the counters. Detached search readiness 
 boundary and must be measured separately; `--ticks 0` does not guarantee it completes.
 The `live-catch-up` stage exposes the handoff; the search worker was woken at publication and
 builds beside it. Its
-`live poll time` contains filesystem walking and checkpoint reads/decoding, with separate
-nested timers and a count of physical sources considered. Inventory-only layout streams
+`live poll time` contains filesystem walking and committed-evidence lookups, with separate
+nested timers, a count of physical sources considered, and `live poll cursor reads` for the
+sources whose cursor row had to be read and decoded; `live hint mapping time`, `live admission
+time` and `live stream time` split the rest of a tick. Inventory-only layout streams
 do not consume the live poll's stat work or source cap; admitted path lookup uses one
 temporary index per poll. Watcher hints, cursor-relative recovery, snapshot membership,
 normalizer expiry, and rotating audits retain their existing semantics.

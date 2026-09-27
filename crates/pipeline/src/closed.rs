@@ -26,6 +26,7 @@ use rosetta_store::{Batch, SourceMode, Store, queries};
 
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
+use crate::live::PollEvidence;
 use crate::meta::SessionFile;
 use crate::stream::{FilePass, PassMode, StreamReport, ingest_file, rotating_audit_paths};
 use crate::{IngestOptions, PipelineError};
@@ -40,6 +41,9 @@ pub struct ClosedSource {
     pub(crate) generation: u64,
     pub(crate) ops: Vec<IngestOp>,
     pub(crate) checkpoint: String,
+    /// What the live stat poll reads from `checkpoint`, taken from the decode
+    /// that validated it, so the writer can hand it on without decoding.
+    pub(crate) evidence: PollEvidence,
     pub(crate) generation_clean: bool,
     pub(crate) activate: bool,
     pub(crate) payload_bytes: u64,
@@ -210,6 +214,7 @@ fn close_file(
         source: source_def(file),
         generation,
         ops,
+        evidence: PollEvidence::of(Some(&checkpoint)),
         checkpoint: cursor.checkpoint,
         generation_clean: checkpoint.generation_clean,
         activate: cursor.active_generation == generation,

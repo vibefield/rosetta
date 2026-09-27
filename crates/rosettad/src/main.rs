@@ -16,6 +16,7 @@
 //! discovered kinds given at start, plus extra managed data roots of a kind
 //! that are consented by construction — see `enroll.rs`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -34,8 +35,8 @@ use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{Ledger, NotifyEvents, SourceWake};
 use rosetta_pipeline::{
     IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, MetaReport, Metric,
-    PreparedRuntime, RebuildOptions, StreamReport, apply_prepared_runtime, meta_ingest_into,
-    meta_ingest_inventory_into, prepare_captured_runtime, prepare_runtime,
+    PollEvidence, PreparedRuntime, RebuildOptions, StreamReport, apply_prepared_runtime,
+    meta_ingest_into, meta_ingest_inventory_into, prepare_captured_runtime, prepare_runtime,
     rebuild_runtime_with_options, stream_backfill_into,
 };
 use rosetta_search::{
@@ -973,6 +974,9 @@ pub(crate) struct AppliedColdRuntime {
     pub(crate) root: PathBuf,
     pub(crate) roster: Vec<rosetta_pipeline::SessionFile>,
     pub(crate) ledger: Option<Ledger>,
+    /// Committed cursor evidence for the live runner's first poll; empty
+    /// where the writer did not collect it, and the poll reads cursor rows.
+    pub(crate) poll_evidence: HashMap<String, PollEvidence>,
 }
 
 /// The log name of a runtime: its kind, with the enrollment label when one
@@ -1097,6 +1101,7 @@ pub(crate) fn apply_captured_cold_runtime(
         root: captured.root,
         roster: captured.roster,
         ledger: captured.ledger,
+        poll_evidence: HashMap::new(),
     })
 }
 

@@ -23,6 +23,7 @@ use crate::PipelineError;
 use crate::checkpoint::PipeCheckpoint;
 use crate::closed::{ClosedSource, StreamedSetup};
 use crate::instrument::{Instrument, Metric};
+use crate::live::PollEvidence;
 use crate::replay::{RebuildReport, stamp_source_cursor};
 use crate::stream::merge_stats;
 
@@ -39,6 +40,8 @@ pub struct StreamedRuntime {
     reconciliation: ColdReconciliation,
     ordinals: OrdinalPlan,
     session_health: BTreeMap<String, bool>,
+    /// The poll evidence of every final checkpoint committed so far, by path.
+    evidence: HashMap<String, PollEvidence>,
     report: RebuildReport,
     apply_nanos: u64,
     sources_applied: u64,
@@ -138,12 +141,14 @@ impl StreamedRuntime {
                 "streamed cursor setup lost {path}"
             )));
         }
+        let cursors_len = cursors.len();
         Ok(Self {
             runtime_id: runtime.id.clone(),
             cursors,
             reconciliation: ColdReconciliation::default(),
             ordinals: OrdinalPlan::default(),
             session_health: BTreeMap::new(),
+            evidence: HashMap::with_capacity(cursors_len),
             report,
             apply_nanos: 0,
             sources_applied: 0,
@@ -163,6 +168,13 @@ impl StreamedRuntime {
         self.sources_applied
     }
 
+    /// The live stat poll's evidence for every final checkpoint this writer
+    /// has committed — the seed that spares the runtime's startup catch-up
+    /// from reading and decoding its cursor rows again.
+    pub fn take_poll_evidence(&mut self) -> HashMap<String, PollEvidence> {
+        std::mem::take(&mut self.evidence)
+    }
+
     /// Apply closed sources, in the path order the producer emits them, in
     /// one private transaction. Messages receive their final presentation
     /// ordinals here (see [`OrdinalPlan`]); deferred relational facts are
@@ -175,6 +187,7 @@ impl StreamedRuntime {
     ) -> Result<ApplyStats, PipelineError> {
         let started = Instant::now();
         let mut batches = Vec::with_capacity(sources.len());
+        let mut evidence = Vec::with_capacity(sources.len());
         for mut source in sources {
             let cursor = self
                 .cursors
@@ -200,6 +213,7 @@ impl StreamedRuntime {
                 .entry(source.source.session_id.clone())
                 .and_modify(|healthy| *healthy &= clean)
                 .or_insert(clean);
+            evidence.push((source.source.relative_path.clone(), source.evidence));
             batches.push(Batch {
                 ops: source.ops,
                 checkpoints: vec![CheckpointUpdate {
@@ -226,6 +240,8 @@ impl StreamedRuntime {
         }
         let count = u64::try_from(batches.len()).unwrap_or(u64::MAX);
         let stats = instrument.apply_streamed_sources(store, &mut self.reconciliation, batches)?;
+        // Each checkpoint above is now the committed value of its cursor.
+        self.evidence.extend(evidence);
         instrument.add(Metric::BatchesApplied, count);
         merge_stats(&mut self.report.stats, &stats);
         self.sources_applied += count;
@@ -556,6 +572,7 @@ mod tests {
             source,
             generation: 1,
             ops,
+            evidence: PollEvidence::of(Some(&checkpoint)),
             checkpoint: checkpoint.encode(),
             generation_clean: true,
             activate: true,
