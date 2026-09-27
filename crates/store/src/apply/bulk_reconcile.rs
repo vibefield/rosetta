@@ -9,6 +9,7 @@
 //! only lifecycle representation written to SQLite; source replacement heals
 //! affected sessions by replaying their raw-ledger sources.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{Connection, Transaction, params};
@@ -22,10 +23,10 @@ use rosetta_core::{
 use crate::StoreError;
 
 use super::rows::{
-    BULK_MAINTENANCE, BucketKey, apply_reconciled_tool_message, apply_usage, touch_session,
-    update_reconciled_tool,
+    BULK_MAINTENANCE, BucketKey, apply_reconciled_tool_message, apply_usage, flush_session_touches,
+    touch_session, update_reconciled_tool,
 };
-use super::{ApplyStats, Batch, SourceMode, apply_op, profile_ordinal_lookup};
+use super::{ApplyStats, Batch, SourceMode, SourceWrite, apply_op, profile_ordinal_lookup};
 
 #[derive(Debug)]
 enum DeferredOp {
@@ -63,10 +64,24 @@ impl BulkReconciliationDelta {
         let Some(source) = batch.source.as_ref() else {
             return Ok(None);
         };
+        Self::from_ops(source, batch.ops.iter().map(Cow::Borrowed)).map(Some)
+    }
+
+    pub(crate) fn from_owned_batch(batch: Batch) -> Result<Option<Self>, StoreError> {
+        let Some(source) = batch.source.as_ref() else {
+            return Ok(None);
+        };
+        Self::from_ops(source, batch.ops.into_iter().map(Cow::Owned)).map(Some)
+    }
+
+    fn from_ops<'a>(
+        source: &SourceWrite,
+        ops: impl ExactSizeIterator<Item = Cow<'a, IngestOp>>,
+    ) -> Result<Self, StoreError> {
         let activation_end = source
             .first_sequence
             .checked_add(
-                u64::try_from(batch.ops.len()).map_err(|_| StoreError::SourceState {
+                u64::try_from(ops.len()).map_err(|_| StoreError::SourceState {
                     cursor_id: source.cursor_id,
                     message: "source batch contains more operations than u64 can represent".into(),
                 })?,
@@ -77,7 +92,7 @@ impl BulkReconciliationDelta {
             })?;
         let mut fingerprints = BTreeMap::new();
         let mut deferred_ops = BTreeMap::new();
-        for (index, op) in batch.ops.iter().enumerate() {
+        for (index, op) in ops.enumerate() {
             let sequence = source
                 .first_sequence
                 .checked_add(u64::try_from(index).map_err(|_| StoreError::SourceState {
@@ -88,46 +103,48 @@ impl BulkReconciliationDelta {
                     cursor_id: source.cursor_id,
                     message: "source sequence overflowed while buffering a cold operation".into(),
                 })?;
-            let deferred = match op {
-                IngestOp::Message(row) if matches!(&row.body, TimelineBody::ToolUse { .. }) => {
-                    Some(DeferredOp::ToolMessage(row.clone()))
-                }
+            if !defers(op.as_ref()) {
+                fingerprints.insert(sequence, OpFingerprint::Immediate);
+                continue;
+            }
+            // Retry identity is computed before taking ownership; both entry
+            // points retain exactly the same source-position conflict checks.
+            fingerprints.insert(
+                sequence,
+                OpFingerprint::Deferred(
+                    *blake3::hash(&serde_json::to_vec(op.as_ref())?).as_bytes(),
+                ),
+            );
+            let deferred_op = match op.into_owned() {
+                IngestOp::Message(row) => DeferredOp::ToolMessage(row),
                 IngestOp::ToolUpdate {
                     session_id,
                     correlation_key,
                     evidence,
                     patch,
                     at,
-                } => Some(DeferredOp::ToolUpdate {
-                    session_id: session_id.clone(),
-                    correlation_key: correlation_key.clone(),
-                    evidence: evidence.clone(),
-                    patch: patch.clone(),
-                    at: *at,
-                }),
-                IngestOp::Usage { .. } | IngestOp::FileEdit(_) => {
-                    Some(DeferredOp::Tail(Box::new(op.clone())))
+                } => DeferredOp::ToolUpdate {
+                    session_id,
+                    correlation_key,
+                    evidence,
+                    patch,
+                    at,
+                },
+                op @ (IngestOp::Usage { .. } | IngestOp::FileEdit(_)) => {
+                    DeferredOp::Tail(Box::new(op))
                 }
-                _ => None,
+                _ => unreachable!("defers admits only relational operations"),
             };
-            let Some(deferred_op) = deferred else {
-                fingerprints.insert(sequence, OpFingerprint::Immediate);
-                continue;
-            };
-            fingerprints.insert(
-                sequence,
-                OpFingerprint::Deferred(*blake3::hash(&serde_json::to_vec(op)?).as_bytes()),
-            );
             deferred_ops.insert(sequence, deferred_op);
         }
-        Ok(Some(Self {
+        Ok(Self {
             cursor_id: source.cursor_id,
             generation: source.generation,
             mode: source.mode,
             activation_end,
             fingerprints,
             deferred: deferred_ops,
-        }))
+        })
     }
 }
 
@@ -228,16 +245,29 @@ impl BulkReconciliationBuffer {
         // attempt. The last activated generation remains available until the
         // replacement's Activate transaction commits; Abandon therefore falls
         // back to it exactly like the canonical projection does.
-        if delta.mode == SourceMode::Stage {
-            self.sources.retain(|candidate, source| {
-                candidate.cursor_id != delta.cursor_id
-                    || candidate.generation == delta.generation
-                    || source.activation_end.is_some()
-            });
-        } else if delta.mode == SourceMode::Activate {
-            self.sources.retain(|candidate, _| {
-                candidate.cursor_id != delta.cursor_id || candidate.generation == delta.generation
-            });
+        if matches!(delta.mode, SourceMode::Stage | SourceMode::Activate) {
+            // Only generations of this cursor can be superseded. Scanning
+            // every previously admitted source makes a closed runtime O(n²).
+            let obsolete = self
+                .sources
+                .range(
+                    SourceKey {
+                        cursor_id: delta.cursor_id,
+                        generation: 0,
+                    }..=SourceKey {
+                        cursor_id: delta.cursor_id,
+                        generation: u64::MAX,
+                    },
+                )
+                .filter(|(candidate, source)| {
+                    candidate.generation != delta.generation
+                        && (delta.mode == SourceMode::Activate || source.activation_end.is_none())
+                })
+                .map(|(candidate, _)| *candidate)
+                .collect::<Vec<_>>();
+            for candidate in obsolete {
+                self.sources.remove(&candidate);
+            }
         }
         let source = self
             .sources
@@ -289,7 +319,7 @@ impl BulkReconciliationBuffer {
             }
         }
 
-        let mut openers: BTreeMap<ToolKey, BufferedOpener> = BTreeMap::new();
+        let mut openers: BTreeMap<ToolKey, BufferedOpener<'_>> = BTreeMap::new();
         let mut new_facts: BTreeMap<FactKey, BufferedFact> = BTreeMap::new();
         let prior_usage = self.pending_usage.values().cloned().collect::<Vec<_>>();
         let mut tail = Vec::new();
@@ -306,10 +336,6 @@ impl BulkReconciliationBuffer {
                 .expect("selected source path exists");
             let activation_end = source.activation_end.expect("selected source is activated");
             for (sequence, op) in &source.deferred {
-                let order = SourceOrder {
-                    path: path.clone(),
-                    sequence: *sequence,
-                };
                 match op {
                     DeferredOp::ToolMessage(row) => {
                         let TimelineBody::ToolUse { tool } = &row.body else {
@@ -328,8 +354,11 @@ impl BulkReconciliationBuffer {
                             });
                         }
                         let candidate = BufferedOpener {
-                            order,
-                            row: (**row).clone(),
+                            order: SourceOrder {
+                                path: path.clone(),
+                                sequence: *sequence,
+                            },
+                            row,
                         };
                         if let Some(previous) = openers.get_mut(&key) {
                             if previous.row.timeline_id != candidate.row.timeline_id {
@@ -382,14 +411,17 @@ impl BulkReconciliationBuffer {
                             BufferedFact {
                                 key,
                                 evidence: evidence.clone(),
-                                patch: (**patch).clone(),
+                                patch: Cow::Borrowed(patch.as_ref()),
                                 at: *at,
                             },
                         )?;
                     }
                     DeferredOp::Tail(op) => tail.push(BufferedTail {
                         cursor_id: source_key.cursor_id,
-                        order,
+                        order: SourceOrder {
+                            path: path.clone(),
+                            sequence: *sequence,
+                        },
                         op: op.as_ref().clone(),
                     }),
                 }
@@ -410,13 +442,13 @@ impl BulkReconciliationBuffer {
                         record_offset: i64::MAX as u64,
                         mutation_index: u32::MAX,
                     },
-                    patch: ToolUpdatePatch {
+                    patch: Cow::Owned(ToolUpdatePatch {
                         status: Some(ToolStatusFact {
                             value: ToolStatus::Unknown,
                             basis: StatusBasis::SourceFinalization,
                         }),
                         ..ToolUpdatePatch::default()
-                    },
+                    }),
                     at: None,
                 },
             )?;
@@ -453,15 +485,19 @@ impl BulkReconciliationBuffer {
         }
         let mut messages = Vec::with_capacity(openers.len());
         for (key, opener) in &openers {
-            let TimelineBody::ToolUse { tool } = &opener.row.body else {
+            let mut row = opener.row.clone();
+            let TimelineBody::ToolUse { tool } = &mut row.body else {
                 unreachable!("buffered opener remains a tool row")
             };
-            let resolved = resolve_tool(key, (**tool).clone(), facts_by_tool.get(key))?;
+            resolve_tool(key, tool, facts_by_tool.get(key))?;
+            // This is the owned, retryable final row; compact once here so
+            // writing it needs no second opener/tool payload copy.
+            tool.action.compact_command_preview();
             messages.push(ResolvedToolMessage {
                 order: opener.order.clone(),
-                row: opener.row.clone(),
-                tool: resolved,
+                row,
                 known_absent: !existing_openers.contains_key(key),
+                activity: None,
             });
         }
         let mut existing = Vec::new();
@@ -472,7 +508,8 @@ impl BulkReconciliationBuffer {
             let Some(opener) = existing_openers.get(key) else {
                 continue;
             };
-            let tool = resolve_tool(key, opener.tool.clone(), facts_by_tool.get(key))?;
+            let mut tool = opener.tool.clone();
+            resolve_tool(key, &mut tool, facts_by_tool.get(key))?;
             existing.push(ResolvedExistingTool {
                 message_id: opener.message_id,
                 tool,
@@ -564,6 +601,17 @@ impl BulkReconciliationBuffer {
             .count() as u64;
         let native_update_count = native_updates.len() as u64;
         let unmatched_updates = native_update_count.saturating_sub(matched_updates);
+        for message in &mut messages {
+            let TimelineBody::ToolUse { tool } = &message.row.body else {
+                unreachable!("resolved message remains a tool row")
+            };
+            // Put result timestamps into the initial canonical write, instead
+            // of updating every newly inserted tool row once or twice more.
+            message.activity = tool_activity.remove(&ToolKey {
+                session_id: message.row.session_id.clone(),
+                correlation_key: tool.correlation.key.clone(),
+            });
+        }
         Ok(BulkReconciliationPlan {
             source_keys,
             messages,
@@ -606,9 +654,11 @@ struct SourceOrder {
 }
 
 #[derive(Debug)]
-struct BufferedOpener {
+struct BufferedOpener<'a> {
     order: SourceOrder,
-    row: TimelineEntry,
+    // Selection only needs to compare openers. The source buffer already
+    // owns them until commit; clone only the winner into the retryable plan.
+    row: &'a TimelineEntry,
 }
 
 #[derive(Debug)]
@@ -625,16 +675,16 @@ struct FactKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BufferedFact {
+struct BufferedFact<'a> {
     key: ToolKey,
     evidence: EvidenceOrder,
-    patch: ToolUpdatePatch,
+    patch: Cow<'a, ToolUpdatePatch>,
     at: Option<i64>,
 }
 
-fn insert_fact(
-    facts: &mut BTreeMap<FactKey, BufferedFact>,
-    fact: BufferedFact,
+fn insert_fact<'a>(
+    facts: &mut BTreeMap<FactKey, BufferedFact<'a>>,
+    fact: BufferedFact<'a>,
 ) -> Result<(), StoreError> {
     let identity = FactKey {
         tool: fact.key.clone(),
@@ -732,9 +782,9 @@ fn load_existing_openers(
 
 fn resolve_tool(
     key: &ToolKey,
-    mut tool: ToolInteraction,
+    tool: &mut ToolInteraction,
     updates: Option<&Vec<&BufferedFact>>,
-) -> Result<ToolInteraction, StoreError> {
+) -> Result<(), StoreError> {
     tool.validate()
         .map_err(|error| StoreError::ProjectionInvalid {
             message: format!(
@@ -754,15 +804,15 @@ fn resolve_tool(
                 })?;
         }
     }
-    Ok(tool)
+    Ok(())
 }
 
 #[derive(Debug)]
 struct ResolvedToolMessage {
     order: SourceOrder,
     row: TimelineEntry,
-    tool: ToolInteraction,
     known_absent: bool,
+    activity: Option<(i64, i64)>,
 }
 
 #[derive(Debug)]
@@ -812,7 +862,10 @@ pub(crate) fn apply_plan(
     preserve_message_ordinals: bool,
     owners: &mut super::UsageOwners,
 ) -> Result<ApplyStats, StoreError> {
-    let mut stats = ApplyStats::default();
+    let mut stats = ApplyStats {
+        session_touches: Some(BTreeMap::new()),
+        ..ApplyStats::default()
+    };
     stats.profile.tool_result_attempts = plan.native_updates;
     stats.profile.usage_attempts = plan.folded_usage;
     stats.tool_results_merged = plan.matched_updates;
@@ -857,8 +910,8 @@ pub(crate) fn apply_plan(
         apply_reconciled_tool_message(
             tx,
             &message.row,
-            &message.tool,
             message.known_absent,
+            message.activity,
             &mut stats,
             BULK_MAINTENANCE,
             &mut dirty_buckets,
@@ -934,6 +987,7 @@ pub(crate) fn apply_plan(
             crate::activity::touch_tool(tx, &key.session_id, &key.correlation_key, *last)?;
         }
     }
+    flush_session_touches(tx, &mut stats)?;
     debug_assert!(dirty_buckets.is_empty(), "cold maintenance defers buckets");
     Ok(stats)
 }

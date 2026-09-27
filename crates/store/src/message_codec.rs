@@ -53,13 +53,13 @@ crate::columns::column_map! {
 }
 
 #[derive(Debug)]
-pub(crate) struct EncodedMessage {
+pub(crate) struct EncodedMessage<'a> {
     pub kind: &'static str,
-    pub content: Option<String>,
+    pub content: Option<&'a str>,
     pub detail: Option<String>,
 }
 
-pub(crate) fn encode(entry: &TimelineEntry) -> Result<EncodedMessage, StoreError> {
+pub(crate) fn encode(entry: &TimelineEntry) -> Result<EncodedMessage<'_>, StoreError> {
     entry
         .validate()
         .map_err(|error| StoreError::ProjectionInvalid {
@@ -141,17 +141,17 @@ pub(crate) fn encode(entry: &TimelineEntry) -> Result<EncodedMessage, StoreError
     })
 }
 
-fn optional_text(text: Option<&CanonicalText>) -> (Option<String>, Option<AssetRef>) {
+fn optional_text(text: Option<&CanonicalText>) -> (Option<&str>, Option<AssetRef>) {
     text.map_or((None, None), |text| {
         let (content, member) = required_text(text);
         (Some(content), member)
     })
 }
 
-fn required_text(text: &CanonicalText) -> (String, Option<AssetRef>) {
+fn required_text(text: &CanonicalText) -> (&str, Option<AssetRef>) {
     match text {
-        CanonicalText::Inline { text } => (text.clone(), None),
-        CanonicalText::Member { asset, preview, .. } => (preview.clone(), Some(asset.clone())),
+        CanonicalText::Inline { text } => (text, None),
+        CanonicalText::Member { asset, preview, .. } => (preview, Some(asset.clone())),
     }
 }
 
@@ -203,6 +203,7 @@ fn prose_detail(
 
 /// A statement-scoped decoder for full message scans. Column positions are
 /// resolved against the actual SELECT layout, never the schema's field order.
+/// Like [`decode`], this reads stored facts without calculating display costs.
 pub(crate) struct Decoder {
     message: Columns<usize>,
     tool: tool_codec::Columns<usize>,
@@ -221,8 +222,16 @@ impl Decoder {
     }
 }
 
+/// Read stored facts for search and internal metadata consumers, which do not
+/// use USD costs. Transcript responses opt into [`decode_priced`] instead.
 pub(crate) fn decode(row: &Row<'_>) -> rusqlite::Result<TimelineEntry> {
     decode_columns(row, &Columns::NAMED, &tool_codec::Columns::NAMED)
+}
+
+pub(crate) fn decode_priced(row: &Row<'_>) -> rusqlite::Result<TimelineEntry> {
+    let mut entry = decode(row)?;
+    entry.cost = crate::pricing::usage_cost(entry.model.as_deref(), entry.at, &entry.usage);
+    Ok(entry)
 }
 
 fn decode_columns<I: rusqlite::RowIndex + Copy>(
@@ -360,8 +369,6 @@ fn decode_columns<I: rusqlite::RowIndex + Copy>(
             src_offset: row.get(columns.src_offset)?,
         },
     };
-    let mut entry = entry;
-    entry.cost = crate::pricing::usage_cost(entry.model.as_deref(), entry.at, &entry.usage);
     entry
         .validate()
         .map_err(|error| invalid(format!("invalid stored timeline entry: {error}")))?;

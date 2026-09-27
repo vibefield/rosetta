@@ -6,6 +6,7 @@
 //! SQLite sees the final canonical rows plus the minimal durable cursor
 //! watermark; the raw ledger is the restart/replay truth.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
@@ -95,11 +96,14 @@ pub struct ApplyStats {
     /// Time spent committing the SQLite transaction after all statements ran.
     pub sqlite_commit_nanos: u64,
     pub profile: ApplyProfile,
+    /// Transaction-local cold timestamp maxima; drained before returning stats.
+    session_touches: Option<BTreeMap<String, Ms>>,
 }
 
-/// Statement-level attribution within [`ApplyStats::canonical_apply_nanos`].
-/// Timers below are non-overlapping with each other; unlisted orchestration is
-/// the residual between their sum and the canonical parent timer.
+/// Statement-level attribution within [`ApplyStats::canonical_apply_nanos`],
+/// plus separately timed cold RAM reconciliation preparation and cleanup.
+/// The RAM timers sit outside the canonical SQL timer, inside the pipeline's
+/// enclosing apply timer.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ApplyProfile {
     pub message_attempts: u64,
@@ -126,10 +130,13 @@ pub struct ApplyProfile {
     pub ordinal_lookup_nanos: u64,
     pub session_renumber_nanos: u64,
     pub tool_reconcile_nanos: u64,
+    /// Release committed source trees and the temporary reconciliation plan.
+    pub tool_reconcile_cleanup_nanos: u64,
 }
 
 impl ApplyStats {
     pub fn merge_from(&mut self, batch: &Self) {
+        debug_assert!(batch.session_touches.is_none());
         self.projection_assets += batch.projection_assets;
         self.asset_files_written += batch.asset_files_written;
         self.asset_files_reused += batch.asset_files_reused;
@@ -176,6 +183,7 @@ impl ApplyProfile {
         self.ordinal_lookup_nanos += batch.ordinal_lookup_nanos;
         self.session_renumber_nanos += batch.session_renumber_nanos;
         self.tool_reconcile_nanos += batch.tool_reconcile_nanos;
+        self.tool_reconcile_cleanup_nanos += batch.tool_reconcile_cleanup_nanos;
     }
 }
 
@@ -224,8 +232,8 @@ use metadata::{apply_project, apply_runtime, apply_session, apply_session_title}
 pub(crate) use ram_reconcile::RamReconciliationBuffer;
 pub(crate) use rows::{BULK_MAINTENANCE, LIVE_MAINTENANCE, Maintenance};
 use rows::{
-    BucketKey, apply_message, apply_tool_updates, apply_usage, finalize_source_tools, mark_bucket,
-    rebuild_bucket, touch_session,
+    BucketKey, apply_message, apply_tool_updates, apply_usage, finalize_source_tools,
+    flush_session_touches, mark_bucket, rebuild_bucket, touch_session,
 };
 pub(crate) use usage_owners::UsageOwners;
 use usage_owners::{Claim, OwnerTarget};
@@ -673,7 +681,7 @@ fn project_source_ops(
             continue;
         }
         if let IngestOp::Message(row) = op {
-            let mut row = (**row).clone();
+            let mut row = Cow::Borrowed(row.as_ref());
             let existing = if projection.preserve_message_ordinals {
                 profile_ordinal_lookup(stats, || {
                     Ok(tx
@@ -685,7 +693,7 @@ fn project_source_ops(
                 None
             };
             if !projection.trust_message_ordinals {
-                row.ordinal = match existing {
+                let ordinal = match existing {
                     Some(ordinal) => ordinal,
                     None => {
                         if let Some(next) = next_ordinals.get_mut(&row.session_id) {
@@ -717,6 +725,9 @@ fn project_source_ops(
                         }
                     }
                 };
+                if row.ordinal != ordinal {
+                    row.to_mut().ordinal = ordinal;
+                }
             }
             if let Some(fx) = projection.effects.as_deref_mut() {
                 fx.touched_sessions.insert(row.session_id.clone());
@@ -1514,6 +1525,11 @@ pub(crate) fn apply_batch(
     // live paths use the Store's process-local reconciliation buffer.
     let defer_bulk_reconciliation = bulk_load && !progressive_public;
     let mut stats = ApplyStats::default();
+    if defer_bulk_reconciliation && batch.source.is_some() {
+        // Source batches cannot contain SessionMeta, so no intervening
+        // metadata write can change the meaning of these timestamp maxima.
+        stats.session_touches = Some(BTreeMap::new());
+    }
     let mut dirty_buckets = BTreeSet::new();
     match &batch.source {
         None => {
@@ -1642,6 +1658,7 @@ pub(crate) fn apply_batch(
                 for checkpoint in &batch.checkpoints {
                     apply_checkpoint(tx, checkpoint)?;
                 }
+                flush_session_touches(tx, &mut stats)?;
                 fold_dirty_buckets(tx, dirty_buckets, &mut stats)?;
                 return Ok(stats);
             }
@@ -1850,6 +1867,7 @@ pub(crate) fn apply_batch(
     for checkpoint in &batch.checkpoints {
         apply_checkpoint(tx, checkpoint)?;
     }
+    flush_session_touches(tx, &mut stats)?;
     fold_dirty_buckets(tx, dirty_buckets, &mut stats)?;
     Ok(stats)
 }

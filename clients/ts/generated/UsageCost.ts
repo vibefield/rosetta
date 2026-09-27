@@ -3,8 +3,9 @@
 /**
  * The read-time list-price cost of one row's usage record (ARCHITECTURE
  * §4.1.3). Never stored or normalized: the store computes it from the stored
- * usage facts and the compiled price catalog whenever it reads or emits the
- * row, so a price update needs no rewrite.
+ * usage facts and the compiled price catalog when returning a transcript row
+ * or emitting a live mutation. Internal reads omit it; a price update needs
+ * no rewrite.
  */
 export type UsageCost = { "status": "priced", micro_usd: number, 
 /**

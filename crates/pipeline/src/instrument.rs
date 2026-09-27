@@ -85,6 +85,9 @@ pub enum Metric {
     OrdinalLookupNanos,
     SessionRenumberNanos,
     ToolReconcileNanos,
+    ToolReconcileCleanupNanos,
+    ColdPrepareNanos,
+    BulkFinalizeNanos,
     BulkRenumberRows,
     BulkRenumberNanos,
     BulkBucketNanos,
@@ -94,10 +97,15 @@ pub enum Metric {
     BulkPragmaNanos,
     BulkAssetSyncNanos,
     PublishNanos,
+    PublishReleaseNanos,
     SearchSyncNanos,
+    LivePollNanos,
+    LivePollWalkNanos,
+    LivePollCheckpointNanos,
+    LivePollFiles,
 }
 
-const METRIC_COUNT: usize = 78;
+const METRIC_COUNT: usize = 86;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -174,6 +182,12 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::OrdinalLookupNanos, "ordinal lookup time"),
     (Metric::SessionRenumberNanos, "session renumber time"),
     (Metric::ToolReconcileNanos, "tool reconciliation time"),
+    (
+        Metric::ToolReconcileCleanupNanos,
+        "tool reconciliation cleanup time",
+    ),
+    (Metric::ColdPrepareNanos, "cold plan preparation time"),
+    (Metric::BulkFinalizeNanos, "bulk finalization time"),
     (Metric::BulkRenumberRows, "bulk renumber rows"),
     (Metric::BulkRenumberNanos, "bulk renumber time"),
     (Metric::BulkBucketNanos, "bulk bucket time"),
@@ -183,7 +197,15 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::BulkPragmaNanos, "bulk pragma time"),
     (Metric::BulkAssetSyncNanos, "bulk asset sync time"),
     (Metric::PublishNanos, "publication time"),
+    (
+        Metric::PublishReleaseNanos,
+        "publication RAM release and reopen time",
+    ),
     (Metric::SearchSyncNanos, "detached search sync time"),
+    (Metric::LivePollNanos, "live poll time"),
+    (Metric::LivePollWalkNanos, "live poll walk time"),
+    (Metric::LivePollCheckpointNanos, "live poll checkpoint time"),
+    (Metric::LivePollFiles, "live poll files"),
 ];
 
 fn index(metric: Metric) -> usize {
@@ -413,13 +435,23 @@ impl Instrument {
         result
     }
 
+    /// Transfer payload ownership when the producer no longer needs the
+    /// batch, allowing a cold planner to retain it without a deep copy.
+    pub fn apply_owned(&self, store: &mut Store, batch: Batch) -> Result<ApplyStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || store.apply_owned(batch));
+        if let Ok(stats) = &result {
+            self.record_apply_stats(stats);
+        }
+        result
+    }
+
     /// Apply a closed runtime's source batches under one private SQLite
     /// transaction while retaining the same aggregate attribution as the
     /// ordinary per-source path.
     pub fn apply_closed_bulk_sources(
         &self,
         store: &mut Store,
-        batches: &[Batch],
+        batches: Vec<Batch>,
     ) -> Result<ApplyStats, StoreError> {
         let result = self.time(Metric::ApplyNanos, || {
             store.apply_closed_bulk_sources(batches)
@@ -485,12 +517,18 @@ impl Instrument {
         self.add(Metric::OrdinalLookupNanos, profile.ordinal_lookup_nanos);
         self.add(Metric::SessionRenumberNanos, profile.session_renumber_nanos);
         self.add(Metric::ToolReconcileNanos, profile.tool_reconcile_nanos);
+        self.add(
+            Metric::ToolReconcileCleanupNanos,
+            profile.tool_reconcile_cleanup_nanos,
+        );
     }
 
     /// Finalize a private projection and record the independently useful
     /// bucket, FTS, index, validation, and journal-mode costs.
     pub fn finish_bulk_load(&self, store: &mut Store) -> Result<BulkLoadStats, StoreError> {
-        let result = self.time(Metric::ApplyNanos, || store.finish_bulk_load());
+        let result = self.time(Metric::BulkFinalizeNanos, || {
+            self.time(Metric::ApplyNanos, || store.finish_bulk_load())
+        });
         if let Ok(stats) = &result {
             self.record_bulk_stats(stats);
         }

@@ -55,6 +55,7 @@ mod cold_stage;
 mod engine;
 mod enroll;
 mod ledger_cmd;
+mod ledger_compression;
 mod recovery;
 mod runtime_ledger;
 mod serve;
@@ -807,6 +808,7 @@ pub(crate) struct ColdCaptureRequest {
     pub(crate) opts: IngestOptions,
     pub(crate) write_raw_ledger: bool,
     pub(crate) async_raw_ledger: bool,
+    pub(crate) ledger_codec: rosetta_capture::SegmentCodec,
     pub(crate) instrument: Arc<Instrument>,
 }
 
@@ -841,6 +843,7 @@ pub(crate) fn plan_parallel_cold_runtime(
         opts,
         write_raw_ledger,
         async_raw_ledger,
+        ledger_codec,
         instrument,
     } = request;
     runtime.enabled = true;
@@ -850,7 +853,7 @@ pub(crate) fn plan_parallel_cold_runtime(
     let mut ledger = write_raw_ledger
         .then(|| open_runtime_ledger(&ledger_root, &runtime))
         .transpose()?
-        .map(Ledger::defer_sync_until_flush)
+        .map(|ledger| ledger.with_codec(ledger_codec).defer_sync_until_flush())
         .map(|ledger| {
             if async_raw_ledger {
                 ledger.into_async(4)
@@ -929,7 +932,10 @@ pub(crate) fn finish_parallel_cold_runtime(
     .map_err(|error| error.to_string())?;
     let stream_wall_ms = stream_started.elapsed().as_secs_f64() * 1_000.0;
     let stream_profile = instrument.snapshot().delta_since(&stream_before);
-    let prepared = prepare_captured_runtime(adapter, &runtime, &files, &mut planner, &stream)
+    let prepared = instrument
+        .time(Metric::ColdPrepareNanos, || {
+            prepare_captured_runtime(adapter, &runtime, &files, &mut planner, &stream)
+        })
         .map_err(|error| error.to_string())?;
 
     Ok(CapturedColdRuntime {
@@ -1001,6 +1007,14 @@ pub(crate) fn apply_captured_cold_runtime(
             "wallMs": captured.stream_wall_ms,
             "captureWallMs": captured.wall_ms,
             "report": captured.stream_profile.report(),
+        }));
+        bench::emit(&serde_json::json!({
+            "event": "stage-profile",
+            "command": "ingest",
+            "stage": "cold-plan-preparation",
+            "agent": captured.adapter.kind(),
+            "runtime": captured.runtime.id,
+            "wallMs": captured.profile.get(Metric::ColdPrepareNanos) as f64 / 1_000_000.0,
         }));
     }
     if flags.json {
@@ -1183,6 +1197,7 @@ fn ingest_parallel_cold(
                         opts,
                         write_raw_ledger,
                         async_raw_ledger,
+                        ledger_codec: rosetta_capture::SegmentCodec::default(),
                         instrument: Arc::new(Instrument::new()),
                     });
                     sender
@@ -1231,6 +1246,7 @@ fn ingest_parallel_cold(
                         opts,
                         write_raw_ledger,
                         async_raw_ledger,
+                        ledger_codec: rosetta_capture::SegmentCodec::default(),
                         instrument: Arc::new(Instrument::new()),
                     })
                 }));

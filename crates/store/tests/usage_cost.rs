@@ -414,6 +414,10 @@ fn unrecorded_output_is_counted_and_never_priced_as_zero() {
         .unwrap();
     assert_eq!(entry.usage.output, None);
     assert!(matches!(entry.cost, Some(UsageCost::Priced { .. })));
+    // Paged transcript reads must retain the same cost and partial-usage
+    // facts as an exact row lookup, even though internal scans omit pricing.
+    let page = queries::timeline_page(store.conn(), "s1", None, 10).unwrap();
+    assert_eq!(page[0], entry);
     // A web-search-only record has no prompt, so it is not "unrecorded output".
     let contribution = queries::contribution_for_scope(store.conn(), Some("p1")).unwrap();
     assert_eq!(contribution.len(), 1);

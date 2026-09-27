@@ -93,6 +93,50 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > Watched timelines receive one resync barrier and re-snapshot through the ordinary API. No raw
 > record, parser state, candidate value, or reconciliation map enters the read target.
 >
+> Cold JSONL capture transfers owned normalized batches into the RAM planner instead of
+> deep-copying them. Both owned and borrowed entry points enforce the same metadata boundary
+> and transactional checkpoint CAS before retaining a batch. Tool reconciliation borrows
+> opener candidates from the retained source buffer while selecting the authoritative source
+> position, then clones only the selected row into its retryable plan. The source buffer
+> survives until successful commit. Closed source application consumes its batches: immediate rows
+> are written first, deferred payloads move into provisional reconciliation deltas, and each
+> consumed batch releases its remaining data. Deltas enter the shared buffer only after the whole
+> runtime transaction commits. This removes the original runtime-sized payload tree before the
+> fold, while preserving fingerprints, rollback, and raw-ledger retry. No raw evidence is dropped.
+> Reconciliation borrows update patches from that same retained buffer and folds each selected
+> tool directly into its one owned final row. Canonical writers and codecs borrow unchanged
+> message/text fields; they copy only for ordinal changes, command compaction, or observed live
+> mutations. Source activation searches only that cursor's generations, avoiding a scan of the
+> whole runtime buffer for every source. Cold source batches coalesce session timestamp maxima
+> before committing; metadata batches retain their ordered write semantics. Tool-result activity
+> bounds join the initial tool insert instead of causing additional row/index updates. Failed
+> reconciliation still retains the committed source buffer for an identical retry.
+>
+> The owned ledger path groups small records from one source/generation into the existing
+> batch-frame format, with at most 1 MiB of extra packing memory. Single or large records
+> retain individual frames. The private async writer coalesces intermediate buffer
+> flushes until metadata, a source seal or segment rotation; unfinished raw-only generations
+> remain ineligible for recovery. Its final joined flush still syncs every segment and
+> required directory before publication. Ordinary live checkpoints remain durable per batch.
+>
+> Fresh and resumed RAM cold builds write the existing plain `RLG1` container, deferring
+> compression until canonical publication, initial live catch-up and search readiness.
+> One daemon-owned maintenance thread snapshots only segments strictly below each live
+> writer's current sequence; active and future segments are ineligible. It verifies the
+> original, writes a sibling zstd copy, verifies decoded frame bytes/checksums/digest, syncs,
+> and atomically replaces that closed segment. Source/generation metadata, logical offsets,
+> frame bytes and the segment index stay valid. Concurrent readers keep their old descriptor
+> or open the complete replacement. No normalization or canonical writes run in this worker.
+> It targets 10% of one core with 5 ms work quanta and bounded 64 KiB copy/verification reads;
+> macOS additionally uses utility QoS and its thread CPU clock, while other platforms
+> conservatively pace elapsed active time. Utility priority avoids the indefinite starvation
+> observed with strict background QoS on a busy host; measured pacing provides the CPU ceiling.
+> Search work takes priority. Shutdown cancels pacing
+> and discards any unfinished copy; warm starts rediscover remaining plain segments, without
+> a persisted maintenance queue. Live writes and finite CLI ingest retain inline zstd.
+> Deferred compression trades additional temporary disk space and a later read/write pass
+> for removing compression from cold capture; final ledger durability is never deferred.
+>
 > After every runtime closes, set-based indexes/rollups, `ANALYZE`, quick/FK checks, and projection
 > validation run against that RAM generation. The named `<ledger>.staged` raw generation is then drained and fsynced;
 > the canonical database is backed up to a same-filesystem private file, synced, installed by
@@ -499,8 +543,10 @@ capture contract explicit.
   *Correction (2026-09-12):* the per-`<agent>` directory is the DISCOVERED runtime's
   ledger; a supervisor-enrolled runtime of the same kind (§5.2, "Supervisor-enrolled
   runtimes") lives in `<projection>.ledger/<agent>~<digest>/`, and every runtime
-  directory carries a `runtime.json` stamp naming its owner. Since 2026-09-04 a new segment
-  lands inside one zstd stream (magic `RLZ1`); the frame stream inside is byte-for-byte the
+  directory carries a `runtime.json` stamp naming its owner. Since 2026-09-04 the default
+  container is one zstd stream (magic `RLZ1`); fresh/resumed RAM cold serve instead writes
+  plain segments and compresses closed segments after readiness as described above. The
+  frame stream inside either container is byte-for-byte the
   plain `RLG1` one, per-frame blake3 integrity is unchanged, and readers keep both containers
   forever, so nothing is rebuilt for the format's sake. The stream flushes at every checkpoint
   — a zstd block ends, the frame does not — so the durable prefix stays decodable while the
@@ -1057,6 +1103,21 @@ compares it with the compiled one. On mismatch, one transaction recomputes the c
 columns from the stored facts and stamps the new version; this took about 0.65 s for 327,520
 usage rows on the 2026-09-11 corpus (diagnostic). A cold fold stamps the version it used.
 
+**Pricing runs only for consumers that use it.** The general message decoder reads and
+validates stored facts without computing USD. Transcript pages, exact-row lookups, team
+timelines and report work explicitly add row costs; live mutations and usage rollups retain
+their existing pricing. Search document builds/repairs, task/plan metadata, file targets and
+Workflow attempt summaries skip the calculation because their outputs do not contain costs.
+
+**Metadata readiness does not imply usage readiness.** The bounded metadata phase admits
+session/project identities, titles and ownership, before complete transcript records are
+streamed. Accurate cold totals need the streamed usage records, per-request model/tier facts,
+and cross-file duplicate reconciliation. Moving that scan into metadata would delay metadata
+readiness and duplicate stream work. A completed projection already serves stored totals on
+warm startup; a fresh projection keeps aggregate readiness at final publication. Earlier
+partial totals would need explicit coverage semantics and a writer-produced snapshot so
+aggregate readers do not contend with cold ingestion.
+
 **The headline is list-price equivalent.** The app leads with one basis across every agent:
 what the recorded usage would cost at API list prices. Most usage runs on subscriptions, so
 there is no bill to compare against. Provider-billed amounts appear as a secondary figure where
@@ -1083,6 +1144,26 @@ coverage.
 **Performance budget.** Diagnostic measurements on the 2026-09-11 projection, taken on a loaded
 M1 Max: pricing costs 36–39 ns per usage row. The cold fold grows by 68–72 ms, from 545–582 ms,
 and the busiest live bucket rebuild from 217 to 260 µs.
+
+Cold profiling also distinguishes closed-plan preparation, reconciliation-tree cleanup,
+complete bulk finalization, and publication's RAM release/reopen. Reconciliation preparation
+and cleanup sit outside the canonical SQL timer, inside the enclosing apply timer. Consumed
+source batches now release incrementally inside closed source application rather than in a
+separate post-reconciliation destruction phase.
+`serve --json --profile` emits discovery timing and a `serve-cold` profile at canonical
+readiness, before live catch-up changes the counters. Detached search readiness is a later
+boundary and must be measured separately; `--ticks 0` does not guarantee it completes.
+The `live-catch-up` stage now exposes the handoff before the search worker wakes. Its
+`live poll time` contains filesystem walking and checkpoint reads/decoding, with separate
+nested timers and a count of physical sources considered. Inventory-only layout streams
+do not consume the live poll's stat work or source cap; admitted path lookup uses one
+temporary index per poll. Watcher hints, cursor-relative recovery, snapshot membership,
+normalizer expiry, and rotating audits retain their existing semantics.
+The deferred partial `message_searchable(id, type)` index contains only the same user/agent
+kinds selected by the search visitor. It covers the build's exact document count and supports
+its id-ordered scan, avoiding a progress-only pass over the much larger message payload table.
+It is built with the other cold secondary indexes and maintained normally in live mode;
+query-plan tests bind it to the production search-kind predicate.
 
 The frozen cold-ingest pair is campaign `usd-cost-abba3-2026-09-22`:
 
@@ -1675,6 +1756,57 @@ still require a driver-specific frozen pair or a declared production-weighted ag
   warm-cache rebuild a few percent slower — the cold-cache case, where 5.6× fewer bytes
   come off disk, was not measured. Search is independently disposable and may never
   delay canonical correctness validation.
+- Frozen campaign `cold-topsteps-20260925` covers the owned cold-batch transfer,
+  borrowed opener selection, driver-only indexed live polling, and deferred partial search
+  index described above. It reuses the permission-read-only Claude/Codex snapshot from
+  `cold-sources-20260826`: 57,175 files / 10,993,320,551 bytes, manifest SHA-256
+  `7428042f111a62a3b0214f92e0345eb8b2e786661201a3ae3bf5c5d4e7b69e1c`; query-suite SHA-256
+  `12e38e5ecc9a0e3d89bdd15b4c9fcc429defd07325f685cb108e91a97465aee7`.
+  Serial single-agent release `serve` pairs on the M1 Max/64 GiB Mac, with SamsungRed outputs
+  and un-evicted filesystem caches, match all 17 normalized canonical tables, every asset,
+  and 8,000 measured ranked-search queries. Source hashes and file sets were reverified.
+  Claude's publication-to-observed-indexing interval fell 13.70 → 1.57 s. On the same
+  candidate database, forcing a payload-table count scan took 5.419 s versus 0.00937 s
+  through the covering partial index (Codex: 2.417 versus 0.00337 s); the full visitor also
+  uses that index in id order. Whole-startup percentages are deliberately unclaimed:
+  Claude reached full readiness at 129.46 → 124.85 s, Codex at 41.85 → 57.87 s, and an
+  unchanged-binary Codex control later took 182.48 s on identical input as host load reached
+  424. RSS is likewise confounded by compression/paging. The ordinary regression suite
+  passes 256 tests (one opt-in test ignored), and affected-crate/all-target Clippy passes
+  with warnings denied. Exact binary/code hashes, commands, stage/resource observations,
+  equality results and harnesses remain in `/private/tmp/rosetta-cold-topsteps-20260925/`;
+  derived data trees were removed only after the pair and query checks passed.
+- Frozen campaign `capture-opt-20260925` reuses that same read-only snapshot and query suite
+  for bounded raw-ledger grouping and private async checkpoint coalescing. Small records share
+  the existing batch-frame format with a 1 MiB body cap; large records remain direct. Private
+  intermediate compression flushes coalesce until metadata, a source seal or rotation, while
+  the final joined sync barrier and ordinary live durability remain intact. Claude/Codex frame
+  counts fall 1,221,418 → 24,130 / 885,677 → 6,754; flushes fall 11,572 → 8,206 / 1,890 → 783.
+  Alternating synchronous ledger-only probes on frozen large files measured mean time reductions
+  of 12.5% / 21.5%, with identical decoded records. A delimiter-scanning experiment was reverted
+  because warmed-cache results did not establish a robust improvement. Full fresh-serve readiness
+  was 93.01 → 1,583.37 s / 54.19 → 286.47 s under sharply different host pressure, so no full-startup
+  speedup is established: load reached 737 on ten cores, and Claude capture averaged only 0.12
+  CPU cores versus 0.92 in the baseline. Ordered raw/seal digests, all 17 canonical tables,
+  every asset and 8,000 measured ranked-search queries match; all source checksums were reverified.
+  The affected suite passes 230 tests (two existing opt-in tests ignored), Clippy with warnings
+  denied and formatting. Evidence and harnesses remain in `/private/tmp/rosetta-capture-opt-20260925/`;
+  the [capture investigation](COLD_START_INVESTIGATION_2026-09-25.md#capture-investigation-and-ledger-optimization)
+  records all timings, hashes and limitations. Derived output trees were removed after validation.
+- Frozen campaign `apply-opt-20260925` uses the same read-only snapshot, checksummed query
+  suite, M1 Max/64 GiB machine, and serial fresh release-serve configuration above. Cursor-local
+  generation eviction replaces whole-buffer scans; borrowed fields and patches avoid repeated
+  payload copies; cold session touches coalesce; tool activity bounds enter the initial insert.
+  Session-touch SQL calls fall 397,583 → 10,574 for Claude and 48,849 → 568 for Codex.
+  Ordered raw/seal digests, all 17 logical canonical tables, assets, and 8,000 measured ranked
+  searches match, with source checksums reverified. Store/pipeline tests pass 240 cases (one
+  opt-in ignored), and affected-crate all-target Clippy passes with warnings denied.
+  Full readiness was 137.20 → 105.30 s / 77.62 → 61.77 s, but Claude apply itself was
+  24.75 → 26.88 s and Codex 8.83 → 8.41 s under different host pressure: these results do
+  not establish a code-only startup speedup. Binary/source hashes, stage/resource data,
+  equality reports, and harnesses remain in `/private/tmp/rosetta-apply-opt-20260925/`;
+  the [application investigation](COLD_START_INVESTIGATION_2026-09-25.md#applyreconciliation-optimization--2026-09-25)
+  includes the later full live-history measurements and their limitations.
 - Every `src_cursor` reconciliation predicate has a matching index. Query-plan tests pin
   these indexes because one missing provenance index turns source activation quadratic.
 - A performance optimization is merge-admissible only with a frozen before/after pair

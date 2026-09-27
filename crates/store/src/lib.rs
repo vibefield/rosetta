@@ -48,6 +48,22 @@ fn elapsed_nanos(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
+fn validate_source_batch(batch: &Batch) -> Result<(), StoreError> {
+    // Only ledgered metadata may settle session identity and ownership.
+    if let Some(source) = &batch.source
+        && batch
+            .ops
+            .iter()
+            .any(|op| matches!(op, rosetta_core::IngestOp::SessionMeta(_)))
+    {
+        return Err(StoreError::SourceState {
+            cursor_id: source.cursor_id,
+            message: "source-scoped stream batch contains metadata-only session_meta".to_string(),
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum StoreError {
     Sqlite(rusqlite::Error),
@@ -425,28 +441,24 @@ impl Store {
         })
     }
 
+    /// Transfer an owned batch into a cold planner without copying its
+    /// normalized payload. Other store modes use the ordinary apply path.
+    pub fn apply_owned(&mut self, batch: Batch) -> Result<ApplyStats, StoreError> {
+        if self.planned_batches.is_some() && batch.source.is_some() {
+            validate_source_batch(&batch)?;
+            self.apply_planning_source(batch)
+        } else {
+            self.apply(&batch)
+        }
+    }
+
     /// Apply one batch in one transaction. On any error — including a
     /// checkpoint CAS conflict — nothing is committed, and nothing reaches
     /// the observed effects.
     pub fn apply(&mut self, batch: &Batch) -> Result<ApplyStats, StoreError> {
-        // Session identity, topology, cwd, and project ownership are settled
-        // only by the ledgered metadata batch. Keep this invariant at the
-        // final write boundary so a future adapter cannot quietly restore
-        // transcript-driven reassignment.
-        if let Some(source) = &batch.source
-            && batch
-                .ops
-                .iter()
-                .any(|op| matches!(op, rosetta_core::IngestOp::SessionMeta(_)))
-        {
-            return Err(StoreError::SourceState {
-                cursor_id: source.cursor_id,
-                message: "source-scoped stream batch contains metadata-only session_meta"
-                    .to_string(),
-            });
-        }
+        validate_source_batch(batch)?;
         if self.planned_batches.is_some() && batch.source.is_some() {
-            return self.apply_planning_source(batch);
+            return self.apply_planning_source(batch.clone());
         }
         let asset_stats = self
             .assets
@@ -530,7 +542,7 @@ impl Store {
         Ok(stats)
     }
 
-    fn apply_planning_source(&mut self, batch: &Batch) -> Result<ApplyStats, StoreError> {
+    fn apply_planning_source(&mut self, batch: Batch) -> Result<ApplyStats, StoreError> {
         let control = Batch {
             ops: Vec::new(),
             checkpoints: batch.checkpoints.clone(),
@@ -556,7 +568,7 @@ impl Store {
         self.planned_batches
             .as_mut()
             .expect("planning source branch requires a planning buffer")
-            .push(batch.clone());
+            .push(batch);
         Ok(stats)
     }
 
@@ -564,10 +576,12 @@ impl Store {
     /// transaction. The caller has already normalized, ordered, and sealed
     /// every source; there are no readers and the raw ledger remains the
     /// retry boundary, so per-source commits add cost without adding an
-    /// observable correctness guarantee.
+    /// observable correctness guarantee. Consuming the batches transfers
+    /// deferred payloads without copying; all deltas remain provisional until
+    /// the whole transaction commits.
     pub fn apply_closed_bulk_sources(
         &mut self,
-        batches: &[Batch],
+        batches: Vec<Batch>,
     ) -> Result<ApplyStats, StoreError> {
         if self.mode != StoreMode::Bulk {
             return Err(StoreError::BulkLoadState {
@@ -578,7 +592,8 @@ impl Store {
         let mut cursor_ids = BTreeSet::new();
         let mut deltas = Vec::with_capacity(batches.len());
         let mut asset_totals = Vec::with_capacity(batches.len());
-        for batch in batches {
+        let mut abandoned = false;
+        for batch in &batches {
             let source = batch
                 .source
                 .as_ref()
@@ -598,32 +613,17 @@ impl Store {
                     ),
                 });
             }
-            if batch
-                .ops
-                .iter()
-                .any(|op| matches!(op, rosetta_core::IngestOp::SessionMeta(_)))
-            {
-                return Err(StoreError::SourceState {
-                    cursor_id: source.cursor_id,
-                    message: "source-scoped stream batch contains metadata-only session_meta"
-                        .to_string(),
-                });
-            }
+            abandoned |= source.mode == SourceMode::Abandon;
+            validate_source_batch(batch)?;
             asset_totals.push(self.assets.materialize_batch(batch, false)?);
-            let delta = apply::BulkReconciliationDelta::from_batch(batch, &self.conn, false)?
-                .ok_or_else(|| StoreError::BulkLoadState {
-                    message: "closed source batch did not produce reconciliation state".to_string(),
-                })?;
-            self.bulk_reconciliation.validate(&delta)?;
-            deltas.push(delta);
         }
 
         let mut totals = ApplyStats::default();
         let tx = self.conn.transaction()?;
-        for (batch, asset_stats) in batches.iter().zip(asset_totals) {
+        for (batch, asset_stats) in batches.into_iter().zip(asset_totals) {
             let mut stats = apply::apply_batch(
                 &tx,
-                batch,
+                &batch,
                 apply::BULK_MAINTENANCE,
                 true,
                 false,
@@ -640,6 +640,18 @@ impl Store {
             stats.asset_bytes = asset_stats.bytes;
             stats.asset_write_nanos = asset_stats.nanos;
             totals.merge_from(&stats);
+            // SQL has consumed the immediate rows. Move deferred facts into
+            // the provisional RAM delta and release the rest of this batch
+            // now, instead of retaining a second runtime-sized payload tree.
+            let delta =
+                apply::BulkReconciliationDelta::from_owned_batch(batch)?.ok_or_else(|| {
+                    StoreError::BulkLoadState {
+                        message: "closed source batch did not produce reconciliation state"
+                            .to_string(),
+                    }
+                })?;
+            self.bulk_reconciliation.validate(&delta)?;
+            deltas.push(delta);
         }
         let commit_started = Instant::now();
         tx.commit()?;
@@ -649,12 +661,7 @@ impl Store {
         for delta in deltas {
             self.bulk_reconciliation.commit(delta);
         }
-        if batches.iter().any(|batch| {
-            matches!(
-                batch.source.as_ref().map(|source| source.mode),
-                Some(SourceMode::Abandon)
-            )
-        }) {
+        if abandoned {
             self.bulk_abandoned = true;
         }
         Ok(totals)
@@ -689,7 +696,10 @@ impl Store {
         let commit_started = Instant::now();
         tx.commit()?;
         stats.sqlite_commit_nanos = elapsed_nanos(commit_started);
+        let cleanup_started = Instant::now();
         self.bulk_reconciliation.committed(&plan);
+        drop(plan);
+        stats.profile.tool_reconcile_cleanup_nanos = elapsed_nanos(cleanup_started);
         Ok(stats)
     }
 

@@ -6,7 +6,7 @@
 //! Readers keep both forever, so one ledger may mix containers segment by
 //! segment and nothing is ever rebuilt for the format's sake.
 //!
-//! Why one stream per segment, flushed at every checkpoint, rather than one
+//! Why one stream per segment, flushed at recovery boundaries, rather than one
 //! compressed unit per record: on real ledgers the median frame is under a
 //! kilobyte, and compressing it alone yields about half the ratio (2.1× against
 //! 4.6× on claude-code segments, 3.9× against 7.2× on codex). A stream keeps
@@ -15,6 +15,9 @@
 //! checkpoint is decodable while the window survives. Measured at the
 //! checkpoint cadence the stream gives up nothing against whole-segment
 //! compression.
+//! Live checkpoints always drain this stream. The private async cold writer
+//! coalesces intermediate raw-batch checkpoints, draining at metadata, source
+//! seals, rotation and its final durable publication barrier.
 //!
 //! The crash contract is the plain one. A process that dies after a checkpoint
 //! leaves a stream without its epilogue; the decoder yields every complete
@@ -27,8 +30,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::Path;
-
-use crate::{CaptureError, io_error, ledger};
 
 pub const MAGIC_PLAIN: &[u8; 4] = b"RLG1";
 pub const MAGIC_ZSTD: &[u8; 4] = b"RLZ1";
@@ -292,136 +293,8 @@ pub fn sniff_segment(path: &Path) -> io::Result<Option<SegmentCodec>> {
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecompressOutcome {
-    /// Rewritten in place; sizes on disk before and after.
-    Rewritten { before: u64, after: u64 },
-    /// Already in the requested container.
-    Unchanged { bytes: u64 },
-    /// The segment ends in a torn or corrupt frame and was left untouched: a
-    /// rewrite could only keep the intact prefix, and dropping a tail is a
-    /// decision for a person, not a compaction pass.
-    Torn { bytes: u64 },
-}
-
-/// Rewrite one closed segment into `codec`, in place and verified. The copy
-/// goes to a sibling temp file, is synced, decoded again and compared frame
-/// by frame and by digest against the source, and only then renamed over it.
-/// Callers hold the projection lock; a segment the daemon is appending to must
-/// never be passed here.
-pub fn recompress_segment(
-    path: &Path,
-    codec: SegmentCodec,
-    force: bool,
-) -> Result<RecompressOutcome, CaptureError> {
-    let before = std::fs::metadata(path)
-        .map_err(|error| io_error("stating segment", path, error))?
-        .len();
-    let Some(mut source) =
-        SegmentReader::open(path).map_err(|error| io_error("opening segment", path, error))?
-    else {
-        return Ok(RecompressOutcome::Torn { bytes: before });
-    };
-    if !force && source.is_compressed() == codec.is_compressed() {
-        return Ok(RecompressOutcome::Unchanged { bytes: before });
-    }
-    let expected = ledger::frame_prefix(&mut source)
-        .map_err(|error| io_error("reading segment", path, error))?;
-    if !expected.clean || source.corrupt() {
-        return Ok(RecompressOutcome::Torn { bytes: before });
-    }
-    drop(source);
-
-    let temporary = path.with_extension("rledger.compact");
-    match std::fs::remove_file(&temporary) {
-        Ok(()) => {}
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(io_error(
-                "removing stale compaction file",
-                &temporary,
-                error,
-            ));
-        }
-    }
-    let written = write_copy(path, &temporary, codec, expected.bytes);
-    let verified = written.and_then(|()| verify_copy(&temporary, &expected));
-    if let Err(error) = verified {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
-    }
-    std::fs::rename(&temporary, path)
-        .map_err(|error| io_error("installing compacted segment", path, error))?;
-    if let Some(parent) = path.parent() {
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| io_error("syncing segment directory", parent, error))?;
-    }
-    let after = std::fs::metadata(path)
-        .map_err(|error| io_error("stating segment", path, error))?
-        .len();
-    Ok(RecompressOutcome::Rewritten { before, after })
-}
-
-fn write_copy(
-    path: &Path,
-    temporary: &Path,
-    codec: SegmentCodec,
-    bytes: u64,
-) -> Result<(), CaptureError> {
-    let Some(source) =
-        SegmentReader::open(path).map_err(|error| io_error("opening segment", path, error))?
-    else {
-        return Err(CaptureError::InvalidConfig(format!(
-            "segment {} changed under compaction",
-            path.display()
-        )));
-    };
-    let mut writer = SegmentWriter::create(temporary, codec, 1024 * 1024)
-        .map_err(|error| io_error("creating compacted segment", temporary, error))?;
-    let copied = io::copy(&mut source.take(bytes), &mut writer)
-        .map_err(|error| io_error("copying segment", path, error))?;
-    if copied != bytes {
-        return Err(CaptureError::InvalidConfig(format!(
-            "segment {} shrank under compaction",
-            path.display()
-        )));
-    }
-    writer
-        .finish()
-        .map_err(|error| io_error("closing compacted segment", temporary, error))?;
-    File::open(temporary)
-        .and_then(|file| file.sync_data())
-        .map_err(|error| io_error("syncing compacted segment", temporary, error))?;
-    Ok(())
-}
-
-fn verify_copy(temporary: &Path, expected: &ledger::FramePrefix) -> Result<(), CaptureError> {
-    let Some(mut copy) = SegmentReader::open(temporary)
-        .map_err(|error| io_error("opening compacted segment", temporary, error))?
-    else {
-        return Err(CaptureError::InvalidConfig(format!(
-            "compacted segment {} has no readable header",
-            temporary.display()
-        )));
-    };
-    let actual = ledger::frame_prefix(&mut copy)
-        .map_err(|error| io_error("verifying compacted segment", temporary, error))?;
-    if copy.corrupt()
-        || !actual.clean
-        || actual.bytes != expected.bytes
-        || actual.digest != expected.digest
-    {
-        return Err(CaptureError::InvalidConfig(format!(
-            "compacted segment {} does not decode to its source ({} of {} bytes, clean {})",
-            temporary.display(),
-            actual.bytes,
-            expected.bytes,
-            actual.clean
-        )));
-    }
-    Ok(())
-}
+// Retain the original public module path for offline callers.
+pub use crate::recompress::{RecompressOutcome, recompress_segment};
 
 #[cfg(test)]
 mod tests {

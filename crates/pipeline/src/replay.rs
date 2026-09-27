@@ -1578,7 +1578,7 @@ pub fn apply_prepared_runtime(
         });
     }
     let source_count = u64::try_from(source_batches.len()).unwrap_or(u64::MAX);
-    let stats = instrument.apply_closed_bulk_sources(store, &source_batches)?;
+    let stats = instrument.apply_closed_bulk_sources(store, source_batches)?;
     merge_stats(&mut prepared.report.stats, &stats);
     instrument.add(Metric::BatchesApplied, source_count);
 

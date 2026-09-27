@@ -305,6 +305,13 @@ fn containing_directory_hint_nominates_the_changed_source() {
 fn startup_catch_up_forces_one_silent_cursor_relative_poll() {
     let adapter = &ClaudeCodeAdapter;
     let mut h = backfilled_harness();
+    // Inventory noise must not become poll obligations or consume the cap
+    // reserved for sources with framing drivers.
+    let inventory = h.root.join("shell-snapshots");
+    std::fs::create_dir_all(&inventory).unwrap();
+    for index in 0..32 {
+        std::fs::write(inventory.join(format!("zsh-{index}")), "inventory").unwrap();
+    }
     let target = h.files[0].clone();
     append_user_line(
         &h.root.join(&target.relative_path),
@@ -316,6 +323,11 @@ fn startup_catch_up_forces_one_silent_cursor_relative_poll() {
     runner.catch_up(&mut h.store, &h.instrument).unwrap();
     assert_eq!(runner.report().polls, 1);
     assert_eq!(runner.report().stream.stats.messages_inserted, 1);
+    assert_eq!(runner.report().admissions, 0);
+    assert_eq!(
+        h.instrument.get(rosetta_pipeline::Metric::LivePollFiles),
+        h.files.len() as u64
+    );
 }
 
 #[test]

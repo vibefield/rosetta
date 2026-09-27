@@ -31,6 +31,8 @@ use crate::segment::{MAGIC_LEN, SegmentCodec, SegmentReader, SegmentWriter};
 use crate::segment_index::{self, IndexedSource, SegmentIndexLine};
 use crate::{CaptureError, io_error};
 
+mod raw;
+
 const CHECKSUM_BYTES: usize = 8;
 
 const TAG_DEFINE: u8 = 1;
@@ -141,9 +143,9 @@ pub struct Ledger {
     /// Generation range seen per local source id in the CURRENT segment,
     /// for the segment index line written when it closes.
     segment_generations: HashMap<u32, (u64, u64)>,
-    /// Private cold builds may flush each projection batch to the kernel and
-    /// defer physical sync until their pre-publication barrier. Live writers
-    /// leave this false and retain the per-batch durability contract.
+    /// Private cold builds defer physical sync until their pre-publication
+    /// barrier. Their async worker also coalesces intermediate buffer flushes.
+    /// Live writers leave this false and retain per-batch durability.
     defer_checkpoint_sync: bool,
     /// Rotated segments that were buffer-flushed but not yet synced. Paths
     /// keep the writer lightweight; the final barrier reopens each file.
@@ -209,11 +211,29 @@ impl Ledger {
         })
     }
 
+    /// Snapshot segments that this writer can never append to again. The
+    /// projection lock must outlive maintenance of these paths. Reopened
+    /// writers always start above the existing maximum; the active segment
+    /// and any segments created by later appends are excluded.
+    pub fn closed_segment_paths(&self) -> Result<Vec<PathBuf>, CaptureError> {
+        if self.async_backend.is_some() {
+            return Err(CaptureError::InvalidConfig(
+                "join the asynchronous ledger before selecting closed segments".into(),
+            ));
+        }
+        Ok(segment_files(&self.dir)?
+            .into_iter()
+            .filter(|(sequence, _)| *sequence < self.segment_seq)
+            .map(|(_, path)| path)
+            .collect())
+    }
+
     /// Move cold ledger IO/checksumming onto a bounded worker. Source bytes
     /// remain ordered per runtime, queue capacity bounds owned payload RAM,
     /// and [`Ledger::flush`] joins the worker before publication. This mode is
     /// intentionally one-shot and only useful while the canonical projection
-    /// is still private.
+    /// is still private. With deferred sync, the worker flushes at metadata,
+    /// source-seal and rotation boundaries instead of every raw batch.
     pub fn into_async(self, queue_capacity: usize) -> Self {
         assert!(
             self.async_backend.is_none(),
@@ -227,6 +247,7 @@ impl Ledger {
         let (sender, receiver) = sync_channel(queue_capacity.max(1));
         let worker = std::thread::spawn(move || {
             let mut ledger = self;
+            let mut recovery_boundary = false;
             while let Ok(command) = receiver.recv() {
                 match command {
                     AsyncCommand::Raw {
@@ -239,17 +260,37 @@ impl Ledger {
                         generation,
                         normalizer_version,
                         normalized_clean,
-                    } => ledger.complete_generation(
-                        &source,
-                        generation,
-                        normalizer_version,
-                        normalized_clean,
-                    )?,
+                    } => {
+                        ledger.complete_generation(
+                            &source,
+                            generation,
+                            normalizer_version,
+                            normalized_clean,
+                        )?;
+                        recovery_boundary = true;
+                    }
                     AsyncCommand::Meta {
                         schema_version,
                         payload,
-                    } => ledger.append_meta(schema_version, &payload)?,
-                    AsyncCommand::Checkpoint => ledger.checkpoint()?,
+                    } => {
+                        ledger.append_meta(schema_version, &payload)?;
+                        recovery_boundary = true;
+                    }
+                    AsyncCommand::Checkpoint => {
+                        // A private source is recoverable only after its seal.
+                        // Intermediate batches already drain when the bounded
+                        // writer fills; flushing zstd here would close blocks
+                        // without making that source eligible for recovery.
+                        // Keep metadata/seal boundaries and segment rotation,
+                        // and never weaken the ordinary durable-checkpoint path.
+                        if !ledger.defer_checkpoint_sync
+                            || recovery_boundary
+                            || ledger.written >= ledger.max_segment_bytes
+                        {
+                            ledger.checkpoint()?;
+                            recovery_boundary = false;
+                        }
+                    }
                 }
             }
             ledger.flush()?;
@@ -332,8 +373,9 @@ impl Ledger {
     }
 
     /// Owned variant for cold pipelines that can move framed payloads out of
-    /// their tail batch. The bytes go straight through checksum/write and are
-    /// never copied into an intermediate frame body.
+    /// their tail batch. Small records share a bounded frame so checksumming
+    /// and compression writes are amortized. Large records retain the direct
+    /// single-record path; order, payloads and checkpoint durability are unchanged.
     pub fn append_raw_owned(
         &mut self,
         source: &SourceDef,
@@ -348,10 +390,7 @@ impl Ledger {
             });
         }
         let file_id = self.define(source)?;
-        for (start_offset, payload) in records {
-            self.raw_frame(file_id, generation, start_offset, &payload)?;
-        }
-        Ok(())
+        self.raw_owned_batch(file_id, generation, records)
     }
 
     /// Seal a fully captured source generation. The marker may be flushed
@@ -456,10 +495,11 @@ impl Ledger {
         Ok(true)
     }
 
-    /// Cross one projection checkpoint. Live/default ledgers make it durable
-    /// immediately. A deliberately deferred private ledger only drains its
-    /// userspace buffer and rotates at the same boundaries; its caller must
-    /// invoke [`Ledger::flush`] before publication.
+    /// Cross one projection checkpoint. Live/default synchronous ledgers make
+    /// it durable immediately. A deferred private ledger drains its buffer and
+    /// rotates without syncing; its async worker may coalesce intermediate
+    /// checkpoints until metadata, a source seal or rotation. The private
+    /// caller must invoke [`Ledger::flush`] before publication.
     pub fn checkpoint(&mut self) -> Result<(), CaptureError> {
         if self.async_backend.is_some() {
             return self.send_async(AsyncCommand::Checkpoint);
@@ -750,68 +790,6 @@ impl Ledger {
         Ok(())
     }
 
-    fn raw_frame(
-        &mut self,
-        file_id: u32,
-        generation: u64,
-        start_offset: u64,
-        payload: &[u8],
-    ) -> Result<(), CaptureError> {
-        const FIXED_BYTES: usize = 20;
-        let body_len = FIXED_BYTES.checked_add(payload.len()).ok_or_else(|| {
-            CaptureError::LimitExceeded("raw ledger record size overflowed usize".to_string())
-        })?;
-        if body_len > MAX_FRAME_BYTES {
-            return Err(CaptureError::LimitExceeded(format!(
-                "raw ledger record is {} bytes, frame limit is {}",
-                payload.len(),
-                MAX_FRAME_BYTES - FIXED_BYTES
-            )));
-        }
-        self.note_generation(file_id, generation);
-        self.ensure_writer()?;
-        let path = self.dir.join(segment_name(self.segment_seq));
-        let started = Instant::now();
-        let mut head = [0_u8; 5];
-        head[0] = TAG_RAW;
-        head[1..5].copy_from_slice(&(body_len as u32).to_be_bytes());
-        let mut fixed = [0_u8; FIXED_BYTES];
-        fixed[0..4].copy_from_slice(&file_id.to_be_bytes());
-        fixed[4..12].copy_from_slice(&generation.to_be_bytes());
-        fixed[12..20].copy_from_slice(&start_offset.to_be_bytes());
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(&head);
-        hasher.update(&fixed);
-        hasher.update(payload);
-        let digest = hasher.finalize();
-        let checksum = &digest.as_bytes()[..CHECKSUM_BYTES];
-        self.write_stats.frame_nanos = self
-            .write_stats
-            .frame_nanos
-            .saturating_add(elapsed_nanos(started));
-
-        let started = Instant::now();
-        let written = {
-            let writer = self.writer.as_mut().expect("ensure_writer just ran");
-            writer
-                .write_all(&head)
-                .and_then(|_| writer.write_all(&fixed))
-                .and_then(|_| writer.write_all(payload))
-                .and_then(|_| writer.write_all(checksum))
-        };
-        self.write_stats.buffer_write_nanos = self
-            .write_stats
-            .buffer_write_nanos
-            .saturating_add(elapsed_nanos(started));
-        written.map_err(|error| io_error("appending to", &path, error))?;
-
-        let frame_bytes = (head.len() + body_len + CHECKSUM_BYTES) as u64;
-        self.write_stats.frames = self.write_stats.frames.saturating_add(1);
-        self.write_stats.frame_bytes = self.write_stats.frame_bytes.saturating_add(frame_bytes);
-        self.written += frame_bytes;
-        Ok(())
-    }
-
     fn ensure_writer(&mut self) -> Result<(), CaptureError> {
         if self.writer.is_some() {
             return Ok(());
@@ -992,6 +970,7 @@ pub(crate) struct FramePrefix {
 pub(crate) fn frame_prefix(reader: &mut impl Read) -> std::io::Result<FramePrefix> {
     let mut digest = blake3::Hasher::new();
     let mut bytes = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
     let torn = |bytes, digest: blake3::Hasher| FramePrefix {
         bytes,
         clean: false,
@@ -1022,23 +1001,29 @@ pub(crate) fn frame_prefix(reader: &mut impl Read) -> std::io::Result<FramePrefi
         if !known || body_len > MAX_FRAME_BYTES {
             return Ok(torn(bytes, digest));
         }
-        let mut body = vec![0_u8; body_len];
-        if !read_exact_or_short(reader, &mut body)? {
-            return Ok(torn(bytes, digest));
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&head);
+        let mut frame_digest = digest.clone();
+        frame_digest.update(&head);
+        let mut remaining = body_len;
+        while remaining != 0 {
+            let length = remaining.min(buffer.len());
+            if !read_exact_or_short(reader, &mut buffer[..length])? {
+                return Ok(torn(bytes, digest));
+            }
+            hasher.update(&buffer[..length]);
+            frame_digest.update(&buffer[..length]);
+            remaining -= length;
         }
         let mut checksum = [0_u8; CHECKSUM_BYTES];
         if !read_exact_or_short(reader, &mut checksum)? {
             return Ok(torn(bytes, digest));
         }
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(&head);
-        hasher.update(&body);
         if hasher.finalize().as_bytes()[..CHECKSUM_BYTES] != checksum {
             return Ok(torn(bytes, digest));
         }
-        digest.update(&head);
-        digest.update(&body);
-        digest.update(&checksum);
+        frame_digest.update(&checksum);
+        digest = frame_digest;
         bytes += (head.len() + body_len + CHECKSUM_BYTES) as u64;
     }
 }
@@ -1320,401 +1305,4 @@ fn decode_define(body: &[u8]) -> Option<(u32, SourceDef)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use tempfile::TempDir;
-
-    use super::*;
-
-    fn source(path: &str) -> SourceDef {
-        SourceDef {
-            ledger_only: false,
-            relative_path: path.to_string(),
-            stream_id: "transcript".to_string(),
-            session_id: "s-canonical".to_string(),
-            native_session_id: "s-native".to_string(),
-            agent_version: Some("1.2.3".to_string()),
-        }
-    }
-
-    #[test]
-    fn source_admission_is_backward_compatible_and_round_trips() {
-        let legacy = br#"{"file_id":"0","relative_path":"a.jsonl","stream_id":"rollout","session_id":"s","native_session_id":"n","agent_version":"1"}"#;
-        assert!(!decode_define(legacy).unwrap().1.ledger_only);
-
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap();
-        let mut internal = source("internal.jsonl");
-        internal.ledger_only = true;
-        ledger
-            .append_raw(&internal, 1, [(0, b"private".as_slice())])
-            .unwrap();
-        ledger.flush().unwrap();
-        drop(ledger);
-        let scanned = scan(dir.path()).unwrap();
-        assert_eq!(scanned.torn_segments, 0);
-        assert!(
-            matches!(&scanned.entries[0], LedgerEntry::Raw { source, .. } if source == &internal)
-        );
-        assert_eq!(internal.projected_session_id(), None);
-    }
-
-    #[test]
-    fn round_trips_raw_and_meta_entries_in_order() {
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap();
-        ledger.append_meta(1, "[{\"op\":\"runtime\"}]").unwrap();
-        ledger
-            .append_raw(
-                &source("a.jsonl"),
-                1,
-                [(0_u64, b"one".as_slice()), (4, b"two")],
-            )
-            .unwrap();
-        ledger
-            .append_raw(&source("b.jsonl"), 3, [(10_u64, b"three".as_slice())])
-            .unwrap();
-        ledger.checkpoint().unwrap();
-
-        let scanned = scan(dir.path()).unwrap();
-        assert_eq!(scanned.segments, 1);
-        assert_eq!(scanned.torn_segments, 0);
-        assert_eq!(scanned.entries.len(), 4);
-        assert_eq!(
-            scanned.entries[0],
-            LedgerEntry::Meta {
-                schema_version: 1,
-                payload: "[{\"op\":\"runtime\"}]".to_string(),
-            }
-        );
-        let LedgerEntry::Raw {
-            source: from_scan,
-            generation,
-            start_offset,
-            payload,
-        } = &scanned.entries[2]
-        else {
-            panic!("expected a raw entry");
-        };
-        assert_eq!(from_scan, &source("a.jsonl"));
-        assert_eq!((*generation, *start_offset), (1, 4));
-        assert_eq!(payload, b"two");
-    }
-
-    #[test]
-    fn semantic_meta_head_skips_identical_warm_snapshots() {
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap();
-        assert!(
-            ledger
-                .append_meta_checkpoint_if_changed(2, "[{\"run\":1}]", "stable-a")
-                .unwrap()
-        );
-        assert!(
-            !ledger
-                .append_meta_checkpoint_if_changed(2, "[{\"run\":2}]", "stable-a")
-                .unwrap()
-        );
-        assert!(
-            ledger
-                .append_meta_checkpoint_if_changed(2, "[{\"run\":3}]", "stable-b")
-                .unwrap()
-        );
-
-        let meta = scan(dir.path())
-            .unwrap()
-            .entries
-            .into_iter()
-            .filter_map(|entry| match entry {
-                LedgerEntry::Meta { payload, .. } => Some(payload),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(meta, ["[{\"run\":1}]", "[{\"run\":3}]"]);
-    }
-
-    #[test]
-    fn write_stats_split_frames_flush_and_sync_without_changing_the_ledger() {
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap();
-        ledger
-            .append_raw(
-                &source("a.jsonl"),
-                1,
-                [(0_u64, b"one".as_slice()), (4, b"two")],
-            )
-            .unwrap();
-        ledger.checkpoint().unwrap();
-
-        let stats = ledger.take_write_stats();
-        assert_eq!(stats.frames, 3, "one define plus two raw frames");
-        assert!(stats.frame_bytes > 6);
-        assert_eq!(stats.flushes, 1);
-        assert_eq!(stats.syncs, 1, "default checkpoints stay live-durable");
-        assert_eq!(stats.directory_syncs, 1);
-        assert_eq!(stats.segments_opened, 1);
-        assert_eq!(ledger.take_write_stats(), LedgerWriteStats::default());
-
-        let scanned = scan(dir.path()).unwrap();
-        assert_eq!(scanned.entries.len(), 2);
-        assert_eq!(scanned.torn_segments, 0);
-    }
-
-    #[test]
-    fn asynchronous_owned_writer_preserves_order_and_joins_at_flush() {
-        let dir = TempDir::new().unwrap();
-        let source = source("async.jsonl");
-        let mut ledger = Ledger::open(dir.path())
-            .unwrap()
-            .defer_sync_until_flush()
-            .into_async(2);
-        ledger.append_meta(2, "[]").unwrap();
-        ledger.checkpoint().unwrap();
-        ledger
-            .append_raw_owned(&source, 1, vec![(0, b"one".to_vec()), (4, b"two".to_vec())])
-            .unwrap();
-        ledger.complete_generation(&source, 1, 7, true).unwrap();
-        ledger.checkpoint().unwrap();
-        ledger.flush().unwrap();
-
-        let stats = ledger.take_write_stats();
-        assert_eq!(stats.syncs, 1);
-        let scanned = scan(dir.path()).unwrap();
-        assert_eq!(scanned.torn_segments, 0);
-        assert!(matches!(scanned.entries[0], LedgerEntry::Meta { .. }));
-        assert!(matches!(
-            scanned.entries.last(),
-            Some(LedgerEntry::GenerationComplete { generation: 1, .. })
-        ));
-        let payloads = scanned
-            .entries
-            .iter()
-            .filter_map(|entry| match entry {
-                LedgerEntry::Raw { payload, .. } => Some(payload.as_slice()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(payloads, [b"one".as_slice(), b"two".as_slice()]);
-    }
-
-    #[test]
-    fn deferred_checkpoints_sync_every_rotated_segment_at_the_final_barrier() {
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path())
-            .unwrap()
-            .with_max_segment_bytes(64)
-            .defer_sync_until_flush();
-        for index in 0..8_u64 {
-            ledger
-                .append_raw(
-                    &source("a.jsonl"),
-                    1,
-                    [(index * 8, format!("record-{index}").into_bytes())],
-                )
-                .unwrap();
-            ledger.checkpoint().unwrap();
-        }
-
-        let checkpoints = ledger.take_write_stats();
-        assert_eq!(checkpoints.flushes, 8);
-        assert_eq!(checkpoints.syncs, 0);
-        assert_eq!(checkpoints.directory_syncs, 0);
-        assert_eq!(checkpoints.segments_opened, 8);
-
-        ledger.flush().unwrap();
-        let barrier = ledger.take_write_stats();
-        assert_eq!(barrier.syncs, 8);
-        assert_eq!(barrier.directory_syncs, 1);
-        assert_eq!(barrier.flushes, 0, "every segment already rotated");
-
-        let scanned = scan(dir.path()).unwrap();
-        assert_eq!(scanned.segments, 8);
-        assert_eq!(scanned.torn_segments, 0);
-        assert_eq!(
-            scanned
-                .entries
-                .iter()
-                .filter(|entry| matches!(entry, LedgerEntry::Raw { .. }))
-                .count(),
-            8
-        );
-    }
-
-    #[test]
-    fn first_barrier_syncs_new_directory_tree_child_first() {
-        let temp = TempDir::new().unwrap();
-        let dir = temp.path().join("ledger").join("runtime");
-        let mut ledger = Ledger::open(&dir).unwrap();
-        ledger
-            .append_raw(&source("a.jsonl"), 1, [(0_u64, b"one".as_slice())])
-            .unwrap();
-        ledger.checkpoint().unwrap();
-
-        let stats = ledger.take_write_stats();
-        assert_eq!(stats.syncs, 1);
-        assert_eq!(
-            stats.directory_syncs, 3,
-            "runtime, ledger root, and the pre-existing parent need barriers"
-        );
-    }
-
-    #[test]
-    fn generation_seals_carry_normalizer_outcome_and_source_identity() {
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap();
-        let source = source("a.jsonl");
-        ledger
-            .append_raw(&source, 7, [(0_u64, b"record".as_slice())])
-            .unwrap();
-        ledger.complete_generation(&source, 7, 4, false).unwrap();
-        ledger.flush().unwrap();
-
-        let scanned = scan(dir.path()).unwrap();
-        assert!(matches!(
-            &scanned.entries[1],
-            LedgerEntry::GenerationComplete {
-                source: sealed,
-                generation: 7,
-                normalizer_version: 4,
-                normalized_clean: false,
-            } if sealed == &source
-        ));
-    }
-
-    #[test]
-    fn same_path_with_new_source_metadata_gets_a_fresh_definition() {
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap();
-        let old = source("a.jsonl");
-        let mut new = old.clone();
-        new.agent_version = Some("2.0.0".to_string());
-        ledger
-            .append_raw(&old, 1, [(0_u64, b"old".as_slice())])
-            .unwrap();
-        ledger
-            .append_raw(&new, 1, [(4_u64, b"new".as_slice())])
-            .unwrap();
-        ledger.flush().unwrap();
-
-        let scanned = scan(dir.path()).unwrap();
-        let sources: Vec<_> = scanned
-            .entries
-            .iter()
-            .filter_map(|entry| match entry {
-                LedgerEntry::Raw { source, .. } => Some(source.agent_version.as_deref()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(sources, [Some("1.2.3"), Some("2.0.0")]);
-    }
-
-    #[test]
-    fn reopening_continues_in_a_new_segment_and_redefines_sources() {
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap();
-        ledger
-            .append_raw(&source("a.jsonl"), 1, [(0_u64, b"first".as_slice())])
-            .unwrap();
-        ledger.flush().unwrap();
-        drop(ledger);
-
-        let mut ledger = Ledger::open(dir.path()).unwrap();
-        ledger
-            .append_raw(&source("a.jsonl"), 1, [(6_u64, b"second".as_slice())])
-            .unwrap();
-        ledger.flush().unwrap();
-
-        let scanned = scan(dir.path()).unwrap();
-        assert_eq!(scanned.segments, 2);
-        assert_eq!(scanned.torn_segments, 0);
-        let raw: Vec<&[u8]> = scanned
-            .entries
-            .iter()
-            .filter_map(|entry| match entry {
-                LedgerEntry::Raw { payload, .. } => Some(payload.as_slice()),
-                LedgerEntry::Meta { .. } | LedgerEntry::GenerationComplete { .. } => None,
-            })
-            .collect();
-        assert_eq!(raw, [b"first".as_slice(), b"second"]);
-    }
-
-    #[test]
-    fn rotation_by_size_keeps_segments_self_contained() {
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap().with_max_segment_bytes(64);
-        for index in 0..8_u64 {
-            ledger
-                .append_raw(
-                    &source("a.jsonl"),
-                    1,
-                    [(index * 8, format!("record-{index}").into_bytes())],
-                )
-                .unwrap();
-            ledger.flush().unwrap();
-        }
-
-        let scanned = scan(dir.path()).unwrap();
-        assert!(scanned.segments > 1, "64-byte cap must force rotation");
-        assert_eq!(scanned.torn_segments, 0);
-        let raw_count = scanned
-            .entries
-            .iter()
-            .filter(|entry| matches!(entry, LedgerEntry::Raw { .. }))
-            .count();
-        assert_eq!(raw_count, 8, "rotation must not lose or split records");
-    }
-
-    #[test]
-    fn a_torn_tail_is_harmless_and_prior_entries_survive() {
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path())
-            .unwrap()
-            .with_codec(SegmentCodec::Plain);
-        ledger
-            .append_raw(&source("a.jsonl"), 1, [(0_u64, b"intact".as_slice())])
-            .unwrap();
-        ledger.flush().unwrap();
-        drop(ledger);
-
-        // Simulate a crash mid-append: garbage after the durable point.
-        let segment = dir.path().join(segment_name(0));
-        let mut file = OpenOptions::new().append(true).open(&segment).unwrap();
-        file.write_all(&[TAG_RAW, 0, 0, 1]).unwrap(); // truncated header
-
-        let scanned = scan(dir.path()).unwrap();
-        assert_eq!(scanned.torn_segments, 1);
-        assert_eq!(scanned.entries.len(), 1); // the intact record (defines resolve, they don't surface)
-
-        // A checksum flip inside a frame also just stops the segment.
-        let mut bytes = std::fs::read(&segment).unwrap();
-        let flip_at = MAGIC_LEN + 7;
-        bytes[flip_at] ^= 0xFF;
-        std::fs::write(&segment, &bytes).unwrap();
-        let scanned = scan(dir.path()).unwrap();
-        assert_eq!(scanned.torn_segments, 1);
-        assert!(scanned.entries.is_empty());
-    }
-
-    #[test]
-    fn define_encoding_survives_hostile_strings() {
-        let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap();
-        let hostile = SourceDef {
-            ledger_only: false,
-            relative_path: "we\"ird\\path\n.jsonl".to_string(),
-            stream_id: "transcript".to_string(),
-            session_id: "s".to_string(),
-            native_session_id: "n".to_string(),
-            agent_version: None,
-        };
-        ledger
-            .append_raw(&hostile, 1, [(0_u64, b"x".as_slice())])
-            .unwrap();
-        ledger.flush().unwrap();
-
-        let scanned = scan(dir.path()).unwrap();
-        let LedgerEntry::Raw { source, .. } = &scanned.entries[0] else {
-            panic!("expected raw");
-        };
-        assert_eq!(source, &hostile);
-    }
-}
+mod tests;

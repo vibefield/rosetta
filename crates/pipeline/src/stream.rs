@@ -855,7 +855,7 @@ fn ingest_file(
             }),
         };
         instrument.observe_write_batch(&write_batch);
-        let applied = instrument.apply(store, &write_batch);
+        let applied = instrument.apply_owned(store, write_batch);
         let stats = match applied {
             Ok(stats) => stats,
             Err(StoreError::CheckpointConflict { .. }) => {

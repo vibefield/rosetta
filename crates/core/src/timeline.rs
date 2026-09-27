@@ -3981,8 +3981,9 @@ pub enum MessageDetail {
 
 /// The read-time list-price cost of one row's usage record (ARCHITECTURE
 /// §4.1.3). Never stored or normalized: the store computes it from the stored
-/// usage facts and the compiled price catalog whenever it reads or emits the
-/// row, so a price update needs no rewrite.
+/// usage facts and the compiled price catalog when returning a transcript row
+/// or emitting a live mutation. Internal reads omit it; a price update needs
+/// no rewrite.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -4022,7 +4023,7 @@ pub struct TimelineEntry {
     /// op retracts it.
     pub usage: TokenSnapshot,
     /// Read-time cost of `usage`; absent when the row carries no usage or was
-    /// not read through the store.
+    /// not read for a transcript response or live mutation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub cost: Option<UsageCost>,

@@ -33,26 +33,26 @@ crate::columns::column_map! {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct EncodedTool {
-    pub correlation_key: Option<String>,
+pub(crate) struct EncodedTool<'a> {
+    pub correlation_key: Option<&'a str>,
     pub correlation_kind: Option<&'static str>,
-    pub native_id: Option<String>,
-    pub namespace: Option<String>,
-    pub provider: Option<String>,
-    pub name: Option<String>,
+    pub native_id: Option<&'a str>,
+    pub namespace: Option<&'a str>,
+    pub provider: Option<&'a str>,
+    pub name: Option<&'a str>,
     pub kind: Option<&'static str>,
     pub status: Option<&'static str>,
     pub status_basis: Option<&'static str>,
     pub detail: Option<String>,
     pub error_kind: Option<&'static str>,
-    pub error_summary: Option<String>,
-    pub diagnostic: Option<String>,
+    pub error_summary: Option<&'a str>,
+    pub diagnostic: Option<&'a str>,
     pub started_at: Option<i64>,
     pub completed_at: Option<i64>,
     pub duration_ms: Option<i64>,
 }
 
-pub(crate) fn encode(tool: Option<&ToolInteraction>) -> Result<EncodedTool, StoreError> {
+pub(crate) fn encode(tool: Option<&ToolInteraction>) -> Result<EncodedTool<'_>, StoreError> {
     let Some(tool) = tool else {
         return Ok(EncodedTool::default());
     };
@@ -65,12 +65,12 @@ pub(crate) fn encode(tool: Option<&ToolInteraction>) -> Result<EncodedTool, Stor
             message: "tool duration exceeds SQLite integer range".into(),
         })?;
     Ok(EncodedTool {
-        correlation_key: Some(tool.correlation.key.clone()),
+        correlation_key: Some(&tool.correlation.key),
         correlation_kind: Some(correlation_name(tool.correlation.derivation)),
-        native_id: tool.native.id.clone(),
-        namespace: tool.native.namespace.clone(),
-        provider: tool.native.provider.clone(),
-        name: Some(tool.native.name.clone()),
+        native_id: tool.native.id.as_deref(),
+        namespace: tool.native.namespace.as_deref(),
+        provider: tool.native.provider.as_deref(),
+        name: Some(&tool.native.name),
         kind: Some(tool.action.kind().as_str()),
         status: Some(status_name(tool.status.value)),
         status_basis: Some(status_basis_name(tool.status.basis)),
@@ -82,11 +82,11 @@ pub(crate) fn encode(tool: Option<&ToolInteraction>) -> Result<EncodedTool, Stor
         error_summary: tool
             .failure
             .as_ref()
-            .and_then(|failure| failure.summary.clone()),
+            .and_then(|failure| failure.summary.as_deref()),
         diagnostic: tool
             .failure
             .as_ref()
-            .and_then(|failure| failure.diagnostic.clone()),
+            .and_then(|failure| failure.diagnostic.as_deref()),
         started_at: tool.timing.and_then(|timing| timing.started_at),
         completed_at: tool.timing.and_then(|timing| timing.completed_at),
         duration_ms,

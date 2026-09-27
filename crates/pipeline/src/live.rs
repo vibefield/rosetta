@@ -20,7 +20,7 @@ use rosetta_capture::{Ledger, SourceEvent, SourceEvents};
 use rosetta_core::rows::RuntimeRow;
 use rosetta_store::Store;
 
-use crate::instrument::Instrument;
+use crate::instrument::{Instrument, Metric};
 use crate::meta::{SessionFile, meta_ingest_into};
 use crate::stream::{StreamReport, stream_backfill_into};
 use crate::{IngestOptions, PipelineError};
@@ -251,6 +251,15 @@ impl<'a> LiveRunner<'a> {
         &self.report
     }
 
+    /// Immutable ledger segments eligible for concurrent container maintenance.
+    /// The owner must retain its projection lock while using this snapshot.
+    pub fn closed_ledger_segments(&self) -> Result<Vec<PathBuf>, PipelineError> {
+        self.ledger.as_ref().map_or_else(
+            || Ok(Vec::new()),
+            |ledger| ledger.closed_segment_paths().map_err(PipelineError::from),
+        )
+    }
+
     pub fn into_report(self) -> LiveReport {
         self.report
     }
@@ -335,7 +344,9 @@ impl<'a> LiveRunner<'a> {
         }
 
         if poll_due {
-            self.poll(store, &mut changed, &mut needs_admission)?;
+            instrument.time(Metric::LivePollNanos, || {
+                self.poll(store, &mut changed, &mut needs_admission, instrument)
+            })?;
         }
 
         if needs_admission {
@@ -419,28 +430,44 @@ impl<'a> LiveRunner<'a> {
         store: &mut Store,
         changed: &mut BTreeSet<String>,
         needs_admission: &mut bool,
+        instrument: &Instrument,
     ) -> Result<(), PipelineError> {
         self.report.polls += 1;
         self.last_poll = Instant::now();
         let layout = self.adapter.layout();
-        let walk = rosetta_capture::walk_filtered(&self.root, self.opts.max_files, |path| {
-            layout.matching_stream(path).is_some()
+        let walk = instrument.time(Metric::LivePollWalkNanos, || {
+            rosetta_capture::walk_filtered(&self.root, self.opts.max_files, |path| {
+                // Inventory-only streams cannot nominate a source or trigger
+                // admission. Keep them out of both the stat work and file cap.
+                layout
+                    .matching_stream(path)
+                    .is_some_and(|stream| self.adapter.stream_driver(&stream.id).is_some())
+            })
         })?;
+        instrument.add(Metric::LivePollFiles, walk.files.len() as u64);
+        // Index once per poll instead of scanning the whole admitted roster
+        // for every physical file. Preserve the old first-match behavior if
+        // a roster ever contains duplicate paths.
+        let mut by_path = BTreeMap::new();
+        for (index, file) in self.files.iter().enumerate() {
+            by_path.entry(file.relative_path.clone()).or_insert(index);
+        }
         for walked in &walk.files {
-            match self
-                .files
-                .iter_mut()
-                .find(|file| file.relative_path == walked.relative_path)
-            {
-                Some(known) => {
-                    let checkpoint = rosetta_store::queries::cursor_state(
-                        store.conn(),
-                        &self.runtime.id,
-                        &walked.relative_path,
-                    )?
-                    .and_then(|cursor| {
-                        crate::checkpoint::PipeCheckpoint::decode(&cursor.checkpoint)
-                    });
+            match by_path.get(&walked.relative_path).copied() {
+                Some(index) => {
+                    let known = &mut self.files[index];
+                    let checkpoint = instrument.time(Metric::LivePollCheckpointNanos, || {
+                        rosetta_store::queries::cursor_state(
+                            store.conn(),
+                            &self.runtime.id,
+                            &walked.relative_path,
+                        )
+                        .map(|cursor| {
+                            cursor.and_then(|cursor| {
+                                crate::checkpoint::PipeCheckpoint::decode(&cursor.checkpoint)
+                            })
+                        })
+                    })?;
                     // An adapter semantic change must replay quiet files too.
                     // Otherwise an installed projection would retain the old
                     // interpretation until this source happened to grow or

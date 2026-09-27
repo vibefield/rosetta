@@ -159,7 +159,8 @@ fn live_commit_reaches_subscribers_before_eight_quiet_runtimes_are_polled() {
             quiet,
         ));
     }
-    let worker = Fts5SearchWorker::start(Fts5SidecarSearch::new(db));
+    let search = Fts5SidecarSearch::new(db);
+    let worker = Fts5SearchWorker::start(search.clone());
     let flags = parse_flags(&["--ticks".into(), "1".into()]).unwrap();
     let result = drive_live_runners(
         &flags,
@@ -171,6 +172,7 @@ fn live_commit_reaches_subscribers_before_eight_quiet_runtimes_are_polled() {
         &DaemonHealth::new(now_ms()),
         &hub,
         &worker,
+        &search,
         &AtomicBool::new(false),
     );
     worker.stop();

@@ -316,6 +316,92 @@ fn native_tool_completion_is_activity_in_live_and_cold_paths_even_without_timing
 }
 
 #[test]
+fn cold_tool_activity_is_inserted_once_and_survives_a_failed_flush() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    init(&mut store);
+    let cursor_id = cursor(&mut store);
+    let mut ops = IngestOp::project_message(tool_message(cursor_id, Some(100)));
+    for (record_offset, at) in [(1, 50), (2, 300), (3, 200)] {
+        ops.push(IngestOp::ToolUpdate {
+            session_id: "root".into(),
+            correlation_key: "call".into(),
+            evidence: rosetta_core::EvidenceOrder {
+                source_identity: rosetta_core::SourceIdentity("test-activity".into()),
+                generation: 1,
+                record_offset,
+                mutation_index: 0,
+            },
+            patch: Box::new(rosetta_core::ToolUpdatePatch {
+                status: Some(rosetta_core::ToolStatusFact {
+                    value: rosetta_core::ToolStatus::Succeeded,
+                    basis: rosetta_core::StatusBasis::NativeTerminalRecord,
+                }),
+                ..Default::default()
+            }),
+            at: Some(at),
+        });
+    }
+    store
+        .apply(&Batch {
+            ops,
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "root".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+            ..Batch::default()
+        })
+        .unwrap();
+    store
+        .conn()
+        .execute_batch(
+            "CREATE TEMP TABLE tool_writes(kind TEXT, first_at INTEGER, last_at INTEGER);
+         CREATE TEMP TRIGGER record_tool_insert AFTER INSERT ON message BEGIN
+           INSERT INTO tool_writes VALUES ('insert', NEW.activity_first_at, NEW.activity_last_at);
+         END;
+         CREATE TEMP TRIGGER record_tool_update AFTER UPDATE ON message BEGIN
+           INSERT INTO tool_writes VALUES ('update', NEW.activity_first_at, NEW.activity_last_at);
+         END;
+         CREATE TEMP TRIGGER fail_tool BEFORE INSERT ON message BEGIN
+           SELECT RAISE(ABORT, 'injected flush failure');
+         END;",
+        )
+        .unwrap();
+    assert!(store.flush_bulk_reconciliation().is_err());
+    store
+        .conn()
+        .execute_batch("DROP TRIGGER fail_tool")
+        .unwrap();
+    let stats = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(stats.messages_inserted, 1);
+    assert_eq!(stats.tool_results_merged, 3);
+    assert_eq!(bounds(&store, "root"), span(50, 300));
+    let writes = store
+        .conn()
+        .prepare("SELECT kind, first_at, last_at FROM tool_writes")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(writes, vec![("insert".to_owned(), 50, 300)]);
+    assert_eq!(
+        store.flush_bulk_reconciliation().unwrap().messages_inserted,
+        0
+    );
+    store.finish_bulk_load().unwrap();
+    assert_eq!(bounds(&store, "root"), span(50, 300));
+}
+
+#[test]
 fn usage_cannot_supply_activity_for_an_undated_tool_during_cold_replay() {
     for cold in [false, true] {
         let mut store = if cold {

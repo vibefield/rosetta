@@ -831,7 +831,7 @@ pub fn timeline_page(
     )?;
     let rows = stmt.query_map(
         params![session_id, before.unwrap_or(i64::MAX), limit],
-        message_codec::decode,
+        message_codec::decode_priced,
     )?;
     let mut out = Vec::new();
     for row in rows {
@@ -853,7 +853,7 @@ pub fn collaboration_timeline(
          WHERE session_id = ?1 AND type = 'collaboration'
          ORDER BY ordinal ASC, timeline_id ASC",
     )?;
-    let rows = entries_stmt.query_map(params![session_id], message_codec::decode)?;
+    let rows = entries_stmt.query_map(params![session_id], message_codec::decode_priced)?;
     let mut entries = Vec::new();
     for row in rows {
         entries.push(row?);
@@ -916,7 +916,10 @@ pub fn timeline_entry(
 ) -> Result<Option<TimelineEntry>, StoreError> {
     let entry = conn
         .prepare_cached("SELECT * FROM message WHERE session_id = ?1 AND timeline_id = ?2")?
-        .query_row(params![session_id, timeline_id], message_codec::decode)
+        .query_row(
+            params![session_id, timeline_id],
+            message_codec::decode_priced,
+        )
         .optional()
         .map_err(StoreError::from)?;
     let Some(entry) = entry else {
@@ -981,7 +984,7 @@ pub fn report_work(
         "SELECT * FROM message WHERE session_id = ?1 AND ordinal BETWEEN ?2 AND ?3 ORDER BY ordinal, timeline_id"
     )?;
     let mut entries = statement
-        .query_map(params![source, start, end], message_codec::decode)?
+        .query_map(params![source, start, end], message_codec::decode_priced)?
         .collect::<Result<Vec<_>, _>>()?;
     if !entries
         .iter()

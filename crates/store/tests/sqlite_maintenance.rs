@@ -84,49 +84,75 @@ fn install_cursor(store: &mut Store, path: &str) -> i64 {
 
 #[test]
 fn cold_planner_retains_payload_without_projecting_canonical_rows() {
-    let mut store = Store::open_in_memory_for_cold_planning().unwrap();
-    store.apply(&base_batch()).unwrap();
-    let cursor_id = install_cursor(&mut store, "session.jsonl");
-    let source_batch = Batch {
-        ops: vec![message_op(message("planned", 0, 10))],
-        checkpoints: vec![CheckpointUpdate {
-            runtime_id: "rt1".into(),
-            stream: "transcript".into(),
-            path: "session.jsonl".into(),
-            session_id: Some("s1".into()),
-            expected: Some("fresh".into()),
-            next: "sealed".into(),
-            updated_at: None,
-        }],
-        source: Some(SourceWrite {
-            cursor_id,
-            session_id: "s1".into(),
-            generation: 1,
-            first_sequence: 0,
-            mode: SourceMode::Activate,
-        }),
-    };
-    store.apply(&source_batch).unwrap();
+    for owned in [false, true] {
+        let mut store = Store::open_in_memory_for_cold_planning().unwrap();
+        store.apply(&base_batch()).unwrap();
+        let cursor_id = install_cursor(&mut store, "session.jsonl");
+        let source_batch = Batch {
+            ops: vec![message_op(message("planned", 0, 10))],
+            checkpoints: vec![CheckpointUpdate {
+                runtime_id: "rt1".into(),
+                stream: "transcript".into(),
+                path: "session.jsonl".into(),
+                session_id: Some("s1".into()),
+                expected: Some("fresh".into()),
+                next: "sealed".into(),
+                updated_at: None,
+            }],
+            source: Some(SourceWrite {
+                cursor_id,
+                session_id: "s1".into(),
+                generation: 1,
+                first_sequence: 0,
+                mode: SourceMode::Activate,
+            }),
+        };
+        let mut invalid = source_batch.clone();
+        invalid.ops.push(IngestOp::SessionMeta(session()));
+        let error = if owned {
+            store.apply_owned(invalid)
+        } else {
+            store.apply(&invalid)
+        }
+        .unwrap_err();
+        assert!(matches!(error, StoreError::SourceState { .. }));
 
-    let message_rows: i64 = store
-        .conn()
-        .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(message_rows, 0, "planning must not project payload rows");
-    let cursor = queries::cursor_state(store.conn(), "rt1", "session.jsonl")
-        .unwrap()
-        .unwrap();
-    assert_eq!(cursor.active_generation, 1);
-    assert_eq!(cursor.highest_generation, 1);
-    assert_eq!(cursor.checkpoint, "sealed");
+        let mut conflict = source_batch.clone();
+        conflict.checkpoints[0].expected = Some("stale".into());
+        let error = if owned {
+            store.apply_owned(conflict)
+        } else {
+            store.apply(&conflict)
+        }
+        .unwrap_err();
+        assert!(matches!(error, StoreError::CheckpointConflict { .. }));
 
-    let planned = store.take_planned_batches().unwrap();
-    assert_eq!(planned.len(), 3);
-    assert_eq!(planned[2].ops, source_batch.ops);
-    assert_eq!(
-        planned[2].source.as_ref().unwrap().mode,
-        SourceMode::Activate
-    );
+        if owned {
+            store.apply_owned(source_batch.clone()).unwrap();
+        } else {
+            store.apply(&source_batch).unwrap();
+        }
+
+        let message_rows: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(message_rows, 0, "planning must not project payload rows");
+        let cursor = queries::cursor_state(store.conn(), "rt1", "session.jsonl")
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor.active_generation, 1);
+        assert_eq!(cursor.highest_generation, 1);
+        assert_eq!(cursor.checkpoint, "sealed");
+
+        let planned = store.take_planned_batches().unwrap();
+        assert_eq!(planned.len(), 3);
+        assert_eq!(planned[2].ops, source_batch.ops);
+        assert_eq!(
+            planned[2].source.as_ref().unwrap().mode,
+            SourceMode::Activate
+        );
+    }
 }
 
 #[test]
@@ -250,6 +276,21 @@ fn assert_ram_only_reconciliation_schema(conn: &Connection) {
 #[test]
 fn reconciliation_and_bucket_queries_have_matching_indexes() {
     let store = Store::open_in_memory().unwrap();
+    let searchable = queries::search_kind_predicate("type");
+    let count_plan = query_plan(
+        store.conn(),
+        &format!("SELECT count(*) FROM message WHERE {searchable}"),
+    )
+    .join(" | ");
+    assert!(
+        count_plan.contains("COVERING INDEX message_searchable"),
+        "search work counting must not read the payload table: {count_plan}"
+    );
+    assert_plan_uses(
+        store.conn(),
+        &format!("SELECT id FROM message WHERE {searchable} ORDER BY id"),
+        "message_searchable",
+    );
     for (table, index) in [
         ("message", "message_src"),
         ("file_edit", "file_edit_src"),
@@ -689,7 +730,7 @@ fn closed_bulk_sources_keep_precomputed_ordinals_without_a_rewrite() {
         }
     };
     let stats = store
-        .apply_closed_bulk_sources(&[
+        .apply_closed_bulk_sources(vec![
             batch(later_path, "later", 1),
             batch(earlier_path, "earlier", 0),
         ])
@@ -715,6 +756,57 @@ fn closed_bulk_sources_keep_precomputed_ordinals_without_a_rewrite() {
 }
 
 #[test]
+fn cold_source_coalesces_timestamp_touches_without_losing_the_latest_time() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    store.apply(&base_batch()).unwrap();
+    store.use_precomputed_bulk_ordinals().unwrap();
+    for (path, times, latest) in [
+        ("first.jsonl", [300, 100, 200], 300),
+        ("second.jsonl", [250, 50, 150], 300),
+    ] {
+        let cursor_id = install_cursor(&mut store, path);
+        let offset = if path == "first.jsonl" { 0 } else { 3 };
+        let ops = times
+            .into_iter()
+            .enumerate()
+            .map(|(index, at)| {
+                let mut row = message(&format!("{path}-{index}"), offset + index as i64, at);
+                row.src_cursor = Some(cursor_id);
+                message_op(row)
+            })
+            .collect();
+        let stats = store
+            .apply_closed_bulk_sources(vec![Batch {
+                ops,
+                source: Some(SourceWrite {
+                    cursor_id,
+                    session_id: "s1".into(),
+                    generation: 1,
+                    first_sequence: 0,
+                    mode: SourceMode::Activate,
+                }),
+                ..Batch::default()
+            }])
+            .unwrap();
+        assert_eq!(stats.profile.session_touch_attempts, 1);
+        assert_eq!(
+            queries::session(store.conn(), "s1")
+                .unwrap()
+                .unwrap()
+                .updated_at,
+            latest
+        );
+    }
+    store.finish_bulk_load().unwrap();
+    assert_eq!(
+        queries::timeline_page(store.conn(), "s1", None, 10)
+            .unwrap()
+            .len(),
+        6
+    );
+}
+
+#[test]
 fn closed_bulk_runtime_transaction_rolls_back_every_source_on_failure() {
     let mut store = Store::open_in_memory_for_rebuild().unwrap();
     store.apply(&base_batch()).unwrap();
@@ -725,8 +817,21 @@ fn closed_bulk_runtime_transaction_rolls_back_every_source_on_failure() {
     let batch = |cursor_id, timeline_id| {
         let mut row = message(timeline_id, 0, 1_000);
         row.src_cursor = Some(cursor_id);
+        let mut ops = vec![message_op(row)];
+        if cursor_id == first_cursor {
+            let mut tool = message("deferred-tool", 1, 1_001);
+            tool.src_cursor = Some(cursor_id);
+            tool.kind = MessageKind::ToolUse;
+            tool.content = None;
+            tool.tool = Some(ToolInteraction::unknown(
+                "deferred-tool",
+                CorrelationDerivation::Synthetic,
+                "fixture-tool",
+            ));
+            ops.push(message_op(tool));
+        }
         Batch {
-            ops: vec![message_op(row)],
+            ops,
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id,
@@ -738,9 +843,16 @@ fn closed_bulk_runtime_transaction_rolls_back_every_source_on_failure() {
         }
     };
     let error = store
-        .apply_closed_bulk_sources(&[batch(first_cursor, "first"), batch(second_cursor, "second")])
+        .apply_closed_bulk_sources(vec![
+            batch(first_cursor, "first"),
+            batch(second_cursor, "second"),
+        ])
         .unwrap_err();
     assert!(matches!(error, StoreError::Sqlite(_)));
+    // The first source's owned deferred payload must roll back with SQL,
+    // even though its provisional delta was prepared before the failure.
+    let flushed = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(flushed.profile.bulk_tool_rows_reconciled, 0);
     assert_eq!(
         store
             .conn()
@@ -758,6 +870,25 @@ fn closed_bulk_runtime_transaction_rolls_back_every_source_on_failure() {
             (0, 0)
         );
     }
+
+    // Reconstructed input can retry the whole closed runtime cleanly.
+    let mut second = batch(second_cursor, "second");
+    let IngestOp::Message(row) = &mut second.ops[0] else {
+        unreachable!()
+    };
+    row.ordinal = 2;
+    store
+        .apply_closed_bulk_sources(vec![batch(first_cursor, "first"), second])
+        .unwrap();
+    let flushed = store.flush_bulk_reconciliation().unwrap();
+    assert_eq!(flushed.profile.bulk_tool_rows_reconciled, 1);
+    store.finish_bulk_load().unwrap();
+    assert_eq!(
+        queries::timeline_page(store.conn(), "s1", None, 10)
+            .unwrap()
+            .len(),
+        3
+    );
 }
 
 #[test]

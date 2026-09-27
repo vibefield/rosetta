@@ -7,6 +7,7 @@
 pub mod discovery;
 pub mod document;
 pub mod ledger;
+mod recompress;
 pub mod segment;
 pub mod segment_index;
 pub mod sqlite;
@@ -22,7 +23,8 @@ pub use ledger::{
     Ledger, LedgerEntry, LedgerScan, LedgerVisit, LedgerWriteStats, SourceDef, scan as scan_ledger,
     visit as visit_ledger, visit_segments as visit_ledger_segments,
 };
-pub use segment::{RecompressOutcome, SegmentCodec, recompress_segment, sniff_segment};
+pub use recompress::{RecompressOutcome, recompress_segment, recompress_segment_controlled};
+pub use segment::{SegmentCodec, sniff_segment};
 pub use segment_index::{
     IndexedSource, SegmentFilter, SegmentIndexLine, candidate_segments, rebuild_segment_index,
     segment_filter,

@@ -475,6 +475,8 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // The census fills the roll-call board; consent decides what is read.
     // Targets: one Discovered per selected adapter, then this start's
     // Enrolled roots (`enroll.rs`). Consent is a set of runtime IDS.
+    let discovery_started = Instant::now();
+    let discovery_before = instrument.snapshot();
     let targets = resolve_targets(
         &adapters,
         &flags.home,
@@ -482,6 +484,16 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         &opts,
         &instrument,
     )?;
+    if flags.json && flags.profile {
+        crate::bench::emit_command_stage_profile(
+            "serve",
+            "discovery",
+            None,
+            discovery_started,
+            &discovery_before,
+            &instrument,
+        );
+    }
     let by_kind = discovered_by_kind(&targets);
     let installed_ids = |kind: &str| {
         by_kind
@@ -665,6 +677,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 &health,
                 &hub,
                 &search_worker,
+                &search,
                 &stop,
                 started,
             )
@@ -684,6 +697,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 &health,
                 &hub,
                 &search_worker,
+                &search,
                 &stop,
                 started,
             )
@@ -735,6 +749,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             &health,
             &hub,
             &search_worker,
+            &search,
             &stop,
         )?;
         let _ = shutdown_tx.send(true);
@@ -1066,6 +1081,7 @@ fn run_resumed_fresh_serve(
     health: &Arc<DaemonHealth>,
     hub: &Arc<Hub>,
     search_worker: &Fts5SearchWorker,
+    search: &Fts5SidecarSearch,
     stop: &Arc<AtomicBool>,
     started: Instant,
 ) -> Result<(Store, u64), String> {
@@ -1151,6 +1167,7 @@ fn run_resumed_fresh_serve(
         // source must still be present: otherwise there is no complete evidence
         // from which this generation can ever be published.
         let mut ledger = open_runtime_ledger(&stage_root, &runtime)?
+            .with_codec(rosetta_capture::SegmentCodec::Plain)
             .defer_sync_until_flush()
             .into_async(4);
         health.ingest_skim(
@@ -1331,6 +1348,7 @@ fn run_resumed_fresh_serve(
         health,
         hub,
         search_worker,
+        search,
         stop,
     )?;
     Ok((store, absorbed))
@@ -1371,6 +1389,7 @@ fn run_fresh_fast_serve(
     health: &Arc<DaemonHealth>,
     hub: &Arc<Hub>,
     search_worker: &Fts5SearchWorker,
+    search: &Fts5SidecarSearch,
     stop: &Arc<AtomicBool>,
     started: Instant,
 ) -> Result<(Store, u64), String> {
@@ -1416,6 +1435,7 @@ fn run_fresh_fast_serve(
             opts: cold_opts.clone(),
             write_raw_ledger: true,
             async_raw_ledger: true,
+            ledger_codec: rosetta_capture::SegmentCodec::Plain,
             instrument: worker_instrument,
         })?;
 
@@ -1593,6 +1613,10 @@ fn run_fresh_fast_serve(
         started.elapsed().as_secs_f64()
     );
 
+    if flags.json && flags.profile {
+        crate::bench::emit_profile("serve-cold", instrument);
+    }
+
     // Reattach live ledger handles at their public paths. Watchers and
     // rosters were armed before capture, so no source write can disappear in
     // the RAM-to-disk handoff.
@@ -1625,6 +1649,7 @@ fn run_fresh_fast_serve(
         health,
         hub,
         search_worker,
+        search,
         stop,
     )?;
     Ok((store, absorbed))
@@ -1643,6 +1668,7 @@ fn run_warm_live_serve(
     health: &Arc<DaemonHealth>,
     hub: &Arc<Hub>,
     search_worker: &Fts5SearchWorker,
+    search: &Fts5SidecarSearch,
     stop: &Arc<AtomicBool>,
 ) -> Result<(Store, u64), String> {
     let wake = SourceWake::default();
@@ -1708,6 +1734,7 @@ fn run_warm_live_serve(
         health,
         hub,
         search_worker,
+        search,
         stop,
     )?;
     Ok((store, absorbed))
@@ -1724,6 +1751,7 @@ fn drive_live_runners(
     health: &DaemonHealth,
     hub: &Hub,
     search_worker: &Fts5SearchWorker,
+    search: &Fts5SidecarSearch,
     stop: &AtomicBool,
 ) -> Result<u64, String> {
     store.observe_meta_effects();
@@ -1738,14 +1766,51 @@ fn drive_live_runners(
         if stop.load(Ordering::SeqCst) {
             break;
         }
+        let catch_up_started = Instant::now();
+        let catch_up_before = instrument.snapshot();
         runner
             .catch_up(store, instrument)
             .map_err(|error| format!("{} startup catch-up: {error}", identity_name(identity)))?;
+        if flags.json && flags.profile {
+            crate::bench::emit_command_stage_profile(
+                "serve",
+                "live-catch-up",
+                Some(&identity.kind),
+                catch_up_started,
+                &catch_up_before,
+                instrument,
+            );
+        }
         update_live_health(health, identity, runner);
         search_worker.wake();
         acknowledge_search(store, search_worker)?;
         absorbed += absorb_effects(store, hub)? as u64;
     }
+
+    // Every selected path is strictly below its live writer's current segment.
+    // Existing plain evidence is rediscovered here on warm starts too, so a
+    // shutdown need not finish compression or persist a separate work queue.
+    let mut closed = Vec::new();
+    for (_, runner) in runners.iter() {
+        match runner.closed_ledger_segments() {
+            Ok(paths) => closed.extend(paths),
+            Err(error) => eprintln!("ledger compression deferred: {error}"),
+        }
+    }
+    let _compression = if closed.is_empty() || stop.load(Ordering::SeqCst) {
+        None
+    } else {
+        let search = search.clone();
+        match crate::ledger_compression::BackgroundCompression::start(closed, move || {
+            search.state().readiness == SearchReadiness::Ready
+        }) {
+            Ok(worker) => Some(worker),
+            Err(error) => {
+                eprintln!("ledger compression deferred: {error}");
+                None
+            }
+        }
+    };
 
     let mut remaining = flags.ticks;
     let mut more_hints = false;
@@ -1842,6 +1907,8 @@ fn publish_fresh_ram_projection(
         ledger_stage.complete()?;
         Ok::<(), String>(())
     })?;
-    drop(store);
-    Store::open(db).map_err(|error| format!("opening published projection: {error}"))
+    instrument.time(Metric::PublishReleaseNanos, || {
+        drop(store);
+        Store::open(db).map_err(|error| format!("opening published projection: {error}"))
+    })
 }

@@ -20,6 +20,6 @@ parent_tool_native_id: string | null,
 usage: TokenSnapshot, 
 /**
  * Read-time cost of `usage`; absent when the row carries no usage or was
- * not read through the store.
+ * not read for a transcript response or live mutation.
  */
 cost?: UsageCost, provenance: Provenance, };

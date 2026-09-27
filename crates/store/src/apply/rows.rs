@@ -3,6 +3,7 @@
 //! compatibility tests; production search is a detached projection repaired
 //! from `search_dirty`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
@@ -382,6 +383,14 @@ pub(super) fn touch_session(
     stats: &mut ApplyStats,
 ) -> Result<(), StoreError> {
     if let Some(ts) = ts {
+        if let Some(touches) = &mut stats.session_touches {
+            if let Some(latest) = touches.get_mut(session_id) {
+                *latest = (*latest).max(ts);
+            } else {
+                touches.insert(session_id.to_owned(), ts);
+            }
+            return Ok(());
+        }
         // Meta ingest usually starts from the source file's mtime, which is
         // newer than its records. Avoid a no-op row write for every message.
         stats.profile.session_touch_attempts += 1;
@@ -395,6 +404,20 @@ pub(super) fn touch_session(
         stats.profile.session_touch_nanos += elapsed_nanos(started);
         stats.profile.session_touch_rows += changed? as u64;
     }
+    Ok(())
+}
+
+pub(super) fn flush_session_touches(
+    tx: &Transaction,
+    stats: &mut ApplyStats,
+) -> Result<(), StoreError> {
+    let started = Instant::now();
+    if let Some(touches) = stats.session_touches.take() {
+        for (session_id, at) in touches {
+            touch_session(tx, &session_id, Some(at), stats)?;
+        }
+    }
+    stats.canonical_apply_nanos += elapsed_nanos(started);
     Ok(())
 }
 
@@ -414,9 +437,9 @@ pub(super) fn apply_message(
     apply_message_inner(
         tx,
         row,
-        None,
         false,
         true,
+        None,
         stats,
         maintenance,
         dirty_buckets,
@@ -430,8 +453,8 @@ pub(super) fn apply_message(
 pub(super) fn apply_reconciled_tool_message(
     tx: &Transaction,
     row: &TimelineEntry,
-    resolved_tool: &ToolInteraction,
     known_absent: bool,
+    activity: Option<(Ms, Ms)>,
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
@@ -439,9 +462,9 @@ pub(super) fn apply_reconciled_tool_message(
     apply_message_inner(
         tx,
         row,
-        Some(resolved_tool),
         known_absent,
         false,
+        activity,
         stats,
         maintenance,
         dirty_buckets,
@@ -453,9 +476,9 @@ pub(super) fn apply_reconciled_tool_message(
 fn apply_message_inner(
     tx: &Transaction,
     row: &TimelineEntry,
-    reconciled_tool: Option<&ToolInteraction>,
     known_absent: bool,
     touch_message_session: bool,
+    activity: Option<(Ms, Ms)>,
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
@@ -491,31 +514,6 @@ fn apply_message_inner(
         TimelineBody::ToolUse { tool } => Some(tool.as_ref()),
         _ => None,
     };
-    let mut tool = match reconciled_tool {
-        Some(resolved) => {
-            let opener = incoming_tool.ok_or_else(|| StoreError::ProjectionInvalid {
-                message: format!(
-                    "pre-reconciled tool row {} does not contain a tool opener",
-                    row.timeline_id
-                ),
-            })?;
-            if opener.correlation != resolved.correlation {
-                return Err(StoreError::ProjectionInvalid {
-                    message: format!(
-                        "pre-reconciled tool correlation changed for row {}",
-                        row.timeline_id
-                    ),
-                });
-            }
-            Some(resolved.clone())
-        }
-        None => incoming_tool.cloned(),
-    };
-    if let Some(tool) = tool.as_mut() {
-        // Defense in depth for callers outside the normal pipeline: SQLite
-        // and the hot mutation mirror never retain a full command body.
-        tool.action.compact_command_preview();
-    }
     if let (Some(previous), Some(incoming)) = (
         old.as_ref().and_then(|row| row.tool.as_ref()),
         incoming_tool,
@@ -528,21 +526,27 @@ fn apply_message_inner(
             ),
         });
     }
-    if let Some(tool) = tool.as_ref() {
-        tool.validate()
-            .map_err(|error| StoreError::ProjectionInvalid {
-                message: format!("invalid resolved tool row {}: {error}", row.timeline_id),
-            })?;
+    // Prose and already resolved cold tools can be serialized by reference.
+    // Only the ordinary tool path needs an owned row for defensive command
+    // compaction; the private reconciler already compacted its final row.
+    let mut emitted = Cow::Borrowed(row);
+    if touch_message_session
+        && incoming_tool.is_some()
+        && let TimelineBody::ToolUse { tool } = &mut emitted.to_mut().body
+    {
+        tool.action.compact_command_preview();
     }
-    let encoded = tool_codec::encode(tool.as_ref())?;
-    let mut emitted = row.clone();
-    if let Some(tool) = tool {
-        emitted.body = TimelineBody::ToolUse {
-            tool: Box::new(tool),
-        };
-    }
+    let tool = match &emitted.body {
+        TimelineBody::ToolUse { tool } => Some(tool.as_ref()),
+        _ => None,
+    };
+    let encoded = tool_codec::encode(tool)?;
     let message = message_codec::encode(&emitted)?;
-    let (activity_first, activity_last) = crate::activity::message_bounds(&emitted);
+    let (mut activity_first, mut activity_last) = crate::activity::message_bounds(&emitted);
+    if let Some((first, last)) = activity {
+        activity_first = Some(activity_first.map_or(first, |at| at.min(first)));
+        activity_last = Some(activity_last.map_or(last, |at| at.max(last)));
+    }
     let response_id = emitted
         .response
         .as_ref()
@@ -732,7 +736,7 @@ fn apply_message_inner(
         touch_session(tx, &row.session_id, row.at, stats)?;
     }
     if let Some(fx) = effects {
-        let mut live = emitted.clone();
+        let mut live = emitted.into_owned();
         live.cost = crate::pricing::usage_cost(live.model.as_deref(), live.at, &live.usage);
         fx.push(Mutation::Message(Box::new(live)));
     }

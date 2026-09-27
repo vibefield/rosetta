@@ -407,6 +407,7 @@ DROP INDEX IF EXISTS session_project;
 DROP INDEX IF EXISTS session_runtime;
 DROP INDEX IF EXISTS task_session;
 DROP INDEX IF EXISTS message_bucket_key;
+DROP INDEX IF EXISTS message_searchable;
 DROP INDEX IF EXISTS timeline_meta_message;
 DROP INDEX IF EXISTS session_usage_bucket_key;
 DROP INDEX IF EXISTS file_edit_session;
@@ -426,6 +427,10 @@ CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
 CREATE INDEX IF NOT EXISTS message_bucket_key ON message(
   session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
 );
+-- Keep the search progress count off the payload table, and preserve id
+-- order for the full search scan. Only projected search kinds enter it.
+CREATE INDEX IF NOT EXISTS message_searchable ON message(id, type)
+  WHERE type IN ('user', 'agent');
 CREATE INDEX IF NOT EXISTS timeline_meta_message ON message(session_id, ordinal)
   WHERE tool_kind IN ('task', 'plan', 'artifact');
 CREATE INDEX IF NOT EXISTS session_usage_bucket_key ON session_usage(
