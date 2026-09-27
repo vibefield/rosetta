@@ -507,6 +507,36 @@ fn assign_precomputed_ordinals(files: &mut [PreparedFile]) -> Result<(), Pipelin
     Ok(())
 }
 
+/// The whole-runtime precompute over `(path, ops)` sources, as timeline →
+/// ordinal: the reference the streamed writer's ordinals are tested against.
+#[cfg(test)]
+pub(crate) fn precomputed_ordinals(
+    files: Vec<(SourceDef, Vec<IngestOp>)>,
+) -> Result<BTreeMap<String, i64>, PipelineError> {
+    let mut prepared = files
+        .into_iter()
+        .map(|(source, ops)| PreparedFile {
+            source,
+            generation: 1,
+            ops,
+            checkpoint: String::new(),
+            generation_clean: true,
+            activate: true,
+        })
+        .collect::<Vec<_>>();
+    prepared.sort_by(|left, right| left.source.relative_path.cmp(&right.source.relative_path));
+    assign_precomputed_ordinals(&mut prepared)?;
+    let mut ordinals = BTreeMap::new();
+    for file in prepared {
+        for op in file.ops {
+            if let IngestOp::Message(row) = op {
+                ordinals.insert(row.timeline_id, row.ordinal);
+            }
+        }
+    }
+    Ok(ordinals)
+}
+
 /// A complete runtime normalized without touching SQLite. It is intentionally
 /// process-local and disposable: the raw ledger remains the recovery source.
 /// Whole-projection cold builds can prepare independent runtimes in parallel,
@@ -1451,7 +1481,7 @@ pub fn prepare_captured_runtime(
     })
 }
 
-fn stamp_source_cursor(ops: &mut [IngestOp], cursor_id: i64) {
+pub(crate) fn stamp_source_cursor(ops: &mut [IngestOp], cursor_id: i64) {
     for op in ops {
         match op {
             IngestOp::Message(row) => row.provenance.src_cursor = Some(cursor_id),

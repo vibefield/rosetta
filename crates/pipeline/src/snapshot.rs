@@ -55,159 +55,194 @@ pub(crate) fn stream_snapshot_sources(
     }
 
     for (db_relative, group) in by_db {
-        opts.check_cancelled()?;
-        report.files += group.len();
-        let mark = |file: &SessionFile,
-                    complete: bool,
-                    file_health: &mut BTreeMap<String, bool>,
-                    session_health: &mut BTreeMap<String, bool>| {
-            file_health.insert(file.relative_path.clone(), complete);
-            session_health
-                .entry(file.session_id.clone())
-                .and_modify(|healthy| *healthy &= complete);
-        };
+        stream_snapshot_group(
+            adapter,
+            runtime,
+            root,
+            store,
+            db_relative,
+            &group,
+            opts,
+            instrument,
+            ledger,
+            report,
+            file_health,
+            session_health,
+        )?;
+    }
+    Ok(())
+}
 
-        let db_path = root.join(db_relative);
-        let Some(_) = rosetta_capture::db_stamp(&db_path)? else {
-            report.files_missing += group.len() as u64 as usize;
-            if group.iter().all(|file| file.source_missing) {
-                for file in &group {
-                    opts.check_cancelled()?;
-                    let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
-                    let complete = apply_snapshot_records(
-                        adapter,
-                        runtime,
-                        store,
-                        file,
-                        &cursor,
-                        &[],
-                        "missing",
-                        opts,
-                        ledger,
-                        instrument,
-                        report,
-                    )?;
-                    mark(file, complete, file_health, session_health);
-                }
-                continue;
-            }
-            for file in &group {
-                mark(file, false, file_health, session_health);
-            }
-            continue;
-        };
+/// One physical database snapshotted once, its sessions projected as virtual
+/// sources. The streamed cold capture calls this per database so members
+/// close in path order between transcripts.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stream_snapshot_group(
+    adapter: &dyn AgentAdapter,
+    runtime: &rosetta_core::rows::RuntimeRow,
+    root: &Path,
+    store: &mut Store,
+    db_relative: &str,
+    group: &[&SessionFile],
+    opts: &IngestOptions,
+    instrument: &Instrument,
+    ledger: &mut Option<&mut rosetta_capture::Ledger>,
+    report: &mut StreamReport,
+    file_health: &mut BTreeMap<String, bool>,
+    session_health: &mut BTreeMap<String, bool>,
+) -> Result<(), PipelineError> {
+    opts.check_cancelled()?;
+    report.files += group.len();
+    let mark = |file: &SessionFile,
+                complete: bool,
+                file_health: &mut BTreeMap<String, bool>,
+                session_health: &mut BTreeMap<String, bool>| {
+        file_health.insert(file.relative_path.clone(), complete);
+        session_health
+            .entry(file.session_id.clone())
+            .and_modify(|healthy| *healthy &= complete);
+    };
 
-        // Load (or create) every virtual source cursor. Metadata never decides
-        // content identity: every pass takes one SQLite-consistent backup and
-        // hashes the adapter's declared rows.
-        let mut cursors = Vec::with_capacity(group.len());
-        for file in &group {
-            opts.check_cancelled()?;
-            cursors.push(cursor_row(adapter, store, runtime, file, instrument)?);
-        }
-
-        let Some(plan) = adapter.snapshot_plan(&group[0].stream_id) else {
-            return Err(PipelineError::Config(format!(
-                "{} drives stream {} as SqliteSnapshot but declares no snapshot plan",
-                adapter.kind(),
-                group[0].stream_id
-            )));
-        };
-
-        // The stat gate first: opening the source — even read-only — writes
-        // its `-shm`, and the watcher sees that write as a database hint, so
-        // an unconditional open per pass feeds the daemon its own footsteps.
-        // When every cursor in the group already ingested exactly this
-        // stamp's content (and that generation is active), there is nothing
-        // to read and, critically, nothing to open. The gate yields to any
-        // pass carrying an audit budget: those hash full content by
-        // construction — the lane that still catches a database whose
-        // content moved under a preserved stamp, once per audit sweep —
-        // while the audit-free hint, catch-up, and cold lanes (the ones a
-        // self-hint loop can feed) trust a stamp their own checkpoint
-        // already ingested.
-        let current_stamp = (opts.audit_files_per_run == 0)
-            .then(|| rosetta_capture::db_stamp(&db_path))
-            .transpose()?
-            .flatten();
-        if let Some(stamp) = &current_stamp {
-            // The skip repeats the outcome the stamp's own pass reported:
-            // each file's generation_clean, never an unconditional true — a
-            // dirty-but-active generation stays Streaming through the gate.
-            let settled: Vec<bool> = group
-                .iter()
-                .zip(&cursors)
-                .filter_map(|(file, cursor)| {
-                    PipeCheckpoint::decode(&cursor.checkpoint)
-                        .filter(|checkpoint| {
-                            checkpoint.session_id == file.session_id
-                                && checkpoint.stream_id == file.stream_id
-                                && checkpoint.normalizer_version == adapter.normalizer_version()
-                                && checkpoint.source_generation == cursor.active_generation
-                                && checkpoint.snapshot_stamp.as_deref() == Some(stamp.as_str())
-                        })
-                        .map(|checkpoint| checkpoint.generation_clean)
-                })
-                .collect();
-            if settled.len() == group.len() {
-                for (file, clean) in group.iter().zip(settled) {
-                    mark(file, clean, file_health, session_health);
-                }
-                continue;
-            }
-        }
-
-        // One stable copy per database per pass, shared by all its sessions.
-        let mut retries = 0_u32;
-        let snapshot = loop {
-            opts.check_cancelled()?;
-            match instrument.time(Metric::ReadNanos, || rosetta_capture::snapshot_db(&db_path))? {
-                rosetta_capture::SnapshotOutcome::Ready(snapshot) => break Some(snapshot),
-                rosetta_capture::SnapshotOutcome::Missing => break None,
-                rosetta_capture::SnapshotOutcome::Unstable => {
-                    retries += 1;
-                    if retries > opts.max_retries {
-                        break None;
-                    }
-                }
-            }
-        };
-        let Some(snapshot) = snapshot else {
-            report.retries_exhausted += group.len() as u64;
-            for file in &group {
-                mark(file, false, file_health, session_health);
-            }
-            continue;
-        };
-        let stamp = snapshot.stamp().clone();
-
-        for (file, cursor) in group.iter().zip(cursors) {
-            opts.check_cancelled()?;
-            let mut records = Vec::new();
-            for query in &plan.record_queries {
+    let db_path = root.join(db_relative);
+    let Some(_) = rosetta_capture::db_stamp(&db_path)? else {
+        report.files_missing += group.len() as u64 as usize;
+        if group.iter().all(|file| file.source_missing) {
+            for file in group {
                 opts.check_cancelled()?;
-                let name = serde_json::to_string(&query.name).expect("string encodes");
-                for row in instrument.time(Metric::ReadNanos, || {
-                    snapshot.query_rows(&query.sql, Some(&file.native_session_id))
-                })? {
-                    records.push(format!("{{\"query\":{name},\"row\":{row}}}").into_bytes());
+                let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
+                let complete = apply_snapshot_records(
+                    adapter,
+                    runtime,
+                    store,
+                    file,
+                    &cursor,
+                    &[],
+                    "missing",
+                    opts,
+                    ledger,
+                    instrument,
+                    report,
+                )?;
+                mark(file, complete, file_health, session_health);
+            }
+            return Ok(());
+        }
+        for file in group {
+            mark(file, false, file_health, session_health);
+        }
+        return Ok(());
+    };
+
+    // Load (or create) every virtual source cursor. Metadata never decides
+    // content identity: every pass takes one SQLite-consistent backup and
+    // hashes the adapter's declared rows.
+    let mut cursors = Vec::with_capacity(group.len());
+    for file in group {
+        opts.check_cancelled()?;
+        cursors.push(cursor_row(adapter, store, runtime, file, instrument)?);
+    }
+
+    let Some(plan) = adapter.snapshot_plan(&group[0].stream_id) else {
+        return Err(PipelineError::Config(format!(
+            "{} drives stream {} as SqliteSnapshot but declares no snapshot plan",
+            adapter.kind(),
+            group[0].stream_id
+        )));
+    };
+
+    // The stat gate first: opening the source — even read-only — writes
+    // its `-shm`, and the watcher sees that write as a database hint, so
+    // an unconditional open per pass feeds the daemon its own footsteps.
+    // When every cursor in the group already ingested exactly this
+    // stamp's content (and that generation is active), there is nothing
+    // to read and, critically, nothing to open. The gate yields to any
+    // pass carrying an audit budget: those hash full content by
+    // construction — the lane that still catches a database whose
+    // content moved under a preserved stamp, once per audit sweep —
+    // while the audit-free hint, catch-up, and cold lanes (the ones a
+    // self-hint loop can feed) trust a stamp their own checkpoint
+    // already ingested.
+    let current_stamp = (opts.audit_files_per_run == 0)
+        .then(|| rosetta_capture::db_stamp(&db_path))
+        .transpose()?
+        .flatten();
+    if let Some(stamp) = &current_stamp {
+        // The skip repeats the outcome the stamp's own pass reported:
+        // each file's generation_clean, never an unconditional true — a
+        // dirty-but-active generation stays Streaming through the gate.
+        let settled: Vec<bool> = group
+            .iter()
+            .zip(&cursors)
+            .filter_map(|(file, cursor)| {
+                PipeCheckpoint::decode(&cursor.checkpoint)
+                    .filter(|checkpoint| {
+                        checkpoint.session_id == file.session_id
+                            && checkpoint.stream_id == file.stream_id
+                            && checkpoint.normalizer_version == adapter.normalizer_version()
+                            && checkpoint.source_generation == cursor.active_generation
+                            && checkpoint.snapshot_stamp.as_deref() == Some(stamp.as_str())
+                    })
+                    .map(|checkpoint| checkpoint.generation_clean)
+            })
+            .collect();
+        if settled.len() == group.len() {
+            for (file, clean) in group.iter().zip(settled) {
+                mark(file, clean, file_health, session_health);
+            }
+            return Ok(());
+        }
+    }
+
+    // One stable copy per database per pass, shared by all its sessions.
+    let mut retries = 0_u32;
+    let snapshot = loop {
+        opts.check_cancelled()?;
+        match instrument.time(Metric::ReadNanos, || rosetta_capture::snapshot_db(&db_path))? {
+            rosetta_capture::SnapshotOutcome::Ready(snapshot) => break Some(snapshot),
+            rosetta_capture::SnapshotOutcome::Missing => break None,
+            rosetta_capture::SnapshotOutcome::Unstable => {
+                retries += 1;
+                if retries > opts.max_retries {
+                    break None;
                 }
             }
-            let complete = apply_snapshot_records(
-                adapter,
-                runtime,
-                store,
-                file,
-                &cursor,
-                &records,
-                stamp.as_str(),
-                opts,
-                ledger,
-                instrument,
-                report,
-            )?;
-            mark(file, complete, file_health, session_health);
         }
+    };
+    let Some(snapshot) = snapshot else {
+        report.retries_exhausted += group.len() as u64;
+        for file in group {
+            mark(file, false, file_health, session_health);
+        }
+        return Ok(());
+    };
+    let stamp = snapshot.stamp().clone();
+
+    for (file, cursor) in group.iter().zip(cursors) {
+        opts.check_cancelled()?;
+        let mut records = Vec::new();
+        for query in &plan.record_queries {
+            opts.check_cancelled()?;
+            let name = serde_json::to_string(&query.name).expect("string encodes");
+            for row in instrument.time(Metric::ReadNanos, || {
+                snapshot.query_rows(&query.sql, Some(&file.native_session_id))
+            })? {
+                records.push(format!("{{\"query\":{name},\"row\":{row}}}").into_bytes());
+            }
+        }
+        let complete = apply_snapshot_records(
+            adapter,
+            runtime,
+            store,
+            file,
+            &cursor,
+            &records,
+            stamp.as_str(),
+            opts,
+            ledger,
+            instrument,
+            report,
+        )?;
+        mark(file, complete, file_health, session_health);
     }
     Ok(())
 }

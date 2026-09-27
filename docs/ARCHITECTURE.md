@@ -80,37 +80,57 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > phase cannot manufacture projects or reassign ownership; schema 12 removed the former
 > `workspace_obs` relation and `project_assigned_at` arbitration column.
 >
-> **Fresh-serve checkpoint (2026-08-31).** The normal first-run app path now uses the fast
-> parallel cold topology without giving up immediate or progressive reads. The listener binds
-> before discovery. Each adapter's bounded source-free metadata commits first to a named,
-> shared-memory SQLite database carrying the exact canonical schema and drains into the Hub;
+> **Fresh-serve checkpoint (2026-08-31; streamed apply 2026-09-27).** The normal first-run app
+> path uses the fast parallel cold topology without giving up immediate or progressive reads. The
+> listener binds before discovery. Each adapter's bounded source-free metadata commits first to a
+> named, shared-memory SQLite database carrying the exact canonical schema and drains into the Hub;
 > projects and top-level sessions therefore appear adapter by adapter. All adapters then capture,
-> ledger, normalize, and reconcile concurrently in private RAM planners. The sole canonical
-> writer admits results in completion order, but only at a closed-runtime boundary: precomputed
-> ordinals and cross-file tool/usage folds are complete before the final readiness commit makes
-> that runtime's timelines visible. Pending sessions are an admission barrier, so intermediate
-> source commits cannot leak a half-reconciled canonical row.
-> Watched timelines receive one resync barrier and re-snapshot through the ordinary API. No raw
-> record, parser state, candidate value, or reconciliation map enters the read target.
+> ledger, and normalize concurrently, each through its own private RAM planner (the cursor CAS
+> chain, generations, and restart detection are unchanged). Nothing is retained per runtime until
+> its capture ends: a producer walks its roster in source-path order and hands each source to the
+> sole canonical writer as a *closed source* — terminal generation, final checkpoint, contiguous
+> validated ops — as soon as nothing can supersede it. Only a transcript whose session still has an
+> uncaptured transcript, or a pending sibling heal after a restart, is held; the heal runs as soon
+> as the restarted session's last transcript is captured, so the writer sees exactly one terminal
+> generation per source, in path order (the order every order-sensitive upsert assumes). A 256 MiB
+> in-flight budget bounds closed sources between producers and the writer. The writer applies them
+> while capture continues, several queued sources of one runtime per bounded transaction: the same
+> final canonical rows the retained path writes, with each message's final presentation ordinal
+> assigned incrementally under the whole-runtime precompute's key (a session a later source
+> repeats a timeline into, or one that receives a source out of path order, is re-ranked by path
+> and stored ordinal at admission). Deferred tool, usage and file-edit facts are collected into
+> that runtime's own RAM fold as its sources commit — never another runtime's. When a producer
+> closes, the writer admits its runtime: the fold resolves each correlation once and writes each
+> final tool row once, then one stream-state commit flips every source-backed session out of
+> `Pending`. Pending sessions are the admission barrier: rows of an unadmitted runtime may sit in the
+> RAM generation, but no timeline, entry, collaboration, plan, file-target or report-work read
+> exposes them, their stubs stay out of the metadata mirror, and no row effects are observed.
+> Admission remains runtime-granular and in completion order. Watched timelines receive one resync
+> barrier and re-snapshot through the ordinary API. No raw record, parser state, candidate value,
+> or reconciliation map enters the read target. Finite `ingest` and replay keep the retained
+> closed-runtime path (`prepare_captured_runtime` → `apply_prepared_runtime`).
 >
 > Cold JSONL capture transfers owned normalized batches into the RAM planner instead of
 > deep-copying them. Both owned and borrowed entry points enforce the same metadata boundary
-> and transactional checkpoint CAS before retaining a batch. Tool reconciliation borrows
-> opener candidates from the retained source buffer while selecting the authoritative source
-> position, then clones only the selected row into its retryable plan. The source buffer
-> survives until successful commit. Closed source application consumes its batches: immediate rows
-> are written first, deferred payloads move into provisional reconciliation deltas, and each
-> consumed batch releases its remaining data. Deltas enter the shared buffer only after the whole
-> runtime transaction commits. This removes the original runtime-sized payload tree before the
-> fold, while preserving fingerprints, rollback, and raw-ledger retry. No raw evidence is dropped.
-> Reconciliation borrows update patches from that same retained buffer and folds each selected
-> tool directly into its one owned final row. Canonical writers and codecs borrow unchanged
-> message/text fields; they copy only for ordinal changes, command compaction, or observed live
-> mutations. Source activation searches only that cursor's generations, avoiding a scan of the
-> whole runtime buffer for every source. Cold source batches coalesce session timestamp maxima
-> before committing; metadata batches retain their ordered write semantics. Tool-result activity
-> bounds join the initial tool insert instead of causing additional row/index updates. Failed
-> reconciliation still retains the committed source buffer for an identical retry.
+> and transactional checkpoint CAS before retaining a batch. The retained path's tool
+> reconciliation borrows opener candidates from the retained source buffer while selecting the
+> authoritative source position, then clones only the selected row into its retryable plan; the
+> source buffer survives until successful commit. Closed source application consumes its batches:
+> immediate rows are written first, deferred payloads move into provisional reconciliation deltas,
+> and each consumed batch releases its remaining data. A closed delta carries no retry
+> fingerprint: a closed generation is applied exactly once, a repeated cursor is refused inside its
+> transaction and fails its checkpoint CAS in any later one. The fold is two order-independent
+> steps shared by both paths — collect (winning opener per correlation, identity-deduped facts
+> grouped by correlation, one source-finalization marker per opener, the tail) and finish (resolve,
+> order, fold response usage) — so a streamed runtime collects while capture continues and its
+> admission moves, rather than copies, what it writes. No raw evidence is dropped.
+> Canonical writers and codecs borrow unchanged message/text fields; they copy only for ordinal
+> changes, command compaction, or observed live mutations. Source activation searches only that
+> cursor's generations, avoiding a scan of the whole runtime buffer for every source. Cold source
+> batches coalesce session timestamp maxima before committing; metadata batches retain their
+> ordered write semantics. Tool-result activity bounds join the initial tool insert instead of
+> causing additional row/index updates. Failed retained reconciliation still keeps the committed
+> source buffer for an identical retry.
 >
 > The owned ledger path groups small records from one source/generation into the existing
 > batch-frame format, with at most 1 MiB of extra packing memory. Single or large records
@@ -1686,8 +1706,10 @@ still require a driver-specific frozen pair or a declared production-weighted ag
 - sonic-rs (or simd-json) for JSONL; rayon parallelism across files for backfill;
   blake3 for content hashes and ledger-frame checksums.
 - Batched writes; prepared-statement caches; mmap reads for big transcripts.
-- Private cold loads and a normal fresh `serve` capture adapters into independent RAM planners,
-  precompute presentation order, and feed closed runtimes to one canonical writer. Fresh serve
+- Private cold loads capture adapters into independent RAM planners, precompute presentation
+  order, and feed closed runtimes to one canonical writer. A normal fresh `serve` streams instead:
+  each source enters the canonical writer as a closed source while capture continues, and each
+  runtime is admitted (fold, final tool rows, Pending flip) when its capture closes. Fresh serve
   places that canonical schema in named shared memory: metadata is immediately public and each
   completed runtime becomes transactionally readable before the global set-based gate. It then
   installs one validated disk copy and atomically retargets readers. Cross-session aggregates are

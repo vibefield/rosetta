@@ -14,10 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{Connection, Transaction, params};
 
-use rosetta_core::timeline::StatusBasis;
 use rosetta_core::{
-    EvidenceOrder, IngestOp, SourceIdentity, TimelineBody, TimelineEntry, ToolFoldState,
-    ToolInteraction, ToolStatus, ToolStatusFact, ToolUpdatePatch,
+    EvidenceOrder, IngestOp, TimelineBody, TimelineEntry, ToolFoldState, ToolInteraction,
+    ToolUpdatePatch,
 };
 
 use crate::StoreError;
@@ -28,7 +27,11 @@ use super::rows::{
 };
 use super::{ApplyStats, Batch, SourceMode, SourceWrite, apply_op, profile_ordinal_lookup};
 
-#[derive(Debug)]
+mod fold;
+
+pub(crate) use fold::ColdFold;
+
+#[derive(Debug, Clone)]
 enum DeferredOp {
     ToolMessage(Box<TimelineEntry>),
     ToolUpdate {
@@ -64,19 +67,25 @@ impl BulkReconciliationDelta {
         let Some(source) = batch.source.as_ref() else {
             return Ok(None);
         };
-        Self::from_ops(source, batch.ops.iter().map(Cow::Borrowed)).map(Some)
+        Self::from_ops(source, batch.ops.iter().map(Cow::Borrowed), true).map(Some)
     }
 
+    /// A closed source's delta, which never carries retry identity: a closed
+    /// generation is applied exactly once — a repeated cursor is refused
+    /// within one transaction and fails its checkpoint compare-and-set in any
+    /// later one — so hashing every deferred op for a retry that cannot
+    /// happen would only serialize the runtime's relational payload twice.
     pub(crate) fn from_owned_batch(batch: Batch) -> Result<Option<Self>, StoreError> {
         let Some(source) = batch.source.as_ref() else {
             return Ok(None);
         };
-        Self::from_ops(source, batch.ops.into_iter().map(Cow::Owned)).map(Some)
+        Self::from_ops(source, batch.ops.into_iter().map(Cow::Owned), false).map(Some)
     }
 
     fn from_ops<'a>(
         source: &SourceWrite,
         ops: impl ExactSizeIterator<Item = Cow<'a, IngestOp>>,
+        fingerprint: bool,
     ) -> Result<Self, StoreError> {
         let activation_end = source
             .first_sequence
@@ -104,17 +113,21 @@ impl BulkReconciliationDelta {
                     message: "source sequence overflowed while buffering a cold operation".into(),
                 })?;
             if !defers(op.as_ref()) {
-                fingerprints.insert(sequence, OpFingerprint::Immediate);
+                if fingerprint {
+                    fingerprints.insert(sequence, OpFingerprint::Immediate);
+                }
                 continue;
             }
-            // Retry identity is computed before taking ownership; both entry
-            // points retain exactly the same source-position conflict checks.
-            fingerprints.insert(
-                sequence,
-                OpFingerprint::Deferred(
-                    *blake3::hash(&serde_json::to_vec(op.as_ref())?).as_bytes(),
-                ),
-            );
+            // Retry identity is computed before taking ownership, so a
+            // retryable batch keeps exactly the same source-position checks.
+            if fingerprint {
+                fingerprints.insert(
+                    sequence,
+                    OpFingerprint::Deferred(
+                        *blake3::hash(&serde_json::to_vec(op.as_ref())?).as_bytes(),
+                    ),
+                );
+            }
             let deferred_op = match op.into_owned() {
                 IngestOp::Message(row) => DeferredOp::ToolMessage(row),
                 IngestOp::ToolUpdate {
@@ -269,16 +282,25 @@ impl BulkReconciliationBuffer {
                 self.sources.remove(&candidate);
             }
         }
-        let source = self
-            .sources
-            .entry(key)
-            .or_insert_with(|| BufferedSource::new(delta.mode));
-        for (sequence, fingerprint) in delta.fingerprints {
-            source.fingerprints.entry(sequence).or_insert(fingerprint);
-        }
-        for (sequence, op) in delta.deferred {
-            source.deferred.entry(sequence).or_insert(op);
-        }
+        let source = match self.sources.entry(key) {
+            // A first delta for this generation moves its maps in whole
+            // instead of re-inserting every position.
+            std::collections::btree_map::Entry::Vacant(vacant) => vacant.insert(BufferedSource {
+                fingerprints: delta.fingerprints,
+                deferred: delta.deferred,
+                ..BufferedSource::new(delta.mode)
+            }),
+            std::collections::btree_map::Entry::Occupied(occupied) => {
+                let source = occupied.into_mut();
+                for (sequence, fingerprint) in delta.fingerprints {
+                    source.fingerprints.entry(sequence).or_insert(fingerprint);
+                }
+                for (sequence, op) in delta.deferred {
+                    source.deferred.entry(sequence).or_insert(op);
+                }
+                source
+            }
+        };
         if delta.mode == SourceMode::Activate {
             source.activation_end = Some(delta.activation_end);
         } else if delta.mode == SourceMode::Append && source.activation_end.is_none() {
@@ -319,313 +341,20 @@ impl BulkReconciliationBuffer {
             }
         }
 
-        let mut openers: BTreeMap<ToolKey, BufferedOpener<'_>> = BTreeMap::new();
-        let mut new_facts: BTreeMap<FactKey, BufferedFact> = BTreeMap::new();
+        let state = fold::collect_borrowed(source_keys.iter().map(|key| {
+            let source = self.sources.get(key).expect("selected source exists");
+            (
+                *key,
+                source.activation_end.expect("selected source is activated"),
+                paths
+                    .get(&key.cursor_id)
+                    .expect("selected source path exists")
+                    .as_str(),
+                &source.deferred,
+            )
+        }))?;
         let prior_usage = self.pending_usage.values().cloned().collect::<Vec<_>>();
-        let mut tail = Vec::new();
-        let mut native_updates = Vec::new();
-        let mut session_touches = BTreeMap::new();
-        let mut opener_finalizations = Vec::new();
-        for source_key in &source_keys {
-            let source = self
-                .sources
-                .get(source_key)
-                .expect("selected source exists");
-            let path = paths
-                .get(&source_key.cursor_id)
-                .expect("selected source path exists");
-            let activation_end = source.activation_end.expect("selected source is activated");
-            for (sequence, op) in &source.deferred {
-                match op {
-                    DeferredOp::ToolMessage(row) => {
-                        let TimelineBody::ToolUse { tool } = &row.body else {
-                            unreachable!("only tool rows enter the bulk reconciliation buffer")
-                        };
-                        let key = ToolKey {
-                            session_id: row.session_id.clone(),
-                            correlation_key: tool.correlation.key.clone(),
-                        };
-                        note_session_touch(&mut session_touches, &row.session_id, row.at);
-                        if activation_end != 0 && *sequence < activation_end {
-                            opener_finalizations.push(BufferedFinalization {
-                                key: key.clone(),
-                                cursor_id: source_key.cursor_id,
-                                generation: source_key.generation,
-                            });
-                        }
-                        let candidate = BufferedOpener {
-                            order: SourceOrder {
-                                path: path.clone(),
-                                sequence: *sequence,
-                            },
-                            row,
-                        };
-                        if let Some(previous) = openers.get_mut(&key) {
-                            if previous.row.timeline_id != candidate.row.timeline_id {
-                                return Err(StoreError::ProjectionInvalid {
-                                    message: format!(
-                                        "cold tool openers {} and {} share correlation {}/{}",
-                                        previous.row.timeline_id,
-                                        candidate.row.timeline_id,
-                                        key.session_id,
-                                        key.correlation_key
-                                    ),
-                                });
-                            }
-                            if previous.order == candidate.order && previous.row != candidate.row {
-                                return Err(StoreError::ProjectionInvalid {
-                                    message: format!(
-                                        "cold tool opener {} has conflicting payloads at {}:{}",
-                                        candidate.row.timeline_id,
-                                        candidate.order.path,
-                                        candidate.order.sequence
-                                    ),
-                                });
-                            }
-                            // Claude can repeat one native assistant record on
-                            // a later branch with the same UUID/tool ID but a
-                            // different parent. Ordinary SQLite upsert semantics
-                            // made the later source position authoritative; the
-                            // one-shot fold must preserve that exact behavior.
-                            if candidate.order > previous.order {
-                                *previous = candidate;
-                            }
-                        } else {
-                            openers.insert(key, candidate);
-                        }
-                    }
-                    DeferredOp::ToolUpdate {
-                        session_id,
-                        correlation_key,
-                        evidence,
-                        patch,
-                        at,
-                    } => {
-                        let key = ToolKey {
-                            session_id: session_id.clone(),
-                            correlation_key: correlation_key.clone(),
-                        };
-                        native_updates.push((key.clone(), *at));
-                        insert_fact(
-                            &mut new_facts,
-                            BufferedFact {
-                                key,
-                                evidence: evidence.clone(),
-                                patch: Cow::Borrowed(patch.as_ref()),
-                                at: *at,
-                            },
-                        )?;
-                    }
-                    DeferredOp::Tail(op) => tail.push(BufferedTail {
-                        cursor_id: source_key.cursor_id,
-                        order: SourceOrder {
-                            path: path.clone(),
-                            sequence: *sequence,
-                        },
-                        op: op.as_ref().clone(),
-                    }),
-                }
-            }
-        }
-
-        for finalization in opener_finalizations {
-            let path = paths
-                .get(&finalization.cursor_id)
-                .expect("opener source path was loaded");
-            insert_fact(
-                &mut new_facts,
-                BufferedFact {
-                    key: finalization.key,
-                    evidence: EvidenceOrder {
-                        source_identity: SourceIdentity(format!("{path}#source-finalization")),
-                        generation: finalization.generation,
-                        record_offset: i64::MAX as u64,
-                        mutation_index: u32::MAX,
-                    },
-                    patch: Cow::Owned(ToolUpdatePatch {
-                        status: Some(ToolStatusFact {
-                            value: ToolStatus::Unknown,
-                            basis: StatusBasis::SourceFinalization,
-                        }),
-                        ..ToolUpdatePatch::default()
-                    }),
-                    at: None,
-                },
-            )?;
-        }
-
-        let targets = openers
-            .keys()
-            .cloned()
-            .chain(native_updates.iter().map(|(key, _)| key.clone()))
-            .collect::<BTreeSet<_>>();
-        let existing_openers = load_existing_openers(conn, &targets)?;
-        for (key, opener) in &openers {
-            if let Some(existing) = existing_openers.get(key)
-                && existing.timeline_id != opener.row.timeline_id
-            {
-                return Err(StoreError::ProjectionInvalid {
-                    message: format!(
-                        "cold tool opener {} conflicts with existing row {} for {}/{}",
-                        opener.row.timeline_id,
-                        existing.timeline_id,
-                        key.session_id,
-                        key.correlation_key
-                    ),
-                });
-            }
-        }
-
-        let mut facts_by_tool: BTreeMap<ToolKey, Vec<&BufferedFact>> = BTreeMap::new();
-        for fact in new_facts.values() {
-            facts_by_tool
-                .entry(fact.key.clone())
-                .or_default()
-                .push(fact);
-        }
-        let mut messages = Vec::with_capacity(openers.len());
-        for (key, opener) in &openers {
-            let mut row = opener.row.clone();
-            let TimelineBody::ToolUse { tool } = &mut row.body else {
-                unreachable!("buffered opener remains a tool row")
-            };
-            resolve_tool(key, tool, facts_by_tool.get(key))?;
-            // This is the owned, retryable final row; compact once here so
-            // writing it needs no second opener/tool payload copy.
-            tool.action.compact_command_preview();
-            messages.push(ResolvedToolMessage {
-                order: opener.order.clone(),
-                row,
-                known_absent: !existing_openers.contains_key(key),
-                activity: None,
-            });
-        }
-        let mut existing = Vec::new();
-        for key in &targets {
-            if openers.contains_key(key) {
-                continue;
-            }
-            let Some(opener) = existing_openers.get(key) else {
-                continue;
-            };
-            let mut tool = opener.tool.clone();
-            resolve_tool(key, &mut tool, facts_by_tool.get(key))?;
-            existing.push(ResolvedExistingTool {
-                message_id: opener.message_id,
-                tool,
-            });
-        }
-        messages.sort_by(|left, right| left.order.cmp(&right.order));
-        tail.sort_by(|left, right| left.order.cmp(&right.order));
-        // A fragment retained from an earlier committed flush happened before
-        // every fragment in this flush, regardless of lexical source path.
-        // Preserve that commit order so the newest usage snapshot wins.
-        let mut ordered_tail = prior_usage;
-        ordered_tail.extend(tail);
-        let tail = ordered_tail;
-
-        // A response-level usage correction targeting a tool row in this same
-        // cold plan is part of the row's final value, not a reason to insert
-        // and immediately update it. Preserve normal last-writer semantics in
-        // the deterministic source order; unrelated response usage stays in
-        // the tail and uses the ordinary canonical path.
-        let message_indexes = messages
-            .iter()
-            .enumerate()
-            .map(|(index, message)| {
-                (
-                    (
-                        message.row.session_id.clone(),
-                        message.row.timeline_id.clone(),
-                    ),
-                    index,
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let mut remaining_tail = Vec::with_capacity(tail.len());
-        let mut folded_usage = 0_u64;
-        let mut usage_seen = BTreeSet::new();
-        for buffered in tail {
-            let IngestOp::Usage {
-                session_id,
-                response,
-                ts,
-                model,
-                tokens,
-                ..
-            } = &buffered.op
-            else {
-                remaining_tail.push(buffered);
-                continue;
-            };
-            usage_seen.insert(UsageKey {
-                session_id: session_id.clone(),
-                response: response.clone(),
-            });
-            let Some(index) = message_indexes.get(&(session_id.clone(), response.clone())) else {
-                remaining_tail.push(buffered);
-                continue;
-            };
-            let message = &mut messages[*index].row;
-            if message.at.is_none() {
-                // Usage may supply the accounting bucket's missing timestamp,
-                // but that is not a timestamped conversation record. Use the
-                // ordinary usage path after inserting the undated opener so
-                // live ingest and cold replay preserve the same activity.
-                remaining_tail.push(buffered);
-                continue;
-            }
-            message.usage = tokens.clone();
-            if let Some(model) = model {
-                message.model = Some(model.clone());
-            }
-            note_session_touch(&mut session_touches, session_id, Some(*ts));
-            folded_usage = folded_usage.saturating_add(1);
-        }
-        let tail = remaining_tail;
-
-        let mut tool_activity: BTreeMap<ToolKey, (i64, i64)> = BTreeMap::new();
-        for (key, at) in &native_updates {
-            if openers.contains_key(key) || existing_openers.contains_key(key) {
-                note_session_touch(&mut session_touches, &key.session_id, *at);
-                if let Some(at) = *at {
-                    let bounds = tool_activity.entry(key.clone()).or_insert((at, at));
-                    bounds.0 = bounds.0.min(at);
-                    bounds.1 = bounds.1.max(at);
-                }
-            }
-        }
-        let matched_updates = native_updates
-            .iter()
-            .filter(|(key, _)| openers.contains_key(key) || existing_openers.contains_key(key))
-            .count() as u64;
-        let native_update_count = native_updates.len() as u64;
-        let unmatched_updates = native_update_count.saturating_sub(matched_updates);
-        for message in &mut messages {
-            let TimelineBody::ToolUse { tool } = &message.row.body else {
-                unreachable!("resolved message remains a tool row")
-            };
-            // Put result timestamps into the initial canonical write, instead
-            // of updating every newly inserted tool row once or twice more.
-            message.activity = tool_activity.remove(&ToolKey {
-                session_id: message.row.session_id.clone(),
-                correlation_key: tool.correlation.key.clone(),
-            });
-        }
-        Ok(BulkReconciliationPlan {
-            source_keys,
-            messages,
-            existing,
-            tail,
-            native_updates: native_update_count,
-            matched_updates,
-            unmatched_updates,
-            session_touches,
-            tool_activity,
-            folded_usage,
-            usage_seen,
-            unmatched_usage: BTreeMap::new(),
-        })
+        fold::finish_borrowed(state, prior_usage, conn)
     }
 
     pub(crate) fn committed(&mut self, plan: &BulkReconciliationPlan) {
@@ -651,58 +380,6 @@ struct ToolKey {
 struct SourceOrder {
     path: String,
     sequence: u64,
-}
-
-#[derive(Debug)]
-struct BufferedOpener<'a> {
-    order: SourceOrder,
-    // Selection only needs to compare openers. The source buffer already
-    // owns them until commit; clone only the winner into the retryable plan.
-    row: &'a TimelineEntry,
-}
-
-#[derive(Debug)]
-struct BufferedFinalization {
-    key: ToolKey,
-    cursor_id: i64,
-    generation: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct FactKey {
-    tool: ToolKey,
-    evidence: EvidenceOrder,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BufferedFact<'a> {
-    key: ToolKey,
-    evidence: EvidenceOrder,
-    patch: Cow<'a, ToolUpdatePatch>,
-    at: Option<i64>,
-}
-
-fn insert_fact<'a>(
-    facts: &mut BTreeMap<FactKey, BufferedFact<'a>>,
-    fact: BufferedFact<'a>,
-) -> Result<(), StoreError> {
-    let identity = FactKey {
-        tool: fact.key.clone(),
-        evidence: fact.evidence.clone(),
-    };
-    if let Some(previous) = facts.get(&identity) {
-        if previous != &fact {
-            return Err(StoreError::ProjectionInvalid {
-                message: format!(
-                    "conflicting cold tool facts share evidence order for {}/{}",
-                    identity.tool.session_id, identity.tool.correlation_key
-                ),
-            });
-        }
-        return Ok(());
-    }
-    facts.insert(identity, fact);
-    Ok(())
 }
 
 fn note_session_touch(touches: &mut BTreeMap<String, i64>, session_id: &str, at: Option<i64>) {
@@ -780,10 +457,10 @@ fn load_existing_openers(
     Ok(result)
 }
 
-fn resolve_tool(
+fn resolve_tool<'f>(
     key: &ToolKey,
     tool: &mut ToolInteraction,
-    updates: Option<&Vec<&BufferedFact>>,
+    updates: impl IntoIterator<Item = (&'f EvidenceOrder, &'f ToolUpdatePatch)>,
 ) -> Result<(), StoreError> {
     tool.validate()
         .map_err(|error| StoreError::ProjectionInvalid {
@@ -793,16 +470,14 @@ fn resolve_tool(
             ),
         })?;
     let mut state = ToolFoldState::default();
-    if let Some(updates) = updates {
-        for fact in updates {
-            tool.apply_patch(&mut state, &fact.patch, &fact.evidence)
-                .map_err(|error| StoreError::ProjectionInvalid {
-                    message: format!(
-                        "invalid cold tool update for {}/{}: {error}",
-                        key.session_id, key.correlation_key
-                    ),
-                })?;
-        }
+    for (evidence, patch) in updates {
+        tool.apply_patch(&mut state, patch, evidence)
+            .map_err(|error| StoreError::ProjectionInvalid {
+                message: format!(
+                    "invalid cold tool update for {}/{}: {error}",
+                    key.session_id, key.correlation_key
+                ),
+            })?;
     }
     Ok(())
 }

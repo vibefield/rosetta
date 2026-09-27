@@ -535,11 +535,32 @@ fn plan_response(document: timeline_meta::PlanDocument) -> Response {
     response
 }
 
+/// Whether a session's source rows are still behind the cold admission
+/// barrier: while the canonical RAM projection is unpublished, a `Pending`
+/// session's streamed rows may already sit in SQLite, but nothing below its
+/// metadata is public until the runtime's readiness commit flips it.
+fn behind_admission(
+    conn: &Connection,
+    session_id: &str,
+    hide_pending: bool,
+) -> Result<bool, Failure> {
+    if !hide_pending {
+        return Ok(false);
+    }
+    Ok(queries::session(conn, session_id)
+        .map_err(store_err)?
+        .is_some_and(|session| session.stream_state == rosetta_core::rows::StreamState::Pending))
+}
+
 async fn read_plan_revision(
     State(state): State<AppState>,
     UrlPath((session_id, revision)): UrlPath<(String, i64)>,
 ) -> Result<Response, Failure> {
+    let hide_pending = !state.projection.is_published();
     let document = with_read(state.projection.clone(), move |conn| {
+        if behind_admission(conn, &session_id, hide_pending)? {
+            return Err(Failure::not_found("that plan revision is not available"));
+        }
         timeline_meta::revision_plan_document(conn, &session_id, revision)
             .map_err(store_err)?
             .ok_or_else(|| Failure::not_found("that plan revision is not available"))
@@ -552,7 +573,11 @@ async fn read_timeline_plan(
     State(state): State<AppState>,
     UrlPath((session_id, timeline_id)): UrlPath<(String, String)>,
 ) -> Result<Response, Failure> {
+    let hide_pending = !state.projection.is_published();
     let document = with_read(state.projection.clone(), move |conn| {
+        if behind_admission(conn, &session_id, hide_pending)? {
+            return Err(Failure::not_found("that recorded plan is not available"));
+        }
         timeline_meta::timeline_plan_document(conn, &session_id, &timeline_id)
             .map_err(store_err)?
             .ok_or_else(|| Failure::not_found("that recorded plan is not available"))
@@ -568,7 +593,11 @@ async fn read_file_target(
     // The path is looked up from the canonical row. There is intentionally no
     // path query parameter: the browser can ask for target 0, but it cannot
     // substitute a different file for the one the transcript recorded.
+    let hide_pending = !state.projection.is_published();
     let target = with_read(state.projection.clone(), move |conn| {
+        if behind_admission(conn, &session_id, hide_pending)? {
+            return Err(Failure::not_found("no file at that recorded target"));
+        }
         queries::file_read_target(conn, &session_id, &timeline_id, target_index)
             .map_err(store_err)?
             .ok_or_else(|| Failure::not_found("no file at that recorded target"))

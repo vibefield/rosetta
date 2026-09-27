@@ -226,7 +226,7 @@ mod rows;
 mod usage_owners;
 
 pub(crate) use bulk_reconcile::{
-    BulkReconciliationBuffer, BulkReconciliationDelta, BulkReconciliationPlan,
+    BulkReconciliationBuffer, BulkReconciliationDelta, BulkReconciliationPlan, ColdFold,
 };
 use metadata::{apply_project, apply_runtime, apply_session, apply_session_title};
 pub(crate) use ram_reconcile::RamReconciliationBuffer;
@@ -892,7 +892,7 @@ fn remove_cursor_projection(
 /// total order the journal replay used to produce. Two phases through
 /// negative space so UNIQUE(session_id, ordinal) never sees a transient
 /// collision.
-fn prepare_renumber_table(tx: &Transaction) -> Result<(), StoreError> {
+pub(crate) fn prepare_renumber_table(tx: &Transaction) -> Result<(), StoreError> {
     tx.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS renumber_message (
            message_id INTEGER PRIMARY KEY,
@@ -903,7 +903,7 @@ fn prepare_renumber_table(tx: &Transaction) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn apply_renumber_table(tx: &Transaction) -> Result<(), StoreError> {
+pub(crate) fn apply_renumber_table(tx: &Transaction) -> Result<(), StoreError> {
     // Move through negative space so the live UNIQUE(session_id, ordinal)
     // constraint never observes a transient collision.
     tx.prepare_cached(

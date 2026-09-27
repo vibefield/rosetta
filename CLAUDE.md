@@ -82,14 +82,20 @@ A normal fresh `serve` binds HTTP/WS
 before discovery, then constructs the canonical schema in a named shared-memory SQLite
 database. Each enrolled adapter's bounded, source-free metadata batches commit there first
 and drain through `Hub::absorb_meta`, so projects and top-level sessions are immediately
-public while payload ingestion continues. Adapters then stream, ledger, normalize, and
-reconcile in parallel RAM planners. The sole canonical writer admits only a complete,
-clean runtime: its closed source batches already have final ordinals, its tool/usage
-relations reconcile in RAM, and only its final readiness commit makes the canonical timeline
-visible through the ordinary REST/WS queries. Open session subscriptions receive one resync barrier; parser
+public while payload ingestion continues. Adapters then stream, ledger, and normalize in
+parallel through private RAM planners, handing each source to the sole canonical writer as a
+closed source (terminal generation, final checkpoint) in path order as soon as nothing can
+supersede it — a session is held only while a restart's sibling heal could still replace its
+transcripts — under a 256 MiB in-flight budget. The writer lands those final rows in the
+canonical RAM generation while capture continues (messages carry final ordinals; deferred
+tool/usage facts collect into that runtime's own RAM fold, never another's), but admits only a
+complete, clean runtime: at its producer's close the fold writes each resolved tool row once,
+and only its final readiness commit (the Pending flip) makes the canonical timeline visible
+through the ordinary REST/WS queries — every payload read route honours Pending. No runtime is
+retained whole in RAM. Open session subscriptions receive one resync barrier; parser
 fragments and reconciliation state are never public. This is deliberately runtime-granular:
 cross-file relations cannot expose a half-reconciled session merely to manufacture finer UI
-progress.
+progress. Finite `ingest` keeps the retained closed-runtime path.
 
 After every runtime closes, the daemon performs set-based finalization and full validation in
 RAM, drains and fsyncs the staged raw ledger, backs the canonical database up to a

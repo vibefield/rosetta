@@ -29,3 +29,8 @@ tokio.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+http-body-util.workspace = true
+rosetta-bench-corpus = { path = "../bench-corpus" }
+tower.workspace = true

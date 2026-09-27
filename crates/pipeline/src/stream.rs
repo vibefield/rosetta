@@ -419,7 +419,7 @@ pub fn reserve_unsealed_generation(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn ingest_file(
+pub(crate) fn ingest_file(
     adapter: &dyn AgentAdapter,
     runtime: &RuntimeRow,
     root: &Path,

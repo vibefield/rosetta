@@ -9,7 +9,7 @@ use std::time::Instant;
 use rosetta_adapter_support::{LineOutcome, LineStatus};
 use rosetta_capture::{Ledger, LedgerWriteStats};
 use rosetta_core::IngestOp;
-use rosetta_store::{ApplyStats, Batch, BulkLoadStats, Store, StoreError};
+use rosetta_store::{ApplyStats, Batch, BulkLoadStats, ColdReconciliation, Store, StoreError};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,6 +435,20 @@ impl Instrument {
         result
     }
 
+    /// [`Instrument::apply`] for a streamed runtime's setup batch, which must
+    /// not reach the metadata mirror before the runtime's admission.
+    pub fn apply_unobserved(
+        &self,
+        store: &mut Store,
+        batch: &Batch,
+    ) -> Result<ApplyStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || store.apply_unobserved(batch));
+        if let Ok(stats) = &result {
+            self.record_apply_stats(stats);
+        }
+        result
+    }
+
     /// Transfer payload ownership when the producer no longer needs the
     /// batch, allowing a cold planner to retain it without a deep copy.
     pub fn apply_owned(&self, store: &mut Store, batch: Batch) -> Result<ApplyStats, StoreError> {
@@ -467,6 +481,37 @@ impl Instrument {
     /// exclusive timer for the audit UI.
     pub fn flush_bulk_reconciliation(&self, store: &mut Store) -> Result<ApplyStats, StoreError> {
         let result = self.time(Metric::ApplyNanos, || store.flush_bulk_reconciliation());
+        if let Ok(stats) = &result {
+            self.record_apply_stats(stats);
+        }
+        result
+    }
+
+    /// Apply a streamed runtime's closed sources, collecting their deferred
+    /// facts into that runtime's fold, with closed-source attribution.
+    pub fn apply_streamed_sources(
+        &self,
+        store: &mut Store,
+        state: &mut ColdReconciliation,
+        batches: Vec<Batch>,
+    ) -> Result<ApplyStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || {
+            store.apply_streamed_sources(state, batches)
+        });
+        if let Ok(stats) = &result {
+            self.record_apply_stats(stats);
+        }
+        result
+    }
+
+    /// Fold a streamed cold runtime at its admission, with the same
+    /// attribution as [`Instrument::flush_bulk_reconciliation`].
+    pub fn fold_cold_reconciliation(
+        &self,
+        store: &mut Store,
+        state: ColdReconciliation,
+    ) -> Result<ApplyStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || store.fold_cold_reconciliation(state));
         if let Ok(stats) = &result {
             self.record_apply_stats(stats);
         }

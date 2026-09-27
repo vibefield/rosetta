@@ -52,6 +52,7 @@ mod bench;
 mod brutal;
 mod cold_progress;
 mod cold_stage;
+mod cold_stream;
 mod engine;
 mod enroll;
 mod ledger_cmd;

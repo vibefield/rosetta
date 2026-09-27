@@ -11,8 +11,9 @@
 //! run (the projection's `enabled` flags), named on the command line, or
 //! chosen in the app while the daemon waits. On a normal first run,
 //! source-free metadata enters a named canonical RAM projection immediately;
-//! closed reconciled runtimes follow in completion order, and the read router
-//! switches to the validated disk copy at the durability barrier.
+//! closed sources stream in behind the Pending barrier, reconciled runtimes
+//! are admitted in completion order, and the read router switches to the
+//! validated disk copy at the durability barrier.
 //! Existing/resumable projections and metadata-audit mode retain the sliced
 //! `ColdEngine`: metadata effects drain between passes, watcher hints and
 //! boosts can reorder its lanes, and scoped row effects serve only sessions
@@ -48,9 +49,8 @@ use crate::enroll::{Enrollment, RuntimeTarget, discovered_by_kind, resolve_targe
 use crate::recovery::restart_incomplete_projection;
 use crate::runtime_ledger::{is_layout_root, ledger_dir, ledger_dir_for, open_runtime_ledger};
 use crate::{
-    AppliedColdRuntime, ColdCaptureRequest, Flags, apply_captured_cold_runtime,
-    finish_parallel_cold_runtime, identity_name, install_rebuilt_projection, ledger_root,
-    load_enrollment, make_single_file, open_progressive_backfill, parse_flags,
+    AppliedColdRuntime, ColdCaptureRequest, Flags, identity_name, install_rebuilt_projection,
+    ledger_root, load_enrollment, make_single_file, open_progressive_backfill, parse_flags,
     plan_parallel_cold_runtime, projection_lock, projection_parent, record_backfill_failures,
     selected,
 };
@@ -1440,8 +1440,8 @@ fn run_fresh_fast_serve(
         })?;
 
         // This is the immediate-public seam: only source-free canonical
-        // identity rows cross it. The planner keeps all payload/source state
-        // in RAM until the runtime closes.
+        // identity rows cross it. Payload follows as closed sources, public
+        // only when the runtime is admitted.
         for batch in plan
             .planner
             .planned_metadata_batches()
@@ -1494,87 +1494,29 @@ fn run_fresh_fast_serve(
         ));
     }
 
-    // Every producer owns one planner and ledger. The consumer is the only
-    // canonical writer and admits completion-order results, so small agents
-    // become browseable while a large agent is still parsing.
+    // Every producer owns one planner and ledger and streams closed sources;
+    // this thread is the only canonical writer. Rows land while capture
+    // continues and each runtime is admitted — folded and flipped out of
+    // Pending in one step — as its producer closes, so small agents become
+    // browseable while a large agent is still parsing.
     for plan in &planned {
         let baseline = plan.instrument.snapshot();
         health.ingest_stream(&plan.runtime.id, counter_source(&plan.instrument, baseline));
     }
     let mut failures = Vec::new();
-    let mut applied = std::thread::scope(|scope| {
-        let worker_count = planned.len();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let mut handles = Vec::with_capacity(worker_count);
-        for plan in planned {
-            let sender = sender.clone();
-            handles.push(scope.spawn(move || {
-                let result = finish_parallel_cold_runtime(plan);
-                sender
-                    .send(result)
-                    .map_err(|_| "fresh cold consumer stopped".to_string())
-            }));
-        }
-        drop(sender);
-
-        let mut outputs = Vec::with_capacity(worker_count);
-        for _ in 0..worker_count {
-            let mut captured = receiver
-                .recv()
-                .map_err(|_| "fresh cold capture channel closed".to_string())??;
-            let mut runtime_failures = Vec::new();
-            let name = identity_name(&captured.identity);
-            record_backfill_failures(
-                &name,
-                captured.discovery_truncated,
-                &captured.meta,
-                &captured.stream,
-                &mut runtime_failures,
-            );
-            if !runtime_failures.is_empty() {
-                failures.extend(runtime_failures);
-                continue;
-            }
-            let runtime_id = captured.runtime.id.clone();
-            let payload_bytes = captured.stream.payload_bytes;
-            let records = captured.stream.records;
-            health.ingest_runtime_stage(&runtime_id, rosetta_server::BackfillState::Applying);
-            captured.prepared.mark_metadata_preapplied();
-            let output = apply_captured_cold_runtime(
-                flags,
-                captured,
-                &mut store,
-                instrument,
-                &mut failures,
-            )?;
-            absorb_effects(&mut store, hub)?;
-            let session_ids = queries::session_list(store.conn(), None, i64::MAX)
-                .map_err(|error| format!("reading {name} sessions after cold apply: {error}"))?
-                .into_iter()
-                .filter(|session| session.runtime_id == output.runtime.id)
-                .map(|session| session.id)
-                .collect::<Vec<_>>();
-            hub.invalidate_sessions(session_ids.iter().map(String::as_str), now_ms());
-            for session_id in &session_ids {
-                board.session_done(
-                    ownership.get(session_id).and_then(Option::as_deref),
-                    session_id,
-                );
-            }
-            health.ingest_done(&runtime_id, payload_bytes, records);
-            println!(
-                "{name}: canonical RAM public — {records} records, {} sessions",
-                session_ids.len()
-            );
-            outputs.push(output);
-        }
-        for handle in handles {
-            handle
-                .join()
-                .map_err(|_| "fresh cold capture worker panicked".to_string())??;
-        }
-        Ok::<_, String>(outputs)
-    })?;
+    let mut applied = crate::cold_stream::build_streamed(
+        planned,
+        crate::cold_stream::StreamedCold {
+            flags,
+            store: &mut store,
+            instrument,
+            hub,
+            health,
+            board: &board,
+            ownership: &ownership,
+        },
+        &mut failures,
+    )?;
     if !failures.is_empty() {
         return Err(failures.join("; "));
     }

@@ -7,6 +7,7 @@ mod activity;
 pub mod apply;
 pub mod assets;
 mod bulk;
+mod cold_stream;
 mod columns;
 pub mod hot;
 mod message_codec;
@@ -27,6 +28,7 @@ use rosetta_core::rows::StreamState;
 use rusqlite::{Connection, OpenFlags};
 
 pub use apply::{ApplyProfile, ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite};
+pub use cold_stream::ColdReconciliation;
 pub use hot::{
     Effects, HotConfig, MetaEffects, MetaMirror, Mutation, Replay, RowScope, Stamp, TailRings,
 };
@@ -583,86 +585,9 @@ impl Store {
         &mut self,
         batches: Vec<Batch>,
     ) -> Result<ApplyStats, StoreError> {
-        if self.mode != StoreMode::Bulk {
-            return Err(StoreError::BulkLoadState {
-                message: "closed source batches require a private cold rebuild".to_string(),
-            });
-        }
-
-        let mut cursor_ids = BTreeSet::new();
-        let mut deltas = Vec::with_capacity(batches.len());
-        let mut asset_totals = Vec::with_capacity(batches.len());
-        let mut abandoned = false;
-        for batch in &batches {
-            let source = batch
-                .source
-                .as_ref()
-                .ok_or_else(|| StoreError::BulkLoadState {
-                    message: "closed bulk source batch is missing source identity".to_string(),
-                })?;
-            if !matches!(source.mode, SourceMode::Activate | SourceMode::Abandon) {
-                return Err(StoreError::BulkLoadState {
-                    message: "closed bulk source batch is not terminal".to_string(),
-                });
-            }
-            if !cursor_ids.insert(source.cursor_id) {
-                return Err(StoreError::BulkLoadState {
-                    message: format!(
-                        "closed bulk transaction repeats cursor {}",
-                        source.cursor_id
-                    ),
-                });
-            }
-            abandoned |= source.mode == SourceMode::Abandon;
-            validate_source_batch(batch)?;
-            asset_totals.push(self.assets.materialize_batch(batch, false)?);
-        }
-
-        let mut totals = ApplyStats::default();
-        let tx = self.conn.transaction()?;
-        for (batch, asset_stats) in batches.into_iter().zip(asset_totals) {
-            let mut stats = apply::apply_batch(
-                &tx,
-                &batch,
-                apply::BULK_MAINTENANCE,
-                true,
-                false,
-                self.bulk_ordinals_precomputed,
-                &mut self.usage_owners,
-                apply::Observation {
-                    rows: None,
-                    meta: None,
-                },
-            )?;
-            stats.projection_assets = asset_stats.assets;
-            stats.asset_files_written = asset_stats.files_written;
-            stats.asset_files_reused = asset_stats.files_reused;
-            stats.asset_bytes = asset_stats.bytes;
-            stats.asset_write_nanos = asset_stats.nanos;
-            totals.merge_from(&stats);
-            // SQL has consumed the immediate rows. Move deferred facts into
-            // the provisional RAM delta and release the rest of this batch
-            // now, instead of retaining a second runtime-sized payload tree.
-            let delta =
-                apply::BulkReconciliationDelta::from_owned_batch(batch)?.ok_or_else(|| {
-                    StoreError::BulkLoadState {
-                        message: "closed source batch did not produce reconciliation state"
-                            .to_string(),
-                    }
-                })?;
-            self.bulk_reconciliation.validate(&delta)?;
-            deltas.push(delta);
-        }
-        let commit_started = Instant::now();
-        tx.commit()?;
-        totals.sqlite_commit_nanos = totals
-            .sqlite_commit_nanos
-            .saturating_add(elapsed_nanos(commit_started));
-        for delta in deltas {
+        let (totals, deltas) = self.apply_closed_source_sql(batches, true)?;
+        for (delta, _) in deltas {
             self.bulk_reconciliation.commit(delta);
-        }
-        if abandoned {
-            self.bulk_abandoned = true;
         }
         Ok(totals)
     }

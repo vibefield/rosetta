@@ -12,6 +12,7 @@
 //! here from `rosetta_core::ids`.
 
 pub mod checkpoint;
+pub mod closed;
 pub mod command;
 pub mod discover;
 mod document;
@@ -25,8 +26,10 @@ pub mod replay;
 pub mod sched;
 mod snapshot;
 pub mod stream;
+pub mod streamed;
 
 pub use checkpoint::PipeCheckpoint;
+pub use closed::{ClosedSource, StreamedSetup, stream_closed_sources_into, streamed_setup};
 pub use command::{RawCommandLocator, read_raw_command};
 pub use discover::{Discovery, discover, discover_root, expand_data_root};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
@@ -43,6 +46,7 @@ pub use sched::{ColdLane, ColdSchedule, order_runtime_roster};
 pub use stream::{
     StreamReport, reserve_unsealed_generation, stream_backfill, stream_backfill_into,
 };
+pub use streamed::StreamedRuntime;
 
 /// Version of the canonical-op envelope stored in ledger meta frames. Replay
 /// routes explicitly by this value instead of assuming today's row JSON.
