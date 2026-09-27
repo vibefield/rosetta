@@ -24,6 +24,7 @@ pub mod progress;
 mod project;
 pub mod replay;
 pub mod sched;
+mod skim;
 mod snapshot;
 pub mod stream;
 pub mod streamed;

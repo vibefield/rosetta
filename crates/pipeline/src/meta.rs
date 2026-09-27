@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use rosetta_adapter_support::{
-    AgentAdapter, FileDiscipline, FileFormat, FileStat, ProjectHint, SkimResult, StreamDriver,
+    AgentAdapter, FileDiscipline, FileFormat, ProjectHint, SkimResult, StreamDriver, StreamSpec,
 };
 use rosetta_core::rows::{
     ProjectRow, RuntimeRow, SessionRole, SessionRow, SessionTitleRow, StreamState, TitleKind,
@@ -124,6 +124,10 @@ pub fn meta_ingest_into(
 /// The roster is immutable evidence from the same finite command; individual
 /// reads still handle files vanishing or changing after that census. Each
 /// file's stream comes from the class its discovery walk carried.
+///
+/// Sources are read on a bounded pool (see `skim`); everything that merges
+/// their facts — sessions, projects, counters, databases — runs in inventory
+/// order, so the batch and its ledger frame match a serial skim exactly.
 #[allow(clippy::too_many_arguments)]
 pub fn meta_ingest_inventory_into(
     adapter: &dyn AgentAdapter,
@@ -136,197 +140,253 @@ pub fn meta_ingest_inventory_into(
     instrument: &Instrument,
     ledger: Option<&mut rosetta_capture::Ledger>,
 ) -> Result<(MetaReport, Vec<SessionFile>), PipelineError> {
+    let (mut report, files, ops) = plan_inventory(
+        adapter,
+        runtime,
+        root,
+        store,
+        inventory,
+        walk_truncated,
+        opts,
+        instrument,
+        crate::skim::skim_threads(),
+    )?;
+    if let Some(ledger) = ledger {
+        let mut semantic_ops = ops.clone();
+        for op in &mut semantic_ops {
+            if let IngestOp::Runtime(runtime) = op {
+                // Discovery wall time is intentionally insert-only in the
+                // projection and must not turn an otherwise identical bounded
+                // skim into a new durable metadata generation every boot.
+                runtime.discovered_at = 0;
+            }
+        }
+        let semantic = serde_json::to_vec(&semantic_ops).map_err(|error| {
+            PipelineError::Config(format!("serializing semantic meta key: {error}"))
+        })?;
+        let semantic_key = blake3::hash(&semantic).to_hex().to_string();
+        instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
+            let json = serde_json::to_string(&ops).map_err(|error| {
+                PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
+            })?;
+            ledger.append_meta_checkpoint_if_changed(
+                crate::LEDGER_META_SCHEMA_VERSION,
+                &json,
+                &semantic_key,
+            )?;
+            Ok(())
+        })?;
+    }
+    report.stats = instrument.apply(
+        store,
+        &Batch {
+            ops,
+            checkpoints: vec![],
+            source: None,
+        },
+    )?;
+    instrument.add(Metric::BatchesApplied, 1);
+    Ok((report, files))
+}
+
+/// Where one inventory file goes, decided from its stream alone.
+enum Entry<'a> {
+    /// No stream claims the path (an inventory walked without classes).
+    Unclaimed,
+    InventoryOnly,
+    /// A driver the stream's declared layout cannot carry.
+    Misconfigured(&'a StreamSpec, StreamDriver),
+    /// A SQLite source, snapshotted and admitted by the ordered merge.
+    Database(&'a StreamSpec, StreamDriver),
+    /// A transcript or document whose bytes are read on the skim pool.
+    Read(&'a StreamSpec, StreamDriver),
+}
+
+fn classify<'a>(
+    adapter: &dyn AgentAdapter,
+    layout: &'a rosetta_adapter_support::GroundTruthDoc,
+    file: &rosetta_capture::ScannedFile,
+) -> Entry<'a> {
+    let Some(stream) = crate::discover::inventory_stream(layout, file) else {
+        return Entry::Unclaimed;
+    };
+    let Some(driver) = adapter.stream_driver(&stream.id) else {
+        return Entry::InventoryOnly;
+    };
+    match driver {
+        StreamDriver::JsonLines
+            if stream.file_format == FileFormat::Jsonl
+                && stream.discipline == FileDiscipline::AppendOnly =>
+        {
+            Entry::Read(stream, driver)
+        }
+        StreamDriver::DocumentSnapshot
+            if matches!(
+                stream.file_format,
+                FileFormat::Json | FileFormat::Toml | FileFormat::Markdown | FileFormat::Text
+            ) && stream.discipline == FileDiscipline::RewriteInPlace =>
+        {
+            Entry::Read(stream, driver)
+        }
+        StreamDriver::SqliteSnapshot
+            if stream.file_format == FileFormat::Sqlite
+                && stream.discipline == FileDiscipline::Database =>
+        {
+            Entry::Database(stream, driver)
+        }
+        _ => Entry::Misconfigured(stream, driver),
+    }
+}
+
+/// The bounded skim of one inventory, up to the batch it journals and
+/// applies: the report, the sources the stream phase will tail (newest
+/// first), and the ops in batch order. `store` is only read, for progress a
+/// re-skim must not regress. `threads` bounds the concurrent source reads.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_inventory(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    store: &Store,
+    inventory: &[rosetta_capture::ScannedFile],
+    walk_truncated: bool,
+    opts: &IngestOptions,
+    instrument: &Instrument,
+    threads: usize,
+) -> Result<(MetaReport, Vec<SessionFile>, Vec<IngestOp>), PipelineError> {
     let layout = adapter.layout();
 
     let mut report = MetaReport::default();
     let mut output = MetaOutput::default();
     report.walk_truncated = walk_truncated;
 
-    for file in inventory {
-        let Some(stream) = crate::discover::inventory_stream(layout, file) else {
-            continue;
-        };
-        report.files_matched += 1;
-
-        let Some(driver) = adapter.stream_driver(&stream.id) else {
-            report.files_inventory_only += 1;
-            continue;
-        };
-        match driver {
-            StreamDriver::JsonLines
-                if stream.file_format == FileFormat::Jsonl
-                    && stream.discipline == FileDiscipline::AppendOnly => {}
-            StreamDriver::DocumentSnapshot
-                if matches!(
-                    stream.file_format,
-                    FileFormat::Json | FileFormat::Toml | FileFormat::Markdown | FileFormat::Text
-                ) && stream.discipline == FileDiscipline::RewriteInPlace =>
-            {
-                admit_document(
-                    adapter,
-                    runtime,
-                    root,
-                    stream,
-                    driver,
-                    &file.relative_path,
-                    file.size,
-                    file.modified_ms,
-                    opts,
-                    &mut report,
-                    &mut output,
-                    instrument,
-                )?;
-                continue;
+    let entries: Vec<Entry<'_>> = inventory
+        .iter()
+        .map(|file| classify(adapter, layout, file))
+        .collect();
+    report.files_matched = entries
+        .iter()
+        .filter(|entry| !matches!(entry, Entry::Unclaimed))
+        .count();
+    let reads: Vec<(&rosetta_capture::ScannedFile, &StreamSpec, StreamDriver)> = inventory
+        .iter()
+        .zip(&entries)
+        .filter_map(|(file, entry)| match *entry {
+            Entry::Read(stream, driver) => Some((file, stream, driver)),
+            _ => None,
+        })
+        .collect();
+    crate::skim::in_order(
+        &reads,
+        threads,
+        |&(file, stream, driver)| match driver {
+            StreamDriver::DocumentSnapshot => {
+                crate::skim::read_document(adapter, root, file, stream, opts, instrument)
             }
-            StreamDriver::SqliteSnapshot
-                if stream.file_format == FileFormat::Sqlite
-                    && stream.discipline == FileDiscipline::Database =>
-            {
-                // Sidecars (-wal/-shm/-journal) travel with their database;
-                // only the database itself is a source.
-                if rosetta_capture::is_db_sidecar(&file.relative_path) {
-                    report.files_inventory_only += 1;
-                    continue;
-                }
-                match instrument.time(Metric::SkimNanos, || {
-                    rosetta_capture::sqlite_file_status(&root.join(&file.relative_path))
-                })? {
-                    rosetta_capture::SqliteFileStatus::Missing => {
-                        report.files_vanished += 1;
-                        continue;
-                    }
-                    rosetta_capture::SqliteFileStatus::NotDatabase => {
-                        // Broad database globs also see agent-owned lock and
-                        // marker files. Preserve them in the inventory count,
-                        // but never manufacture an empty SQLite source.
+            _ => crate::skim::skim_transcript(adapter, root, file, stream, opts, instrument),
+        },
+        |next| -> Result<(), PipelineError> {
+            for (file, entry) in inventory.iter().zip(&entries) {
+                let (stream, driver) = match *entry {
+                    Entry::Unclaimed => continue,
+                    Entry::InventoryOnly => {
                         report.files_inventory_only += 1;
                         continue;
                     }
-                    rosetta_capture::SqliteFileStatus::Database => {}
-                }
-                admit_database(
-                    adapter,
-                    runtime,
-                    root,
-                    stream,
-                    driver,
-                    &file.relative_path,
-                    file.size,
-                    file.modified_ms,
-                    &mut report,
-                    &mut output,
-                    instrument,
-                )?;
-                continue;
-            }
-            _ => {
-                return Err(PipelineError::Config(format!(
-                    "{} opted stream {} into {:?}, but its layout is {:?}/{:?}",
-                    adapter.kind(),
-                    stream.id,
-                    driver,
-                    stream.file_format,
-                    stream.discipline
-                )));
-            }
-        }
-
-        let Some(windows) = instrument.time(Metric::SkimNanos, || {
-            rosetta_capture::head_tail(
-                &root.join(&file.relative_path),
-                opts.skim_head_bytes,
-                opts.skim_tail_bytes,
-            )
-        })?
-        else {
-            report.files_vanished += 1;
-            continue;
-        };
-        report.files_skimmed += 1;
-        instrument.add(Metric::FilesSkimmed, 1);
-        instrument.add(
-            Metric::BytesRead,
-            (windows.head.len() + windows.tail.len()) as u64,
-        );
-
-        let stat = FileStat {
-            relative_path: file.relative_path.clone(),
-            size: file.size,
-            modified_ms: file.modified_ms,
-        };
-        let mut skim = adapter.skim(&stream.id, &stat, &windows.head, &windows.tail);
-        // Some opening records legitimately exceed the UI skim window (Codex
-        // session_meta can embed AGENTS.md). Read exactly one bounded record,
-        // never the transcript body, before declaring the file unidentified.
-        if skim.session_id.is_none()
-            && let Some(mut first) = instrument.time(Metric::SkimNanos, || {
-                rosetta_capture::first_record(
-                    &root.join(&file.relative_path),
-                    opts.tail.delimiter,
-                    opts.tail.max_record_bytes,
-                    opts.tail.normalize_crlf,
-                )
-            })?
-        {
-            first.push(opts.tail.delimiter);
-            instrument.add(Metric::BytesRead, first.len() as u64);
-            skim = adapter.skim(&stream.id, &stat, &first, &windows.tail);
-        }
-        if opts.skim_fallback_bytes > 0
-            && opts.skim_fallback_records > 0
-            && adapter.wants_skim_fallback(&stream.id, &skim)
-        {
-            // Rewind to the beginning of the record clipped by the head so
-            // every byte handed to the adapter is a complete JSONL record.
-            let start = windows
-                .head
-                .iter()
-                .rposition(|byte| *byte == opts.tail.delimiter)
-                .map_or(0, |at| at + 1) as u64;
-            if let Some(scan) = instrument.time(Metric::SkimFallbackNanos, || {
-                rosetta_capture::scan_records(
-                    &root.join(&file.relative_path),
-                    start,
-                    opts.skim_fallback_bytes,
-                    opts.skim_fallback_records,
-                    opts.tail.delimiter,
-                    opts.tail.max_record_bytes,
-                    opts.tail.normalize_crlf,
-                )
-            })? {
-                instrument.add(Metric::SkimFallbackBytes, scan.bytes_read);
-                instrument.add(Metric::BytesRead, scan.bytes_read);
-                for record in scan.records {
-                    if adapter.absorb_skim_fallback_record(&stream.id, &record, &mut skim) {
-                        break;
+                    Entry::Misconfigured(stream, driver) => {
+                        return Err(PipelineError::Config(format!(
+                            "{} opted stream {} into {:?}, but its layout is {:?}/{:?}",
+                            adapter.kind(),
+                            stream.id,
+                            driver,
+                            stream.file_format,
+                            stream.discipline
+                        )));
+                    }
+                    Entry::Database(stream, driver) => {
+                        // Sidecars (-wal/-shm/-journal) travel with their
+                        // database; only the database itself is a source.
+                        if rosetta_capture::is_db_sidecar(&file.relative_path) {
+                            report.files_inventory_only += 1;
+                            continue;
+                        }
+                        match instrument.time(Metric::SkimNanos, || {
+                            rosetta_capture::sqlite_file_status(&root.join(&file.relative_path))
+                        })? {
+                            rosetta_capture::SqliteFileStatus::Missing => {
+                                report.files_vanished += 1;
+                                continue;
+                            }
+                            rosetta_capture::SqliteFileStatus::NotDatabase => {
+                                // Broad database globs also see agent-owned
+                                // lock and marker files. Preserve them in the
+                                // inventory count, but never manufacture an
+                                // empty SQLite source.
+                                report.files_inventory_only += 1;
+                                continue;
+                            }
+                            rosetta_capture::SqliteFileStatus::Database => {}
+                        }
+                        admit_database(
+                            adapter,
+                            runtime,
+                            root,
+                            stream,
+                            driver,
+                            &file.relative_path,
+                            file.size,
+                            file.modified_ms,
+                            &mut report,
+                            &mut output,
+                            instrument,
+                        )?;
+                        continue;
+                    }
+                    Entry::Read(stream, driver) => (stream, driver),
+                };
+                match next()? {
+                    crate::skim::Skimmed::Vanished => report.files_vanished += 1,
+                    crate::skim::Skimmed::Transcript(skim) => {
+                        report.files_skimmed += 1;
+                        admit_skim(
+                            runtime,
+                            &mut report,
+                            &mut output,
+                            file,
+                            stream,
+                            driver,
+                            *skim,
+                            false,
+                            instrument,
+                        );
+                    }
+                    // One physical document may enumerate several native
+                    // sessions, each an independently replayable virtual
+                    // source (`<document-path>#<native-id>`). A member the
+                    // document no longer lists keeps its last projected
+                    // generation, like a removed SQLite member and a deleted
+                    // JSONL transcript (product decision, 2026-09-24).
+                    crate::skim::Skimmed::Document(skims) => {
+                        report.files_skimmed += 1;
+                        for skim in skims {
+                            admit_skim(
+                                runtime,
+                                &mut report,
+                                &mut output,
+                                file,
+                                stream,
+                                driver,
+                                skim,
+                                true,
+                                instrument,
+                            );
+                        }
                     }
                 }
             }
-        }
-        if !skim.ledger_only {
-            output.ops.extend(std::mem::take(&mut skim.ops));
-        }
-        let Some(native_session_id) = skim.session_id.clone() else {
-            report.files_unidentified += 1;
-            continue;
-        };
-        admit_identified(
-            runtime,
-            &mut output,
-            AdmitSource {
-                relative_path: file.relative_path.clone(),
-                stream_id: stream.id.clone(),
-                file_format: stream.file_format,
-                discipline: stream.discipline,
-                driver,
-                size: file.size,
-                modified_ms: file.modified_ms,
-            },
-            skim,
-            native_session_id,
-            instrument,
-        );
-    }
+            Ok(())
+        },
+    )?;
 
     // A snapshot source that disappears whole keeps every member's last
     // projected generation, like a deleted JSONL transcript keeps its rows;
@@ -379,45 +439,10 @@ pub fn meta_ingest_inventory_into(
     ops.extend(projects.into_iter().map(IngestOp::Project));
     ops.extend(sessions.into_iter().map(IngestOp::SessionMeta));
     ops.extend(meta_ops);
-    if let Some(ledger) = ledger {
-        let mut semantic_ops = ops.clone();
-        for op in &mut semantic_ops {
-            if let IngestOp::Runtime(runtime) = op {
-                // Discovery wall time is intentionally insert-only in the
-                // projection and must not turn an otherwise identical bounded
-                // skim into a new durable metadata generation every boot.
-                runtime.discovered_at = 0;
-            }
-        }
-        let semantic = serde_json::to_vec(&semantic_ops).map_err(|error| {
-            PipelineError::Config(format!("serializing semantic meta key: {error}"))
-        })?;
-        let semantic_key = blake3::hash(&semantic).to_hex().to_string();
-        instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
-            let json = serde_json::to_string(&ops).map_err(|error| {
-                PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
-            })?;
-            ledger.append_meta_checkpoint_if_changed(
-                crate::LEDGER_META_SCHEMA_VERSION,
-                &json,
-                &semantic_key,
-            )?;
-            Ok(())
-        })?;
-    }
-    report.stats = instrument.apply(
-        store,
-        &Batch {
-            ops,
-            checkpoints: vec![],
-            source: None,
-        },
-    )?;
-    instrument.add(Metric::BatchesApplied, 1);
 
     // Newest sessions stream first.
     files.sort_by_key(|file| std::cmp::Reverse(file.modified_ms));
-    Ok((report, files))
+    Ok((report, files, ops))
 }
 
 fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
@@ -856,89 +881,49 @@ fn canonical_project_hint(runtime_id: &str, hint: ProjectHint) -> Option<Project
     }
 }
 
-/// Meta admission for a rewrite-in-place document. One physical file may
-/// enumerate several native sessions, each represented as an independently
-/// replayable virtual source (`<document-path>#<native-id>`).
+/// Stage one skimmed source: its meta ops, then its identified session and
+/// source row. A document member's source is virtual
+/// (`<document-path>#<native-id>`); an unidentified skim is only counted.
 #[allow(clippy::too_many_arguments)]
-fn admit_document(
-    adapter: &dyn AgentAdapter,
+fn admit_skim(
     runtime: &RuntimeRow,
-    root: &Path,
-    stream: &rosetta_adapter_support::StreamSpec,
-    driver: StreamDriver,
-    relative_path: &str,
-    size: u64,
-    modified_ms: i64,
-    opts: &IngestOptions,
     report: &mut MetaReport,
     output: &mut MetaOutput,
+    file: &rosetta_capture::ScannedFile,
+    stream: &StreamSpec,
+    driver: StreamDriver,
+    mut skim: SkimResult,
+    member: bool,
     instrument: &Instrument,
-) -> Result<(), PipelineError> {
-    let path = root.join(relative_path);
-    let document_limit = adapter.document_size_limit(&stream.id, opts.tail.max_record_bytes);
-    let mut retries = 0_u32;
-    let snapshot = loop {
-        match instrument.time(Metric::SkimNanos, || {
-            rosetta_capture::snapshot_document(&path, document_limit)
-        })? {
-            rosetta_capture::DocumentOutcome::Ready(snapshot) => break snapshot,
-            rosetta_capture::DocumentOutcome::Missing => {
-                report.files_vanished += 1;
-                return Ok(());
-            }
-            rosetta_capture::DocumentOutcome::Unstable => {
-                retries += 1;
-                if retries > opts.max_retries {
-                    report.files_vanished += 1;
-                    return Ok(());
-                }
-            }
-            rosetta_capture::DocumentOutcome::Oversized { size, limit } => {
-                return Err(PipelineError::Config(format!(
-                    "document snapshot {relative_path} is {size} bytes, above the {limit}-byte limit"
-                )));
-            }
-        }
-    };
-
-    report.files_skimmed += 1;
-    instrument.add(Metric::FilesSkimmed, 1);
-    instrument.add(Metric::BytesRead, snapshot.bytes().len() as u64);
-    let stat = FileStat {
-        relative_path: relative_path.to_owned(),
-        size,
-        modified_ms,
-    };
-    for mut skim in adapter.document_sessions(&stream.id, &stat, snapshot.bytes()) {
-        if !skim.ledger_only {
-            output.ops.extend(std::mem::take(&mut skim.ops));
-        }
-        let Some(native) = skim.session_id.clone() else {
-            report.files_unidentified += 1;
-            continue;
-        };
-        admit_identified(
-            runtime,
-            output,
-            AdmitSource {
-                relative_path: format!("{relative_path}#{native}"),
-                stream_id: stream.id.clone(),
-                file_format: stream.file_format,
-                discipline: stream.discipline,
-                driver,
-                size,
-                modified_ms,
-            },
-            skim,
-            native,
-            instrument,
-        );
+) {
+    if !skim.ledger_only {
+        output.ops.extend(std::mem::take(&mut skim.ops));
     }
-
-    // A member the document no longer lists keeps its last projected
-    // generation, like a removed SQLite member and a deleted JSONL transcript
-    // (product decision, 2026-09-24).
-    Ok(())
+    let Some(native_session_id) = skim.session_id.clone() else {
+        report.files_unidentified += 1;
+        return;
+    };
+    let relative_path = if member {
+        format!("{}#{native_session_id}", file.relative_path)
+    } else {
+        file.relative_path.clone()
+    };
+    admit_identified(
+        runtime,
+        output,
+        AdmitSource {
+            relative_path,
+            stream_id: stream.id.clone(),
+            file_format: stream.file_format,
+            discipline: stream.discipline,
+            driver,
+            size: file.size,
+            modified_ms: file.modified_ms,
+        },
+        skim,
+        native_session_id,
+        instrument,
+    );
 }
 
 /// Meta admission for a `SqliteSnapshot` stream: enumerate the database's
