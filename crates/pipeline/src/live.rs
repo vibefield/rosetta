@@ -552,14 +552,19 @@ impl<'a> LiveRunner<'a> {
         self.report.polls += 1;
         self.last_poll = Instant::now();
         let layout = self.adapter.layout();
+        // Inventory-only streams cannot nominate a source or trigger
+        // admission. Keep them out of the stat work and the file cap, and
+        // never read a directory only they could claim.
+        let driven = |stream: &rosetta_adapter_support::StreamSpec| {
+            self.adapter.stream_driver(&stream.id).is_some()
+        };
         let walk = instrument.time(Metric::LivePollWalkNanos, || {
-            rosetta_capture::walk_filtered(&self.root, self.opts.max_files, |path| {
-                // Inventory-only streams cannot nominate a source or trigger
-                // admission. Keep them out of both the stat work and file cap.
-                layout
-                    .matching_stream(path)
-                    .is_some_and(|stream| self.adapter.stream_driver(&stream.id).is_some())
-            })
+            rosetta_capture::walk_pruned(
+                &self.root,
+                self.opts.max_files,
+                |dir| layout.may_claim_below(dir, driven),
+                |path| layout.matching_stream(path).is_some_and(driven),
+            )
         })?;
         instrument.add(Metric::LivePollFiles, walk.files.len() as u64);
         // Index once per poll instead of scanning the whole admitted roster

@@ -92,9 +92,12 @@ pub fn discover_root(
         .map_or(0, |elapsed| elapsed.as_millis() as i64);
     let layout = adapter.layout();
     let report = instrument.time(Metric::WalkNanos, || {
-        rosetta_capture::walk_filtered(root, opts.max_files, |path| {
-            layout.matching_stream(path).is_some()
-        })
+        rosetta_capture::walk_pruned(
+            root,
+            opts.max_files,
+            |dir| layout.may_claim_below(dir, |_| true),
+            |path| layout.matching_stream(path).is_some(),
+        )
     })?;
     instrument.add(Metric::FilesWalked, report.files.len() as u64);
 

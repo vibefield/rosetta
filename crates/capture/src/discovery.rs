@@ -37,13 +37,44 @@ pub fn walk(root: &Path, max_files: usize) -> Result<WalkReport, CaptureError> {
 pub fn walk_filtered(
     root: &Path,
     max_files: usize,
+    include: impl FnMut(&str) -> bool,
+) -> Result<WalkReport, CaptureError> {
+    walk_pruned(root, max_files, |_| true, include)
+}
+
+/// [`walk_filtered`] that never enters a directory `descend` rejects. The
+/// caller answers from the directory's portable relative path (the root
+/// itself is always entered) and must reject only subtrees where `include`
+/// can accept nothing: then the accepted files, their order, and the cap —
+/// which counts accepted files only — are exactly the unpruned walk's. A
+/// rejected directory is never read, so it cannot fail the walk either.
+pub fn walk_pruned(
+    root: &Path,
+    max_files: usize,
+    mut descend: impl FnMut(&str) -> bool,
     mut include: impl FnMut(&str) -> bool,
 ) -> Result<WalkReport, CaptureError> {
     let mut report = WalkReport::default();
     if !root.is_dir() {
         return Ok(report);
     }
-    for entry in walkdir::WalkDir::new(root).follow_links(false) {
+    let entries = walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            if entry.depth() == 0 || !entry.file_type().is_dir() {
+                return true;
+            }
+            // A directory without a portable path only holds files without
+            // one, which the walk skips anyway.
+            entry
+                .path()
+                .strip_prefix(root)
+                .ok()
+                .and_then(portable_relative)
+                .is_some_and(|relative| descend(&relative))
+        });
+    for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
             // A directory vanishing mid-walk is normal on live roots.
@@ -318,6 +349,64 @@ mod tests {
         let report = walk(root.path(), 3).unwrap();
         assert_eq!(report.files.len(), 3);
         assert!(report.truncated);
+    }
+
+    #[test]
+    fn pruned_walk_never_enters_a_rejected_directory() {
+        let root = TempDir::new().unwrap();
+        for dir in ["keep/nested", "skip/nested", "skipped"] {
+            std::fs::create_dir_all(root.path().join(dir)).unwrap();
+        }
+        for file in [
+            "top.jsonl",
+            "keep/a.jsonl",
+            "keep/nested/b.jsonl",
+            "skip/c.jsonl",
+            "skip/nested/d.jsonl",
+            "skipped/e.jsonl",
+        ] {
+            std::fs::write(root.path().join(file), b"x\n").unwrap();
+        }
+        let mut asked = Vec::new();
+        let report = walk_pruned(
+            root.path(),
+            100,
+            |dir| {
+                asked.push(dir.to_owned());
+                !dir.starts_with("skip")
+            },
+            |_| true,
+        )
+        .unwrap();
+        let paths: Vec<&str> = report
+            .files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect();
+        assert_eq!(paths, ["keep/a.jsonl", "keep/nested/b.jsonl", "top.jsonl"]);
+        asked.sort();
+        assert_eq!(asked, ["keep", "keep/nested", "skip", "skipped"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rejected_unreadable_directory_cannot_fail_the_walk() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = TempDir::new().unwrap();
+        let locked = root.path().join("locked");
+        std::fs::create_dir_all(locked.join("inner")).unwrap();
+        std::fs::write(root.path().join("a.jsonl"), b"x\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // A superuser reads mode-000 directories; the contrast needs a user.
+        let enforced = std::fs::read_dir(&locked).is_err();
+        let pruned = walk_pruned(root.path(), 100, |dir| dir != "locked", |_| true);
+        let unpruned = walk(root.path(), 100);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(pruned.unwrap().files.len(), 1);
+        if enforced {
+            assert!(unpruned.is_err());
+        }
     }
 
     #[test]

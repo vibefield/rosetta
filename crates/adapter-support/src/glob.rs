@@ -34,6 +34,13 @@ impl Glob {
     pub fn matches(&self, path: &str) -> bool {
         match_path(&self.segments, Some(path))
     }
+
+    /// Whether some path strictly below the directory `relative_dir` (a
+    /// non-empty relative path) could match. A walk may skip every subtree
+    /// for which this is false; a `**` keeps everything below it reachable.
+    pub fn may_match_below(&self, relative_dir: &str) -> bool {
+        match_prefix(&self.segments, Some(relative_dir))
+    }
 }
 
 impl Segment {
@@ -97,6 +104,23 @@ fn match_path(pattern: &[Segment], path: Option<&str>) -> bool {
             head.matches(segment) && match_path(rest, tail)
         }
         (None, Some(_)) | (Some(_), None) => false,
+    }
+}
+
+/// Whether `pattern` can consume every segment of `dir` and still match at
+/// least one segment after them: the name of something inside the directory.
+fn match_prefix(pattern: &[Segment], dir: Option<&str>) -> bool {
+    match (pattern.split_first(), dir) {
+        // Whatever pattern is left can match one or more further segments.
+        (Some(_), None) => true,
+        (None, _) => false,
+        (Some((Segment::AnyDepth, rest)), Some(dir)) => {
+            match_prefix(rest, Some(dir)) || match_prefix(pattern, next_segment(dir).1)
+        }
+        (Some((head, rest)), Some(dir)) => {
+            let (segment, tail) = next_segment(dir);
+            head.matches(segment) && match_prefix(rest, tail)
+        }
     }
 }
 
@@ -400,5 +424,115 @@ mod tests {
                 assert_equivalent(pattern, edge);
             }
         }
+    }
+
+    /// A concrete path the pattern matches: every `*` filled, every `**`
+    /// expanded to zero, one or two segments.
+    fn instantiate(pattern: &str, rng: &mut Rng, fillers: &[&str]) -> String {
+        let mut segments = Vec::new();
+        for segment in pattern.split('/') {
+            if segment == "**" {
+                for _ in 0..rng.below(3) {
+                    segments.push(format!("d{}", rng.pick(fillers)));
+                }
+                continue;
+            }
+            let pieces: Vec<&str> = segment.split('*').collect();
+            let mut filled = pieces[0].to_owned();
+            for piece in &pieces[1..] {
+                filled.push_str(rng.pick(fillers));
+                filled.push_str(piece);
+            }
+            segments.push(filled);
+        }
+        segments.join("/")
+    }
+
+    #[test]
+    fn prefix_viability_never_prunes_a_reachable_match() {
+        let mut rng = Rng(0xD1_2EC7_0271);
+        let fillers = ["", "x", "é", "日本", ".", "a*b", "agent-", ".jsonl"];
+        let mut patterns: Vec<String> = ground_truths()
+            .iter()
+            .flat_map(|doc| doc.streams.iter().map(|stream| stream.glob.clone()))
+            .collect();
+        let pattern_segments = [
+            "*", "**", "a*", "*b", "a*b", "*a*", "a**b", "*.jsonl", "x", "projects", "",
+        ];
+        for _ in 0..600 {
+            let pattern: Vec<&str> = (0..1 + rng.below(5))
+                .map(|_| *rng.pick(&pattern_segments))
+                .collect();
+            patterns.push(pattern.join("/"));
+        }
+        let noise = [
+            "a",
+            "b",
+            "x",
+            "é",
+            "projects",
+            "subagents",
+            "agent-1.jsonl",
+            ".",
+        ];
+        for pattern in &patterns {
+            let glob = Glob::new(pattern);
+            // Every proper directory prefix of a matching path is viable.
+            for _ in 0..12 {
+                let path = instantiate(pattern, &mut rng, &fillers);
+                if !glob.matches(&path) {
+                    continue;
+                }
+                let segments: Vec<&str> = path.split('/').collect();
+                for depth in 1..segments.len() {
+                    let dir = segments[..depth].join("/");
+                    assert!(
+                        glob.may_match_below(&dir),
+                        "{pattern:?} matches {path:?} but denies {dir:?}"
+                    );
+                }
+            }
+            // So is any directory a random matching continuation extends.
+            for _ in 0..40 {
+                let dir: Vec<&str> = (0..1 + rng.below(4)).map(|_| *rng.pick(&noise)).collect();
+                let rest: Vec<&str> = (0..1 + rng.below(3)).map(|_| *rng.pick(&noise)).collect();
+                let (dir, rest) = (dir.join("/"), rest.join("/"));
+                if glob.matches(&format!("{dir}/{rest}")) {
+                    assert!(glob.may_match_below(&dir), "{pattern:?} denies {dir:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn layouts_deny_subtrees_no_stream_can_reach() {
+        let docs = ground_truths();
+        let claude = docs
+            .iter()
+            .find(|doc| doc.agent == "claude-code")
+            .expect("claude-code ground truth");
+        let any = |_: &crate::StreamSpec| true;
+        for denied in [
+            "plugins",
+            "plugins/cache/x",
+            "projects/p/s/tool-results",
+            "<farm>x",
+        ] {
+            assert!(!claude.may_claim_below(denied, any), "{denied}");
+        }
+        for allowed in [
+            "projects",
+            "projects/p",
+            "projects/p/s/subagents/a/b",
+            "projects/p/s/workflows",
+            "file-history/x/y",
+            "<farm>",
+        ] {
+            assert!(claude.may_claim_below(allowed, any), "{allowed}");
+        }
+        let transcripts = |stream: &crate::StreamSpec| stream.id.ends_with("transcript");
+        assert!(!claude.may_claim_below("file-history", transcripts));
+        assert!(!claude.may_claim_below("projects/p/memory/x", transcripts));
+        assert!(claude.may_claim_below("projects/p/s", transcripts));
     }
 }

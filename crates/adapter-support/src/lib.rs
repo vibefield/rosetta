@@ -128,6 +128,19 @@ impl GroundTruthDoc {
             .iter()
             .find(|stream| stream.pattern.matches(relative_path))
     }
+
+    /// Whether any stream `accept` admits could claim a file somewhere below
+    /// the directory `relative_dir`. Walks skip every other subtree, so a
+    /// layout prunes exactly what its own globs can never reach.
+    pub fn may_claim_below(
+        &self,
+        relative_dir: &str,
+        accept: impl Fn(&StreamSpec) -> bool,
+    ) -> bool {
+        self.streams
+            .iter()
+            .any(|stream| accept(stream) && stream.pattern.may_match_below(relative_dir))
+    }
 }
 
 /// Match `/`-separated paths using the ground-truth layout's small glob

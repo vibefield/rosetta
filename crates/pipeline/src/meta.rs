@@ -99,9 +99,12 @@ pub fn meta_ingest_into(
 ) -> Result<(MetaReport, Vec<SessionFile>), PipelineError> {
     let layout = adapter.layout();
     let walk = instrument.time(Metric::WalkNanos, || {
-        rosetta_capture::walk_filtered(root, opts.max_files, |path| {
-            layout.matching_stream(path).is_some()
-        })
+        rosetta_capture::walk_pruned(
+            root,
+            opts.max_files,
+            |dir| layout.may_claim_below(dir, |_| true),
+            |path| layout.matching_stream(path).is_some(),
+        )
     })?;
 
     meta_ingest_inventory_into(

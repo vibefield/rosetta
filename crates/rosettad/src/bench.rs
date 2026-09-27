@@ -141,11 +141,14 @@ fn admitted_sources(
     opts: &IngestOptions,
 ) -> Result<rosetta_capture::WalkReport, String> {
     let layout = adapter.layout();
-    rosetta_capture::walk_filtered(root, opts.max_files, |relative_path| {
-        layout
-            .matching_stream(relative_path)
-            .is_some_and(|stream| adapter.stream_driver(&stream.id).is_some())
-    })
+    let driven =
+        |stream: &rosetta_adapter_support::StreamSpec| adapter.stream_driver(&stream.id).is_some();
+    rosetta_capture::walk_pruned(
+        root,
+        opts.max_files,
+        |dir| layout.may_claim_below(dir, driven),
+        |relative_path| layout.matching_stream(relative_path).is_some_and(driven),
+    )
     .map_err(|error| error.to_string())
 }
 
