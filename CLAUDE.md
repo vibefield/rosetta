@@ -80,9 +80,11 @@ macOS utility QoS. Atomic verified replacement preserves concurrent reads and cr
 recovery; interrupted maintenance resumes from remaining plain segments on a warm start.
 A normal fresh `serve` binds HTTP/WS
 before discovery, then constructs the canonical schema in a named shared-memory SQLite
-database. Each enrolled adapter's bounded, source-free metadata batches commit there first
-and drain through `Hub::absorb_meta`, so projects and top-level sessions are immediately
-public while payload ingestion continues. Adapters then stream, ledger, and normalize in
+database. Metadata is planned off the writer thread, a few runtimes at a time; each enrolled
+adapter's bounded, source-free metadata batches commit there in registry order and drain
+through `Hub::absorb_meta`, and that runtime's producer starts capturing at once, so projects
+and top-level sessions are immediately public while payload ingestion continues and no
+runtime's capture waits for a later runtime's skim. Adapters stream, ledger, and normalize in
 parallel through private RAM planners, handing each source to the sole canonical writer as a
 closed source (terminal generation, final checkpoint) in path order as soon as nothing can
 supersede it — a session is held only while a restart's sibling heal could still replace its

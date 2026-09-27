@@ -174,11 +174,19 @@ impl DaemonHealth {
 
     /// Every enrolled runtime has completed its bounded skim. This is a real
     /// observable boundary even when the ordinary daemon immediately proceeds
-    /// to streaming; metadata-audit mode deliberately remains here.
+    /// to streaming; metadata-audit mode deliberately remains here. A fresh
+    /// cold start begins each runtime's capture as soon as its own metadata
+    /// is public, so by the last skim others may be streaming already: their
+    /// meters keep running and the phase stays `Backfilling`.
     pub fn ingest_metadata_ready(&self) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
-        ingest.phase = IngestPhase::MetadataReady;
-        for entry in &mut ingest.entries {
+        let skim_side = |entry: &BackfillEntry| {
+            matches!(entry.state, BackfillState::Queued | BackfillState::Skimming)
+        };
+        if ingest.entries.iter().all(skim_side) {
+            ingest.phase = IngestPhase::MetadataReady;
+        }
+        for entry in ingest.entries.iter_mut().filter(|entry| skim_side(entry)) {
             entry.live = None;
         }
     }
@@ -474,6 +482,44 @@ mod tests {
         assert_eq!(ingest.runtimes[0].state, BackfillState::Done);
         assert_eq!(ingest.runtimes[0].bytes_streamed, 1_000_000);
         assert_eq!(ingest.runtimes[0].records, 5_000);
+    }
+
+    #[test]
+    fn metadata_ready_leaves_runtimes_already_streaming_alone() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let hub = Hub::new(HubConfig::default(), 1);
+        let health = DaemonHealth::new(1_000);
+        health.ingest_register(&identity("early"), 10, 1_000);
+        health.ingest_register(&identity("late"), 10, 1_000);
+        let streamed = Arc::new(AtomicU64::new(0));
+
+        // The first runtime's metadata is public and its capture has begun
+        // while the second is still skimming.
+        health.ingest_skim("early", Arc::new(IngestCounters::default));
+        health.ingest_skim_done("early", 3, 10);
+        let meter = streamed.clone();
+        health.ingest_stream(
+            "early",
+            Arc::new(move || IngestCounters {
+                bytes_read: meter.load(Ordering::Relaxed),
+                ..IngestCounters::default()
+            }),
+        );
+        health.ingest_skim("late", Arc::new(IngestCounters::default));
+        health.ingest_skim_done("late", 4, 10);
+        health.ingest_metadata_ready();
+
+        streamed.store(512, Ordering::Relaxed);
+        let ingest = health.snapshot(&hub, 2_000).ingest;
+        assert_eq!(ingest.phase, IngestPhase::Backfilling);
+        assert_eq!(ingest.runtimes[0].state, BackfillState::Streaming);
+        assert_eq!(
+            ingest.runtimes[0].bytes_streamed, 512,
+            "the meter still reads"
+        );
+        assert_eq!(ingest.runtimes[1].state, BackfillState::Queued);
+        assert_eq!(ingest.runtimes[1].sessions_total, 4);
     }
 
     #[test]

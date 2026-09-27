@@ -51,8 +51,7 @@ use crate::runtime_ledger::{is_layout_root, ledger_dir, ledger_dir_for, open_run
 use crate::{
     AppliedColdRuntime, ColdCaptureRequest, Flags, identity_name, install_rebuilt_projection,
     ledger_root, load_enrollment, make_single_file, open_progressive_backfill, parse_flags,
-    plan_parallel_cold_runtime, projection_lock, projection_parent, record_backfill_failures,
-    selected,
+    projection_lock, projection_parent, record_backfill_failures, selected,
 };
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
@@ -203,7 +202,7 @@ fn apply_file_consent(
 /// A live meter over the pipeline's always-on atomic counters: the status
 /// endpoint reads deltas since `baseline` while the writer thread is blocked
 /// inside a backfill call.
-fn counter_source(
+pub(crate) fn counter_source(
     instrument: &Arc<Instrument>,
     baseline: InstrumentSnapshot,
 ) -> IngestCounterSource {
@@ -1406,7 +1405,7 @@ fn run_fresh_fast_serve(
     // as hints and are replayed by the live runner after durable publication.
     let wake = SourceWake::default();
     let mut events = std::collections::BTreeMap::new();
-    let mut planned = Vec::new();
+    let mut requests = Vec::new();
     let cold_opts = IngestOptions {
         cancel: Some(stop.clone()),
         ..opts.clone()
@@ -1418,98 +1417,45 @@ fn run_fresh_fast_serve(
         if stop.load(Ordering::SeqCst) {
             return Err("stopped before cold metadata completed".into());
         }
-        let adapter = target.adapter;
-        let name = target.name();
         let watcher = NotifyEvents::watch_with_wake(&target.root, &wake)
             .map_err(|error| error.to_string())?;
-        let worker_instrument = Arc::new(Instrument::new());
-        let skim_baseline = worker_instrument.snapshot();
-        health.ingest_skim(
-            target.id(),
-            counter_source(&worker_instrument, skim_baseline),
-        );
-        let plan = plan_parallel_cold_runtime(ColdCaptureRequest {
-            adapter,
-            runtime: target.runtime.clone(),
-            identity: target.identity(),
-            root: target.root.clone(),
-            inventory: target.census.inventory.clone(),
-            discovery_truncated: target.census.walk_truncated,
-            ledger_root: ledger_stage.path().to_path_buf(),
-            opts: cold_opts.clone(),
-            write_raw_ledger: true,
-            async_raw_ledger: true,
-            ledger_codec: rosetta_capture::SegmentCodec::Plain,
-            instrument: worker_instrument,
-        })?;
-
-        // This is the immediate-public seam: only source-free canonical
-        // identity rows cross it. Payload follows as closed sources, public
-        // only when the runtime is admitted.
-        for batch in plan
-            .planner
-            .planned_metadata_batches()
-            .map_err(|error| format!("reading {name} metadata plan: {error}"))?
-        {
-            instrument
-                .apply(&mut store, &batch)
-                .map_err(|error| format!("publishing {name} metadata: {error}"))?;
-        }
-        absorb_effects(&mut store, hub)?;
-        health.ingest_skim_done(
-            target.id(),
-            plan.meta.sessions as u64,
-            plan.meta.files_skimmed as u64,
-        );
-        println!(
-            "{name}: metadata public — {} sessions, {} projects, {} streamable files",
-            plan.meta.sessions,
-            plan.meta.projects,
-            plan.files.len(),
-        );
         events.insert(target.id().to_string(), watcher);
-        planned.push(plan);
+        requests.push(crate::cold_stream::ColdRuntimeRequest {
+            name: target.name(),
+            capture: ColdCaptureRequest {
+                adapter: target.adapter,
+                runtime: target.runtime.clone(),
+                identity: target.identity(),
+                root: target.root.clone(),
+                inventory: target.census.inventory.clone(),
+                discovery_truncated: target.census.walk_truncated,
+                ledger_root: ledger_stage.path().to_path_buf(),
+                opts: cold_opts.clone(),
+                write_raw_ledger: true,
+                async_raw_ledger: true,
+                ledger_codec: rosetta_capture::SegmentCodec::Plain,
+                instrument: Arc::new(Instrument::new()),
+            },
+        });
     }
-    if planned.is_empty() {
+    if requests.is_empty() {
         return Err("nothing to serve: no enrolled runtimes".to_string());
     }
-    health.ingest_metadata_ready();
-    println!(
-        "milestone: metadata-ready elapsed_s={:.2}",
-        started.elapsed().as_secs_f64()
-    );
 
-    let ownership = queries::session_list(store.conn(), None, i64::MAX)
-        .map_err(|error| format!("reading cold progress ownership: {error}"))?
-        .into_iter()
-        .map(|session| (session.id, session.project_id))
-        .collect();
-    let board = Arc::new(rosetta_server::ProgressBoard::new());
-    let status_board = board.clone();
-    health.ingest_project_source(Arc::new(move || status_board.snapshot()));
-    for plan in &mut planned {
-        plan.opts.progress = Some(crate::cold_progress::ColdProgress::observe(
-            &plan.runtime.id,
-            &plan.files,
-            &ownership,
-            board.clone(),
-            health.clone(),
-            true,
-        ));
-    }
-
+    // Metadata is planned off this thread, a few runtimes at once, and made
+    // public here in registry order; each runtime's producer starts the
+    // moment its own metadata is public instead of after every runtime's.
     // Every producer owns one planner and ledger and streams closed sources;
     // this thread is the only canonical writer. Rows land while capture
     // continues and each runtime is admitted — folded and flipped out of
     // Pending in one step — as its producer closes, so small agents become
     // browseable while a large agent is still parsing.
-    for plan in &planned {
-        let baseline = plan.instrument.snapshot();
-        health.ingest_stream(&plan.runtime.id, counter_source(&plan.instrument, baseline));
-    }
+    let board = Arc::new(rosetta_server::ProgressBoard::new());
+    let status_board = board.clone();
+    health.ingest_project_source(Arc::new(move || status_board.snapshot()));
     let mut failures = Vec::new();
     let mut applied = crate::cold_stream::build_streamed(
-        planned,
+        requests,
         crate::cold_stream::StreamedCold {
             flags,
             store: &mut store,
@@ -1517,7 +1463,8 @@ fn run_fresh_fast_serve(
             hub,
             health,
             board: &board,
-            ownership: &ownership,
+            stop,
+            started,
         },
         &mut failures,
     )?;
@@ -1526,7 +1473,6 @@ fn run_fresh_fast_serve(
     }
 
     health.ingest_phase(rosetta_server::IngestPhase::Finalizing);
-    drop(ownership);
     drop(board);
     // Async ledger workers have overlapped almost all payload IO. One
     // pre-publication barrier now drains and fsyncs each runtime, after which

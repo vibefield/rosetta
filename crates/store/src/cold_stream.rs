@@ -249,6 +249,22 @@ impl Store {
         Ok(ids)
     }
 
+    /// Every session one runtime owns, with the project it settled into —
+    /// the cold progress board's ownership, without a session list's
+    /// activity queries.
+    pub fn runtime_session_owners(
+        &self,
+        runtime_id: &str,
+    ) -> Result<Vec<(String, Option<String>)>, StoreError> {
+        let mut statement = self.conn.prepare_cached(
+            "SELECT id, project_id FROM session WHERE runtime_id = ?1 ORDER BY id",
+        )?;
+        let owners = statement
+            .query_map(params![runtime_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(owners)
+    }
+
     /// Canonicalize the named sessions' presentation ordinals from the
     /// ordinals already stored: source path first, then the stored ordinal.
     ///

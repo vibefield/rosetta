@@ -15,11 +15,19 @@
 //! A byte budget bounds the closed sources in flight across all producers, so
 //! a fast producer cannot pile gigabytes up behind the writer while it admits
 //! another runtime.
+//!
+//! Metadata comes first, per runtime: a few planning threads skim runtimes
+//! in registry order while the writer makes each plan's metadata public, also
+//! in registry order, and starts that runtime's producer right away. A large
+//! runtime early in the registry therefore captures while later runtimes are
+//! still skimming, and no runtime waits for another's capture to start.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{Scope, ScopedJoinHandle};
 use std::time::Instant;
 
 use rosetta_adapter_support::AgentAdapter;
@@ -32,9 +40,12 @@ use rosetta_server::{BackfillState, DaemonHealth, Hub, ProgressBoard, RuntimeIde
 use rosetta_store::Store;
 use serde_json::json;
 
+use crate::cold_progress::ColdProgress;
 use crate::engine::{absorb_effects, now_ms};
+use crate::serve::counter_source;
 use crate::{
-    AppliedColdRuntime, Flags, PlannedColdRuntime, bench, identity_name, record_backfill_failures,
+    AppliedColdRuntime, ColdCaptureRequest, Flags, PlannedColdRuntime, bench, identity_name,
+    plan_parallel_cold_runtime, record_backfill_failures,
 };
 
 /// Closed sources in flight between all producers and the writer, measured
@@ -46,8 +57,19 @@ const IN_FLIGHT_BYTES: u64 = 256 * 1024 * 1024;
 /// behind one very long write.
 const TRANSACTION_BYTES: u64 = 16 * 1024 * 1024;
 const TRANSACTION_SOURCES: usize = 256;
+/// Runtimes whose metadata is planned at once. Each plan already reads its
+/// sources on a bounded pool, and publication stays in registry order, so
+/// this only needs to keep the small runtimes planning while a large one
+/// does; more planners would add threads, not an earlier capture start.
+const METADATA_PLANNERS: usize = 3;
 
 enum StreamMessage {
+    /// A runtime's metadata plan (or why there is none), by its position in
+    /// registry order.
+    Planned {
+        index: usize,
+        planned: Result<Box<PlannedColdRuntime>, String>,
+    },
     Opened(Box<OpenedColdRuntime>),
     Sources {
         runtime_id: String,
@@ -258,50 +280,77 @@ fn produce(
         .map_err(gone)
 }
 
+/// One consented runtime a fresh cold start plans, publishes and captures.
+pub(crate) struct ColdRuntimeRequest {
+    /// Its log name, for the metadata line.
+    pub(crate) name: String,
+    pub(crate) capture: ColdCaptureRequest,
+}
+
 /// The serve-scoped state the writer publishes through.
 pub(crate) struct StreamedCold<'a> {
     pub(crate) flags: &'a Flags,
     pub(crate) store: &'a mut Store,
     pub(crate) instrument: &'a Instrument,
     pub(crate) hub: &'a Hub,
-    pub(crate) health: &'a DaemonHealth,
-    pub(crate) board: &'a ProgressBoard,
-    pub(crate) ownership: &'a BTreeMap<String, Option<String>>,
+    pub(crate) health: &'a Arc<DaemonHealth>,
+    pub(crate) board: &'a Arc<ProgressBoard>,
+    pub(crate) stop: &'a AtomicBool,
+    /// The base every `milestone:` line reports from.
+    pub(crate) started: Instant,
 }
 
-/// Capture every planned runtime on its own producer thread while this thread,
-/// the sole canonical writer, applies their closed sources and admits each
-/// runtime in completion order. Returns the admitted runtimes for the live
-/// handoff; runtimes with recorded capture failures are left unadmitted and
-/// their failures appended to `failures`.
+/// Plan every requested runtime's metadata a few at a time, and capture each
+/// on its own producer thread from the moment its metadata is public, while
+/// this thread, the sole canonical writer, publishes metadata in registry
+/// order, applies closed sources, and admits each runtime in completion
+/// order. Returns the admitted runtimes for the live handoff; runtimes with
+/// recorded capture failures are left unadmitted and their failures appended
+/// to `failures`. A runtime that cannot be planned fails the whole build —
+/// the first such runtime in registry order, as a serial start would.
 pub(crate) fn build_streamed(
-    planned: Vec<PlannedColdRuntime>,
+    requests: Vec<ColdRuntimeRequest>,
     mut cx: StreamedCold<'_>,
     failures: &mut Vec<String>,
 ) -> Result<Vec<AppliedColdRuntime>, String> {
     let budget = ByteBudget::new(IN_FLIGHT_BYTES);
     let stage_profiles = cx.flags.json && cx.flags.profile;
+    let names: Vec<String> = requests
+        .iter()
+        .map(|request| request.name.clone())
+        .collect();
+    let queue = Mutex::new(
+        requests
+            .into_iter()
+            .map(|request| request.capture)
+            .enumerate()
+            .collect::<VecDeque<_>>(),
+    );
+    let abandoned = AtomicBool::new(false);
     std::thread::scope(|scope| {
-        let workers = planned.len();
         let (sender, receiver) = mpsc::channel();
-        let mut handles = Vec::with_capacity(workers);
-        for plan in planned {
+        let mut handles = Vec::with_capacity(names.len() + METADATA_PLANNERS);
+        for _ in 0..METADATA_PLANNERS.min(names.len()) {
             let sender = sender.clone();
-            let budget = &budget;
-            handles.push(scope.spawn(move || {
-                if let Err(error) = produce(plan, &sender, budget, stage_profiles) {
-                    let _ = sender.send(StreamMessage::Failed(error));
-                }
-            }));
+            let (queue, abandoned, health, stop) = (&queue, &abandoned, cx.health, cx.stop);
+            handles.push(scope.spawn(move || plan_queued(queue, abandoned, &sender, health, stop)));
         }
-        drop(sender);
-
-        let written = write(receiver, workers, &budget, &mut cx, failures);
+        let mut producers = Producers {
+            scope,
+            sender: Some(sender),
+            budget: &budget,
+            stage_profiles,
+            handles: &mut handles,
+        };
+        let written = write(receiver, &names, &mut producers, &mut cx, failures);
         if written.is_err() {
-            // Producers blocked on the budget must see the writer is gone;
-            // the dropped receiver fails their next send.
+            // Planners stop before their next runtime. Producers blocked on
+            // the budget must see the writer is gone; the dropped receiver
+            // fails every later send.
+            abandoned.store(true, Ordering::SeqCst);
             budget.abort();
         }
+        drop(producers);
         for handle in handles {
             handle
                 .join()
@@ -311,13 +360,130 @@ pub(crate) fn build_streamed(
     })
 }
 
+/// One planning thread: skim queued runtimes, earliest in registry order
+/// first, until none remain or the build is abandoned, and hand the writer
+/// each plan or the reason there is none.
+fn plan_queued(
+    queue: &Mutex<VecDeque<(usize, ColdCaptureRequest)>>,
+    abandoned: &AtomicBool,
+    sender: &Sender<StreamMessage>,
+    health: &DaemonHealth,
+    stop: &AtomicBool,
+) {
+    while !abandoned.load(Ordering::SeqCst) {
+        let Some((index, request)) = queue
+            .lock()
+            .expect("cold planning queue poisoned")
+            .pop_front()
+        else {
+            return;
+        };
+        let planned = if stop.load(Ordering::SeqCst) {
+            Err("stopped before cold metadata completed".to_string())
+        } else {
+            let kind = request.adapter.kind();
+            health.ingest_skim(
+                &request.runtime.id,
+                counter_source(&request.instrument, request.instrument.snapshot()),
+            );
+            // Publication is in registry order, so every runtime must answer,
+            // even one whose planning panics.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                plan_parallel_cold_runtime(request)
+            }))
+            .unwrap_or_else(|_| Err(format!("{kind} cold metadata planning panicked")))
+            .map(Box::new)
+        };
+        if sender
+            .send(StreamMessage::Planned { index, planned })
+            .is_err()
+        {
+            return;
+        }
+    }
+}
+
+/// Starts each runtime's producer on the capture scope once its metadata is
+/// public. The writer's own sender leaves with the last producer, so the
+/// channel closes once every worker is gone.
+struct Producers<'h, 'scope, 'env> {
+    scope: &'scope Scope<'scope, 'env>,
+    sender: Option<Sender<StreamMessage>>,
+    budget: &'scope ByteBudget,
+    stage_profiles: bool,
+    handles: &'h mut Vec<ScopedJoinHandle<'scope, ()>>,
+}
+
+impl Producers<'_, '_, '_> {
+    fn start(&mut self, plan: PlannedColdRuntime, last: bool) {
+        let sender = if last {
+            self.sender.take()
+        } else {
+            self.sender.clone()
+        };
+        let Some(sender) = sender else {
+            return;
+        };
+        let (budget, stage_profiles) = (self.budget, self.stage_profiles);
+        self.handles.push(self.scope.spawn(move || {
+            if let Err(error) = produce(plan, &sender, budget, stage_profiles) {
+                let _ = sender.send(StreamMessage::Failed(error));
+            }
+        }));
+    }
+}
+
+/// Make one planned runtime's metadata public: only source-free canonical
+/// identity rows cross this seam, and its sessions join the progress
+/// board's ownership. Payload follows as closed sources, public only when the
+/// runtime is admitted.
+fn publish_metadata(
+    plan: &PlannedColdRuntime,
+    name: &str,
+    ownership: &mut BTreeMap<String, Option<String>>,
+    cx: &mut StreamedCold<'_>,
+) -> Result<(), String> {
+    for batch in plan
+        .planner
+        .planned_metadata_batches()
+        .map_err(|error| format!("reading {name} metadata plan: {error}"))?
+    {
+        cx.instrument
+            .apply(cx.store, &batch)
+            .map_err(|error| format!("publishing {name} metadata: {error}"))?;
+    }
+    absorb_effects(cx.store, cx.hub)?;
+    cx.health.ingest_skim_done(
+        &plan.runtime.id,
+        plan.meta.sessions as u64,
+        plan.meta.files_skimmed as u64,
+    );
+    println!(
+        "{name}: metadata public — {} sessions, {} projects, {} streamable files",
+        plan.meta.sessions,
+        plan.meta.projects,
+        plan.files.len(),
+    );
+    ownership.extend(
+        cx.store
+            .runtime_session_owners(&plan.runtime.id)
+            .map_err(|error| format!("reading {name} session ownership: {error}"))?,
+    );
+    Ok(())
+}
+
 fn write(
     receiver: Receiver<StreamMessage>,
-    workers: usize,
-    budget: &ByteBudget,
+    names: &[String],
+    producers: &mut Producers<'_, '_, '_>,
     cx: &mut StreamedCold<'_>,
     failures: &mut Vec<String>,
 ) -> Result<Vec<AppliedColdRuntime>, String> {
+    let workers = names.len();
+    let mut plans: Vec<Option<Result<Box<PlannedColdRuntime>, String>>> =
+        std::iter::repeat_with(|| None).take(workers).collect();
+    let mut published = 0_usize;
+    let mut ownership = BTreeMap::new();
     let mut open: HashMap<String, StreamedRuntime> = HashMap::new();
     let mut outputs = Vec::with_capacity(workers);
     let mut pending: Option<StreamMessage> = None;
@@ -339,6 +505,42 @@ fn write(
             }
         };
         match message {
+            StreamMessage::Planned { index, planned } => {
+                plans[index] = Some(planned);
+                // Publish in registry order, whatever order plans finish in:
+                // runtimes share project rows, and the canonical row must not
+                // depend on thread timing.
+                while let Some(planned) = plans.get_mut(published).and_then(Option::take) {
+                    let mut plan = *planned?;
+                    if cx.stop.load(Ordering::SeqCst) {
+                        return Err("stopped before cold metadata completed".into());
+                    }
+                    publish_metadata(&plan, &names[published], &mut ownership, cx)?;
+                    published += 1;
+                    let last = published == workers;
+                    if last {
+                        cx.health.ingest_metadata_ready();
+                        println!(
+                            "milestone: metadata-ready elapsed_s={:.2}",
+                            cx.started.elapsed().as_secs_f64()
+                        );
+                    }
+                    plan.opts.progress = Some(ColdProgress::observe(
+                        &plan.runtime.id,
+                        &plan.files,
+                        &ownership,
+                        cx.board.clone(),
+                        cx.health.clone(),
+                        true,
+                    ));
+                    let baseline = plan.instrument.snapshot();
+                    cx.health.ingest_stream(
+                        &plan.runtime.id,
+                        counter_source(&plan.instrument, baseline),
+                    );
+                    producers.start(plan, last);
+                }
+            }
             StreamMessage::Opened(opened) => {
                 let OpenedColdRuntime {
                     adapter,
@@ -382,7 +584,7 @@ fn write(
                     .apply(cx.store, sources, cx.instrument)
                     .map_err(|error| format!("applying streamed {runtime_id} sources: {error}"))?;
                 apply_calls += 1;
-                budget.release(bytes);
+                producers.budget.release(bytes);
             }
             StreamMessage::Closed(runtime) => {
                 closed += 1;
@@ -390,7 +592,7 @@ fn write(
                 let streamed = open.remove(&runtime.runtime.id).ok_or_else(|| {
                     format!("streamed runtime {} closed unopened", runtime.runtime.id)
                 })?;
-                if let Some(output) = admit(runtime, streamed, cx, failures)? {
+                if let Some(output) = admit(runtime, streamed, &ownership, cx, failures)? {
                     outputs.push(output);
                 }
             }
@@ -416,6 +618,7 @@ fn write(
 fn admit(
     runtime: ClosedColdRuntime,
     mut streamed: StreamedRuntime,
+    ownership: &BTreeMap<String, Option<String>>,
     cx: &mut StreamedCold<'_>,
     failures: &mut Vec<String>,
 ) -> Result<Option<AppliedColdRuntime>, String> {
@@ -517,7 +720,7 @@ fn admit(
         .invalidate_sessions(session_ids.iter().map(String::as_str), now_ms());
     for session_id in &session_ids {
         cx.board.session_done(
-            cx.ownership.get(session_id).and_then(Option::as_deref),
+            ownership.get(session_id).and_then(Option::as_deref),
             session_id,
         );
     }
@@ -541,3 +744,7 @@ fn admit(
         poll_evidence,
     }))
 }
+
+#[cfg(test)]
+#[path = "cold_stream_tests.rs"]
+mod tests;

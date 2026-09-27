@@ -82,9 +82,17 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 >
 > **Fresh-serve checkpoint (2026-08-31; streamed apply 2026-09-27).** The normal first-run app
 > path uses the fast parallel cold topology without giving up immediate or progressive reads. The
-> listener binds before discovery. Each adapter's bounded source-free metadata commits first to a
-> named, shared-memory SQLite database carrying the exact canonical schema and drains into the Hub;
-> projects and top-level sessions therefore appear adapter by adapter. All adapters then capture,
+> listener binds before discovery. Metadata is planned off the writer thread, up to three runtimes
+> at a time in registry order (2026-09-27). The writer commits each runtime's bounded source-free
+> metadata to a named, shared-memory SQLite database carrying the exact canonical schema, strictly
+> in registry order whatever order the plans finish in (runtimes share project rows), and drains it
+> into the Hub; projects and top-level sessions therefore appear adapter by adapter. A runtime's
+> producer starts the moment its own metadata is public, so Claude Code (second in the registry)
+> captures while later runtimes are still skimming. `milestone: metadata-ready` still marks the
+> moment every runtime's metadata is public; early runtimes may already be streaming by then, and
+> the status phase stays `backfilling` for them (it parks at `metadata_ready` only when nothing
+> streams, as in metadata-audit mode). The first runtime that cannot be planned, in registry
+> order, fails the start. Adapters capture,
 > ledger, and normalize concurrently, each through its own private RAM planner (the cursor CAS
 > chain, generations, and restart detection are unchanged). Nothing is retained per runtime until
 > its capture ends: a producer walks its roster in source-path order and hands each source to the
