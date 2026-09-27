@@ -11,11 +11,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
-use rosetta_capture::{TailConfig, TailItem, TailRead, Tailer, Transition};
-use rosetta_core::IngestOp;
-use rosetta_core::fold::CumulativeUsage;
-use rosetta_core::rows::{DriftFact, RuntimeRow, StreamState};
+use rosetta_adapter_support::AgentAdapter;
+use rosetta_capture::Tailer;
+use rosetta_core::rows::{RuntimeRow, StreamState};
 use rosetta_store::{
     ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries,
 };
@@ -24,6 +22,10 @@ use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::meta::SessionFile;
 use crate::{IngestOptions, PipelineError};
+
+mod pass;
+
+pub(crate) use pass::{IngestPass, PassStep};
 
 #[derive(Debug, Default)]
 pub struct StreamReport {
@@ -418,6 +420,9 @@ pub fn reserve_unsealed_generation(
     Ok(true)
 }
 
+/// One pass over one JSONL source, driven serially: each batch
+/// [`IngestPass::step`] produces is appended to the raw ledger, then applied
+/// to the store under the cursor's CAS, then committed to the pass.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ingest_file(
     adapter: &dyn AgentAdapter,
@@ -432,375 +437,25 @@ pub(crate) fn ingest_file(
     mode: PassMode,
     mut ledger: Option<&mut rosetta_capture::Ledger>,
 ) -> Result<FilePass, PipelineError> {
-    let path = root.join(&file.relative_path);
     let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
-    if cursor.session_id != file.projected_session_id() {
-        return Err(PipelineError::Config(format!(
-            "source {} moved from projected session {:?} to {}",
-            file.relative_path, cursor.session_id, file.session_id
-        )));
-    }
-    let cursor_id = cursor.id;
-    let mut prev_blob = cursor.checkpoint;
-    let mut active_generation = cursor.active_generation;
-    let mut highest_generation = cursor.highest_generation;
-
-    // An expired blob (undecodable, foreign version, or a cursor row that
-    // belongs to a different session id) means full replay from byte zero —
-    // deterministic ids make the replay idempotent.
-    let resumed = PipeCheckpoint::decode(&prev_blob)
-        .filter(|checkpoint| {
-            checkpoint.session_id == file.session_id
-                && checkpoint.stream_id == file.stream_id
-                && checkpoint.normalizer_version == adapter.normalizer_version()
-                // An unactivated generation may have process-local tool join
-                // state. After restart, replay it from byte zero instead of
-                // pretending SQLite was its reconciliation journal.
-                && checkpoint.source_generation == active_generation
-        })
-        .and_then(|checkpoint| {
-            adapter
-                .restore_state(checkpoint.adapter_state.as_ref())
-                .ok()
-                .map(|state| (checkpoint, state))
-        });
-    let mut tail = resumed
-        .as_ref()
-        .and_then(|(checkpoint, _)| checkpoint.tail_checkpoint());
-    // Ledger-first means everything at or below the resumed committed offset
-    // is already durable in the raw ledger for this generation. An audit (or
-    // sibling-heal) replay re-frames those records to verify the projection,
-    // but appending them again would grow the append-only ledger without
-    // bound — one full file copy per audit turn. Records below the watermark
-    // stay out of the ledger; a generation restart resets it, because a
-    // replacement generation's content is all new.
-    let mut ledgered_through = tail
-        .as_ref()
-        .map_or(0, |checkpoint| checkpoint.committed_offset);
-
-    let mut ctx = NormalizeCtx::new(runtime.id.as_str(), file.session_id.as_str());
-    ctx.native_session_id = Some(file.native_session_id.clone());
-    ctx.agent_version = file.agent_version.clone();
-    ctx.state = match &resumed {
-        Some((_, _)) => None,
-        None => adapter.restore_state(None).map_err(PipelineError::Config)?,
-    };
-    ctx.src_cursor = Some(cursor_id);
-    ctx.source_identity = Some(file.relative_path.clone());
-    let mut source_generation = highest_generation
-        .checked_add(1)
-        .ok_or_else(|| PipelineError::Config("source generation overflowed".to_string()))?;
-    let mut next_source_sequence = 0_u64;
-    let mut generation_clean = true;
-    let mut generation_raw_complete = true;
-    if let Some((checkpoint, state)) = resumed {
-        ctx.next_ordinal = checkpoint.next_ordinal;
-        if let Some(last) = checkpoint.cumulative {
-            ctx.cumulative = CumulativeUsage::resume(last);
-        }
-        ctx.state = state;
-        if checkpoint.source_generation > 0 {
-            source_generation = checkpoint.source_generation;
-        }
-        next_source_sequence = checkpoint.next_source_sequence;
-        generation_clean = checkpoint.generation_clean;
-    }
-
-    // A starter budget applies only where pausing cannot regress what a
-    // reader already sees: a fresh source's first generation (early Activate
-    // turns the unread remainder into ordinary growth) or append growth of
-    // the already-active generation. A replacement generation ignores it so
-    // the previous complete content stays visible until the full swap.
-    let mut budget = opts
-        .starter_budget
-        .filter(|_| active_generation == 0 || source_generation == active_generation);
-    let budget_tailer = match budget {
-        Some(slice) => Some(Tailer::new(TailConfig {
-            // A soft per-batch byte cap sizes budgeted batches to the slice
-            // itself — one transaction per slice in the common case — while
-            // the ordinary record and hard-byte bounds stay untouched, so a
-            // large valid record still frames instead of going oversized.
-            soft_batch_bytes: Some(
-                usize::try_from(slice.max_bytes)
-                    .unwrap_or(usize::MAX)
-                    .max(1),
-            ),
-            ..opts.tail.clone()
-        })?),
-        None => None,
-    };
-    let mut budget_bytes = 0_u64;
-    let mut budget_records = 0_u64;
-
-    let mut retries = 0_u32;
-    let mut force_replay = matches!(mode, PassMode::ForceHeal)
-        && tail.is_some()
-        && source_generation == active_generation;
-    // The audit: one sequential read of the committed range against the
-    // checkpoint's content chain. Verified — the common case, a quiet file —
-    // costs no generation, no ledger append, and no projection write; a
-    // mismatch is real content change hiding under a quiet stat, and THAT
-    // escalates to the full replacement replay. A pre-chain checkpoint has
-    // its chain computed once and persisted, so the next audit verifies.
-    if matches!(mode, PassMode::Audit)
-        && source_generation == active_generation
-        && let Some(tail_checkpoint) = tail.as_mut()
-    {
-        match tailer.verify_committed(&path, tail_checkpoint)? {
-            rosetta_capture::CommittedVerification::Verified => {
-                instrument.add(Metric::BytesRead, tail_checkpoint.committed_offset);
-            }
-            rosetta_capture::CommittedVerification::Mismatch => {
-                instrument.add(Metric::BytesRead, tail_checkpoint.committed_offset);
-                force_replay = true;
-            }
-            rosetta_capture::CommittedVerification::Established(chain) => {
-                instrument.add(Metric::BytesRead, tail_checkpoint.committed_offset);
-                tail_checkpoint.committed_chain = Some(chain);
-                if let Some(mut previous) = PipeCheckpoint::decode(&prev_blob) {
-                    previous.tail = Some(tail_checkpoint.encode_hex());
-                    let next_blob = previous.encode();
-                    let applied = instrument.apply(
-                        store,
-                        &Batch {
-                            ops: vec![],
-                            checkpoints: vec![CheckpointUpdate {
-                                runtime_id: runtime.id.clone(),
-                                stream: file.stream_id.clone(),
-                                path: file.relative_path.clone(),
-                                session_id: file.projected_session_id(),
-                                expected: Some(prev_blob.clone()),
-                                next: next_blob.clone(),
-                                updated_at: Some(file.modified_ms),
-                            }],
-                            source: None,
-                        },
-                    );
-                    match applied {
-                        Ok(stats) => {
-                            merge_stats(&mut report.stats, &stats);
-                            report.batches += 1;
-                            prev_blob = next_blob;
-                        }
-                        Err(StoreError::CheckpointConflict { .. }) => report.conflicts += 1,
-                        Err(error) => return Err(error.into()),
-                    }
-                }
-            }
-            // The ordinary read below reclassifies these and recovers.
-            rosetta_capture::CommittedVerification::Missing
-            | rosetta_capture::CommittedVerification::IdentityChanged
-            | rosetta_capture::CommittedVerification::Truncated => {}
-        }
+    let mut pass = IngestPass::begin(adapter, runtime, root, file, opts, cursor, mode)?;
+    if mode == PassMode::Audit {
+        pass.audit(runtime, file, tailer, store, instrument, report)?;
     }
     loop {
-        opts.check_cancelled()?;
-        // Chosen per iteration: a mid-pass rewrite that disables the budget
-        // must also stop paying its batch shape for the replacement replay.
-        let read_tailer = match (&budget, &budget_tailer) {
-            (Some(_), Some(budgeted)) => budgeted,
-            _ => tailer,
+        let output = match pass.step(adapter, runtime, file, tailer, opts, instrument)? {
+            PassStep::Batch(output) => output,
+            PassStep::Finished(outcome, deltas) => {
+                deltas.merge_into(report);
+                return Ok(outcome);
+            }
         };
-        let read = instrument.time(Metric::ReadNanos, || {
-            read_tailer.read(&path, tail.as_ref(), force_replay)
-        })?;
-        let mut batch = match read {
-            TailRead::Missing => {
-                report.files_missing += 1;
-                return Ok(FilePass::Finished(false));
-            }
-            TailRead::Retry => {
-                retries += 1;
-                if retries > opts.max_retries {
-                    report.retries_exhausted += 1;
-                    return Ok(FilePass::Finished(false));
-                }
-                continue;
-            }
-            TailRead::Batch(batch) => batch,
-        };
-        force_replay = false;
-        instrument.add(Metric::BytesRead, batch.bytes_read);
-
-        if batch.transition.starts_new_generation()
-            && !matches!(batch.transition, Transition::Initial)
-        {
-            if active_generation > 0 {
-                // A rewrite mid-pass is a replacement generation: pausing it
-                // early would hide previously complete content, so the
-                // budget stops applying.
-                budget = None;
-            }
-            // The replacement generation starts its own budget arithmetic;
-            // carrying the abandoned generation's counts could pause it
-            // below the documented record floor.
-            budget_bytes = 0;
-            budget_records = 0;
-            report.generations_restarted += 1;
-            source_generation = source_generation
-                .max(active_generation)
-                .max(highest_generation)
-                .checked_add(1)
-                .ok_or_else(|| PipelineError::Config("source generation overflowed".to_string()))?;
-            highest_generation = source_generation;
-            next_source_sequence = 0;
-            ledgered_through = 0;
-            generation_clean = true;
-            generation_raw_complete = true;
-            ctx.next_ordinal = 0;
-            ctx.cumulative = CumulativeUsage::new();
-            ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
-        }
-
-        let payload_before = report.payload_bytes;
-        let mut ops: Vec<IngestOp> = Vec::with_capacity(batch.items.len());
-        for item in &batch.items {
-            opts.check_cancelled()?;
-            match item {
-                TailItem::Record(record) => {
-                    report.records += 1;
-                    report.payload_bytes += record.payload.len() as u64;
-                    budget_records += 1;
-                    // The budget counts FRAMED PAYLOAD, mirroring the soft
-                    // batch cap — physical amplification (anchor and
-                    // continuity re-reads) must not spend the slice.
-                    budget_bytes = budget_bytes.saturating_add(record.payload.len() as u64);
-                    instrument.add(Metric::RecordsFramed, 1);
-                    ctx.src_offset = Some(record.start_offset as i64);
-                    ctx.source_generation = source_generation;
-                    let outcome = instrument.time(Metric::NormalizeNanos, || {
-                        adapter
-                            .ingest_line(&mut ctx, &file.stream_id, &record.payload)
-                            .into_projection()
-                    });
-                    match &outcome.status {
-                        LineStatus::Parsed => {
-                            report.parsed += 1;
-                            instrument.add(Metric::LinesParsed, 1);
-                        }
-                        LineStatus::UnknownType => {
-                            report.unknown += 1;
-                            instrument.add(Metric::LinesUnknown, 1);
-                        }
-                        LineStatus::HardError { .. } => {
-                            generation_clean = false;
-                            report.hard_errors += 1;
-                            instrument.add(Metric::LinesHardError, 1);
-                        }
-                    }
-                    instrument.observe_normalization(
-                        &file.stream_id,
-                        ctx.src_offset,
-                        &record.payload,
-                        &outcome,
-                    );
-                    ops.extend(outcome.ops);
-                }
-                TailItem::Oversized {
-                    start_offset,
-                    payload_len,
-                    ..
-                } => {
-                    generation_clean = false;
-                    generation_raw_complete = false;
-                    report.oversized += 1;
-                    instrument.add(Metric::RecordsOversized, 1);
-                    let _ = payload_len;
-                    ops.push(IngestOp::Drift(DriftFact {
-                        runtime_id: runtime.id.clone(),
-                        agent_version: file.agent_version.clone().unwrap_or_default(),
-                        stream: file.stream_id.clone(),
-                        record_kind: "raw_record".to_string(),
-                        error_code: "oversized".to_string(),
-                        shape_hash: String::new(),
-                        at: None,
-                        sample_cursor: Some(cursor_id),
-                        sample_offset: Some(*start_offset as i64),
-                    }));
-                }
-            }
-        }
-
-        let payload_bytes = report.payload_bytes - payload_before;
-        instrument.add(Metric::PayloadBytes, payload_bytes);
-        if let Some(progress) = &opts.progress {
-            progress.source_bytes(file, payload_bytes);
-        }
-        let last_reading = ctx.cumulative.last_reading().clone();
-        let adapter_state = adapter
-            .checkpoint_state(ctx.state.as_deref())
-            .map_err(PipelineError::Config)?;
-        let first_sequence = next_source_sequence;
-        next_source_sequence = next_source_sequence
-            .checked_add(ops.len() as u64)
-            .ok_or_else(|| PipelineError::Config("source sequence overflowed".to_string()))?;
-        let complete = !batch.more_available && batch.checkpoint.incomplete_suffix_len == 0;
-        // The slice boundary: enough clean bytes and complete records are
-        // framed that this pass may stop. A fresh generation stops by
-        // ACTIVATING and sealing its prefix, so the unread remainder becomes
-        // ordinary append growth — indistinguishable from the file having
-        // ended here and then grown.
-        let budget_stop = !complete
-            && generation_clean
-            && generation_raw_complete
-            && budget.is_some_and(|slice| {
-                budget_bytes >= slice.max_bytes && budget_records >= u64::from(slice.min_records)
-            });
-        let source_mode = if source_generation == active_generation {
-            SourceMode::Append
-        } else if (complete || budget_stop) && generation_clean {
-            SourceMode::Activate
-        } else if complete && active_generation == 0 && generation_raw_complete {
-            // The live-growth rule, converged (product decision 2026-08-31):
-            // a FIRST generation that reaches EOF unclean still activates its
-            // parseable rows and the session holds Streaming — exactly what
-            // the sliced path and live growth already produce. A dirty
-            // REPLACEMENT still abandons so previously clean content
-            // survives, and a raw-incomplete (oversized) generation still
-            // abandons because an unsealable generation must never activate.
-            SourceMode::Activate
-        } else if complete {
-            SourceMode::Abandon
-        } else {
-            SourceMode::Stage
-        };
-        let next_blob = PipeCheckpoint {
-            v: crate::checkpoint::PIPE_CHECKPOINT_VERSION,
-            session_id: file.session_id.clone(),
-            stream_id: file.stream_id.clone(),
-            normalizer_version: adapter.normalizer_version(),
-            source_generation,
-            next_source_sequence,
-            generation_clean,
-            next_ordinal: ctx.next_ordinal,
-            tail: Some(batch.checkpoint.encode_hex()),
-            cumulative: (!last_reading.is_empty()).then_some(last_reading),
-            adapter_state,
-            snapshot_stamp: None,
-            snapshot_revision: None,
-        }
-        .encode();
-
-        // Nothing new and nothing to move the cursor to: don't write an
-        // empty transaction on every re-scan of a quiet file.
-        if ops.is_empty() && next_blob == prev_blob && !batch.more_available {
-            break;
-        }
+        output.deltas.merge_into(report);
 
         // Ledger-first: the raw bytes are durable before the projection tx
-        // may reference them. Oversized records are quarantined by the
-        // tailer and carry no payload, so only ordinary records land here.
+        // may reference them.
         if let Some(ledger) = ledger.as_deref_mut() {
-            let raw: Vec<(u64, Vec<u8>)> = batch
-                .items
-                .iter_mut()
-                .filter_map(|item| match item {
-                    TailItem::Record(record) if record.start_offset >= ledgered_through => {
-                        Some((record.start_offset, std::mem::take(&mut record.payload)))
-                    }
-                    TailItem::Record(_) | TailItem::Oversized { .. } => None,
-                })
-                .collect();
+            let raw = output.raw;
             instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
                 let source = rosetta_capture::SourceDef {
                     ledger_only: file.ledger_only,
@@ -811,19 +466,16 @@ pub(crate) fn ingest_file(
                     agent_version: file.agent_version.clone(),
                 };
                 let mut wrote = false;
-                if !raw.is_empty() {
-                    ledger.append_raw_owned(&source, source_generation, raw)?;
+                if !raw.records.is_empty() {
+                    ledger.append_raw_owned(&source, raw.generation, raw.records)?;
                     wrote = true;
                 }
-                if source_generation != active_generation
-                    && (complete || budget_stop)
-                    && generation_raw_complete
-                {
+                if let Some(clean) = raw.seal {
                     ledger.complete_generation(
                         &source,
-                        source_generation,
+                        raw.generation,
                         adapter.normalizer_version(),
-                        generation_clean,
+                        clean,
                     )?;
                     wrote = true;
                 }
@@ -834,28 +486,9 @@ pub(crate) fn ingest_file(
             })?;
         }
 
-        let ops_count = ops.len() as u64;
-        let write_batch = Batch {
-            ops,
-            checkpoints: vec![CheckpointUpdate {
-                runtime_id: runtime.id.clone(),
-                stream: file.stream_id.clone(),
-                path: file.relative_path.clone(),
-                session_id: file.projected_session_id(),
-                expected: Some(prev_blob.clone()),
-                next: next_blob.clone(),
-                updated_at: Some(file.modified_ms),
-            }],
-            source: Some(SourceWrite {
-                cursor_id,
-                session_id: file.session_id.clone(),
-                generation: source_generation,
-                first_sequence,
-                mode: source_mode,
-            }),
-        };
-        instrument.observe_write_batch(&write_batch);
-        let applied = instrument.apply_owned(store, write_batch);
+        let ops_count = output.batch.ops.len() as u64;
+        instrument.observe_write_batch(&output.batch);
+        let applied = instrument.apply_owned(store, output.batch);
         let stats = match applied {
             Ok(stats) => stats,
             Err(StoreError::CheckpointConflict { .. }) => {
@@ -870,31 +503,10 @@ pub(crate) fn ingest_file(
         report.batches += 1;
         instrument.add(Metric::OpsEmitted, ops_count);
         instrument.add(Metric::BatchesApplied, 1);
-
-        prev_blob = next_blob;
-        if source_mode == SourceMode::Activate {
-            active_generation = source_generation;
-        }
-        highest_generation = highest_generation.max(source_generation);
-        tail = Some(batch.checkpoint);
-        if budget_stop {
-            // The prefix is active and its checkpoint durable; the rest of
-            // this file is a later completion pass's work.
-            return Ok(FilePass::Paused);
-        }
-        if !batch.more_available {
-            // An incomplete trailing record stays unconsumed until the file
-            // grows; looping now would re-frame the same bytes forever.
-            break;
+        if let Some(outcome) = pass.committed() {
+            return Ok(outcome);
         }
     }
-    Ok(FilePass::Finished(
-        generation_clean
-            && active_generation == source_generation
-            && tail
-                .as_ref()
-                .is_some_and(|checkpoint| checkpoint.incomplete_suffix_len == 0),
-    ))
 }
 
 pub(crate) fn merge_stats(total: &mut ApplyStats, batch: &ApplyStats) {
