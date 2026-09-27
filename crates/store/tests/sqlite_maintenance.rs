@@ -274,6 +274,21 @@ fn assert_ram_only_reconciliation_schema(conn: &Connection) {
 }
 
 #[test]
+fn cold_stores_index_the_per_source_provenance_guard() {
+    // `cursor_has_projection` runs once per new source generation on both the
+    // cold planner and the private rebuild writer. Its session probe must not
+    // scan the table before finalization builds the deferred indexes.
+    let probe = "SELECT 1 FROM session WHERE title_src_cursor = 1 LIMIT 1";
+    for store in [
+        Store::open_in_memory_for_cold_planning().unwrap(),
+        Store::open_in_memory_for_rebuild().unwrap(),
+    ] {
+        assert!(store.is_bulk_rebuild());
+        assert_plan_uses(store.conn(), probe, "session_title_src");
+    }
+}
+
+#[test]
 fn reconciliation_and_bucket_queries_have_matching_indexes() {
     let store = Store::open_in_memory().unwrap();
     let searchable = queries::search_kind_predicate("type");

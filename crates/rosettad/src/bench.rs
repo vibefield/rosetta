@@ -223,10 +223,9 @@ pub(crate) fn meta_event(agent: &str, meta: &MetaReport) -> Value {
     })
 }
 
-const DEFERRED_INDEXES: [&str; 11] = [
+const DEFERRED_INDEXES: [&str; 10] = [
     "session_project",
     "session_runtime",
-    "session_title_src",
     "task_session",
     "message_bucket_key",
     "timeline_meta_message",

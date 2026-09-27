@@ -395,6 +395,11 @@ CREATE INDEX IF NOT EXISTS session_root ON session(root_session_id);
 
 -- Keep these during cold loads: progressive metadata reads must remain bounded.
 CREATE INDEX IF NOT EXISTS message_activity_first ON message(session_id, activity_first_at);
+-- The per-source provenance guard (`cursor_has_projection`) probes session by
+-- title cursor for every new source generation, on the cold planner and the
+-- canonical writer alike. Without this index each probe scans every session
+-- (9k sources x 6k sessions for one large runtime), so it is not deferred.
+CREATE INDEX IF NOT EXISTS session_title_src ON session(title_src_cursor);
 CREATE INDEX IF NOT EXISTS message_activity_last ON message(session_id, activity_last_at);
 "#;
 
@@ -422,7 +427,6 @@ DROP INDEX IF EXISTS usage_bucket_hour;
 pub(crate) const BULK_CREATE_INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS session_project ON session(project_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS session_runtime ON session(runtime_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS session_title_src ON session(title_src_cursor);
 CREATE INDEX IF NOT EXISTS task_session ON task(session_id);
 CREATE INDEX IF NOT EXISTS message_bucket_key ON message(
   session_id, COALESCE(model, 'unknown'), COALESCE(ts, 0)
