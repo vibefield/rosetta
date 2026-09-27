@@ -21,8 +21,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{SyncSender, sync_channel};
-use std::thread::JoinHandle;
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -31,15 +30,20 @@ use crate::segment::{MAGIC_LEN, SegmentCodec, SegmentWriter};
 use crate::segment_index::{self, IndexedSource, SegmentIndexLine};
 use crate::{CaptureError, io_error};
 
+mod frames;
 mod raw;
 mod read;
 mod verify;
+mod worker;
 
+pub use frames::PrebuiltFrames;
+use frames::{frame_checksum, frame_head, seal_body};
 #[cfg(test)]
 use read::decode_define;
 pub(crate) use read::{FramePrefix, frame_prefix, scan_segment};
 pub use read::{LedgerScan, LedgerVisit, scan, visit, visit_segments};
 pub use verify::{EntryDigest, EntryTally, LedgerVerify, SegmentVerify, verify};
+use worker::{AsyncBackend, AsyncCommand};
 
 const CHECKSUM_BYTES: usize = 8;
 
@@ -151,6 +155,12 @@ pub struct Ledger {
     /// Generation range seen per local source id in the CURRENT segment,
     /// for the segment index line written when it closes.
     segment_generations: HashMap<u32, (u64, u64)>,
+    /// Roster keys ([`Ledger::set_source_keys`]): a keyed source's file id
+    /// in every segment is its key.
+    keys: Option<Arc<HashMap<SourceDef, u32>>>,
+    /// Sources outside the keys already defined in the CURRENT segment; the
+    /// next one gets the id after them, above every key.
+    unkeyed: u32,
     /// Private cold builds defer physical sync until their pre-publication
     /// barrier. Their async worker also coalesces intermediate buffer flushes.
     /// Live writers leave this false and retain per-batch durability.
@@ -164,30 +174,6 @@ pub struct Ledger {
     unsynced_directories: Vec<PathBuf>,
     write_stats: LedgerWriteStats,
     async_backend: Option<AsyncBackend>,
-}
-
-enum AsyncCommand {
-    Raw {
-        source: SourceDef,
-        generation: u64,
-        records: Vec<(u64, Vec<u8>)>,
-    },
-    Complete {
-        source: SourceDef,
-        generation: u64,
-        normalizer_version: u32,
-        normalized_clean: bool,
-    },
-    Meta {
-        schema_version: u32,
-        payload: String,
-    },
-    Checkpoint,
-}
-
-struct AsyncBackend {
-    sender: Option<SyncSender<AsyncCommand>>,
-    worker: Option<JoinHandle<Result<Ledger, CaptureError>>>,
 }
 
 impl Ledger {
@@ -211,6 +197,8 @@ impl Ledger {
             written: 0,
             defined: HashMap::new(),
             segment_generations: HashMap::new(),
+            keys: None,
+            unkeyed: 0,
             defer_checkpoint_sync: false,
             unsynced_segments: Vec::new(),
             unsynced_directories,
@@ -234,95 +222,6 @@ impl Ledger {
             .filter(|(sequence, _)| *sequence < self.segment_seq)
             .map(|(_, path)| path)
             .collect())
-    }
-
-    /// Move cold ledger IO/checksumming onto a bounded worker. Source bytes
-    /// remain ordered per runtime, queue capacity bounds owned payload RAM,
-    /// and [`Ledger::flush`] joins the worker before publication. This mode is
-    /// intentionally one-shot and only useful while the canonical projection
-    /// is still private. With deferred sync, the worker flushes at metadata,
-    /// source-seal and rotation boundaries instead of every raw batch.
-    pub fn into_async(self, queue_capacity: usize) -> Self {
-        assert!(
-            self.async_backend.is_none(),
-            "ledger is already asynchronous"
-        );
-        let dir = self.dir.clone();
-        let max_segment_bytes = self.max_segment_bytes;
-        let segment_seq = self.segment_seq;
-        let defer_checkpoint_sync = self.defer_checkpoint_sync;
-        let codec = self.codec;
-        let (sender, receiver) = sync_channel(queue_capacity.max(1));
-        let worker = std::thread::spawn(move || {
-            let mut ledger = self;
-            let mut recovery_boundary = false;
-            while let Ok(command) = receiver.recv() {
-                match command {
-                    AsyncCommand::Raw {
-                        source,
-                        generation,
-                        records,
-                    } => ledger.append_raw_owned(&source, generation, records)?,
-                    AsyncCommand::Complete {
-                        source,
-                        generation,
-                        normalizer_version,
-                        normalized_clean,
-                    } => {
-                        ledger.complete_generation(
-                            &source,
-                            generation,
-                            normalizer_version,
-                            normalized_clean,
-                        )?;
-                        recovery_boundary = true;
-                    }
-                    AsyncCommand::Meta {
-                        schema_version,
-                        payload,
-                    } => {
-                        ledger.append_meta(schema_version, &payload)?;
-                        recovery_boundary = true;
-                    }
-                    AsyncCommand::Checkpoint => {
-                        // A private source is recoverable only after its seal.
-                        // Intermediate batches already drain when the bounded
-                        // writer fills; flushing zstd here would close blocks
-                        // without making that source eligible for recovery.
-                        // Keep metadata/seal boundaries and segment rotation,
-                        // and never weaken the ordinary durable-checkpoint path.
-                        if !ledger.defer_checkpoint_sync
-                            || recovery_boundary
-                            || ledger.written >= ledger.max_segment_bytes
-                        {
-                            ledger.checkpoint()?;
-                            recovery_boundary = false;
-                        }
-                    }
-                }
-            }
-            ledger.flush()?;
-            Ok(ledger)
-        });
-        Self {
-            dir,
-            max_segment_bytes,
-            segment_seq,
-            writer: None,
-            codec,
-            disk_sampled: 0,
-            written: 0,
-            defined: HashMap::new(),
-            segment_generations: HashMap::new(),
-            defer_checkpoint_sync,
-            unsynced_segments: Vec::new(),
-            unsynced_directories: Vec::new(),
-            write_stats: LedgerWriteStats::default(),
-            async_backend: Some(AsyncBackend {
-                sender: Some(sender),
-                worker: Some(worker),
-            }),
-        }
     }
 
     pub fn with_max_segment_bytes(mut self, max: u64) -> Self {
@@ -421,17 +320,67 @@ impl Ledger {
         }
         let file_id = self.define(source)?;
         self.note_generation(file_id, generation);
-        let started = Instant::now();
-        let mut body = Vec::with_capacity(17);
-        body.extend_from_slice(&file_id.to_be_bytes());
-        body.extend_from_slice(&generation.to_be_bytes());
-        body.extend_from_slice(&normalizer_version.to_be_bytes());
-        body.push(u8::from(normalized_clean));
-        self.write_stats.frame_nanos = self
-            .write_stats
-            .frame_nanos
-            .saturating_add(elapsed_nanos(started));
+        let body = seal_body(file_id, generation, normalizer_version, normalized_clean);
         self.frame(TAG_GENERATION_COMPLETE, &body)
+    }
+
+    /// Install roster keys: from now on a keyed source's file id, in every
+    /// segment, is its key, and any other source gets an id above every key.
+    /// A keyed source's frames can therefore be finished before the segment
+    /// they land in is known ([`PrebuiltFrames`], [`Ledger::append_prebuilt`]).
+    /// The keys must number their sources `0..n`, and the open segment must
+    /// not have defined a source yet: one segment never mixes dense and keyed
+    /// ids. On an asynchronous ledger the keys take effect in queue order.
+    pub fn set_source_keys(
+        &mut self,
+        keys: Arc<HashMap<SourceDef, u32>>,
+    ) -> Result<(), CaptureError> {
+        validate_keys(&keys)?;
+        if self.async_backend.is_some() {
+            // The owner keeps them too, to refuse mis-keyed frames early.
+            self.keys = Some(Arc::clone(&keys));
+            return self.send_async(AsyncCommand::SourceKeys(keys));
+        }
+        if !self.defined.is_empty() {
+            return Err(CaptureError::InvalidConfig(
+                "roster keys must be installed before the open segment defines a source"
+                    .to_string(),
+            ));
+        }
+        self.keys = Some(keys);
+        self.unkeyed = 0;
+        Ok(())
+    }
+
+    /// Append one source generation's frames, finished ahead of the ledger
+    /// under the source's roster key. The source is defined first if the
+    /// open segment has not defined it, so the bytes land exactly where the
+    /// ledger's own framing of the same records would have put them.
+    pub fn append_prebuilt(
+        &mut self,
+        source: &SourceDef,
+        frames: PrebuiltFrames,
+    ) -> Result<(), CaptureError> {
+        let key = self
+            .keys
+            .as_ref()
+            .and_then(|keys| keys.get(source))
+            .copied();
+        if key != Some(frames.key()) {
+            return Err(CaptureError::InvalidConfig(format!(
+                "prebuilt frames for {} carry file id {}, but its roster key is {key:?}",
+                source.relative_path,
+                frames.key()
+            )));
+        }
+        if self.async_backend.is_some() {
+            return self.send_async(AsyncCommand::Prebuilt {
+                source: source.clone(),
+                frames,
+            });
+        }
+        let file_id = self.define(source)?;
+        self.write_frames(file_id, &frames)
     }
 
     /// Append a version-routed serialized meta-ops batch.
@@ -564,51 +513,6 @@ impl Ledger {
         self.rotate_if_needed(true)
     }
 
-    fn send_async(&mut self, command: AsyncCommand) -> Result<(), CaptureError> {
-        self.async_backend
-            .as_mut()
-            .and_then(|backend| backend.sender.as_mut())
-            .ok_or_else(|| {
-                CaptureError::InvalidConfig("asynchronous ledger is already closed".to_string())
-            })?
-            .send(command)
-            .map_err(|_| {
-                CaptureError::InvalidConfig("asynchronous ledger worker stopped".to_string())
-            })
-    }
-
-    fn finish_async(&mut self) -> Result<(), CaptureError> {
-        let mut backend = self
-            .async_backend
-            .take()
-            .ok_or_else(|| CaptureError::InvalidConfig("ledger is not asynchronous".to_string()))?;
-        drop(backend.sender.take());
-        let worker = backend.worker.take().ok_or_else(|| {
-            CaptureError::InvalidConfig("asynchronous ledger worker is missing".to_string())
-        })?;
-        let finished = worker.join().map_err(|_| {
-            CaptureError::InvalidConfig("asynchronous ledger worker panicked".to_string())
-        })??;
-        self.adopt_sync(finished);
-        Ok(())
-    }
-
-    fn adopt_sync(&mut self, mut finished: Ledger) {
-        self.dir = std::mem::take(&mut finished.dir);
-        self.max_segment_bytes = finished.max_segment_bytes;
-        self.segment_seq = finished.segment_seq;
-        self.writer = finished.writer.take();
-        self.written = finished.written;
-        self.codec = finished.codec;
-        self.disk_sampled = finished.disk_sampled;
-        self.defined = std::mem::take(&mut finished.defined);
-        self.segment_generations = std::mem::take(&mut finished.segment_generations);
-        self.defer_checkpoint_sync = finished.defer_checkpoint_sync;
-        self.unsynced_segments = std::mem::take(&mut finished.unsynced_segments);
-        self.unsynced_directories = std::mem::take(&mut finished.unsynced_directories);
-        self.write_stats = std::mem::take(&mut finished.write_stats);
-    }
-
     fn flush_buffer(&mut self) -> Result<(), CaptureError> {
         let Some(writer) = &mut self.writer else {
             return Ok(());
@@ -716,6 +620,7 @@ impl Ledger {
         }
         self.defined.clear();
         self.segment_generations.clear();
+        self.unkeyed = 0;
         self.segment_seq += 1;
         self.written = 0;
         Ok(())
@@ -728,7 +633,21 @@ impl Ledger {
         if let Some(id) = self.defined.get(source) {
             return Ok(*id);
         }
-        let id = self.defined.len() as u32;
+        let id = match &self.keys {
+            None => self.defined.len() as u32,
+            Some(keys) => match keys.get(source) {
+                Some(key) => *key,
+                None => {
+                    let id = (keys.len() as u32)
+                        .checked_add(self.unkeyed)
+                        .ok_or_else(|| {
+                            CaptureError::LimitExceeded("ledger file ids exhausted".to_string())
+                        })?;
+                    self.unkeyed += 1;
+                    id
+                }
+            },
+        };
         let started = Instant::now();
         let body = serde_encode(&[
             (
@@ -764,14 +683,8 @@ impl Ledger {
         self.ensure_writer()?;
         let path = self.dir.join(segment_name(self.segment_seq));
         let started = Instant::now();
-        let mut head = [0_u8; 5];
-        head[0] = tag;
-        head[1..5].copy_from_slice(&(body.len() as u32).to_be_bytes());
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(&head);
-        hasher.update(body);
-        let digest = hasher.finalize();
-        let checksum = &digest.as_bytes()[..CHECKSUM_BYTES];
+        let head = frame_head(tag, body.len());
+        let checksum = frame_checksum(&head, &[body]);
         self.write_stats.frame_nanos = self
             .write_stats
             .frame_nanos
@@ -783,7 +696,7 @@ impl Ledger {
             writer
                 .write_all(&head)
                 .and_then(|_| writer.write_all(body))
-                .and_then(|_| writer.write_all(checksum))
+                .and_then(|_| writer.write_all(&checksum))
         };
         self.write_stats.buffer_write_nanos = self
             .write_stats
@@ -932,5 +845,29 @@ fn serde_encode(fields: &[(&str, &str)]) -> String {
     out
 }
 
+/// Roster keys must number their sources `0..n`, so keyed ids are distinct
+/// and every unkeyed id (`n` and up) is disjoint from them.
+fn validate_keys(keys: &HashMap<SourceDef, u32>) -> Result<(), CaptureError> {
+    let count = u32::try_from(keys.len())
+        .map_err(|_| CaptureError::LimitExceeded("more roster keys than file ids".to_string()))?;
+    let mut seen = vec![false; keys.len()];
+    for (source, key) in keys {
+        let Some(slot) = seen.get_mut(*key as usize) else {
+            return Err(CaptureError::InvalidConfig(format!(
+                "roster key {key} for {} is outside 0..{count}",
+                source.relative_path
+            )));
+        };
+        if std::mem::replace(slot, true) {
+            return Err(CaptureError::InvalidConfig(format!(
+                "roster key {key} names two sources"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod prebuilt_tests;
 #[cfg(test)]
 mod tests;

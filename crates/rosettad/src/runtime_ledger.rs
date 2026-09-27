@@ -25,6 +25,11 @@ use crate::enroll::Enrollment;
 pub(crate) const STAMP_FILE: &str = "runtime.json";
 const STAMP_FORMAT: u32 = 1;
 
+/// Bytes a private cold ledger may queue ahead of its worker thread: about a
+/// dozen ordinary capture batches. Bounded by bytes rather than by commands,
+/// so the checkpoint and seal commands a batch sends never take its room.
+pub(crate) const COLD_LEDGER_QUEUE_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RuntimeStamp {
     pub format: u32,

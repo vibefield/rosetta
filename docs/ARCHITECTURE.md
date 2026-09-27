@@ -618,7 +618,14 @@ capture contract explicit.
   to size-rotated segment files, checksummed with blake3, and durably flushed before the
   corresponding projection transaction. By default `rosettad` stores one runtime
   ledger at `<projection>.ledger/<agent>/`; `--ledger` overrides that root. Segments are
-  self-describing and scanned incrementally during rebuild.
+  self-describing and scanned incrementally during rebuild: each defines every source it
+  references under a segment-local file id. Live and CLI writers number sources by first
+  appearance in the segment; a fresh cold capture installs *roster keys* instead — each
+  source's id is its index in the path-ordered roster, in every segment — so a batch's
+  frames (one encoder, `ledger/frames.rs`) can be finished before the segment they land in is
+  known. Readers accept any id and decode the same entries either way. The private cold
+  ledger's worker is fed through a queue bounded by the bytes it holds (64 MiB), not by
+  command count, so a batch's checkpoint and seal commands take no room from the next batch.
   *Correction (2026-09-12):* the per-`<agent>` directory is the DISCOVERED runtime's
   ledger; a supervisor-enrolled runtime of the same kind (§5.2, "Supervisor-enrolled
   runtimes") lives in `<projection>.ledger/<agent>~<digest>/`, and every runtime

@@ -862,7 +862,7 @@ pub(crate) fn plan_parallel_cold_runtime(
         .map(|ledger| ledger.with_codec(ledger_codec).defer_sync_until_flush())
         .map(|ledger| {
             if async_raw_ledger {
-                ledger.into_async(4)
+                ledger.into_async_bounded(runtime_ledger::COLD_LEDGER_QUEUE_BYTES)
             } else {
                 ledger
             }

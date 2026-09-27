@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use rosetta_adapter_support::{AgentAdapter, StreamDriver};
@@ -454,7 +455,9 @@ fn virtual_parent(file: &SessionFile) -> Result<&str, PipelineError> {
 ///
 /// Every roster source's cursor is created before the walk, in one planner
 /// transaction and in path order — the order the walk would have created
-/// them one at a time, so each cursor gets the rowid it always had.
+/// them one at a time, so each cursor gets the rowid it always had. The
+/// ledger's file id for each source is its index in that order (its roster
+/// key), in every segment.
 #[allow(clippy::too_many_arguments)]
 pub fn stream_closed_sources_into(
     adapter: &dyn AgentAdapter,
@@ -464,14 +467,31 @@ pub fn stream_closed_sources_into(
     files: &[SessionFile],
     opts: &IngestOptions,
     instrument: &Instrument,
-    ledger: Option<&mut rosetta_capture::Ledger>,
+    mut ledger: Option<&mut rosetta_capture::Ledger>,
     emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
 ) -> Result<StreamReport, PipelineError> {
     let ordered = path_ordered(files);
     create_roster_cursors(adapter, runtime, planner, &ordered, instrument)?;
+    if let Some(ledger) = ledger.as_deref_mut() {
+        ledger.set_source_keys(Arc::new(roster_keys(&ordered)?))?;
+    }
     walk_closed_sources(
         adapter, runtime, root, planner, &ordered, opts, instrument, ledger, emit,
     )
+}
+
+/// Each roster source's ledger file id: its index in path order.
+fn roster_keys(ordered: &[&SessionFile]) -> Result<HashMap<SourceDef, u32>, PipelineError> {
+    ordered
+        .iter()
+        .enumerate()
+        .map(|(index, file)| {
+            let key = u32::try_from(index).map_err(|_| {
+                PipelineError::Config("cold roster has more sources than ledger ids".to_string())
+            })?;
+            Ok((source_def(file), key))
+        })
+        .collect()
 }
 
 fn path_ordered(files: &[SessionFile]) -> Vec<&SessionFile> {

@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn asynchronous_writer_compresses_and_joins_at_flush() {
         let dir = TempDir::new().unwrap();
-        let mut ledger = Ledger::open(dir.path()).unwrap().into_async(2);
+        let mut ledger = Ledger::open(dir.path()).unwrap().into_async_bounded(2);
         for index in 0..50_u64 {
             ledger
                 .append_raw_owned(&source("a.jsonl"), 1, vec![(index * 100, record(index))])

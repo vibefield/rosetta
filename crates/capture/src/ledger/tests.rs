@@ -141,7 +141,7 @@ fn asynchronous_owned_writer_preserves_order_and_joins_at_flush() {
     let mut ledger = Ledger::open(dir.path())
         .unwrap()
         .defer_sync_until_flush()
-        .into_async(2);
+        .into_async_bounded(2);
     ledger.append_meta(2, "[]").unwrap();
     ledger.checkpoint().unwrap();
     ledger
@@ -267,7 +267,7 @@ fn private_async_checkpoints_coalesce_between_metadata_and_source_seals() {
     let mut ledger = Ledger::open(dir.path())
         .unwrap()
         .defer_sync_until_flush()
-        .into_async(1);
+        .into_async_bounded(1);
     ledger.append_meta(2, "[]").unwrap();
     ledger.checkpoint().unwrap();
     for generation in [1, 2] {
@@ -315,7 +315,7 @@ fn async_checkpoint_coalescing_still_rotates_long_unsealed_sources() {
         .unwrap()
         .with_max_segment_bytes(1024)
         .defer_sync_until_flush()
-        .into_async(1);
+        .into_async_bounded(1);
     for offset in 0..32 {
         ledger
             .append_raw_owned(&source, 1, vec![(offset, vec![b'x'; 128])])
@@ -339,7 +339,7 @@ fn async_checkpoint_coalescing_still_rotates_long_unsealed_sources() {
 fn async_writers_without_deferred_sync_keep_every_durable_checkpoint() {
     let dir = TempDir::new().unwrap();
     let source = source("durable.jsonl");
-    let mut ledger = Ledger::open(dir.path()).unwrap().into_async(1);
+    let mut ledger = Ledger::open(dir.path()).unwrap().into_async_bounded(1);
     for offset in 0..8 {
         ledger
             .append_raw(&source, 1, [(offset, b"record")])

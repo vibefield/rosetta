@@ -1168,7 +1168,7 @@ fn run_resumed_fresh_serve(
         let mut ledger = open_runtime_ledger(&stage_root, &runtime)?
             .with_codec(rosetta_capture::SegmentCodec::Plain)
             .defer_sync_until_flush()
-            .into_async(4);
+            .into_async_bounded(crate::runtime_ledger::COLD_LEDGER_QUEUE_BYTES);
         health.ingest_skim(
             &runtime.id,
             counter_source(instrument, instrument.snapshot()),

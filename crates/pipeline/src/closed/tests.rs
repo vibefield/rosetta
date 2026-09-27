@@ -1,8 +1,9 @@
-//! Eager roster cursors against the lazy creation they replaced: the same
-//! planner cursor rows, closed sources, report and raw ledger bytes, on every
-//! recorded fixture of every adapter (between them all three stream drivers,
-//! and rosters that mix them) and on a home whose session restarts
-//! mid-capture.
+//! Eager roster cursors and roster-keyed ledger ids against the lazy creation
+//! and dense ids they replaced, on every recorded fixture of every adapter
+//! (between them all three stream drivers, and rosters that mix them) and on
+//! a home whose session restarts mid-capture. Against a lazy walk
+//! with the same keys installed, everything is identical down to the ledger
+//! bytes; against the dense ledger, the decoded entries are.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use rosetta_adapter_hermes::HermesAdapter;
 use rosetta_adapter_kimi_code::KimiCodeAdapter;
 use rosetta_adapter_opencode::OpenCodeAdapter;
 use rosetta_adapter_pi::PiAdapter;
-use rosetta_capture::{Ledger, SegmentCodec, TailConfig};
+use rosetta_capture::{Ledger, LedgerEntry, SegmentCodec, TailConfig, scan_ledger};
 use rusqlite::types::Value;
 use tempfile::TempDir;
 
@@ -91,17 +92,29 @@ struct Captured {
     /// Each closed source as emitted, in emission order.
     emitted: Vec<String>,
     report: Vec<u64>,
-    /// Every segment file's bytes, in name order.
+    /// Every ledger file's bytes, in name order.
     ledger: Vec<(String, Vec<u8>)>,
+    /// The decoded ledger, in scan order.
+    entries: Vec<LedgerEntry>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Walk {
+    /// Cursors at each source's turn, dense ledger ids.
+    Lazy,
+    /// Cursors at each source's turn, roster keys installed by hand.
+    LazyKeyed,
+    /// [`stream_closed_sources_into`] itself.
+    Eager,
 }
 
 /// Discover, plan metadata and set the stream up — fresh serve's steps
-/// before capture — then capture, lazily or eagerly.
+/// before capture — then capture one way.
 fn capture(
     adapter: &'static dyn AgentAdapter,
     home: &Path,
     opts: &IngestOptions,
-    eager: bool,
+    walk: Walk,
 ) -> Captured {
     let instrument = Instrument::new();
     let discovery = discover(&[adapter], home, opts, &instrument)
@@ -129,13 +142,17 @@ fn capture(
     let mut ledger = Ledger::open(ledger_dir.path())
         .unwrap()
         .with_codec(SegmentCodec::Plain)
-        .with_max_segment_bytes(64 * 1024);
+        .with_max_segment_bytes(4 * 1024);
     let mut emitted = Vec::new();
     let mut emit = |sources: Vec<ClosedSource>| {
         emitted.extend(sources.iter().map(|source| format!("{source:?}")));
         Ok(())
     };
-    let report = if eager {
+    if walk == Walk::LazyKeyed {
+        let keys = roster_keys(&path_ordered(&files)).unwrap();
+        ledger.set_source_keys(Arc::new(keys)).unwrap();
+    }
+    let report = if walk == Walk::Eager {
         stream_closed_sources_into(
             adapter,
             &runtime,
@@ -187,6 +204,7 @@ fn capture(
         })
         .collect::<Vec<_>>();
     ledger.sort();
+    let entries = scan_ledger(ledger_dir.path()).unwrap().entries;
     Captured {
         cursors,
         emitted,
@@ -210,7 +228,25 @@ fn capture(
             report.siblings_healed,
         ],
         ledger,
+        entries,
     }
+}
+
+/// Eager equals the keyed lazy walk exactly, and the dense lazy walk in
+/// everything but the ledger's file ids. Returns the eager capture and
+/// whether those ids changed any ledger byte.
+fn assert_equivalent(label: &str, run: impl Fn(Walk) -> Captured) -> (Captured, bool) {
+    let dense = run(Walk::Lazy);
+    let keyed = run(Walk::LazyKeyed);
+    let eager = run(Walk::Eager);
+    assert_eq!(eager, keyed, "{label}");
+    assert_eq!(eager.cursors, dense.cursors, "{label}");
+    assert_eq!(eager.emitted, dense.emitted, "{label}");
+    assert_eq!(eager.report, dense.report, "{label}");
+    assert_eq!(eager.entries, dense.entries, "{label}");
+    assert_path_numbered(label, &eager);
+    let rekeyed = eager.ledger != dense.ledger;
+    (eager, rekeyed)
 }
 
 /// The cursors of a path-ordered roster are numbered 1, 2, … in path order.
@@ -229,8 +265,9 @@ fn assert_path_numbered(label: &str, captured: &Captured) {
 }
 
 #[test]
-fn eager_roster_cursors_match_lazy_creation_on_every_fixture() {
+fn eager_cursors_and_roster_keys_match_the_lazy_dense_walk_on_every_fixture() {
     let mut scenarios = 0;
+    let mut rekeyed = 0;
     for adapter in adapters() {
         for (scenario, data) in fixture_roots(adapter.kind()) {
             let label = format!("{} {scenario}", adapter.kind());
@@ -240,14 +277,15 @@ fn eager_roster_cursors_match_lazy_creation_on_every_fixture() {
                 &expand_data_root(&adapter.layout().data_root, home.path()),
             );
             let opts = IngestOptions::default();
-            let lazy = capture(adapter, home.path(), &opts, false);
-            let eager = capture(adapter, home.path(), &opts, true);
-            assert_eq!(eager, lazy, "{label}");
-            assert_path_numbered(&label, &eager);
+            let (_, keys_changed_bytes) =
+                assert_equivalent(&label, |walk| capture(adapter, home.path(), &opts, walk));
             scenarios += 1;
+            rekeyed += usize::from(keys_changed_bytes);
         }
     }
     assert!(scenarios >= 9, "only {scenarios} fixture scenarios");
+    // Small segments rotate, where dense ids restart and keys do not.
+    assert!(rekeyed > 0, "no scenario's ledger bytes depend on its ids");
 }
 
 /// Rewrites one source the first time capture reports bytes for it — after
@@ -296,7 +334,7 @@ const HEAL_JOURNAL: &str =
 /// is rewritten between its first and second capture batch, so the session
 /// restarts and its sibling heals before either source is emitted.
 #[test]
-fn eager_roster_cursors_match_lazy_creation_across_a_restart_and_heal() {
+fn eager_cursors_and_roster_keys_match_the_lazy_dense_walk_across_a_restart_and_heal() {
     let home = TempDir::new().unwrap();
     let root = expand_data_root(&ClaudeCodeAdapter.layout().data_root, home.path());
     let lines = |prefix: &str| {
@@ -327,7 +365,7 @@ fn eager_roster_cursors_match_lazy_creation_across_a_restart_and_heal() {
     std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
     // One home for both runs; each run starts from the original transcript,
     // with the modification time discovery reads pinned, and rewrites it once.
-    let run = |eager: bool| {
+    let run = |walk: Walk| {
         std::fs::write(&transcript, lines("old")).unwrap();
         std::fs::File::options()
             .write(true)
@@ -347,12 +385,9 @@ fn eager_roster_cursors_match_lazy_creation_across_a_restart_and_heal() {
             })),
             ..IngestOptions::default()
         };
-        capture(&ClaudeCodeAdapter, home.path(), &opts, eager)
+        capture(&ClaudeCodeAdapter, home.path(), &opts, walk)
     };
-    let lazy = run(false);
-    let eager = run(true);
-    assert_eq!(eager, lazy);
-    assert_path_numbered("restart", &eager);
+    let (eager, _) = assert_equivalent("restart", run);
     // The rewrite restarts the transcript; the heal replays its sibling into
     // a replacement generation too.
     let restarted = eager.report[9];
