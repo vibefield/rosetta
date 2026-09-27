@@ -273,6 +273,8 @@ machine, which corroborates the quiet-host column.
 
 ## 8. Decisions for James
 
+D1 and D2 were tried on 2026-09-27; see §10 for the outcome.
+
 - D1 Validation placement: validate the installed projection after publication (Tier 1 #2) and
   the search generation after readiness (Tier 1 #4), with failure demoting to rebuild. Both checks
   are kept; only their position changes.
@@ -302,3 +304,49 @@ Scratchpad root: `/private/tmp/claude-501/-Users-jamesyong-Projects-project100-r
 
 Nothing in the repository's tracked code was modified by this session; this document is the only
 new file. All benchmark outputs were written to the internal disk and deleted after each run.
+
+## 10. Outcome of D1 and D2 (2026-09-27)
+
+Both were implemented in separate worktrees on a snapshot of the then-uncommitted working tree,
+checked against the frozen snapshot (projection digests equal to the baseline in every canonical
+table, message ordinals included), and measured in interleaved live all-agent cold starts: three
+per variant, same host and hour. Means in seconds unless noted.
+
+Campaign 1, load 14–88:
+
+| | Baseline | D1 | D2 |
+|---|---:|---:|---:|
+| Canonical ready | 132.5 | 136.1 | 119.6 |
+| Search ready | 143.5 | 147.1 | 131.6 |
+| Daemon CPU | 161.9 | 175.5 | 153.9 |
+| Peak footprint, GiB | 8.6 | 9.1 | 5.0 |
+
+Campaign 3, load mostly 8–23, with the session-index fix (Tier 1 #1) on top of D2:
+
+| | Baseline | D2 | D2 + index |
+|---|---:|---:|---:|
+| Canonical ready | 110.2 | 91.9 | 89.0 |
+| Search ready | 118.9 | 102.9 | 98.4 |
+| Daemon CPU | 147.5 | 143.1 | 127.9 |
+| Peak footprint, GiB | 8.7 | 4.7 | 4.8 |
+
+- **D2 and the session index are merged** (`8d43b30`, `cc9606c`). Claude Code's apply after
+  capture fell from about 30 s to 9 s because rows now land while capture runs. That moved writer
+  work into the capture window and lengthened Claude's capture by 4–18 s depending on load. The
+  index removed most of that extra CPU: Claude's planner apply fell from 10.2 s to 1.3 s. The
+  stage-by-stage history remains on `cold/d2-streaming-apply` and `cold/d2-session-index`.
+- **D1 is not merged.** Moving the canonical `quick_check` and foreign-key check behind
+  publication removed about 5 s from finalization. The check then read the installed file from
+  disk in 12–20 s, overlapped catch-up and search, and cost about 14 extra CPU-seconds. No
+  end-to-end gain was measurable at these loads. The implementation remains on
+  `cold/d1-post-publication-validation`.
+- **Kept from D1: `quick_check` on a read-only connection skips CHECK constraints.** SQLite does not
+  parse CHECK constraints when a database is opened read-only (verified on 3.46 and 3.51), so an
+  audit must use a read-write connection with `PRAGMA query_only = ON`. The cold path validates on
+  its read-write RAM connection and is unaffected. Equality reports from earlier campaigns that
+  opened outputs read-only did not evaluate CHECK constraints.
+- Early tool-row resolution at file close (D2's skipped stage B3) is provable only with a runtime
+  check that a session has exactly one source; it would move the remaining 3.4–3.9 s of Claude
+  tool-row writes out of admission. D3–D5 remain open.
+- Evidence (plans, reports, digests, per-run evidence and binaries):
+  `/Volumes/SamsungRed/rosetta-agent-tests/runs/d1d2-campaign-20260927/`.
