@@ -5,6 +5,7 @@
 //! pieces that production Rust parsers need.
 
 pub mod adapter;
+mod glob;
 pub mod media;
 pub mod time;
 pub mod tool;
@@ -13,6 +14,7 @@ pub use adapter::{
     AgentAdapter, FileStat, LineOutcome, LineStatus, NormalizeCtx, ProjectHint, SkimResult,
     SnapshotPlan, SnapshotQuery, StreamDriver,
 };
+pub use glob::Glob;
 pub use time::rfc3339_ms;
 
 use std::collections::BTreeMap;
@@ -50,12 +52,37 @@ pub struct GroundTruthDoc {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(from = "StreamFields")]
 pub struct StreamSpec {
     pub id: String,
     pub glob: String,
     pub file_format: FileFormat,
     pub discipline: FileDiscipline,
     pub evidence: Evidence,
+    /// `glob`, compiled once when the layout loads.
+    pattern: Glob,
+}
+
+#[derive(Deserialize)]
+struct StreamFields {
+    id: String,
+    glob: String,
+    file_format: FileFormat,
+    discipline: FileDiscipline,
+    evidence: Evidence,
+}
+
+impl From<StreamFields> for StreamSpec {
+    fn from(fields: StreamFields) -> Self {
+        Self {
+            pattern: Glob::new(&fields.glob),
+            id: fields.id,
+            glob: fields.glob,
+            file_format: fields.file_format,
+            discipline: fields.discipline,
+            evidence: fields.evidence,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -95,70 +122,17 @@ impl GroundTruthDoc {
         self.streams.iter().find(|stream| stream.id == id)
     }
 
+    /// The first stream whose glob claims `relative_path`.
     pub fn matching_stream(&self, relative_path: &str) -> Option<&StreamSpec> {
         self.streams
             .iter()
-            .find(|stream| glob_match(&stream.glob, relative_path))
+            .find(|stream| stream.pattern.matches(relative_path))
     }
 }
 
 /// Match `/`-separated paths using the ground-truth layout's small glob
-/// language: `*` within a segment and `**` across segments.
+/// language: `*` within a segment and `**` across segments. Compiles the
+/// pattern on every call; layouts keep theirs compiled (see [`Glob`]).
 pub fn glob_match(pattern: &str, path: &str) -> bool {
-    let pattern: Vec<&str> = pattern.split('/').collect();
-    let path: Vec<&str> = path.split('/').collect();
-    match_segments(&pattern, &path)
-}
-
-fn match_segments(pattern: &[&str], path: &[&str]) -> bool {
-    match (pattern.first(), path.first()) {
-        (None, None) => true,
-        (Some(&"**"), _) => {
-            match_segments(&pattern[1..], path)
-                || (!path.is_empty() && match_segments(pattern, &path[1..]))
-        }
-        (Some(head), Some(segment)) => {
-            match_segment(head, segment) && match_segments(&pattern[1..], &path[1..])
-        }
-        _ => false,
-    }
-}
-
-fn match_segment(pattern: &str, segment: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 1 {
-        return pattern == segment;
-    }
-    if !segment.starts_with(parts[0]) || !segment.ends_with(parts.last().copied().unwrap_or("")) {
-        return false;
-    }
-
-    let mut cursor = parts[0].len();
-    let final_part = parts.len() - 1;
-    for part in &parts[1..final_part] {
-        let Some(offset) = segment[cursor..].find(part) else {
-            return false;
-        };
-        cursor += offset + part.len();
-    }
-    cursor <= segment.len() - parts[final_part].len()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::glob_match;
-
-    #[test]
-    fn layout_globs() {
-        assert!(glob_match("projects/*/*.jsonl", "projects/p/a.jsonl"));
-        assert!(!glob_match("projects/*/*.jsonl", "projects/a.jsonl"));
-        assert!(glob_match(
-            "projects/*/*/subagents/**/agent-*.jsonl",
-            "projects/p/s/subagents/x/y/agent-7.jsonl"
-        ));
-        assert!(glob_match("**/*.jsonl", "a/b/c.jsonl"));
-        assert!(glob_match("**/*.jsonl", "c.jsonl"));
-        assert!(glob_match("todos/*-agent-*.json", "todos/1-agent-2.json"));
-        assert!(!glob_match("agent-*-*.jsonl", "agent-.jsonl"));
-    }
+    Glob::new(pattern).matches(path)
 }
