@@ -31,7 +31,9 @@ use std::path::{Path, PathBuf};
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_core::ids;
 use rosetta_core::rows::RuntimeRow;
-use rosetta_pipeline::{Discovery, IngestOptions, Instrument, discover_root, expand_data_root};
+use rosetta_pipeline::{
+    CensusRoot, Discovery, IngestOptions, Instrument, discover_roots, expand_data_root,
+};
 use rosetta_server::{DiscoveryRow, RuntimeIdentity, RuntimeProvenance};
 use serde::Deserialize;
 
@@ -358,7 +360,8 @@ pub(crate) fn runtime_name(kind: &str, label: Option<&str>, root: Option<&String
 /// Every runtime a command may serve: one Discovered target per selected
 /// adapter (the layout's `~` root over `home`, id minted from the `~` form),
 /// then one Enrolled target per file entry (absolute root, id minted from
-/// it), each with the same census walk over its own root.
+/// it), each with the same census walk over its own root. The roots are
+/// walked concurrently; targets keep that order.
 pub(crate) fn resolve_targets(
     adapters: &[&'static dyn AgentAdapter],
     home: &Path,
@@ -366,14 +369,33 @@ pub(crate) fn resolve_targets(
     opts: &IngestOptions,
     instrument: &Instrument,
 ) -> Result<Vec<RuntimeTarget>, String> {
-    let mut targets = Vec::with_capacity(
-        adapters.len() + enrollment.map_or(0, |enrollment| enrollment.runtimes.len()),
+    let enrolled = enrollment.map_or(&[][..], |enrollment| &enrollment.runtimes[..]);
+    let native_roots: Vec<PathBuf> = adapters
+        .iter()
+        .map(|adapter| expand_data_root(&adapter.layout().data_root, home))
+        .collect();
+    let mut roots = Vec::with_capacity(adapters.len() + enrolled.len());
+    roots.extend(
+        adapters
+            .iter()
+            .zip(&native_roots)
+            .map(|(adapter, root)| CensusRoot {
+                adapter: *adapter,
+                data_root: &adapter.layout().data_root,
+                root,
+            }),
     );
-    for adapter in adapters.iter().copied() {
-        let layout = adapter.layout();
-        let root = expand_data_root(&layout.data_root, home);
-        let census = discover_root(adapter, &layout.data_root, &root, opts, instrument)
-            .map_err(|error| error.to_string())?;
+    roots.extend(enrolled.iter().map(|enrolled| CensusRoot {
+        adapter: enrolled.adapter,
+        data_root: &enrolled.runtime.data_root,
+        root: &enrolled.root,
+    }));
+    let mut censuses = discover_roots(&roots, opts, instrument)
+        .map_err(|error| error.to_string())?
+        .into_iter();
+
+    let mut targets = Vec::with_capacity(roots.len());
+    for (adapter, census) in adapters.iter().copied().zip(censuses.by_ref()) {
         targets.push(RuntimeTarget::from_census(
             adapter,
             census,
@@ -381,18 +403,7 @@ pub(crate) fn resolve_targets(
             RuntimeProvenance::Discovered,
         ));
     }
-    for enrolled in enrollment
-        .iter()
-        .flat_map(|enrollment| &enrollment.runtimes)
-    {
-        let census = discover_root(
-            enrolled.adapter,
-            &enrolled.runtime.data_root,
-            &enrolled.root,
-            opts,
-            instrument,
-        )
-        .map_err(|error| error.to_string())?;
+    for (enrolled, census) in enrolled.iter().zip(censuses) {
         debug_assert_eq!(census.runtime.id, enrolled.runtime.id);
         targets.push(RuntimeTarget::from_census(
             enrolled.adapter,

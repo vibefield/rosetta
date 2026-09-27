@@ -31,7 +31,9 @@ pub mod streamed;
 pub use checkpoint::PipeCheckpoint;
 pub use closed::{ClosedSource, StreamedSetup, stream_closed_sources_into, streamed_setup};
 pub use command::{RawCommandLocator, read_raw_command};
-pub use discover::{Discovery, discover, discover_root, expand_data_root};
+pub use discover::{
+    CensusRoot, Discovery, discover, discover_root, discover_roots, expand_data_root,
+};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
 pub use live::{
     HintMapping, LiveOptions, LiveReport, LiveRunner, PollEvidence, map_hint, stream_live,

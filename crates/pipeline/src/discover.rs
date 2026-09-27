@@ -59,19 +59,60 @@ pub fn discover(
     opts: &IngestOptions,
     instrument: &Instrument,
 ) -> Result<Vec<Discovery>, PipelineError> {
-    let mut out = Vec::with_capacity(adapters.len());
-    for adapter in adapters {
-        let layout = adapter.layout();
-        let root = expand_data_root(&layout.data_root, home);
-        out.push(discover_root(
-            *adapter,
-            &layout.data_root,
-            &root,
-            opts,
-            instrument,
-        )?);
+    let roots: Vec<PathBuf> = adapters
+        .iter()
+        .map(|adapter| expand_data_root(&adapter.layout().data_root, home))
+        .collect();
+    let census: Vec<CensusRoot<'_>> = adapters
+        .iter()
+        .zip(&roots)
+        .map(|(adapter, root)| CensusRoot {
+            adapter: *adapter,
+            data_root: &adapter.layout().data_root,
+            root,
+        })
+        .collect();
+    discover_roots(&census, opts, instrument)
+}
+
+/// One root for [`discover_roots`]: the adapter whose layout walks it, the
+/// identity string its runtime id is minted from, and the directory walked.
+#[derive(Clone, Copy)]
+pub struct CensusRoot<'a> {
+    pub adapter: &'a dyn AgentAdapter,
+    pub data_root: &'a str,
+    pub root: &'a Path,
+}
+
+/// [`discover_root`] for several roots at once, one scoped thread per root.
+/// Roots are separate directory trees, so their walks only overlap latency.
+/// Results keep the given order, and the first root that fails, in that
+/// order, fails the census with its own error: the one a serial census
+/// would have stopped at.
+pub fn discover_roots(
+    roots: &[CensusRoot<'_>],
+    opts: &IngestOptions,
+    instrument: &Instrument,
+) -> Result<Vec<Discovery>, PipelineError> {
+    let census = |root: &CensusRoot<'_>| {
+        discover_root(root.adapter, root.data_root, root.root, opts, instrument)
+    };
+    if roots.len() < 2 {
+        return roots.iter().map(census).collect();
     }
-    Ok(out)
+    std::thread::scope(|scope| {
+        let walks: Vec<_> = roots
+            .iter()
+            .map(|root| scope.spawn(move || census(root)))
+            .collect();
+        walks
+            .into_iter()
+            .map(|walk| {
+                walk.join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    })
 }
 
 /// The census walk of one root for one adapter. `data_root` is the identity
