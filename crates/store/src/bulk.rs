@@ -108,7 +108,7 @@ pub(crate) fn finalize(
     // The CASE implements Rust's div_euclid hour floor for pre-epoch values;
     // SQLite integer division otherwise truncates toward zero.
     let started = Instant::now();
-    refold_usage_buckets(tx)?;
+    with_sort_budget(tx, FOLD_SORT_BUDGET_KIB, || refold_usage_buckets(tx))?;
     stats.bucket_nanos = elapsed_nanos(started);
 
     let started = Instant::now();
@@ -116,6 +116,39 @@ pub(crate) fn finalize(
     tx.execute_batch("ANALYZE;")?;
     stats.index_nanos = elapsed_nanos(started);
     Ok(stats)
+}
+
+/// Memory for the cold fold's GROUP BY sort: every message row and usage
+/// sample, grouped by bucket. SQLite sizes each sorter's in-memory runs by the
+/// connection's cache budget; at the 2 MB default this sort spills dozens of
+/// runs to temporary files and merges them back. Beyond this bound it still
+/// spills, so the extra memory is capped.
+const FOLD_SORT_BUDGET_KIB: i64 = 256 * 1024;
+
+/// Run `work` with at least `budget_kib` of cache budget for its sorters, then
+/// restore the connection's own setting, whatever the outcome.
+fn with_sort_budget<T>(
+    conn: &Connection,
+    budget_kib: i64,
+    work: impl FnOnce() -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    let previous: i64 = conn.query_row("PRAGMA cache_size", [], |row| row.get(0))?;
+    let page_size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+    // Negative sizes are KiB, positive sizes pages.
+    let previous_kib = if previous < 0 {
+        previous.saturating_neg()
+    } else {
+        previous.saturating_mul(page_size) / 1024
+    };
+    if previous_kib >= budget_kib {
+        return work();
+    }
+    conn.pragma_update(None, "cache_size", -budget_kib)?;
+    let result = work();
+    let restored = conn.pragma_update(None, "cache_size", previous);
+    let value = result?;
+    restored?;
+    Ok(value)
 }
 
 /// Replace every `usage_bucket` row from the stored usage facts in one
@@ -158,4 +191,43 @@ pub(crate) fn restore_live_pragmas(conn: &Connection) -> Result<(), StoreError> 
          PRAGMA foreign_keys = ON;",
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    fn cache_size(conn: &Connection) -> i64 {
+        conn.query_row("PRAGMA cache_size", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn sort_budget_applies_during_the_work_and_restores_the_setting() {
+        let conn = Connection::open_in_memory().unwrap();
+        for setting in [-2000, 100] {
+            conn.pragma_update(None, "cache_size", setting).unwrap();
+            let during = super::with_sort_budget(&conn, 8192, || Ok(cache_size(&conn))).unwrap();
+            assert_eq!(during, -8192);
+            assert_eq!(cache_size(&conn), setting);
+        }
+
+        conn.pragma_update(None, "cache_size", -2000).unwrap();
+        let failed = super::with_sort_budget(&conn, 8192, || -> Result<(), crate::StoreError> {
+            Err(crate::StoreError::BulkLoadState {
+                message: "work failed".into(),
+            })
+        });
+        assert!(failed.is_err());
+        assert_eq!(cache_size(&conn), -2000);
+    }
+
+    #[test]
+    fn sort_budget_never_lowers_a_larger_setting() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "cache_size", -16384).unwrap();
+        let during = super::with_sort_budget(&conn, 8192, || Ok(cache_size(&conn))).unwrap();
+        assert_eq!(during, -16384);
+        assert_eq!(cache_size(&conn), -16384);
+    }
 }
