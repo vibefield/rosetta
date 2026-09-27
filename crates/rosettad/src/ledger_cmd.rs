@@ -1,6 +1,7 @@
 //! `rosettad ledger` — offline maintenance on a projection's raw ledger.
 //!
-//! The one subcommand today is `compact`: it rewrites the closed segments of
+//! `verify` is read-only evidence about a ledger (`ledger_verify.rs`).
+//! `compact` rewrites the closed segments of
 //! an existing ledger into the zstd container (`RLZ1`). Readers keep both
 //! containers forever and decide per segment from the magic, so a compaction
 //! pass is invisible to every consumer — the ledger stays the same append-only
@@ -50,10 +51,11 @@ const SEGMENT_DIGITS: usize = 8;
 pub(crate) fn cmd_ledger(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("compact") => cmd_compact(&args[1..]),
+        Some("verify") => crate::ledger_verify::cmd_verify(&args[1..]),
         Some(other) => Err(format!(
-            "unknown ledger subcommand {other}; expected one of: compact"
+            "unknown ledger subcommand {other}; expected one of: compact, verify"
         )),
-        None => Err("ledger needs a subcommand: compact".to_string()),
+        None => Err("ledger needs a subcommand: compact or verify".to_string()),
     }
 }
 
@@ -190,7 +192,7 @@ fn classify(path: &Path, codec: SegmentCodec, force: bool) -> Result<RecompressO
 /// projection set lives in a `recovery/` sibling of the projection, so neither
 /// is reachable from here; a `recovery` child and every dotted entry are
 /// skipped anyway so a hand-moved tree cannot be rewritten by accident.
-fn runtime_dirs(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+pub(crate) fn runtime_dirs(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     let mut out = Vec::new();
     for entry in read_dir(root)? {
         let entry = entry.map_err(|error| format!("listing {}: {error}", root.display()))?;

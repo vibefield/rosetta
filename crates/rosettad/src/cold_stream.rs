@@ -222,8 +222,8 @@ fn produce(
         &mut |mut sources| {
             preparer.prepare(&mut sources)?;
             let bytes = sources.iter().map(ClosedSource::payload_bytes).sum();
-            budget
-                .acquire(bytes)
+            instrument
+                .time(Metric::WriterBudgetWaitNanos, || budget.acquire(bytes))
                 .map_err(rosetta_pipeline::PipelineError::Config)?;
             sender
                 .send(StreamMessage::Sources {

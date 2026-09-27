@@ -20,7 +20,8 @@ pub use discovery::{
 };
 pub use document::{DocumentOutcome, DocumentSnapshot, snapshot as snapshot_document};
 pub use ledger::{
-    Ledger, LedgerEntry, LedgerScan, LedgerVisit, LedgerWriteStats, SourceDef, scan as scan_ledger,
+    EntryDigest, EntryTally, Ledger, LedgerEntry, LedgerScan, LedgerVerify, LedgerVisit,
+    LedgerWriteStats, SegmentVerify, SourceDef, scan as scan_ledger, verify as verify_ledger,
     visit as visit_ledger, visit_segments as visit_ledger_segments,
 };
 pub use recompress::{RecompressOutcome, recompress_segment, recompress_segment_controlled};

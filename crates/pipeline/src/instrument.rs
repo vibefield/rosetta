@@ -89,6 +89,9 @@ pub enum Metric {
     ToolReconcileNanos,
     ToolReconcileCleanupNanos,
     ColdPrepareNanos,
+    /// Time a fresh cold producer waited for the canonical writer's in-flight
+    /// byte budget: capture blocked on the writer, not on its own work.
+    WriterBudgetWaitNanos,
     BulkFinalizeNanos,
     BulkRenumberRows,
     BulkRenumberNanos,
@@ -113,7 +116,7 @@ pub enum Metric {
     LiveStreamNanos,
 }
 
-const METRIC_COUNT: usize = 90;
+const METRIC_COUNT: usize = 91;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -195,6 +198,7 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
         "tool reconciliation cleanup time",
     ),
     (Metric::ColdPrepareNanos, "cold plan preparation time"),
+    (Metric::WriterBudgetWaitNanos, "writer budget wait time"),
     (Metric::BulkFinalizeNanos, "bulk finalization time"),
     (Metric::BulkRenumberRows, "bulk renumber rows"),
     (Metric::BulkRenumberNanos, "bulk renumber time"),

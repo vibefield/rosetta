@@ -32,6 +32,9 @@ use crate::segment_index::{self, IndexedSource, SegmentIndexLine};
 use crate::{CaptureError, io_error};
 
 mod raw;
+mod verify;
+
+pub use verify::{EntryDigest, EntryTally, LedgerVerify, SegmentVerify, verify};
 
 const CHECKSUM_BYTES: usize = 8;
 

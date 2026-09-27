@@ -1384,6 +1384,7 @@ name = "rosettad"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "blake3",
  "http-body-util",
  "libc",
  "rosetta-adapter-antigravity",

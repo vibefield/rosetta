@@ -250,3 +250,7 @@ clients/                   TypeScript consumers                       [Phase 4]
   privacy rules in `crates/search-bench/README.md`).
 - Ledger compaction (stop the daemon/app that owns the projection first):
   `rosettad ledger compact --db PATH [--ledger DIR] [--level N] [--long] [--force] [--dry-run] [--json]`.
+- Ledger evidence (read-only; per-segment decoded digests plus an entry digest that ignores
+  containers, segment boundaries, file ids and batch packing, split into source and meta
+  digests because metadata carries discovery times):
+  `rosettad ledger verify --db PATH | --ledger DIR [--json]`.

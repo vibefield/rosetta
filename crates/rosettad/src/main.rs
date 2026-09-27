@@ -9,6 +9,7 @@
 //!   rosettad serve --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] ...
 //!   rosettad rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--enroll FILE]
 //!   rosettad ledger compact --db PATH [--ledger DIR] [--level N] [--long]
+//!   rosettad ledger verify --db PATH | --ledger DIR [--json]
 //!
 //! `ingest` implies consent for the selected agents (the CLI user asked);
 //! the app flow instead runs `discover`, asks, and flips `enabled` itself.
@@ -58,6 +59,7 @@ mod engine;
 mod enroll;
 mod ledger_cmd;
 mod ledger_compression;
+mod ledger_verify;
 mod publication;
 mod recovery;
 mod runtime_ledger;
@@ -116,6 +118,7 @@ fn main() -> ExitCode {
             eprintln!(
                 "  ledger compact --db PATH [--ledger DIR] [--level N] [--long] [--force] [--dry-run] [--json]"
             );
+            eprintln!("  ledger verify --db PATH | --ledger DIR [--json]");
             eprintln!(
                 "  (ingest and watch keep a raw ledger at <db>.ledger/ unless --ledger overrides)"
             );

@@ -638,6 +638,14 @@ capture contract explicit.
   cost as much as a write-side one: every later decoder of a segment allocates its window
   (2 MiB at level 3, 8 MiB at 19, 128 MiB for `--long` or levels 20–22) for as long as the
   segment is open, and a replay opens one per runtime.
+  `rosettad ledger verify` is the read-only evidence for comparing two ledgers: per segment
+  its container, disk and decoded bytes, clean or torn, and blake3 over the decoded frame
+  bytes (container-independent, the digest compaction proves its copies against); per
+  runtime an entry digest over a canonical encoding of every decoded entry in visit order,
+  which also ignores segment boundaries, file ids and raw-batch packing. Metadata entries
+  carry run-dependent values (a runtime row's `discovered_at`), so the entry digest is also
+  reported split: a source digest over the raw and seal entries — what two builds of the
+  same read-only inputs must share — and a meta digest.
   Each closed segment also appends one line to `<agent>/.segments` naming the sources and
   generation ranges it holds, so a read scoped to one source generation (the transcript's
   exact-command fetch) opens the owning segments instead of walking the ledger; the index is
