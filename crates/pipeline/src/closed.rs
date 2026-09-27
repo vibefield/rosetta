@@ -28,7 +28,9 @@ use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::live::PollEvidence;
 use crate::meta::SessionFile;
-use crate::stream::{FilePass, PassMode, StreamReport, ingest_file, rotating_audit_paths};
+use crate::stream::{
+    FilePass, PassMode, StreamReport, fresh_cursor, ingest_file, rotating_audit_paths,
+};
 use crate::{IngestOptions, PipelineError};
 
 /// One source whose generation is terminal: exactly what
@@ -449,6 +451,10 @@ fn virtual_parent(file: &SessionFile) -> Result<&str, PipelineError> {
 /// no longer be superseded. `emit` receives every roster source exactly once,
 /// in path order. The planner must be a cold-capture planner whose metadata
 /// batches were already taken by [`streamed_setup`].
+///
+/// Every roster source's cursor is created before the walk, in one planner
+/// transaction and in path order — the order the walk would have created
+/// them one at a time, so each cursor gets the rowid it always had.
 #[allow(clippy::too_many_arguments)]
 pub fn stream_closed_sources_into(
     adapter: &dyn AgentAdapter,
@@ -458,12 +464,68 @@ pub fn stream_closed_sources_into(
     files: &[SessionFile],
     opts: &IngestOptions,
     instrument: &Instrument,
+    ledger: Option<&mut rosetta_capture::Ledger>,
+    emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
+) -> Result<StreamReport, PipelineError> {
+    let ordered = path_ordered(files);
+    create_roster_cursors(adapter, runtime, planner, &ordered, instrument)?;
+    walk_closed_sources(
+        adapter, runtime, root, planner, &ordered, opts, instrument, ledger, emit,
+    )
+}
+
+fn path_ordered(files: &[SessionFile]) -> Vec<&SessionFile> {
+    let mut ordered: Vec<&SessionFile> = files.iter().collect();
+    ordered.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    ordered
+}
+
+/// Create the fresh cursor of every roster source that has none, in one
+/// planner transaction, in path order. Cursor ids are rowids allocated in
+/// insertion order, so each id equals the one creation at the source's turn
+/// in the walk gives it; the batch names no source, so closing a unit
+/// ignores it.
+fn create_roster_cursors(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    planner: &mut Store,
+    ordered: &[&SessionFile],
+    instrument: &Instrument,
+) -> Result<(), PipelineError> {
+    let mut checkpoints = Vec::with_capacity(ordered.len());
+    for file in ordered {
+        if queries::cursor_state(planner.conn(), &runtime.id, &file.relative_path)?.is_none() {
+            checkpoints.push(fresh_cursor(adapter, runtime, file));
+        }
+    }
+    if !checkpoints.is_empty() {
+        instrument.apply_owned(
+            planner,
+            Batch {
+                ops: vec![],
+                checkpoints,
+                source: None,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// The walk behind [`stream_closed_sources_into`], over the roster in path
+/// order. A source without a cursor gets one at its turn.
+#[allow(clippy::too_many_arguments)]
+fn walk_closed_sources(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    planner: &mut Store,
+    ordered: &[&SessionFile],
+    opts: &IngestOptions,
+    instrument: &Instrument,
     mut ledger: Option<&mut rosetta_capture::Ledger>,
     emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
 ) -> Result<StreamReport, PipelineError> {
     let tailer = Tailer::new(opts.tail.clone())?;
-    let mut ordered: Vec<&SessionFile> = files.iter().collect();
-    ordered.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     let transcripts: Vec<&SessionFile> = ordered
         .iter()
         .copied()
@@ -474,13 +536,13 @@ pub fn stream_closed_sources_into(
     let audit_set: BTreeSet<&str> = audit_paths.iter().map(String::as_str).collect();
 
     let mut report = StreamReport::default();
-    let mut session_health: BTreeMap<String, bool> = files
+    let mut session_health: BTreeMap<String, bool> = ordered
         .iter()
         .map(|file| (file.session_id.clone(), true))
         .collect();
     let mut file_health: BTreeMap<String, bool> = BTreeMap::new();
     let mut restarted_files: BTreeSet<String> = BTreeSet::new();
-    let mut frontier = Frontier::new(&ordered);
+    let mut frontier = Frontier::new(ordered);
 
     let mut index = 0;
     while index < ordered.len() {
@@ -651,3 +713,6 @@ pub fn stream_closed_sources_into(
     }
     Ok(report)
 }
+
+#[cfg(test)]
+mod tests;

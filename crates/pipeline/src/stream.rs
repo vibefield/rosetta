@@ -343,6 +343,28 @@ pub(crate) enum FilePass {
     Paused,
 }
 
+/// The update that creates a source's fresh cursor row.
+pub(crate) fn fresh_cursor(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    file: &SessionFile,
+) -> CheckpointUpdate {
+    CheckpointUpdate {
+        runtime_id: runtime.id.clone(),
+        stream: file.stream_id.clone(),
+        path: file.relative_path.clone(),
+        session_id: file.projected_session_id(),
+        expected: None,
+        next: PipeCheckpoint::fresh(
+            &file.session_id,
+            &file.stream_id,
+            adapter.normalizer_version(),
+        )
+        .encode(),
+        updated_at: Some(file.modified_ms),
+    }
+}
+
 /// Load-or-create the cursor row for a file, returning its rowid and the
 /// EXACT stored blob (the CAS expectation, decodable or not).
 pub(crate) fn cursor_row(
@@ -355,25 +377,11 @@ pub(crate) fn cursor_row(
     if let Some(existing) = queries::cursor_state(store.conn(), &runtime.id, &file.relative_path)? {
         return Ok(existing);
     }
-    let initial = PipeCheckpoint::fresh(
-        &file.session_id,
-        &file.stream_id,
-        adapter.normalizer_version(),
-    )
-    .encode();
     instrument.apply(
         store,
         &Batch {
             ops: vec![],
-            checkpoints: vec![CheckpointUpdate {
-                runtime_id: runtime.id.clone(),
-                stream: file.stream_id.clone(),
-                path: file.relative_path.clone(),
-                session_id: file.projected_session_id(),
-                expected: None,
-                next: initial,
-                updated_at: Some(file.modified_ms),
-            }],
+            checkpoints: vec![fresh_cursor(adapter, runtime, file)],
             source: None,
         },
     )?;

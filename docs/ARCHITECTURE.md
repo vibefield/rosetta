@@ -94,7 +94,9 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > streams, as in metadata-audit mode). The first runtime that cannot be planned, in registry
 > order, fails the start. Adapters capture,
 > ledger, and normalize concurrently, each through its own private RAM planner (the cursor CAS
-> chain, generations, and restart detection are unchanged). Nothing is retained per runtime until
+> chain, generations, and restart detection are unchanged; every roster source's cursor is created
+> before the walk, in path order in one planner transaction, so each keeps the id creation at its
+> turn gave it). Nothing is retained per runtime until
 > its capture ends: a producer walks its roster in source-path order and hands each source to the
 > sole canonical writer as a *closed source* — terminal generation, final checkpoint, contiguous
 > validated ops — as soon as nothing can supersede it. Only a transcript whose session still has an
