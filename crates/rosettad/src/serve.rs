@@ -1827,9 +1827,7 @@ fn publish_fresh_ram_projection(
         .map_err(|error| format!("finalizing canonical RAM projection: {error}"))?;
     health.ingest_phase(rosetta_server::IngestPhase::Publishing);
     instrument.time(Metric::PublishNanos, || {
-        store
-            .conn()
-            .backup(rusqlite::DatabaseName::Main, &*temp, None)
+        crate::publication::stage_ram_projection(store.conn(), &temp)
             .map_err(|error| format!("backing up canonical RAM projection: {error}"))?;
         let finished = rusqlite::Connection::open(&*temp)
             .map_err(|error| format!("opening staged durable projection: {error}"))?;

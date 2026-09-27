@@ -57,6 +57,7 @@ mod engine;
 mod enroll;
 mod ledger_cmd;
 mod ledger_compression;
+mod publication;
 mod recovery;
 mod runtime_ledger;
 mod serve;
@@ -2021,9 +2022,7 @@ fn publish_private_projection(
     after_finalize(&store)?;
     instrument.time(Metric::PublishNanos, || {
         if store.is_transient_memory() {
-            store
-                .conn()
-                .backup(rusqlite::DatabaseName::Main, &*temp, None)
+            publication::stage_ram_projection(store.conn(), &temp)
                 .map_err(|error| format!("backing up in-memory projection: {error}"))?;
         }
         drop(store);

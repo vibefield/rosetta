@@ -161,6 +161,9 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > validation run against that RAM generation. The named `<ledger>.staged` raw generation is then drained and fsynced;
 > the canonical database is backed up to a same-filesystem private file, synced, installed by
 > atomic rename, and the read router switches RAM → disk before the RAM keeper is released.
+> The backup writes that private file without a rollback journal or SQLite syncs of its own
+> (an interrupted copy is never installed); the explicit fsync before the rename carries its
+> durability.
 > Detached search stays explicitly Building and its worker remains paused until this switch.
 > Watchers were armed before metadata, so source suffixes written during the build feed the live
 > runner after handoff. RAM is a temporary location for the one canonical projection, not a third
