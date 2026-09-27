@@ -546,6 +546,22 @@ capture contract explicit.
   only writer of its runtime's cursors, so it forgets a source's entry just before streaming
   it (hint, poll, admission or audit), whatever that pass commits or rolls back; debug builds
   re-derive every RAM entry from its cursor row on each poll.
+- **Layout walks** (2026-09-27): each stream glob is compiled once when its ground truth
+  loads, and matching never allocates. A walk never enters a directory below which none of
+  the streams it accepts could match (`GroundTruthDoc::may_claim_below` →
+  `capture::walk_pruned`): discovery and metadata admission prune with every stream, the
+  live poll and `rosettad sources` with driver-backed streams only. Each layout's own globs
+  decide what is pruned; shared code names no agent directory. The walk cap still counts
+  accepted files only, so accepted files, their order, and truncation are unchanged; a
+  pruned directory is never read, so an unreadable directory no stream can claim no longer
+  fails a walk. Discovery walks all registered roots concurrently (the first failing root in
+  registry order fails the census) and records each file's claiming stream on its
+  `ScannedFile`, which the census and metadata admission reuse instead of matching again.
+- **Metadata skim** (2026-09-27): sources are read and skimmed by their adapter on a
+  bounded pool (at most eight threads, never more than the cores) while one ordered merge
+  admits their facts in inventory order, so the metadata batch and its ledger frame are
+  exactly a serial skim's; SQLite snapshot sources are still read by the merge itself. A
+  session cwd's repository probe runs once per metadata pass, never cached across passes.
 - **Tailer**: per-file cursor = byte offset + line count + hash of a head prefix.
   The head hash detects rewrite/truncation (Claude Code rewrites files on compaction);
   on mismatch, the file re-ingests under a new **epoch**. Partial trailing lines are
