@@ -3,7 +3,7 @@
 //! batch of Runtime + Project + SessionMeta upserts, plus the file→session
 //! map the stream phase keys its cursors by.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use rosetta_adapter_support::{
@@ -66,7 +66,10 @@ pub struct MetaReport {
 #[derive(Debug, Default)]
 struct MetaOutput {
     projects: Vec<ProjectRow>,
+    /// First-merge order. Grows only through [`MetaOutput::merge_session`],
+    /// which keeps `session_positions` in step.
     sessions: Vec<SessionRow>,
+    session_positions: HashMap<String, usize>,
     project_hints: BTreeMap<String, BTreeSet<ProjectHint>>,
     files: Vec<SessionFile>,
     ops: Vec<IngestOp>,
@@ -445,49 +448,56 @@ pub(crate) fn plan_inventory(
     Ok((report, files, ops))
 }
 
-fn merge_session(sessions: &mut Vec<SessionRow>, row: SessionRow) {
-    match sessions.iter_mut().find(|existing| existing.id == row.id) {
-        Some(existing) => {
-            let incoming_has_delegation = row.delegation.is_some();
-            let existing_has_delegation = existing.delegation.is_some();
-            let existing_started_at = existing.started_at;
-            let newer = row.updated_at >= existing.updated_at;
-            existing.started_at = existing.started_at.min(row.started_at);
-            existing.updated_at = existing.updated_at.max(row.updated_at);
-            if newer {
-                existing.title = row.title.or_else(|| existing.title.clone());
-                existing.summary = row.summary.or_else(|| existing.summary.clone());
-            } else {
-                existing.title = existing.title.clone().or(row.title);
-                existing.summary = existing.summary.clone().or(row.summary);
-            }
-            existing.cwd = select_primary_cwd(
-                existing.cwd.take(),
-                existing_started_at,
-                row.cwd,
-                row.started_at,
-            );
-            // Project assignment is derived after every metadata source has
-            // contributed its bounded fact.
-            existing.project_id = None;
-            existing.parent_session_id = if incoming_has_delegation {
-                row.parent_session_id
-                    .or_else(|| existing.parent_session_id.clone())
-            } else if existing_has_delegation {
-                existing.parent_session_id.clone()
-            } else {
-                existing.parent_session_id.clone().or(row.parent_session_id)
-            };
-            existing.delegation = merge_delegation(existing.delegation.take(), row.delegation);
-            if existing.root_session_id == existing.id && row.root_session_id != row.id {
-                existing.root_session_id = row.root_session_id;
-            }
-            if existing.role == SessionRole::Main && row.role != SessionRole::Main {
-                existing.role = row.role;
-            }
-            existing.stream_state = stronger_stream_state(existing.stream_state, row.stream_state);
+impl MetaOutput {
+    /// Fold one bounded fact about a session into this pass's row for it. A
+    /// session can span several files, or reappear across runs; an index by
+    /// id keeps each fold constant-time while rows keep first-merge order.
+    fn merge_session(&mut self, row: SessionRow) {
+        let Some(&position) = self.session_positions.get(&row.id) else {
+            self.session_positions
+                .insert(row.id.clone(), self.sessions.len());
+            self.sessions.push(row);
+            return;
+        };
+        let existing = &mut self.sessions[position];
+        let incoming_has_delegation = row.delegation.is_some();
+        let existing_has_delegation = existing.delegation.is_some();
+        let existing_started_at = existing.started_at;
+        let newer = row.updated_at >= existing.updated_at;
+        existing.started_at = existing.started_at.min(row.started_at);
+        existing.updated_at = existing.updated_at.max(row.updated_at);
+        if newer {
+            existing.title = row.title.or_else(|| existing.title.clone());
+            existing.summary = row.summary.or_else(|| existing.summary.clone());
+        } else {
+            existing.title = existing.title.clone().or(row.title);
+            existing.summary = existing.summary.clone().or(row.summary);
         }
-        None => sessions.push(row),
+        existing.cwd = select_primary_cwd(
+            existing.cwd.take(),
+            existing_started_at,
+            row.cwd,
+            row.started_at,
+        );
+        // Project assignment is derived after every metadata source has
+        // contributed its bounded fact.
+        existing.project_id = None;
+        existing.parent_session_id = if incoming_has_delegation {
+            row.parent_session_id
+                .or_else(|| existing.parent_session_id.clone())
+        } else if existing_has_delegation {
+            existing.parent_session_id.clone()
+        } else {
+            existing.parent_session_id.clone().or(row.parent_session_id)
+        };
+        existing.delegation = merge_delegation(existing.delegation.take(), row.delegation);
+        if existing.root_session_id == existing.id && row.root_session_id != row.id {
+            existing.root_session_id = row.root_session_id;
+        }
+        if existing.role == SessionRole::Main && row.role != SessionRole::Main {
+            existing.role = row.role;
+        }
+        existing.stream_state = stronger_stream_state(existing.stream_state, row.stream_state);
     }
 }
 
@@ -533,6 +543,7 @@ fn select_primary_cwd(
 /// metadata. Explicit adapter ownership can also join a deleted worktree to a
 /// native owner session or checkout root. No source-body record is consulted.
 fn settle_projects(output: &mut MetaOutput) {
+    let mut resolver = crate::project::ProjectResolver::default();
     let positions: BTreeMap<String, usize> = output
         .sessions
         .iter()
@@ -592,13 +603,13 @@ fn settle_projects(output: &mut MetaOutput) {
         .iter()
         .zip(&hints)
         .map(|(session, hint)| match hint {
-            Some(ProjectHint::Root { root, git_repo }) => Some(crate::project::project_from_hint(
+            Some(ProjectHint::Root { root, git_repo }) => Some(resolver.project_from_hint(
                 session.cwd.as_deref().unwrap_or(root),
                 root,
                 git_repo.as_deref(),
             )),
             Some(ProjectHint::SameAsSession { .. }) => None,
-            None => session.cwd.as_deref().map(crate::project::project),
+            None => session.cwd.as_deref().map(|cwd| resolver.project(cwd)),
         })
         .collect();
 
@@ -617,7 +628,11 @@ fn settle_projects(output: &mut MetaOutput) {
             let Some(mut project) = resolved[*owner].clone() else {
                 continue;
             };
-            extend_project_roots(&mut project, output.sessions[index].cwd.as_deref());
+            extend_project_roots(
+                &mut resolver,
+                &mut project,
+                output.sessions[index].cwd.as_deref(),
+            );
             resolved[index] = Some(project);
             changed = true;
         }
@@ -630,7 +645,7 @@ fn settle_projects(output: &mut MetaOutput) {
     for (index, session) in output.sessions.iter_mut().enumerate() {
         let project = resolved[index]
             .take()
-            .or_else(|| session.cwd.as_deref().map(crate::project::project));
+            .or_else(|| session.cwd.as_deref().map(|cwd| resolver.project(cwd)));
         session.project_id = project.as_ref().map(|project| project.id.clone());
         if let Some(project) = project {
             merge_project(&mut projects, project);
@@ -639,11 +654,15 @@ fn settle_projects(output: &mut MetaOutput) {
     output.projects = projects.into_values().collect();
 }
 
-fn extend_project_roots(project: &mut ProjectRow, cwd: Option<&str>) {
+fn extend_project_roots(
+    resolver: &mut crate::project::ProjectResolver,
+    project: &mut ProjectRow,
+    cwd: Option<&str>,
+) {
     let Some(cwd) = cwd else {
         return;
     };
-    let observed = crate::project::project(cwd);
+    let observed = resolver.project(cwd);
     project.root_paths.extend(observed.root_paths);
     project.root_paths.sort();
     project.root_paths.dedup();
@@ -769,26 +788,23 @@ fn admit_identified(
         && root_session_id != session_id
         && parent_session_id.as_deref() != Some(root_session_id.as_str())
     {
-        merge_session(
-            &mut output.sessions,
-            SessionRow {
-                id: root_session_id.clone(),
-                native_session_id: root_native.to_owned(),
-                runtime_id: runtime.id.clone(),
-                project_id: None,
-                cwd: None,
-                parent_session_id: None,
-                delegation: None,
-                root_session_id: root_session_id.clone(),
-                role: SessionRole::Main,
-                title: None,
-                summary: None,
-                started_at: skim.started_at.unwrap_or(source.modified_ms),
-                updated_at: source.modified_ms,
-                activity: None,
-                stream_state: StreamState::Pending,
-            },
-        );
+        output.merge_session(SessionRow {
+            id: root_session_id.clone(),
+            native_session_id: root_native.to_owned(),
+            runtime_id: runtime.id.clone(),
+            project_id: None,
+            cwd: None,
+            parent_session_id: None,
+            delegation: None,
+            root_session_id: root_session_id.clone(),
+            role: SessionRole::Main,
+            title: None,
+            summary: None,
+            started_at: skim.started_at.unwrap_or(source.modified_ms),
+            updated_at: source.modified_ms,
+            activity: None,
+            stream_state: StreamState::Pending,
+        });
     }
 
     // A retained subagent transcript can outlive its parent's transcript.
@@ -799,30 +815,27 @@ fn admit_identified(
         parent_session_id.as_ref(),
     ) {
         let nested_parent = parent_id != &root_session_id;
-        merge_session(
-            &mut output.sessions,
-            SessionRow {
-                id: parent_id.clone(),
-                native_session_id: parent_native.to_owned(),
-                runtime_id: runtime.id.clone(),
-                project_id: None,
-                cwd: None,
-                parent_session_id: nested_parent.then(|| root_session_id.clone()),
-                delegation: None,
-                root_session_id: root_session_id.clone(),
-                role: if nested_parent {
-                    SessionRole::Subagent
-                } else {
-                    SessionRole::Main
-                },
-                title: None,
-                summary: None,
-                started_at: skim.started_at.unwrap_or(source.modified_ms),
-                updated_at: source.modified_ms,
-                activity: None,
-                stream_state: StreamState::Pending,
+        output.merge_session(SessionRow {
+            id: parent_id.clone(),
+            native_session_id: parent_native.to_owned(),
+            runtime_id: runtime.id.clone(),
+            project_id: None,
+            cwd: None,
+            parent_session_id: nested_parent.then(|| root_session_id.clone()),
+            delegation: None,
+            root_session_id: root_session_id.clone(),
+            role: if nested_parent {
+                SessionRole::Subagent
+            } else {
+                SessionRole::Main
             },
-        );
+            title: None,
+            summary: None,
+            started_at: skim.started_at.unwrap_or(source.modified_ms),
+            updated_at: source.modified_ms,
+            activity: None,
+            stream_state: StreamState::Pending,
+        });
     }
 
     // One session can span several files (or reappear across runs) —
@@ -845,7 +858,7 @@ fn admit_identified(
         activity: None,
         stream_state: StreamState::Pending,
     };
-    merge_session(&mut output.sessions, row);
+    output.merge_session(row);
 
     output.files.push(SessionFile {
         ledger_only: false,
@@ -1032,18 +1045,70 @@ mod tests {
         }
     }
 
+    fn merged(rows: impl IntoIterator<Item = SessionRow>) -> Vec<SessionRow> {
+        let mut output = MetaOutput::default();
+        for row in rows {
+            output.merge_session(row);
+        }
+        output.sessions
+    }
+
     #[test]
     fn metadata_cwd_selection_is_order_independent() {
         let early = session("s", Some("/work/early"), None, "s", SessionRole::Main, 10);
         let late = session("s", Some("/work/late"), None, "s", SessionRole::Main, 20);
-        let mut left = Vec::new();
-        merge_session(&mut left, early.clone());
-        merge_session(&mut left, late.clone());
-        let mut right = Vec::new();
-        merge_session(&mut right, late);
-        merge_session(&mut right, early);
+        let left = merged([early.clone(), late.clone()]);
+        let right = merged([late, early]);
         assert_eq!(left[0].cwd.as_deref(), Some("/work/early"));
         assert_eq!(left[0].cwd, right[0].cwd);
+    }
+
+    #[test]
+    fn indexed_merges_fold_each_session_alone_in_first_seen_order() {
+        let mut rows = Vec::new();
+        for round in 0..5_i64 {
+            for id in 0..40_i64 {
+                let mut row = session(
+                    &format!("s{id}"),
+                    Some(&format!("/w/{}", (id + round) % 7)),
+                    (round % 2 == 1).then_some("p"),
+                    &format!("s{id}"),
+                    if round == 3 {
+                        SessionRole::Subagent
+                    } else {
+                        SessionRole::Main
+                    },
+                    1_000 - round * 10 + id,
+                );
+                row.updated_at = row.started_at + round;
+                row.title = (round == id % 5).then(|| format!("t{round}"));
+                rows.push(row);
+            }
+        }
+        // A fixed interleaving, so sessions are first seen out of id order.
+        let mut position = 0_usize;
+        for index in (1..rows.len()).rev() {
+            position = (position * 31 + 17) % (index + 1);
+            rows.swap(index, position);
+        }
+
+        let mut output = MetaOutput::default();
+        for row in rows.clone() {
+            output.merge_session(row);
+        }
+        let mut first_seen: Vec<&str> = Vec::new();
+        for row in &rows {
+            if !first_seen.contains(&row.id.as_str()) {
+                first_seen.push(&row.id);
+            }
+        }
+        let ids: Vec<&str> = output.sessions.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids, first_seen);
+        for (index, session) in output.sessions.iter().enumerate() {
+            assert_eq!(output.session_positions[&session.id], index);
+            let alone = merged(rows.iter().filter(|row| row.id == session.id).cloned());
+            assert_eq!(alone, std::slice::from_ref(session));
+        }
     }
 
     #[test]
@@ -1065,12 +1130,8 @@ mod tests {
             color: None,
             configured_model: Some("opus".into()),
         });
-        let mut forward = Vec::new();
-        merge_session(&mut forward, fallback.clone());
-        merge_session(&mut forward, exact.clone());
-        let mut reverse = Vec::new();
-        merge_session(&mut reverse, exact);
-        merge_session(&mut reverse, fallback);
+        let forward = merged([fallback.clone(), exact.clone()]);
+        let reverse = merged([exact, fallback]);
         assert_eq!(forward, reverse);
         assert_eq!(
             forward[0].parent_session_id.as_deref(),

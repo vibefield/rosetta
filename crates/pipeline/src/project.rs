@@ -1,7 +1,49 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rosetta_core::ids;
 use rosetta_core::rows::ProjectRow;
+
+/// [`project`] memoized for one metadata pass: each distinct cwd is probed
+/// once, however many sessions share it (5,829 sessions over 175 cwds on the
+/// 2026-09-25 corpus). Owned by the pass and dropped with it, never shared
+/// across passes, so the next live admission sees checkouts created since.
+#[derive(Default)]
+pub(crate) struct ProjectResolver {
+    by_cwd: HashMap<String, ProjectRow>,
+}
+
+impl ProjectResolver {
+    pub(crate) fn project(&mut self, cwd: &str) -> ProjectRow {
+        self.by_cwd
+            .entry(cwd.to_owned())
+            .or_insert_with(|| project(cwd))
+            .clone()
+    }
+
+    /// The session's own checkout, identified by the adapter-proven group
+    /// root (a linked worktree's original checkout) instead of its own.
+    pub(crate) fn project_from_hint(
+        &mut self,
+        cwd: &str,
+        group_root: &str,
+        git_repo: Option<&str>,
+    ) -> ProjectRow {
+        let mut observed = self.project(cwd);
+        let group_root = ids::normalize_root(group_root);
+        if !observed.root_paths.contains(&group_root) {
+            observed.root_paths.push(group_root.clone());
+            observed.root_paths.sort();
+            observed.root_paths.dedup();
+        }
+        observed.id = ids::project_id(&group_root, None);
+        observed.name = ids::project_name(&group_root);
+        if let Some(git_repo) = git_repo {
+            observed.git_repo = Some(sanitize_remote(git_repo));
+        }
+        observed
+    }
+}
 
 pub(crate) fn project(cwd: &str) -> ProjectRow {
     let cwd = ids::normalize_root(cwd);
@@ -18,22 +60,6 @@ pub(crate) fn project(cwd: &str) -> ProjectRow {
         root_paths,
         git_repo,
     }
-}
-
-pub(crate) fn project_from_hint(cwd: &str, group_root: &str, git_repo: Option<&str>) -> ProjectRow {
-    let mut observed = project(cwd);
-    let group_root = ids::normalize_root(group_root);
-    if !observed.root_paths.contains(&group_root) {
-        observed.root_paths.push(group_root.clone());
-        observed.root_paths.sort();
-        observed.root_paths.dedup();
-    }
-    observed.id = ids::project_id(&group_root, None);
-    observed.name = ids::project_name(&group_root);
-    if let Some(git_repo) = git_repo {
-        observed.git_repo = Some(sanitize_remote(git_repo));
-    }
-    observed
 }
 
 /// Best-effort repository metadata without invoking git. The common Git
@@ -256,6 +282,37 @@ mod tests {
         );
         assert_eq!(main_project.git_repo, None);
         assert_eq!(linked_project.git_repo, None);
+    }
+
+    #[test]
+    fn a_pass_probes_each_cwd_once_and_the_next_pass_probes_again() {
+        let temp = TempDir::new().unwrap();
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::write(
+            checkout.join(".git/config"),
+            "[remote \"origin\"]\n  url = git@example.com:acme/repo.git\n",
+        )
+        .unwrap();
+        let nested = checkout.join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        let cwd = nested.to_string_lossy().into_owned();
+
+        let mut pass = ProjectResolver::default();
+        let first = pass.project(&cwd);
+        assert_eq!(first, project(&cwd));
+        let hinted = pass.project_from_hint(&cwd, "/work/original", Some("https://x@h/r.git"));
+        assert_eq!(hinted.id, ids::project_id("/work/original", None));
+        assert_eq!(hinted.git_repo.as_deref(), Some("https://h/r"));
+        assert!(hinted.root_paths.contains(&first.root_paths[0]));
+
+        // The checkout stops being one mid-pass: this pass keeps its first
+        // answer for every session of that cwd; the next pass sees the change.
+        std::fs::remove_dir_all(checkout.join(".git")).unwrap();
+        assert_eq!(pass.project(&cwd), first);
+        let next = ProjectResolver::default().project(&cwd);
+        assert_ne!(next, first);
+        assert_eq!(next, project(&cwd));
     }
 
     #[test]
