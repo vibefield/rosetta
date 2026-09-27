@@ -569,6 +569,120 @@ fn background_worker_wakes_repairs_and_delivers_acknowledgements() {
     worker.stop();
 }
 
+fn search_revision(store: &Store) -> u64 {
+    queries::projection_state(store.conn())
+        .unwrap()
+        .search_revision
+}
+
+fn dirty_revision(store: &Store, session_id: &str) -> Option<i64> {
+    store
+        .conn()
+        .query_row(
+            "SELECT revision FROM search_dirty WHERE kind = 'session' AND key = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
+/// Fresh serve wakes the paused worker the moment the projection is
+/// published and lets live catch-up commit beside the initial build. The
+/// build reads one canonical snapshot and records that snapshot's revision,
+/// so a commit landing while it indexes is ordinary repair work: its dirty key
+/// survives the build's acknowledgement and the next pass indexes it.
+#[test]
+fn a_commit_landing_during_the_initial_build_is_repaired_after_it() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("projection.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    let mut ops = vec![
+        IngestOp::Runtime(runtime()),
+        IngestOp::SessionMeta(session("s1", None)),
+        IngestOp::SessionMeta(session("s2", None)),
+    ];
+    // Enough documents that the commit below usually lands mid-build.
+    for ordinal in 0..4_000 {
+        ops.push(message_op(message(
+            &format!("bulk-{ordinal}"),
+            "s1",
+            ordinal,
+            &format!("alpha bulk document {ordinal} with several ordinary words to tokenize"),
+        )));
+    }
+    store
+        .apply(&Batch {
+            ops,
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    let search = Fts5SidecarSearch::new(&path);
+    let worker = Fts5SearchWorker::start_paused(search.clone());
+    worker.wake();
+
+    // Progress starts only after the build's snapshot transaction has read
+    // its revision, so from here on every commit postdates that snapshot.
+    let mut acks = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while search.state().progress.is_none() && acks.is_empty() {
+        acks.extend(worker.drain_acknowledgements());
+        assert!(Instant::now() < deadline, "the initial build never started");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    store
+        .apply(&Batch {
+            ops: vec![message_op(message(
+                "late",
+                "s2",
+                0,
+                "zeta committed while the build indexed",
+            ))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    let late = search_revision(&store);
+    assert_eq!(dirty_revision(&store, "s2"), Some(late as i64));
+
+    // Apply acknowledgements the way the daemon's writer does until one
+    // covers the late commit.
+    let mut built = false;
+    loop {
+        acks.extend(worker.drain_acknowledgements());
+        let mut covered = false;
+        for ack in acks.drain(..) {
+            store
+                .acknowledge_search(&ack.projection_epoch, ack.revision)
+                .unwrap();
+            if !built {
+                // The build's generation predates the late commit, and its
+                // acknowledgement leaves the late session's repair key alone.
+                assert!(ack.revision < late);
+                assert_eq!(dirty_revision(&store, "s2"), Some(late as i64));
+                built = true;
+            }
+            covered |= ack.revision >= late;
+        }
+        if covered {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the late commit was never repaired"
+        );
+        worker.wake();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(dirty_revision(&store, "s2"), None);
+    assert_eq!(search.state().readiness, SearchReadiness::Ready);
+    let hits = search.search(query("zeta")).unwrap().hits;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].timeline_id, "late");
+    assert_eq!(search.search(query("alpha")).unwrap().hits.len(), 100);
+    worker.stop();
+}
+
 #[test]
 fn metadata_project_assignment_repairs_structured_search_filters() {
     let dir = tempfile::TempDir::new().unwrap();

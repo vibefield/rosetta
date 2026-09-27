@@ -164,7 +164,10 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > The backup writes that private file without a rollback journal or SQLite syncs of its own
 > (an interrupted copy is never installed); the explicit fsync before the rename carries its
 > durability.
-> Detached search stays explicitly Building and its worker remains paused until this switch.
+> Detached search stays explicitly Building and its worker remains paused until this switch; the
+> writer wakes it as soon as the published projection is reopened, before any runner's live catch-up.
+> The build reads one canonical snapshot and records that snapshot's search revision, so catch-up
+> commits landing meanwhile are ordinary revision-stamped repairs of the new generation.
 > Watchers were armed before metadata, so source suffixes written during the build feed the live
 > runner after handoff. RAM is a temporary location for the one canonical projection, not a third
 > representation or a recovery source. The app keeps one HTTP/WS contract across the switch.
@@ -1176,7 +1179,8 @@ separate post-reconciliation destruction phase.
 `serve --json --profile` emits discovery timing and a `serve-cold` profile at canonical
 readiness, before live catch-up changes the counters. Detached search readiness is a later
 boundary and must be measured separately; `--ticks 0` does not guarantee it completes.
-The `live-catch-up` stage now exposes the handoff before the search worker wakes. Its
+The `live-catch-up` stage exposes the handoff; the search worker was woken at publication and
+builds beside it. Its
 `live poll time` contains filesystem walking and checkpoint reads/decoding, with separate
 nested timers and a count of physical sources considered. Inventory-only layout streams
 do not consume the live poll's stat work or source cap; admitted path lookup uses one

@@ -101,7 +101,8 @@ After every runtime closes, the daemon performs set-based finalization and full 
 RAM, drains and fsyncs the staged raw ledger, backs the canonical database up to a
 same-filesystem private file, syncs and atomically installs it, then switches the read router
 from RAM to disk before releasing the RAM generation. Detached search remains explicitly
-Building and does not start until that switch. Watchers are armed before metadata, and their
+Building and does not start until that switch; it wakes right after it, before any runner's
+catch-up, whose commits become ordinary revision-stamped repairs. Watchers are armed before metadata, and their
 queued suffixes flow into the ordinary live runner after publication. Cross-session aggregates
 (heatmap, usage decomposition, and contribution) return protocol-v7 `not_ready` while the reader
 targets shared RAM; this prevents presentation scans from contending with the sole canonical

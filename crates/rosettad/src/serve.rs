@@ -1701,6 +1701,15 @@ fn drive_live_runners(
     health.ingest_live();
     let mut absorbed = absorb_effects(store, hub)? as u64;
 
+    // Every caller reaches this point with the published projection open as
+    // the sole writer, so the detached build can start now instead of after
+    // the first catch-up: it reads one canonical snapshot and records that
+    // snapshot's search revision, and whatever the catch-ups below commit
+    // meanwhile is revision-stamped `search_dirty` work for its next pass. A
+    // warm worker is already running; the extra wake only brings its next
+    // pass forward.
+    search_worker.wake();
+
     // One non-blocking recovery pass is part of entering live mode. It catches
     // offline growth and the private-public handoff even if the OS watcher
     // dropped or coalesced the corresponding event.
