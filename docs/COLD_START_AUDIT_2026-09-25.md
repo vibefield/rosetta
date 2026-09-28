@@ -386,3 +386,27 @@ dominated by capture, which this batch does not change (steps 2 and 3 below).
 - **Follow-ups seen during step 1:** a live admission during catch-up still re-runs the runtime's
   whole metadata phase (Hermes admits once on every start; Claude once took 22.7 s under load), and
   a warm start still decodes every checkpoint once on its first poll (1.6–11 s under load).
+
+## 12. Outcome of step 3, taking work off the canonical writer (2026-09-28)
+
+Each runtime's producer now holds a session's tool, usage and file-edit facts until the session's
+last roster source is emitted, then resolves them with the admission fold's own code and sends
+final tool rows (details already serialized) with that source. Sessions that another source
+touches before they complete fall back to the runtime fold. A source naming an already resolved
+session fails the start closed; that never happened on the frozen or live corpus, and a failed
+start resumes through ledger replay, which does not use this path. Smaller changes: a four-column
+usage lookup, freeing consumed rows and plans on a reclaimer thread, and one-pass session
+activity for large mirror refreshes. Every Claude and Codex tool row now resolves before
+admission; all frozen digests are equal to `main`'s.
+
+- Calm frozen pairs over step 1: canonical ready 55.9–57.1 → 51.0 s, Claude admission 5.5 → 1.1 s,
+  Codex 2.6–3.0 → 0.15 s, writer busy 16.1 → 12.1 s, daemon CPU unchanged, peak footprint
+  3.4 → 2.55 GiB (live: 5.30 → 3.34 GiB).
+- **Measure loaded pairs with care.** On this host, frozen runs at load 70–210 fell into two
+  modes whatever the binary: Claude capture about 45 s or about 85–105 s, with every producer-side
+  timer (read, normalize, planner apply) doubling in the slow mode. Three frozen and three live pairs
+  first pointed against step 3 because it landed in the slow mode each time; a four-way isolation
+  run then put the same binary in the fast mode twice (canonical ready 56.9 and 60.1 s against
+  67.3 s for step 1) and showed no effect from the reclaimer thread. Compare runs within one mode,
+  and prefer retired instructions and per-thread CPU (reported in `--profile` since this step) to
+  wall time when the host is loaded.
