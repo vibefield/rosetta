@@ -102,15 +102,39 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > validated ops — as soon as nothing can supersede it. Only a transcript whose session still has an
 > uncaptured transcript, or a pending sibling heal after a restart, is held; the heal runs as soon
 > as the restarted session's last transcript is captured, so the writer sees exactly one terminal
-> generation per source, in path order (the order every order-sensitive upsert assumes). A
-> transcript caught mid-append (its file ends inside a record its writer has not finished) still
-> closes (2026-09-28): the walk runs every pass with `IngestOptions::stop_at_partial_record`, so the
-> generation ends at the last complete record exactly as if the file ended there — the end-of-file
-> rules decide activation and the seal, for a replacement generation too, since it has read every
-> complete record and nothing of the source is public yet — the checkpoint keeps the unfinished
-> suffix, the session is admitted `Streaming`, and the live runner lands the record as ordinary
-> append growth. Live and disk-cold passes still leave such a generation staged until a read finds
-> the record complete. The
+> generation per source, in path order (the order every order-sensitive upsert assumes). Every
+> pass of the walk is a *private build* pass (`IngestOptions::private_build`, 2026-09-28): nothing
+> of the source is public yet and publication needs it at a terminal generation, so a generation
+> ends wherever the file stops it, by the end-of-file rules — which decide activation and the
+> seal, for a replacement generation too. A transcript caught mid-append (its file ends inside a
+> record its writer has not finished) ends at its last complete record, the checkpoint keeping
+> the unfinished suffix as ordinary append growth for the live runner. A source that vanishes, or
+> keeps changing under every retry, after part of a generation was read ends that generation at
+> the last record read; one that cannot be read at all closes *skipped* — the writer applies
+> nothing for it and its cursor keeps the fresh checkpoint, from which the live runner reads it if
+> it returns — and a heal that cannot read its sibling again keeps the generation the sibling was
+> held with. An unclean generation activates its parseable rows, a JSONL replacement and any
+> snapshot or document generation included. Each such source holds its session `Streaming`, as a
+> live pass leaves it. Live and disk-cold passes keep their rules: a mid-append or cut-short
+> generation stays staged until a read completes it, and an unclean replacement abandons so the
+> published generation survives.
+>
+> **Fresh-start tolerance (2026-09-28).** Publication stays runtime-granular, but a fresh or
+> resumed start no longer refuses a runtime for per-file imperfections the live path already
+> absorbs: a file that vanished during metadata; a transcript no skim identifies — counted
+> *unfinished* instead when no delimiter ends its first record yet, which makes it not yet a
+> session — a source missing or unstable at capture; and malformed records. Withheld files wait
+> for the live runner's first-sighting or movement admission; sessions whose sources were cut
+> short or unclean publish `Streaming`. A runtime that tolerated anything prints one line,
+> `<kind>: tolerated per-file imperfections (vanished=…, unfinished=…, unidentified=…,
+> missing=…, unstable=…, hard_errors=…, incomplete=…)`, and the profile counts files vanished
+> during metadata, unidentified, unfinished, missing at capture, and unstable under every retry.
+> A start still refuses what no later read can repair: a truncated discovery or metadata walk
+> (the file cap), a checkpoint conflict, a record past the raw frame limit (§3.5), a resumed
+> start's interrupted source that is gone (its reserved generation can never finish), and what
+> only a bug or corruption leaves — a closed source with a gap in its operation sequence, an
+> undecodable final checkpoint, or no terminal generation. Finite `ingest`, `watch` and the
+> disk-progressive engine keep the strict gate that refuses every shortfall. The
 > producers do not read their own files (2026-09-27): every runtime registers its fresh JSONL
 > sources with one process-wide *capture pool* — one worker per core but one by default
 > (`--capture-workers N`; `0` restores the walk in which each producer reads its runtime's files in
@@ -316,8 +340,9 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > a fsynced `.cold-generation.json` inside `<ledger>.staged` binds the projection/ledger names,
 > enrollment, and runtime roots. An exit discards only canonical RAM. The next launch reconstructs
 > it from sealed staged-ledger generations, treats a raw-only tail as unfinished, reserves that
-> generation in RAM, and rereads the source strictly above it; its catch-up passes, like the fresh
-> build's, stop a source caught mid-append at its last complete record. A crash after ledger
+> generation in RAM, and rereads the source strictly above it; its catch-up passes are private
+> build passes like the fresh walk's, and it publishes past the same per-file imperfections. A
+> crash after ledger
 > promotion but before SQLite installation remains resumable because the marker moves with the
 > ledger; successful
 > SQLite installation removes it last. `--restart-incomplete` remains an explicit legacy
@@ -370,7 +395,8 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > follows live-growth semantics on every cold path (decided 2026-08-31): a dirty FIRST generation
 > activates its parseable rows and the session holds Streaming, never Indexed — identical sliced,
 > unsliced, or rebuilt, with rebuild electing latest seals for only-dirty paths — while a dirty
-> REPLACEMENT still abandons to protect the active clean generation, and a raw-incomplete source
+> REPLACEMENT still abandons to protect the active clean generation (a private build, with no
+> generation published yet, activates it, 2026-09-28), and a raw-incomplete source
 > (one holding a record past the capture limit, §3.5) still abandons. An idle daemon appends
 > NOTHING to the raw ledger
 > (fixed 2026-08-31, found by visual QA): the rotating audit re-reads a quiet file against the

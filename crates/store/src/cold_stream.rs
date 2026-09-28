@@ -15,6 +15,7 @@ use rusqlite::params;
 use crate::apply::{
     self, ApplyStats, Batch, BulkReconciliationDelta, ResolvedSession, SourceMode, WithheldFacts,
 };
+use crate::assets::AssetWriteStats;
 use crate::{Store, StoreError, StoreMode, elapsed_nanos, validate_source_batch};
 
 /// One runtime's deferred cold facts — tool openers, lifecycle updates,
@@ -90,12 +91,25 @@ impl Store {
         let mut abandoned = false;
         for streamed in &sources {
             let batch = &streamed.batch;
-            let source = batch
-                .source
-                .as_ref()
-                .ok_or_else(|| StoreError::BulkLoadState {
-                    message: "closed bulk source batch is missing source identity".to_string(),
-                })?;
+            let Some(source) = batch.source.as_ref() else {
+                // A roster source the build skipped — nothing of it could be
+                // read — writes nothing of its own; it only carries the facts
+                // of a session it completed.
+                if !batch.ops.is_empty() || !batch.checkpoints.is_empty() || streamed.withheld {
+                    return Err(StoreError::BulkLoadState {
+                        message: "closed bulk source batch is missing source identity".to_string(),
+                    });
+                }
+                if streamed.prepared() && (validate_retries || !self.bulk_ordinals_precomputed) {
+                    return Err(StoreError::BulkLoadState {
+                        message: "a skipped source carries facts prepared for a streamed runtime \
+                                  outside one"
+                            .to_string(),
+                    });
+                }
+                asset_totals.push(AssetWriteStats::default());
+                continue;
+            };
             if !matches!(source.mode, SourceMode::Activate | SourceMode::Abandon) {
                 return Err(StoreError::BulkLoadState {
                     message: "closed bulk source batch is not terminal".to_string(),
@@ -135,25 +149,28 @@ impl Store {
                 resolved,
                 released,
             } = streamed;
-            let mut stats = apply::apply_batch(
-                &tx,
-                &batch,
-                apply::BULK_MAINTENANCE,
-                true,
-                false,
-                self.bulk_ordinals_precomputed,
-                &mut self.usage_owners,
-                apply::Observation {
-                    rows: None,
-                    meta: None,
-                },
-            )?;
-            stats.projection_assets = asset_stats.assets;
-            stats.asset_files_written = asset_stats.files_written;
-            stats.asset_files_reused = asset_stats.files_reused;
-            stats.asset_bytes = asset_stats.bytes;
-            stats.asset_write_nanos = asset_stats.nanos;
-            totals.merge_from(&stats);
+            let skipped = batch.source.is_none();
+            if !skipped {
+                let mut stats = apply::apply_batch(
+                    &tx,
+                    &batch,
+                    apply::BULK_MAINTENANCE,
+                    true,
+                    false,
+                    self.bulk_ordinals_precomputed,
+                    &mut self.usage_owners,
+                    apply::Observation {
+                        rows: None,
+                        meta: None,
+                    },
+                )?;
+                stats.projection_assets = asset_stats.assets;
+                stats.asset_files_written = asset_stats.files_written;
+                stats.asset_files_reused = asset_stats.files_reused;
+                stats.asset_bytes = asset_stats.bytes;
+                stats.asset_write_nanos = asset_stats.nanos;
+                totals.merge_from(&stats);
+            }
             for mut session in resolved {
                 let started = Instant::now();
                 let mut written = session.write(&tx)?;
@@ -167,6 +184,9 @@ impl Store {
             for facts in released {
                 let (delta, path) = facts.into_delta()?;
                 deltas.push((delta, Some(path)));
+            }
+            if skipped {
+                continue;
             }
             if withheld {
                 // The producer took every relational fact out of this batch;

@@ -90,9 +90,13 @@ runtime's capture waits for a later runtime's skim. Adapters stream, ledger, and
 parallel through private RAM planners, handing each source to the sole canonical writer as a
 closed source (terminal generation, final checkpoint) in path order as soon as nothing can
 supersede it — a session is held only while a restart's sibling heal could still replace its
-transcripts — under a 256 MiB in-flight budget. A source caught mid-append ends at its last
-complete record (`stop_at_partial_record`): its session is admitted Streaming and the live runner
-lands the unfinished record as append growth. One capture pool shared by every runtime (a
+transcripts — under a 256 MiB in-flight budget. Every capture pass is a private-build pass
+(`IngestOptions::private_build`): a generation ends wherever the file stops it, by the
+end-of-file rules. A source caught mid-append ends at its last complete record (the live runner
+lands the rest as append growth); one that vanishes or keeps changing ends at the last record
+read, or closes skipped with a fresh cursor if none was; an unclean generation — a replacement,
+a snapshot or document one included — activates its parseable rows. Each holds its session
+Streaming, as a live pass does. One capture pool shared by every runtime (a
 worker per core but one by default; `--capture-workers 0` restores one producer reading its
 runtime's files in turn) reads, normalizes and frames the fresh JSONL sources a batch at a
 time ahead of each producer, which becomes its runtime's sequencer and commits them strictly
@@ -104,10 +108,17 @@ crossed is folded right there (the admission fold's own code) and its resolved t
 travel with that source, while a crossed session's facts go back unresolved. The writer lands
 those final rows — and the resolved tool rows, each written once — in the canonical RAM
 generation while capture continues; whatever is left collects into that runtime's own RAM
-fold, never another's. It admits only a complete, clean runtime: at its producer's close the
+fold, never another's. It admits only a complete runtime: at its producer's close the
 fold writes each remaining tool row once, and only its final readiness commit (the Pending
 flip) makes the canonical timeline visible through the ordinary REST/WS queries — every
-payload read route honours Pending. No runtime is
+payload read route honours Pending. Per-file imperfections the live path absorbs no longer
+refuse a fresh or resumed start (2026-09-28): files that vanished, are unidentified, or are not
+yet sessions (unidentified, and no delimiter ends their first record yet: `files_unfinished`)
+wait for live admission; sources missing or unstable at capture and malformed records publish
+Streaming; one `tolerated per-file imperfections (…)` stdout line per runtime and profile
+counters report them. A truncated walk, a checkpoint conflict, a record past the raw frame
+limit, a resumed start's vanished interrupted source, and bug-shaped close errors still refuse;
+finite `ingest`, `watch` and the disk `ColdEngine` keep the strict gate. No runtime is
 retained whole in RAM. Open session subscriptions receive one resync barrier; parser
 fragments and reconciliation state are never public. This is deliberately runtime-granular:
 cross-file relations cannot expose a half-reconciled session merely to manufacture finer UI
@@ -157,14 +168,15 @@ always stream whole (revision = whole-content hash); a source that turns unclean
 falls back to whole-file handling. Dirty sources converge on live-growth semantics on
 every cold path: a dirty FIRST generation activates its parseable rows with the session
 held Streaming (never Indexed) — identical sliced, unsliced, or rebuilt — while dirty
-replacements still abandon. `milestone:` stdout lines feed the sweep harness.
+replacements still abandon outside a private build. `milestone:` stdout lines feed the sweep
+harness.
 Interrupted disk-progressive work is durable and resumable. Interrupted fresh RAM work never
 installs an incomplete canonical database; it retains a named `<ledger>.staged` generation with a
 fsynced manifest binding projection, ledger, enrollment, and runtime roots. The next plain `serve`
 replays sealed evidence into fresh canonical RAM, ignores raw-only tails, reserves their generation
 in RAM so source retries allocate strictly above it, finishes from the current source inventory
-(a source caught mid-append again ends at its last complete record), and publishes the same
-generation. The recovery marker survives ledger promotion and is removed only
+(with the same private-build passes and the same tolerance as a fresh start), and publishes the
+same generation. The recovery marker survives ledger promotion and is removed only
 after SQLite installation. The app does not pass `--restart-incomplete`; that flag remains an
 explicit legacy archive/restart operation for old incomplete projection sets. A complete projection
 is never moved. `pnpm dev` builds `rosettad --release` and

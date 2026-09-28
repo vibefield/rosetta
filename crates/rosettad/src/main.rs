@@ -821,6 +821,12 @@ pub(crate) fn record_backfill_failures(
             meta.files_unidentified
         ));
     }
+    if meta.files_unfinished > 0 {
+        failures.push(format!(
+            "{kind} left {} streamable files with an unfinished first record",
+            meta.files_unfinished
+        ));
+    }
     if meta.files_vanished > 0 {
         failures.push(format!(
             "{kind} lost {} files during meta ingest",
@@ -844,6 +850,56 @@ pub(crate) fn record_backfill_failures(
             stream.files_incomplete,
         ));
     }
+}
+
+/// [`record_backfill_failures`] for a fresh start's private build, which
+/// refuses publication only for what no later read can repair: a truncated
+/// walk hides sources, a checkpoint conflict means a second writer, and a
+/// record past the raw frame limit was never captured. Every other shortfall
+/// is a per-file imperfection the live path already absorbs — a file that
+/// vanished, is not yet a session, or kept changing, and malformed records,
+/// whose parseable rows publish with their session held Streaming — so the
+/// build publishes past it; the returned line says what it tolerated.
+pub(crate) fn record_fresh_failures(
+    kind: &str,
+    discovery_truncated: bool,
+    meta: &rosetta_pipeline::MetaReport,
+    stream: &rosetta_pipeline::StreamReport,
+    failures: &mut Vec<String>,
+) -> Option<String> {
+    if discovery_truncated {
+        failures.push(format!("{kind} discovery walk was truncated"));
+    }
+    if meta.walk_truncated {
+        failures.push(format!("{kind} meta walk was truncated"));
+    }
+    if stream.oversized > 0 || stream.conflicts > 0 {
+        failures.push(format!(
+            "{kind} ingest incomplete: {} oversized, {} conflicts",
+            stream.oversized, stream.conflicts,
+        ));
+    }
+    let tolerated = [
+        meta.files_vanished as u64,
+        meta.files_unfinished as u64,
+        meta.files_unidentified as u64,
+        stream.files_missing as u64,
+        stream.retries_exhausted,
+        stream.hard_errors,
+        stream.files_incomplete,
+    ];
+    tolerated.iter().any(|count| *count > 0).then(|| {
+        format!(
+            "{kind}: tolerated per-file imperfections (vanished={}, unfinished={}, unidentified={}, missing={}, unstable={}, hard_errors={}, incomplete={}); withheld files wait for live admission and affected sessions stay Streaming",
+            meta.files_vanished,
+            meta.files_unfinished,
+            meta.files_unidentified,
+            stream.files_missing,
+            stream.retries_exhausted,
+            stream.hard_errors,
+            stream.files_incomplete,
+        )
+    })
 }
 
 pub(crate) struct CapturedColdRuntime {
@@ -1556,6 +1612,12 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
             failures.push(format!(
                 "{name} left {} streamable files unidentified",
                 meta.files_unidentified
+            ));
+        }
+        if meta.files_unfinished > 0 {
+            failures.push(format!(
+                "{name} left {} streamable files with an unfinished first record",
+                meta.files_unfinished
             ));
         }
         if meta.files_vanished > 0 {
@@ -2521,6 +2583,115 @@ mod tests {
         std::fs::create_dir(&destination).unwrap();
         let error = ColdLedgerStage::new(&destination).unwrap_err();
         assert!(error.contains("use `rosettad rebuild`"));
+    }
+
+    /// A fresh start publishes past every per-file imperfection, naming them
+    /// in one line, where the strict gate refuses each; both refuse what no
+    /// later read can repair.
+    #[test]
+    fn a_fresh_start_refuses_only_what_no_later_read_repairs() {
+        let meta = MetaReport {
+            files_vanished: 1,
+            files_unfinished: 2,
+            files_unidentified: 3,
+            ..MetaReport::default()
+        };
+        let stream = StreamReport {
+            files_missing: 4,
+            retries_exhausted: 5,
+            hard_errors: 6,
+            files_incomplete: 7,
+            ..StreamReport::default()
+        };
+        let mut failures = Vec::new();
+        let line = record_fresh_failures("codex", false, &meta, &stream, &mut failures);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(
+            line.as_deref(),
+            Some(
+                "codex: tolerated per-file imperfections (vanished=1, unfinished=2, \
+                 unidentified=3, missing=4, unstable=5, hard_errors=6, incomplete=7); \
+                 withheld files wait for live admission and affected sessions stay Streaming"
+            )
+        );
+        let mut strict = Vec::new();
+        record_backfill_failures("codex", false, &meta, &stream, &mut strict);
+        assert_eq!(strict.len(), 4, "{strict:?}");
+
+        let mut failures = Vec::new();
+        let clean = record_fresh_failures(
+            "codex",
+            false,
+            &MetaReport::default(),
+            &StreamReport::default(),
+            &mut failures,
+        );
+        assert_eq!((clean, failures.len()), (None, 0));
+
+        for (label, discovery_truncated, meta, stream, refusal) in [
+            (
+                "discovery",
+                true,
+                MetaReport::default(),
+                StreamReport::default(),
+                "discovery walk was truncated",
+            ),
+            (
+                "metadata",
+                false,
+                MetaReport {
+                    walk_truncated: true,
+                    ..MetaReport::default()
+                },
+                StreamReport::default(),
+                "meta walk was truncated",
+            ),
+            (
+                "oversized",
+                false,
+                MetaReport::default(),
+                StreamReport {
+                    oversized: 1,
+                    ..StreamReport::default()
+                },
+                "1 oversized, 0 conflicts",
+            ),
+            (
+                "conflict",
+                false,
+                MetaReport::default(),
+                StreamReport {
+                    conflicts: 1,
+                    ..StreamReport::default()
+                },
+                "0 oversized, 1 conflicts",
+            ),
+        ] {
+            for fresh in [true, false] {
+                let mut failures = Vec::new();
+                if fresh {
+                    record_fresh_failures(
+                        "codex",
+                        discovery_truncated,
+                        &meta,
+                        &stream,
+                        &mut failures,
+                    );
+                } else {
+                    record_backfill_failures(
+                        "codex",
+                        discovery_truncated,
+                        &meta,
+                        &stream,
+                        &mut failures,
+                    );
+                }
+                assert_eq!(failures.len(), 1, "{label}, fresh {fresh}: {failures:?}");
+                if fresh {
+                    assert!(failures[0].contains(refusal), "{label}: {failures:?}");
+                }
+            }
+        }
     }
 
     fn args(db: &std::path::Path, ledger: &std::path::Path, agent: &str) -> Vec<String> {

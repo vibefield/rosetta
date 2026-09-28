@@ -51,7 +51,7 @@ use crate::runtime_ledger::{is_layout_root, ledger_dir, ledger_dir_for, open_run
 use crate::{
     AppliedColdRuntime, ColdCaptureRequest, Flags, identity_name, install_rebuilt_projection,
     ledger_root, load_enrollment, make_single_file, open_progressive_backfill, parse_flags,
-    projection_lock, projection_parent, record_backfill_failures, selected,
+    projection_lock, projection_parent, record_fresh_failures, selected,
 };
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
@@ -1088,12 +1088,13 @@ fn run_resumed_fresh_serve(
     let wake = SourceWake::default();
     let stage_root = ledger_stage.path().to_path_buf();
     // Publication needs every source at a terminal generation, so a source
-    // caught mid-append ends at its last complete record here too, exactly
-    // as on a fresh build's closed walk; the live runner lands the rest.
+    // caught mid-append, or lost after part of it was read, ends where its
+    // file stopped here too, and an unclean one activates, exactly as on a
+    // fresh build's closed walk; the live runner lands the rest.
     let cold_opts = IngestOptions {
         starter_budget: None,
         audit_files_per_run: 0,
-        stop_at_partial_record: true,
+        private_build: true,
         cancel: Some(stop.clone()),
         ..opts.clone()
     };
@@ -1245,13 +1246,17 @@ fn run_resumed_fresh_serve(
             Some(&mut ledger),
         )
         .map_err(|error| format!("{name} resume source catch-up: {error}"))?;
-        record_backfill_failures(
+        let refused = failures.len();
+        let tolerated = record_fresh_failures(
             &name,
             target.census.walk_truncated,
             &meta,
             &stream,
             &mut failures,
         );
+        if let Some(line) = tolerated.filter(|_| failures.len() == refused) {
+            println!("{line}");
+        }
         instrument
             .ledger_write(&mut ledger, |ledger| ledger.flush())
             .map_err(|error| error.to_string())?;
@@ -1602,10 +1607,17 @@ fn run_warm_live_serve(
             Some(&mut ledger),
         )
         .map_err(|error| format!("{name} warm metadata catch-up: {error}"))?;
-        if meta.walk_truncated || meta.files_unidentified > 0 || meta.files_vanished > 0 {
+        if meta.walk_truncated
+            || meta.files_unidentified > 0
+            || meta.files_unfinished > 0
+            || meta.files_vanished > 0
+        {
             eprintln!(
-                "{name}: warm inventory changed during scan (truncated={}, unidentified={}, vanished={}); live admission will retry",
-                meta.walk_truncated, meta.files_unidentified, meta.files_vanished
+                "{name}: warm inventory changed during scan (truncated={}, unidentified={}, unfinished={}, vanished={}); live admission will retry",
+                meta.walk_truncated,
+                meta.files_unidentified,
+                meta.files_unfinished,
+                meta.files_vanished
             );
         }
         let runner = LiveRunner::resume_from_roster(

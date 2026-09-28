@@ -171,15 +171,24 @@ pub struct IngestOptions {
     /// EOF. Snapshot-driver sources (SQLite/document) always stream whole:
     /// their revision identity is a whole-content hash.
     pub starter_budget: Option<SliceBudget>,
-    /// `true` for a one-shot pass that must end every JSONL source at a
-    /// terminal generation — the fresh cold build's closed-source walk and a
-    /// resumed fresh start's catch-up set it. A source whose writer is
-    /// mid-append (the file ends inside a record) then ends its generation at
-    /// its last complete record, exactly as if the file ended there, and its
-    /// unterminated suffix stays in the checkpoint as ordinary append growth
-    /// for the live runner. `false` — the default, and every other pass —
-    /// leaves such a generation staged until a read finds the record complete.
-    pub stop_at_partial_record: bool,
+    /// `true` for a pass of a private cold build — the fresh build's
+    /// closed-source walk and a resumed fresh start's catch-up: no generation
+    /// of any source is published yet, and publication needs every source at
+    /// a terminal generation. Such a pass ends a generation wherever the file
+    /// stops it, by the rules of an end of file:
+    /// - a source whose writer is mid-append (the file ends inside a record)
+    ///   ends at its last complete record, and the unterminated suffix stays in
+    ///   the checkpoint as ordinary append growth for the live runner;
+    /// - a source that vanishes, or keeps changing under every retry, after
+    ///   part of a generation was read ends that generation at the last record
+    ///   read (one that was never read is left to the caller);
+    /// - an unclean generation activates its parseable rows even when it
+    ///   replaces another, which has not been published either.
+    ///
+    /// `false` — the default, and every live and disk-cold pass — leaves the
+    /// first two staged until a later read completes them, and lets an unclean
+    /// replacement abandon so the published generation survives.
+    pub private_build: bool,
     /// Process-local cooperative cancellation. It is deliberately not a
     /// checkpoint or canonical fact; cold workers check it at bounded record
     /// batches so app shutdown can discard the private build cleanly.
@@ -214,7 +223,7 @@ impl Default for IngestOptions {
             max_retries: 3,
             audit_files_per_run: 1,
             starter_budget: None,
-            stop_at_partial_record: false,
+            private_build: false,
             cancel: None,
             progress: None,
         }

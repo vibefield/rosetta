@@ -19,6 +19,17 @@ pub enum Metric {
     FilesWalked,
     FilesMatched,
     FilesSkimmed,
+    /// Files that vanished while their metadata was read.
+    FilesVanished,
+    /// Streamable files whose session could not be identified.
+    FilesUnidentified,
+    /// Streamable files no skim identifies whose first record no delimiter
+    /// ends yet: not yet a session.
+    FilesUnfinished,
+    /// Sources gone when their stream pass opened them.
+    FilesMissing,
+    /// Sources that kept changing under every retry of one read.
+    RetriesExhausted,
     SessionsDiscovered,
     RecordsFramed,
     RecordsOversized,
@@ -128,12 +139,23 @@ pub enum Metric {
     LiveStreamNanos,
 }
 
-const METRIC_COUNT: usize = 95;
+const METRIC_COUNT: usize = 100;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
     (Metric::FilesMatched, "files matched"),
     (Metric::FilesSkimmed, "files skimmed"),
+    (Metric::FilesVanished, "files vanished during metadata"),
+    (Metric::FilesUnidentified, "files unidentified"),
+    (
+        Metric::FilesUnfinished,
+        "files with an unfinished first record",
+    ),
+    (Metric::FilesMissing, "sources missing at capture"),
+    (
+        Metric::RetriesExhausted,
+        "sources unstable under every retry",
+    ),
     (Metric::SessionsDiscovered, "sessions discovered"),
     (Metric::RecordsFramed, "records framed"),
     (Metric::RecordsOversized, "records oversized"),

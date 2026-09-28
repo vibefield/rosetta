@@ -245,15 +245,31 @@ impl StreamedRuntime {
                 })?;
                 facts.bind_cursor(cursor_id);
             }
-            // A source stopped before a record its writer has not finished
-            // holds its session Streaming, exactly as a live pass that finds
-            // that suffix does, until the live runner lands the record.
-            let clean = source.activate && source.generation_clean && !source.partial_record;
+            // The pass's own verdict decides the badge: a source that is not
+            // complete — unclean, stopped before a record its writer has not
+            // finished, or cut short or skipped because its file could not be
+            // read — holds its session Streaming, exactly as a live pass does.
+            let complete = source.complete;
             self.session_health
                 .entry(source.source.session_id.clone())
-                .and_modify(|healthy| *healthy &= clean)
-                .or_insert(clean);
+                .and_modify(|healthy| *healthy &= complete)
+                .or_insert(complete);
             evidence.push((source.source.relative_path.clone(), source.evidence));
+            if source.skipped() {
+                // Nothing to write: its cursor keeps the fresh checkpoint.
+                // Only the facts of a session it completed travel with it.
+                batches.push(StreamedSource {
+                    batch: Batch {
+                        ops: Vec::new(),
+                        checkpoints: Vec::new(),
+                        source: None,
+                    },
+                    withheld: false,
+                    resolved: prepared.resolved,
+                    released: prepared.released,
+                });
+                continue;
+            }
             batches.push(StreamedSource {
                 batch: Batch {
                     ops: source.ops,
@@ -621,9 +637,8 @@ mod tests {
             ops,
             evidence: PollEvidence::of(Some(&checkpoint)),
             checkpoint: checkpoint.encode(),
-            generation_clean: true,
             activate: true,
-            partial_record: false,
+            complete: true,
             payload_bytes: 1,
             prepared: None,
         }

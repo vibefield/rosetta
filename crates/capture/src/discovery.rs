@@ -158,16 +158,25 @@ fn walk_with(
     Ok(report)
 }
 
+/// A file's first record, and whether a delimiter ended it: one that runs
+/// to the end of the file may still be being written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstRecord {
+    pub payload: Vec<u8>,
+    pub terminated: bool,
+}
+
 /// Read only the first delimiter-terminated record, bounded by
-/// `max_record_bytes`. A small or newline-free whole file is also a complete
-/// first record; an oversized, missing, or concurrently vanished file yields
-/// `None` and is reported as unidentified by the caller.
+/// `max_record_bytes`. A small or newline-free whole file — an empty one
+/// included — is also a first record, reported unterminated; an oversized,
+/// missing, or concurrently vanished file yields `None` and is reported as
+/// unidentified by the caller.
 pub fn first_record(
     path: &Path,
     delimiter: u8,
     max_record_bytes: usize,
     normalize_crlf: bool,
-) -> Result<Option<Vec<u8>>, CaptureError> {
+) -> Result<Option<FirstRecord>, CaptureError> {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -194,16 +203,20 @@ pub fn first_record(
             if normalize_crlf && payload.last() == Some(&b'\r') {
                 payload.pop();
             }
-            return (payload.len() <= max_record_bytes)
-                .then_some(payload)
-                .map_or(Ok(None), |payload| Ok(Some(payload)));
+            return Ok((payload.len() <= max_record_bytes).then_some(FirstRecord {
+                payload,
+                terminated: true,
+            }));
         }
         payload.extend_from_slice(&buffer[..count]);
     }
     if normalize_crlf && payload.last() == Some(&b'\r') {
         payload.pop();
     }
-    Ok((!payload.is_empty() && payload.len() <= max_record_bytes).then_some(payload))
+    Ok((payload.len() <= max_record_bytes).then_some(FirstRecord {
+        payload,
+        terminated: false,
+    }))
 }
 
 /// A bounded run of complete delimiter-framed records plus the actual bytes
@@ -489,8 +502,22 @@ mod tests {
         let long = format!("{{\"padding\":\"{}\"}}\nsecond\n", "x".repeat(80_000));
         std::fs::write(&path, &long).unwrap();
         let record = first_record(&path, b'\n', 100_000, true).unwrap().unwrap();
-        assert_eq!(record.len(), 80_014);
+        assert_eq!(record.payload.len(), 80_014);
+        assert!(record.terminated);
         assert!(first_record(&path, b'\n', 1_000, true).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_first_record_that_runs_to_the_end_of_the_file_is_unterminated() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("rollout.jsonl");
+        std::fs::write(&path, b"{\"type\":\"session_meta\",\"pay").unwrap();
+        let record = first_record(&path, b'\n', 1_000, true).unwrap().unwrap();
+        assert_eq!(record.payload, b"{\"type\":\"session_meta\",\"pay");
+        assert!(!record.terminated);
+        std::fs::write(&path, b"").unwrap();
+        let empty = first_record(&path, b'\n', 1_000, true).unwrap().unwrap();
+        assert!(empty.payload.is_empty() && !empty.terminated);
     }
 
     #[cfg(unix)]

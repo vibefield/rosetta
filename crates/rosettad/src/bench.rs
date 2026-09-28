@@ -221,6 +221,7 @@ pub(crate) fn meta_event(agent: &str, meta: &MetaReport) -> Value {
         "filesInventoryOnly": meta.files_inventory_only,
         "filesSkimmed": meta.files_skimmed,
         "filesUnidentified": meta.files_unidentified,
+        "filesUnfinished": meta.files_unfinished,
         "filesVanished": meta.files_vanished,
         "walkTruncated": meta.walk_truncated,
     })
@@ -677,6 +678,13 @@ pub(crate) fn cmd_meta(args: &[String]) -> Result<(), String> {
                 "{} left {} streamable files unidentified",
                 adapter.kind(),
                 meta.files_unidentified
+            ));
+        }
+        if meta.files_unfinished > 0 {
+            failures.push(format!(
+                "{} left {} streamable files with an unfinished first record",
+                adapter.kind(),
+                meta.files_unfinished
             ));
         }
         if meta.files_vanished > 0 {

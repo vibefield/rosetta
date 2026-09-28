@@ -54,8 +54,13 @@ pub struct MetaReport {
     pub files_skimmed: usize,
     /// Matched streamable files whose session could not be identified even
     /// after the bounded first-record retry. They are reported and withheld
-    /// from streaming; the CLI treats any such file as an incomplete ingest.
+    /// from streaming until movement re-admits them; a finite ingest treats
+    /// any such file as an incomplete ingest.
     pub files_unidentified: usize,
+    /// Unidentified transcripts whose first record no delimiter ends yet:
+    /// their writer is still writing it, so they are not yet sessions.
+    /// Withheld like [`MetaReport::files_unidentified`], never counted there.
+    pub files_unfinished: usize,
     pub files_vanished: usize,
     pub walk_truncated: bool,
     pub sessions: usize,
@@ -318,6 +323,7 @@ pub(crate) fn plan_inventory(
                         })? {
                             rosetta_capture::SqliteFileStatus::Missing => {
                                 report.files_vanished += 1;
+                                instrument.add(Metric::FilesVanished, 1);
                                 continue;
                             }
                             rosetta_capture::SqliteFileStatus::NotDatabase => {
@@ -348,7 +354,15 @@ pub(crate) fn plan_inventory(
                     Entry::Read(stream, driver) => (stream, driver),
                 };
                 match next()? {
-                    crate::skim::Skimmed::Vanished => report.files_vanished += 1,
+                    crate::skim::Skimmed::Vanished => {
+                        report.files_vanished += 1;
+                        instrument.add(Metric::FilesVanished, 1);
+                    }
+                    crate::skim::Skimmed::Unfinished => {
+                        report.files_skimmed += 1;
+                        report.files_unfinished += 1;
+                        instrument.add(Metric::FilesUnfinished, 1);
+                    }
                     crate::skim::Skimmed::Transcript(skim) => {
                         report.files_skimmed += 1;
                         admit_skim(
@@ -914,6 +928,7 @@ fn admit_skim(
     }
     let Some(native_session_id) = skim.session_id.clone() else {
         report.files_unidentified += 1;
+        instrument.add(Metric::FilesUnidentified, 1);
         return;
     };
     let relative_path = if member {
@@ -972,6 +987,7 @@ fn admit_database(
         // A racing writer or vanished db is the stream phase's problem.
         rosetta_capture::SnapshotOutcome::Missing | rosetta_capture::SnapshotOutcome::Unstable => {
             report.files_vanished += 1;
+            instrument.add(Metric::FilesVanished, 1);
             return Ok(());
         }
     };
@@ -985,6 +1001,7 @@ fn admit_database(
         let skim = adapter.snapshot_session(&stream.id, &value);
         let Some(native) = skim.session_id.clone() else {
             report.files_unidentified += 1;
+            instrument.add(Metric::FilesUnidentified, 1);
             continue;
         };
         let updated = skim.updated_at.unwrap_or(modified_ms);

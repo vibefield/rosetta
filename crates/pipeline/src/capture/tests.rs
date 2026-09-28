@@ -147,6 +147,19 @@ fn capture_into(
     config: Config,
     ledger_dir: &Path,
 ) -> Captured {
+    capture_into_after(adapter, home, opts, config, ledger_dir, &|| {})
+}
+
+/// [`capture_into`], running `between` after the metadata phase and before
+/// the capture walk.
+fn capture_into_after(
+    adapter: &'static dyn AgentAdapter,
+    home: &Path,
+    opts: &IngestOptions,
+    config: Config,
+    ledger_dir: &Path,
+    between: &dyn Fn(),
+) -> Captured {
     let instrument = Instrument::new();
     let discovery = discover(&[adapter], home, opts, &instrument)
         .unwrap()
@@ -195,6 +208,7 @@ fn capture_into(
             .apply(&mut canonical, sources, &instrument)
             .map(|_| ())
     };
+    between();
     let captured = catch_unwind(AssertUnwindSafe(|| {
         if config.workers == 0 {
             return stream_closed_sources_into(
@@ -666,7 +680,7 @@ fn the_pool_matches_the_serial_walk_when_a_healed_sibling_ends_mid_record() {
         .filter(|source| source.contains(HEAL_JOURNAL))
         .collect::<Vec<_>>();
     assert_eq!(journal.len(), 1, "one terminal generation per source");
-    for field in ["generation: 2,", "activate: true,", "partial_record: true,"] {
+    for field in ["generation: 2,", "activate: true,", "complete: false,"] {
         assert!(journal[0].contains(field), "{field}: {}", journal[0]);
     }
     let ledger = TempDir::new().unwrap();
@@ -1114,3 +1128,4 @@ fn stream_state(canonical: &BTreeMap<String, Vec<String>>, native: &str) -> Stri
 
 mod faults;
 mod oversized;
+mod tolerance;

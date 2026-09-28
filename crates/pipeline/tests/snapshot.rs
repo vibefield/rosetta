@@ -666,6 +666,80 @@ fn repeated_hard_snapshot_generations_are_abandoned_without_staging_growth() {
     }
 }
 
+/// A private build — nothing of which is published yet — activates an unclean
+/// first snapshot generation's parseable rows with the session held
+/// Streaming, the dirty-first-generation rule a transcript already follows;
+/// any other pass still abandons it.
+#[test]
+fn a_private_build_activates_an_unclean_snapshot_generation() {
+    let adapter = &FakeDbAgent;
+    for (private_build, active, rows) in [(false, 0, 0), (true, 1, 1)] {
+        let mut h = harness();
+        let connection = rusqlite::Connection::open(&h.db).unwrap();
+        connection
+            .execute("UPDATE messages SET role = 'broken' WHERE id = 2", [])
+            .unwrap();
+        drop(connection);
+        let opts = IngestOptions {
+            private_build,
+            ..h.opts.clone()
+        };
+        let (_, files) = meta_ingest_into(
+            adapter,
+            &h.runtime,
+            &h.root,
+            &mut h.store,
+            &opts,
+            &h.instrument,
+            None,
+        )
+        .unwrap();
+        let report = stream_backfill_into(
+            adapter,
+            &h.runtime,
+            &h.root,
+            &mut h.store,
+            &files,
+            &opts,
+            &h.instrument,
+            None,
+        )
+        .unwrap();
+        let label = format!("private build: {private_build}");
+        assert_eq!(report.hard_errors, 1, "{label}");
+        let path = &files
+            .iter()
+            .find(|file| file.native_session_id == "sess-a")
+            .unwrap()
+            .relative_path;
+        let cursor = queries::cursor_state(h.store.conn(), &h.runtime.id, path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (cursor.active_generation, cursor.highest_generation),
+            (active, 1),
+            "{label}"
+        );
+        assert_eq!(
+            queries::search(h.store.conn(), "ometeotl", 5)
+                .unwrap()
+                .len(),
+            rows,
+            "{label}"
+        );
+        let state: String = h
+            .store
+            .conn()
+            .query_row(
+                "SELECT stream_state FROM session WHERE native_session_id = 'sess-a'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "streaming", "{label}");
+    }
+}
+
 #[test]
 fn rebuild_reproduces_the_database_projection_without_sqlite() {
     let adapter = &FakeDbAgent;

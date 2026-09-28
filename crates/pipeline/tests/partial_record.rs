@@ -1,6 +1,6 @@
 //! A transcript caught mid-append: its file ends inside a record its writer
 //! has not finished. A pass that must end every source at a terminal
-//! generation (`IngestOptions::stop_at_partial_record`, the fresh cold
+//! generation (`IngestOptions::private_build`, the fresh cold
 //! build's closed walk) stops at the last complete record — the clean prefix
 //! activates and seals exactly as if the file ended there, the session holds
 //! Streaming, and the checkpoint keeps the unfinished suffix — so the record
@@ -52,7 +52,7 @@ fn live_opts() -> IngestOptions {
 
 fn stopping_opts() -> IngestOptions {
     IngestOptions {
-        stop_at_partial_record: true,
+        private_build: true,
         ..live_opts()
     }
 }

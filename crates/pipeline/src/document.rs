@@ -106,12 +106,14 @@ pub(crate) fn stream_document_group(
             rosetta_capture::DocumentOutcome::Ready(snapshot) => break Some(snapshot),
             rosetta_capture::DocumentOutcome::Missing => {
                 report.files_missing += group.len();
+                instrument.add(Metric::FilesMissing, group.len() as u64);
                 break None;
             }
             rosetta_capture::DocumentOutcome::Unstable => {
                 retries += 1;
                 if retries > opts.max_retries {
                     report.retries_exhausted += group.len() as u64;
+                    instrument.add(Metric::RetriesExhausted, group.len() as u64);
                     break None;
                 }
             }

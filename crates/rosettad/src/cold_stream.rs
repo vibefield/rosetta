@@ -52,7 +52,7 @@ use crate::ledger_compression::thread_cpu_time;
 use crate::serve::counter_source;
 use crate::{
     AppliedColdRuntime, ColdCaptureRequest, Flags, PlannedColdRuntime, bench, identity_name,
-    plan_parallel_cold_runtime, record_backfill_failures,
+    plan_parallel_cold_runtime, record_fresh_failures,
 };
 
 /// Closed sources in flight between all producers and the writer, measured
@@ -748,7 +748,7 @@ fn admit(
 ) -> Result<Option<AppliedColdRuntime>, String> {
     let name = identity_name(&runtime.identity);
     let mut runtime_failures = Vec::new();
-    record_backfill_failures(
+    let tolerated = record_fresh_failures(
         &name,
         runtime.discovery_truncated,
         &runtime.meta,
@@ -760,6 +760,9 @@ fn admit(
         // before anything is published.
         failures.extend(runtime_failures);
         return Ok(None);
+    }
+    if let Some(line) = tolerated {
+        println!("{line}");
     }
     let runtime_id = runtime.runtime.id.clone();
     let kind = runtime.adapter.kind();

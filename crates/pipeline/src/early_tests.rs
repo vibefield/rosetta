@@ -47,9 +47,8 @@ fn closed(path: &str, session_id: &str, ops: Vec<IngestOp>) -> ClosedSource {
         ops,
         evidence: PollEvidence::of(Some(&checkpoint)),
         checkpoint: checkpoint.encode(),
-        generation_clean: true,
         activate: true,
-        partial_record: false,
+        complete: true,
         payload_bytes: 1,
         prepared: None,
     }

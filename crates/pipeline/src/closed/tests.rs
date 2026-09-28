@@ -395,3 +395,112 @@ fn eager_cursors_and_roster_keys_match_the_lazy_dense_walk_across_a_restart_and_
     let healed = eager.report[16];
     assert_eq!((restarted, healed), (2, 1), "{:?}", eager.report);
 }
+
+/// Closing a source tolerates exactly one thing its pass could not produce —
+/// a generation, for a source it could not read at all — and still refuses
+/// everything else that only a bug leaves behind.
+#[test]
+fn close_file_skips_an_unread_source_and_refuses_what_only_a_bug_leaves() {
+    let file = SessionFile {
+        ledger_only: false,
+        relative_path: "projects/-w/close.jsonl".into(),
+        stream_id: "transcript".into(),
+        file_format: rosetta_adapter_support::FileFormat::Jsonl,
+        discipline: rosetta_adapter_support::FileDiscipline::AppendOnly,
+        driver: StreamDriver::JsonLines,
+        session_id: "session".into(),
+        native_session_id: "close".into(),
+        size: 0,
+        modified_ms: 0,
+        agent_version: None,
+        source_missing: false,
+    };
+    let cursor = |active: u64, highest: u64, checkpoint: &str| queries::CursorState {
+        id: 7,
+        checkpoint: checkpoint.into(),
+        active_generation: active,
+        highest_generation: highest,
+        session_id: Some("session".into()),
+    };
+    let batch = |ops: usize, first_sequence: u64, mode: SourceMode| Batch {
+        ops: (0..ops)
+            .map(|index| {
+                IngestOp::Drift(rosetta_core::rows::DriftFact {
+                    runtime_id: "runtime".into(),
+                    agent_version: String::new(),
+                    stream: "transcript".into(),
+                    record_kind: "raw_record".into(),
+                    error_code: "test".into(),
+                    shape_hash: format!("{first_sequence}-{index}"),
+                    at: None,
+                    sample_cursor: Some(7),
+                    sample_offset: None,
+                })
+            })
+            .collect(),
+        checkpoints: Vec::new(),
+        source: Some(rosetta_store::SourceWrite {
+            cursor_id: 7,
+            session_id: "session".into(),
+            generation: 1,
+            first_sequence,
+            mode,
+        }),
+    };
+    let close = |cursor, batches, lost| {
+        close_file(&ClaudeCodeAdapter, &file, cursor, batches, 0, false, lost)
+            .map_err(|error| error.to_string())
+    };
+
+    let skipped = close(cursor(0, 0, "fresh"), Vec::new(), true).unwrap();
+    assert!(skipped.skipped() && !skipped.complete && skipped.ops.is_empty());
+    for (label, closed, refusal) in [
+        (
+            "unread, yet not lost",
+            close(cursor(0, 0, "fresh"), Vec::new(), false),
+            "never started a generation",
+        ),
+        (
+            "lost, yet holding batches",
+            close(
+                cursor(0, 0, "fresh"),
+                vec![batch(1, 0, SourceMode::Activate)],
+                true,
+            ),
+            "never started a generation",
+        ),
+        (
+            "a gap in the operation sequence",
+            close(
+                cursor(1, 1, "fresh"),
+                vec![
+                    batch(1, 0, SourceMode::Stage),
+                    batch(1, 2, SourceMode::Activate),
+                ],
+                false,
+            ),
+            "non-contiguous operation sequence",
+        ),
+        (
+            "a staged generation",
+            close(
+                cursor(0, 1, "fresh"),
+                vec![batch(1, 0, SourceMode::Stage)],
+                true,
+            ),
+            "stopped without a terminal generation",
+        ),
+        (
+            "an undecodable final checkpoint",
+            close(
+                cursor(1, 1, "{not a checkpoint"),
+                vec![batch(1, 0, SourceMode::Activate)],
+                false,
+            ),
+            "undecodable checkpoint",
+        ),
+    ] {
+        let error = closed.expect_err(label);
+        assert!(error.contains(refusal), "{label}: {error}");
+    }
+}

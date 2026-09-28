@@ -15,8 +15,8 @@ pub mod tailer;
 pub mod watch;
 
 pub use discovery::{
-    HeadTail, RecordScan, ScannedFile, WalkReport, first_record, head_tail, scan_records, walk,
-    walk_classified, walk_filtered, walk_pruned,
+    FirstRecord, HeadTail, RecordScan, ScannedFile, WalkReport, first_record, head_tail,
+    scan_records, walk, walk_classified, walk_filtered, walk_pruned,
 };
 pub use document::{DocumentOutcome, DocumentSnapshot, snapshot as snapshot_document};
 pub use ledger::{

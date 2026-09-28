@@ -31,6 +31,9 @@ pub(crate) fn skim_threads() -> usize {
 pub(crate) enum Skimmed {
     /// The file disappeared (or never held still) before it could be read.
     Vanished,
+    /// A transcript no skim identifies whose first record no delimiter has
+    /// ended yet: its writer is still writing it, so it is not yet a session.
+    Unfinished,
     /// A transcript's skim, after any bounded identity or title fallback.
     Transcript(Box<SkimResult>),
     /// The sessions a stable document snapshot enumerates.
@@ -39,9 +42,10 @@ pub(crate) enum Skimmed {
 
 /// Read one JSONL transcript: bounded head and tail windows, then the
 /// adapter's skim. A file whose opening record outgrows the head window gets
-/// exactly that one bounded record before it can count as unidentified, and
-/// an adapter may ask for a bounded run of complete records after the head
-/// when an optional fact is still missing.
+/// exactly that one bounded record before it can count as unidentified — or
+/// as unfinished, while no delimiter ends that record — and an adapter may
+/// ask for a bounded run of complete records after the head when an optional
+/// fact is still missing.
 pub(crate) fn skim_transcript(
     adapter: &dyn AgentAdapter,
     root: &Path,
@@ -73,7 +77,7 @@ pub(crate) fn skim_transcript(
     // session_meta can embed AGENTS.md). Read exactly one bounded record,
     // never the transcript body, before declaring the file unidentified.
     if skim.session_id.is_none()
-        && let Some(mut first) = instrument.time(Metric::SkimNanos, || {
+        && let Some(first) = instrument.time(Metric::SkimNanos, || {
             rosetta_capture::first_record(
                 &path,
                 opts.tail.delimiter,
@@ -82,9 +86,20 @@ pub(crate) fn skim_transcript(
             )
         })?
     {
-        first.push(opts.tail.delimiter);
-        instrument.add(Metric::BytesRead, first.len() as u64);
-        skim = adapter.skim(&stream.id, &stat, &first, &windows.tail);
+        let rosetta_capture::FirstRecord {
+            payload: mut record,
+            terminated,
+        } = first;
+        record.push(opts.tail.delimiter);
+        instrument.add(Metric::BytesRead, record.len() as u64);
+        skim = adapter.skim(&stream.id, &stat, &record, &windows.tail);
+        if skim.session_id.is_none() && !terminated {
+            // No delimiter ends the record yet, so its writer may still be
+            // writing it: the file is not yet a session, rather than one no
+            // adapter can identify. The delimiter is movement, which admits
+            // the file live.
+            return Ok(Skimmed::Unfinished);
+        }
     }
     if opts.skim_fallback_bytes > 0
         && opts.skim_fallback_records > 0

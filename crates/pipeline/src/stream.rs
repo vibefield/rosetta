@@ -57,7 +57,7 @@ pub struct StreamReport {
     pub retries_exhausted: u64,
     pub files_incomplete: u64,
     /// Files paused on purpose — by a starter budget, or at a record its
-    /// writer has not finished ([`crate::IngestOptions::stop_at_partial_record`]):
+    /// writer has not finished ([`crate::IngestOptions::private_build`]):
     /// a clean prefix is active and the remainder is append growth for a later
     /// pass. Deliberate, never a failure.
     pub files_paused: u64,
@@ -344,11 +344,12 @@ pub(crate) enum PassMode {
 /// How one pass over one source file ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FilePass {
-    /// The whole source was read; `true` means a clean generation is fully
-    /// active with no partial suffix (today's completion condition).
+    /// The whole source was read, or it vanished or kept changing under every
+    /// retry; `true` means a clean generation is fully active with no partial
+    /// suffix (today's completion condition).
     Finished(bool),
-    /// A starter budget, or a record its writer has not finished
-    /// ([`crate::IngestOptions::stop_at_partial_record`]), stopped the pass at
+    /// A starter budget, or a record its writer has not finished in a private
+    /// build ([`crate::IngestOptions::private_build`]), stopped the pass at
     /// a record boundary: the clean prefix is active (and its generation
     /// sealed in the ledger), so the unread remainder is ordinary append
     /// growth for a later pass.

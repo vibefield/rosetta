@@ -106,6 +106,7 @@ pub(crate) fn stream_snapshot_group(
     let db_path = root.join(db_relative);
     let Some(_) = rosetta_capture::db_stamp(&db_path)? else {
         report.files_missing += group.len() as u64 as usize;
+        instrument.add(Metric::FilesMissing, group.len() as u64);
         if group.iter().all(|file| file.source_missing) {
             for file in group {
                 opts.check_cancelled()?;
@@ -210,6 +211,7 @@ pub(crate) fn stream_snapshot_group(
     };
     let Some(snapshot) = snapshot else {
         report.retries_exhausted += group.len() as u64;
+        instrument.add(Metric::RetriesExhausted, group.len() as u64);
         for file in group {
             mark(file, false, file_health, session_health);
         }
@@ -425,6 +427,7 @@ pub(crate) fn apply_snapshot_records(
             &mut next_sequence,
             last,
             generation_clean,
+            opts.private_build,
             stamp,
             &revision,
             &mut ctx,
@@ -456,6 +459,7 @@ pub(crate) fn apply_snapshot_records(
             &mut next_sequence,
             true,
             generation_clean,
+            opts.private_build,
             stamp,
             &revision,
             &mut ctx,
@@ -501,8 +505,11 @@ pub(crate) fn seal_generation(
     })
 }
 
-/// One staged chunk (or the activating final one). Returns true on a
-/// checkpoint conflict — another writer owns the cursor now.
+/// One staged chunk (or the activating final one). An unclean final chunk
+/// abandons its generation — unless it belongs to a private build, where
+/// nothing is published yet and its parseable rows activate with the session
+/// held Streaming ([`crate::IngestOptions::private_build`]). Returns true on
+/// a checkpoint conflict — another writer owns the cursor now.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn flush_chunk(
     adapter: &dyn AgentAdapter,
@@ -515,6 +522,7 @@ pub(crate) fn flush_chunk(
     next_sequence: &mut u64,
     last: bool,
     generation_clean: bool,
+    private_build: bool,
     stamp: &str,
     revision: &str,
     ctx: &mut NormalizeCtx,
@@ -527,7 +535,7 @@ pub(crate) fn flush_chunk(
     *next_sequence += chunk.len() as u64;
     let mode = if !last {
         SourceMode::Stage
-    } else if generation_clean {
+    } else if generation_clean || private_build {
         SourceMode::Activate
     } else {
         SourceMode::Abandon

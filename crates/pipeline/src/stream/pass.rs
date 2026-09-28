@@ -93,6 +93,8 @@ struct Staged {
     tail: TailCheckpoint,
     budget_stop: bool,
     more_available: bool,
+    /// The generation ended because the file could not be read any further.
+    stopped_short: bool,
 }
 
 pub(crate) struct IngestPass {
@@ -115,8 +117,8 @@ pub(crate) struct IngestPass {
     budget_tailer: Option<Tailer>,
     budget_bytes: u64,
     budget_records: u64,
-    /// [`IngestOptions::stop_at_partial_record`].
-    stop_at_partial_record: bool,
+    /// [`IngestOptions::private_build`].
+    private_build: bool,
     retries: u32,
     force_replay: bool,
     staged: Option<Staged>,
@@ -249,7 +251,7 @@ impl IngestPass {
             budget_tailer,
             budget_bytes: 0,
             budget_records: 0,
-            stop_at_partial_record: opts.stop_at_partial_record,
+            private_build: opts.private_build,
             retries: 0,
             force_replay,
             staged: None,
@@ -356,13 +358,15 @@ impl IngestPass {
             match read {
                 TailRead::Missing => {
                     deltas.files_missing += 1;
-                    return Ok(PassStep::Finished(FilePass::Finished(false), deltas));
+                    instrument.add(Metric::FilesMissing, 1);
+                    return Ok(self.stop_short(runtime, file, deltas));
                 }
                 TailRead::Retry => {
                     self.retries += 1;
                     if self.retries > opts.max_retries {
                         deltas.retries_exhausted += 1;
-                        return Ok(PassStep::Finished(FilePass::Finished(false), deltas));
+                        instrument.add(Metric::RetriesExhausted, 1);
+                        return Ok(self.stop_short(runtime, file, deltas));
                     }
                 }
                 TailRead::Batch(batch) => break batch,
@@ -497,16 +501,16 @@ impl IngestPass {
             .ok_or_else(|| PipelineError::Config("source sequence overflowed".to_string()))?;
         let complete = !batch.more_available && batch.checkpoint.incomplete_suffix_len == 0;
         // The partial-record stop: all that is left is a record its writer
-        // has not finished, and this pass must end its generation anyway
-        // ([`IngestOptions::stop_at_partial_record`]). Every rule below reads
-        // it as the end of the file — the generation ends at its last
-        // complete record exactly as if the file ended there — while the
-        // checkpoint keeps the unterminated suffix unconsumed, so the finished
-        // record later arrives as ordinary append growth. A replacement
-        // generation ends here too: unlike a budget pause it has read every
-        // complete record the file holds, and the pass that sets this option
-        // has published no generation of the source for it to hide.
-        let partial_stop = self.stop_at_partial_record && !batch.more_available && !complete;
+        // has not finished, and a private build must end its generation
+        // anyway ([`IngestOptions::private_build`]). Every rule below reads it
+        // as the end of the file — the generation ends at its last complete
+        // record exactly as if the file ended there — while the checkpoint
+        // keeps the unterminated suffix unconsumed, so the finished record
+        // later arrives as ordinary append growth. A replacement generation
+        // ends here too: unlike a budget pause it has read every complete
+        // record the file holds, and a private build has published no
+        // generation of the source for it to hide.
+        let partial_stop = self.private_build && !batch.more_available && !complete;
         let ended = complete || partial_stop;
         // The slice boundary: enough clean bytes and complete records are
         // framed that this pass may stop. A fresh generation stops by
@@ -522,21 +526,8 @@ impl IngestPass {
             });
         let source_mode = if self.source_generation == self.active_generation {
             SourceMode::Append
-        } else if (ended || budget_stop) && self.generation_clean {
-            SourceMode::Activate
-        } else if ended && self.active_generation == 0 && self.generation_raw_complete {
-            // The live-growth rule, converged (product decision 2026-08-31):
-            // a FIRST generation that reaches EOF unclean still activates its
-            // parseable rows and the session holds Streaming — exactly what
-            // the sliced path and live growth already produce. A dirty
-            // REPLACEMENT still abandons so previously clean content
-            // survives, and a raw-incomplete (oversized) generation still
-            // abandons because an unsealable generation must never activate.
-            SourceMode::Activate
-        } else if ended {
-            SourceMode::Abandon
         } else {
-            SourceMode::Stage
+            self.ending_mode(ended, budget_stop)
         };
         let next_blob = PipeCheckpoint {
             v: crate::checkpoint::PIPE_CHECKPOINT_VERSION,
@@ -602,6 +593,7 @@ impl IngestPass {
             tail: batch.checkpoint,
             budget_stop,
             more_available: batch.more_available,
+            stopped_short: false,
         });
         Ok(PassStep::Batch(PassOutput {
             raw: RawOut {
@@ -627,6 +619,11 @@ impl IngestPass {
         }
         self.highest_generation = self.highest_generation.max(self.source_generation);
         self.tail = Some(staged.tail);
+        if staged.stopped_short {
+            // The file stopped this generation, not its end: the source is
+            // never complete from this pass.
+            return Some(FilePass::Finished(false));
+        }
         if staged.budget_stop {
             // The prefix is active and its checkpoint durable; the rest of
             // this file is a later completion pass's work.
@@ -640,6 +637,91 @@ impl IngestPass {
         None
     }
 
+    /// How a generation other than the active one ends — at an end of file
+    /// (`ended`) or a budget pause — or stays staged.
+    fn ending_mode(&self, ended: bool, budget_stop: bool) -> SourceMode {
+        if (ended || budget_stop) && self.generation_clean {
+            SourceMode::Activate
+        } else if ended
+            && (self.active_generation == 0 || self.private_build)
+            && self.generation_raw_complete
+        {
+            // The live-growth rule, converged (product decision 2026-08-31):
+            // a FIRST generation that reaches EOF unclean still activates its
+            // parseable rows and the session holds Streaming — exactly what
+            // the sliced path and live growth already produce. A dirty
+            // REPLACEMENT still abandons so previously clean content
+            // survives — except in a private build, where no generation is
+            // published yet — and a raw-incomplete (oversized) generation
+            // still abandons because an unsealable generation must never
+            // activate.
+            SourceMode::Activate
+        } else if ended {
+            SourceMode::Abandon
+        } else {
+            SourceMode::Stage
+        }
+    }
+
+    /// The file cannot be read any further: it vanished, or it kept changing
+    /// under every retry. A private build must still publish what it staged,
+    /// so the generation ends at the last record this pass committed, by the
+    /// rules of an end of file, and its checkpoint stays where that record
+    /// left it. A generation this pass never staged — and every live pass —
+    /// ends incomplete instead.
+    fn stop_short(
+        &mut self,
+        runtime: &RuntimeRow,
+        file: &SessionFile,
+        deltas: ReportDelta,
+    ) -> PassStep {
+        let staged = self.private_build
+            && self.source_generation != self.active_generation
+            && self.highest_generation == self.source_generation;
+        let Some(tail) = self.tail.clone().filter(|_| staged) else {
+            return PassStep::Finished(FilePass::Finished(false), deltas);
+        };
+        let mode = self.ending_mode(true, false);
+        let write = Batch {
+            ops: Vec::new(),
+            checkpoints: vec![CheckpointUpdate {
+                runtime_id: runtime.id.clone(),
+                stream: file.stream_id.clone(),
+                path: file.relative_path.clone(),
+                session_id: file.projected_session_id(),
+                expected: Some(self.prev_blob.clone()),
+                next: self.prev_blob.clone(),
+                updated_at: Some(file.modified_ms),
+            }],
+            source: Some(SourceWrite {
+                cursor_id: self.cursor_id,
+                session_id: file.session_id.clone(),
+                generation: self.source_generation,
+                first_sequence: self.next_source_sequence,
+                mode,
+            }),
+        };
+        self.staged = Some(Staged {
+            next_blob: self.prev_blob.clone(),
+            mode,
+            tail,
+            budget_stop: false,
+            more_available: false,
+            stopped_short: true,
+        });
+        PassStep::Batch(PassOutput {
+            raw: RawOut {
+                generation: self.source_generation,
+                records: Vec::new(),
+                seal: self
+                    .generation_raw_complete
+                    .then_some(self.generation_clean),
+            },
+            batch: write,
+            deltas,
+        })
+    }
+
     fn finished(&self) -> FilePass {
         let active_clean =
             self.generation_clean && self.active_generation == self.source_generation;
@@ -647,7 +729,7 @@ impl IngestPass {
             .tail
             .as_ref()
             .map(|checkpoint| checkpoint.incomplete_suffix_len);
-        if self.stop_at_partial_record && active_clean && suffix.is_some_and(|len| len > 0) {
+        if self.private_build && active_clean && suffix.is_some_and(|len| len > 0) {
             // Stopped before a record its writer has not finished: the clean
             // prefix is active, and the record is append growth for a later
             // pass. Deliberate, like a budget pause — never a failure.

@@ -48,12 +48,12 @@ pub struct ClosedSource {
     /// What the live stat poll reads from `checkpoint`, taken from the decode
     /// that validated it, so the writer can hand it on without decoding.
     pub(crate) evidence: PollEvidence,
-    pub(crate) generation_clean: bool,
     pub(crate) activate: bool,
-    /// The source ends inside a record its writer has not finished: the
-    /// generation stopped at its last complete record, and its session stays
-    /// `Streaming` until a live pass lands the rest.
-    pub(crate) partial_record: bool,
+    /// The pass's own verdict: a clean generation, fully active, with nothing
+    /// of the file left unread. Anything less — an unclean generation, a
+    /// record its writer has not finished, a file that vanished or kept
+    /// changing — holds the session `Streaming`, as a live pass would.
+    pub(crate) complete: bool,
     pub(crate) payload_bytes: u64,
     /// What [`crate::StreamedPreparer`] did to the source as it was emitted;
     /// the writer applies only prepared sources.
@@ -69,6 +69,14 @@ impl ClosedSource {
     /// budget unit.
     pub fn payload_bytes(&self) -> u64 {
         self.payload_bytes
+    }
+
+    /// Nothing of the source could be read — it vanished, or kept changing
+    /// under every retry — so it has no generation: the writer applies no
+    /// batch for it and its cursor keeps the fresh checkpoint, which the live
+    /// runner reads it from if it comes back.
+    pub(crate) fn skipped(&self) -> bool {
+        self.generation == 0
     }
 }
 
@@ -138,15 +146,32 @@ pub fn streamed_setup(
 /// Validate one source's retained planner batches exactly like
 /// [`crate::prepare_captured_runtime`]: a started, terminal generation with
 /// contiguous operation sequences and a decodable final checkpoint of this
-/// adapter's normalizer. Batches of a superseded generation are dropped.
+/// adapter's normalizer. Batches of a superseded generation are dropped. A
+/// source its pass could not read at all (`lost`) closes skipped instead;
+/// `complete` is that pass's verdict.
 fn close_file(
     adapter: &dyn AgentAdapter,
     file: &SessionFile,
     cursor: queries::CursorState,
     batches: Vec<Batch>,
     payload_bytes: u64,
+    complete: bool,
+    lost: bool,
 ) -> Result<ClosedSource, PipelineError> {
     if cursor.highest_generation == 0 {
+        if lost && batches.is_empty() {
+            return Ok(ClosedSource {
+                source: source_def(file),
+                generation: 0,
+                ops: Vec::new(),
+                evidence: PollEvidence::of(PipeCheckpoint::decode(&cursor.checkpoint).as_ref()),
+                checkpoint: cursor.checkpoint,
+                activate: false,
+                complete: false,
+                payload_bytes,
+                prepared: None,
+            });
+        }
         return Err(PipelineError::Config(format!(
             "cold source {} never started a generation",
             file.relative_path
@@ -226,26 +251,27 @@ fn close_file(
         generation,
         ops,
         evidence: PollEvidence::of(Some(&checkpoint)),
-        partial_record: checkpoint
-            .tail_checkpoint()
-            .is_some_and(|tail| tail.incomplete_suffix_len > 0),
         checkpoint: cursor.checkpoint,
-        generation_clean: checkpoint.generation_clean,
         activate: cursor.active_generation == generation,
+        complete,
         payload_bytes,
         prepared: None,
     })
 }
 
 /// Close every source of one capture unit from the batches the planner
-/// retained for it. Anything retained for a source outside the unit is a
-/// broken planner invariant.
+/// retained for it, with each one's health as its pass reported it and
+/// whether the unit's source could not be read at all. Anything retained for
+/// a source outside the unit is a broken planner invariant.
+#[allow(clippy::too_many_arguments)]
 fn close_unit(
     adapter: &dyn AgentAdapter,
     runtime: &RuntimeRow,
     planner: &mut Store,
     members: &[&SessionFile],
     payload_bytes: u64,
+    file_health: &BTreeMap<String, bool>,
+    lost: bool,
     instrument: &Instrument,
 ) -> Result<Vec<ClosedSource>, PipelineError> {
     let started = Instant::now();
@@ -272,6 +298,11 @@ fn close_unit(
             cursor,
             batches,
             payload_bytes.div_ceil(count),
+            file_health
+                .get(&file.relative_path)
+                .copied()
+                .unwrap_or(false),
+            lost,
         )?);
     }
     if let Some(cursor_id) = by_cursor.keys().next() {
@@ -373,6 +404,21 @@ impl Frontier {
         Ok(())
     }
 
+    /// Keep a held transcript whose sibling heal could not read it again, but
+    /// no longer as complete.
+    fn held_incomplete(&mut self, path: &str) -> Result<(), PipelineError> {
+        let index = self.slot_index(path)?;
+        match self.slots[index].closed.as_mut() {
+            Some(closed) if index >= self.next => {
+                closed.complete = false;
+                Ok(())
+            }
+            _ => Err(PipelineError::Config(format!(
+                "healed cold source {path} was not held for its session"
+            ))),
+        }
+    }
+
     fn slot_index(&self, path: &str) -> Result<usize, PipelineError> {
         self.position.get(path).copied().ok_or_else(|| {
             PipelineError::Config(format!("closed cold source {path} is not in the roster"))
@@ -442,6 +488,12 @@ fn record_outcome(
     }
 }
 
+/// Sources a pass could not read: gone when opened, or changing under every
+/// retry.
+fn lost_sources(report: &StreamReport) -> u64 {
+    (report.files_missing as u64).saturating_add(report.retries_exhausted)
+}
+
 fn virtual_parent(file: &SessionFile) -> Result<&str, PipelineError> {
     file.relative_path
         .split_once('#')
@@ -467,11 +519,11 @@ fn virtual_parent(file: &SessionFile) -> Result<&str, PipelineError> {
 /// ledger's file id for each source is its index in that order (its roster
 /// key), in every segment.
 ///
-/// Every pass of the walk runs with
-/// [`IngestOptions::stop_at_partial_record`]: a source whose writer is
-/// mid-append still ends at a terminal generation, at its last complete
-/// record, and the record it has not finished is append growth for the live
-/// runner.
+/// Every pass of the walk runs as part of a private build
+/// ([`IngestOptions::private_build`]): a source whose writer is mid-append,
+/// or that vanishes or keeps changing after part of it was read, still ends at
+/// a terminal generation, and an unclean one activates its parseable rows. A
+/// source that cannot be read at all is emitted skipped.
 #[allow(clippy::too_many_arguments)]
 pub fn stream_closed_sources_into(
     adapter: &dyn AgentAdapter,
@@ -554,11 +606,11 @@ pub fn stream_closed_sources_pooled(
 }
 
 /// The options every closed-source pass runs under: the walk hands the writer
-/// only terminal generations ([`close_file`]), so a pass may never leave one
-/// staged behind a record its writer has not finished.
+/// only terminal generations ([`close_file`]) of a build nothing of which is
+/// published yet, so a pass never leaves one staged.
 fn closed_pass_options(opts: &IngestOptions) -> IngestOptions {
     IngestOptions {
-        stop_at_partial_record: true,
+        private_build: true,
         ..opts.clone()
     }
 }
@@ -675,6 +727,7 @@ fn walk_closed_sources(
             report.files += 1;
             let restarts_before = report.generations_restarted;
             let payload_before = report.payload_bytes;
+            let lost_before = lost_sources(&report);
             let mode = if audit_set.contains(file.relative_path.as_str()) {
                 PassMode::Audit
             } else {
@@ -720,7 +773,16 @@ fn walk_closed_sources(
                 &mut session_health,
             );
             let payload = report.payload_bytes - payload_before;
-            for closed in close_unit(adapter, runtime, planner, &[file], payload, instrument)? {
+            for closed in close_unit(
+                adapter,
+                runtime,
+                planner,
+                &[file],
+                payload,
+                &file_health,
+                lost_sources(&report) > lost_before,
+                instrument,
+            )? {
                 frontier.captured(closed)?;
             }
 
@@ -739,6 +801,10 @@ fn walk_closed_sources(
                     opts.check_cancelled()?;
                     report.siblings_healed += 1;
                     let payload_before = report.payload_bytes;
+                    let lost_before = lost_sources(&report);
+                    let generations_before =
+                        queries::cursor_state(planner.conn(), &runtime.id, &sibling.relative_path)?
+                            .map(|cursor| cursor.highest_generation);
                     let outcome = ingest_file(
                         adapter,
                         runtime,
@@ -752,6 +818,7 @@ fn walk_closed_sources(
                         PassMode::ForceHeal,
                         ledger.as_deref_mut(),
                     )?;
+                    let lost = lost_sources(&report) > lost_before;
                     record_outcome(
                         outcome,
                         sibling,
@@ -759,10 +826,33 @@ fn walk_closed_sources(
                         &mut file_health,
                         &mut session_health,
                     );
-                    let payload = report.payload_bytes - payload_before;
-                    for closed in
-                        close_unit(adapter, runtime, planner, &[sibling], payload, instrument)?
+                    if lost
+                        && queries::cursor_state(
+                            planner.conn(),
+                            &runtime.id,
+                            &sibling.relative_path,
+                        )?
+                        .map(|cursor| cursor.highest_generation)
+                            == generations_before
                     {
+                        // The sibling could not be read again at all, so
+                        // nothing was staged: the generation it was held with
+                        // stays, held Streaming like a live heal that lost
+                        // its file.
+                        frontier.held_incomplete(&sibling.relative_path)?;
+                        continue;
+                    }
+                    let payload = report.payload_bytes - payload_before;
+                    for closed in close_unit(
+                        adapter,
+                        runtime,
+                        planner,
+                        &[sibling],
+                        payload,
+                        &file_health,
+                        lost,
+                        instrument,
+                    )? {
                         frontier.healed(closed)?;
                     }
                 }
@@ -782,6 +872,7 @@ fn walk_closed_sources(
             }
             let group = &ordered[index..end];
             let payload_before = report.payload_bytes;
+            let lost_before = lost_sources(&report);
             if file.driver == StreamDriver::DocumentSnapshot {
                 crate::document::stream_document_group(
                     adapter,
@@ -814,7 +905,16 @@ fn walk_closed_sources(
                 )?;
             }
             let payload = report.payload_bytes - payload_before;
-            for closed in close_unit(adapter, runtime, planner, group, payload, instrument)? {
+            for closed in close_unit(
+                adapter,
+                runtime,
+                planner,
+                group,
+                payload,
+                &file_health,
+                lost_sources(&report) > lost_before,
+                instrument,
+            )? {
                 frontier.captured(closed)?;
             }
             index = end;
