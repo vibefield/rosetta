@@ -410,3 +410,27 @@ admission; all frozen digests are equal to `main`'s.
   67.3 s for step 1) and showed no effect from the reclaimer thread. Compare runs within one mode,
   and prefer retired instructions and per-thread CPU (reported in `--profile` since this step) to
   wall time when the host is loaded.
+
+## 13. Outcome of step 2, parallel capture (2026-09-28)
+
+One process-wide pool of capture workers (cores − 1 by default; `--capture-workers 0` keeps the
+serial walk) steps resumable per-file passes one tail batch at a time: read, normalize, checkpoint,
+frame and hash. Each runtime's producer became a sequencer that commits worker output strictly in
+path order, so the raw ledger is byte-identical to the serial walk's for any worker count (except
+the metadata frames' `discovered_at`), and the producer-side tool resolution of step 3 runs on it in
+emission order. Ledger file ids became roster keys so workers can checksum finished frames; decoded
+entries are unchanged. Look-ahead is bounded by a 512 MiB budget whose over-budget tasks park rather
+than block. Every frozen digest and ledger source digest equals `main`'s.
+
+- Calm interleaved means over `main` with steps 1 and 3: frozen canonical ready 57.4 → 47.9 s, live
+  87.4 → 71.0 s; search ready 61.8 → 52.0 s frozen, 95.7 → 80.2 s live; the same retired
+  instructions; daemon CPU +8 %; live peak footprint 3.41 → 4.57 GiB.
+- The pool also halves the cold start's sensitivity to host load: on the frozen sweep canonical ready
+  fits about 77.5 + 0.64·load serially and 66 + 0.36·load pooled.
+- **What limits it now:** the sole canonical writer's share of the CPU (its CPU is unchanged, but its
+  wall time is 1.5–2× its CPU when pooled, and Codex's producer waits 9–18 s on the writer's
+  in-flight budget); Codex's longest chain of large files (26–30 s, now the critical path); and
+  Codex's resolution burst after its state-database unit.
+- **Found while testing, not yet fixed:** a transcript that ends inside a record makes the fresh
+  pass end staged, and the whole cold start fails; a record over 32 MiB abandons its first
+  generation and admission then refuses the whole build.
