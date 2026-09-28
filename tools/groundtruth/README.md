@@ -44,8 +44,10 @@ Every successful schema rebuild writes both `groundtruth.json` and its sibling
 not require runner isolation.
 
 Organic censuses retain real protocol enum values and built-in tool names, but
-remove literal IDs, paths, filenames, prompts, titles, arbitrary map keys, and
-configured MCP names. Claude transcript censuses must pass the pinned
+remove literal IDs (also as map keys, and epoch-stamped ones), paths, filenames,
+prompts, titles, arbitrary map keys, and configured MCP names; a configured MCP
+tool's input keeps only its parameter names and JSON kinds. Claude transcript
+censuses must pass the pinned
 `--writer-version`; unversioned sidecar streams are still included.
 
 Every `watch.toml` declares `groundtruth.status = "captured"` or `"blocked"`, and

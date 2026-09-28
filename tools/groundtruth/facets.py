@@ -55,6 +55,22 @@ def _hit(
     }
 
 
+def _mcp_parameters(value: Any) -> Any:
+    """A configured MCP server's input: parameter names and JSON kinds only.
+
+    The server, not the agent, defines everything below its parameters, and
+    nested payloads can be keyed by per-call values (document block ids, for
+    example) that a structure census must not publish.
+    """
+
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: {} if isinstance(item, dict) else [] if isinstance(item, list) else item
+        for key, item in value.items()
+    }
+
+
 def _claude_code(
     stream_id: str,
     record: dict[str, Any],
@@ -384,7 +400,7 @@ def _claude_code(
                             "assistant.message.content[type=tool_use].input",
                             "name",
                             key,
-                            tool_input,
+                            _mcp_parameters(tool_input) if key == "mcp__*" else tool_input,
                         )
                     )
                     if name == "Agent" and isinstance(tool_input, dict):

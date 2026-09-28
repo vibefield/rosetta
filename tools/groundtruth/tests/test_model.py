@@ -44,6 +44,27 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(list(shape["fields"]), ["<dynamic>"])
         self.assertEqual(shape["fields"]["<dynamic>"]["observed"], 2)
 
+    def test_native_id_keys_collapse(self) -> None:
+        shape = shape_of(
+            {
+                "toolu_014Q1xingyToyWpN3CCfCcdt": {"command": "ls"},
+                "toolu_01ARoTaMy3L4gh1adUHm8Pqz": {"file_path": "a"},
+                "0123456789abcdef0123": {"cwd": "b"},
+            }
+        )
+        self.assertEqual(list(shape["fields"]), ["<dynamic>"])
+        self.assertEqual(shape["fields"]["<dynamic>"]["observed"], 3)
+        self.assertEqual(
+            sorted(shape["fields"]["<dynamic>"]["shape"]["fields"]),
+            ["command", "cwd", "file_path"],
+        )
+
+    def test_id_named_schema_fields_are_kept(self) -> None:
+        shape = shape_of({"tool_use_id": "a", "msg_id": "b", "session_id": "c"})
+        self.assertEqual(
+            list(shape["fields"]), ["msg_id", "session_id", "tool_use_id"]
+        )
+
     def test_wide_schema_field_names_are_kept(self) -> None:
         row = {f"col_{index:02d}": index for index in range(56)}
         shape = shape_of(row)
@@ -196,6 +217,62 @@ class ShapeTests(unittest.TestCase):
         )
         self.assertEqual(
             list(stream["facets"][0]["record_types"]), ["Bash", "mcp__*"]
+        )
+
+    def test_census_drops_epoch_stamped_identifiers(self) -> None:
+        document = {
+            "format": "rosetta-groundtruth/1",
+            "agent": "a",
+            "agent_version": "1.0.0",
+            "evidence": "observed",
+            "generator": "tools.groundtruth census 2",
+            "data_root": "~/.a",
+            "streams": [
+                {
+                    "id": "events",
+                    # Values as an older census committed them, before the
+                    # policy existed: the sanitizer `check` runs must drop them.
+                    "record_types": {
+                        "": {
+                            "observed": 3,
+                            "shape": {
+                                "kind": "object",
+                                "fields": {
+                                    name: {
+                                        "required": True,
+                                        "observed": 3,
+                                        "shape": {"kind": "string", "values": values},
+                                    }
+                                    for name, values in {
+                                        "version": {
+                                            "1790555900-d9dc": 1,
+                                            "1790561051-5714": 1,
+                                            "2.1.283": 1,
+                                        },
+                                        "model": {
+                                            "claude-3-5-sonnet-20241022": 1,
+                                            "opus": 2,
+                                        },
+                                        "status": {"1790555900123": 1, "done": 2},
+                                    }.items()
+                                },
+                            },
+                        }
+                    },
+                }
+            ],
+        }
+        fields = sanitize_census_document(document)["streams"][0]["record_types"][""][
+            "shape"
+        ]["fields"]
+        self.assertEqual(fields["version"]["shape"]["values"], {"2.1.283": 1})
+        self.assertEqual(
+            fields["model"]["shape"]["values"],
+            {"claude-3-5-sonnet-20241022": 1, "opus": 2},
+        )
+        self.assertEqual(fields["status"]["shape"]["values"], {"done": 2})
+        self.assertNotIn(
+            "values", shape_of({"version": "1790555900-d9dc"})["fields"]["version"]["shape"]
         )
 
     def test_census_keeps_sqlite_table_identities(self) -> None:

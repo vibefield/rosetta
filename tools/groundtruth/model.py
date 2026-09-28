@@ -98,6 +98,9 @@ OPAQUE_VALUE = re.compile(
     re.IGNORECASE,
 )
 LONG_HEX_VALUE = re.compile(r"^[0-9a-f]{12,}$", re.IGNORECASE)
+# Epoch seconds/milliseconds and other long counters: no protocol enum carries
+# nine consecutive digits (dated model names such as `-20241022` have eight).
+LONG_DIGITS_VALUE = re.compile(r"\d{9,}")
 
 CENSUS_ENUM_SUFFIXES = {
     "action",
@@ -207,6 +210,10 @@ def _safe_enum_values(
             continue
         if UUID_KEY.fullmatch(value) or OPAQUE_VALUE.fullmatch(value) or LONG_HEX_VALUE.fullmatch(value):
             continue
+        # Epoch-stamped IDs such as Artifact versions (`1790555900-d9dc`)
+        # otherwise pass as a version number with a suffix.
+        if LONG_DIGITS_VALUE.search(value):
+            continue
         if normalized.endswith("version") and not SEMVER_VALUE.fullmatch(value):
             continue
         if normalized in {"tool", "toolname", "tools"} and value.startswith("mcp__"):
@@ -220,7 +227,9 @@ def value_like_key(key: str) -> bool:
         return True
     if any(char.isspace() or char in "/\\" for char in key):
         return True
-    if UUID_KEY.fullmatch(key):
+    # Maps keyed by native IDs (Claude's per-tool-call `wireToolInputs`, keyed
+    # by `toolu_…`) would otherwise publish every literal ID as a field name.
+    if UUID_KEY.fullmatch(key) or OPAQUE_VALUE.fullmatch(key) or LONG_HEX_VALUE.fullmatch(key):
         return True
     if len(key) > 2 and key.startswith("<") and key.endswith(">"):
         return True

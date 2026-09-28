@@ -41,6 +41,44 @@ class FacetTests(unittest.TestCase):
         result = next(hit for hit in results if hit["facet_id"] == "tool-result")
         self.assertEqual(result["key"], "Bash")
 
+    def test_claude_mcp_input_keeps_parameter_names_and_kinds_only(self) -> None:
+        calls = extract(
+            "claude-code",
+            "transcript",
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "call-1",
+                            "name": "mcp__server__update",
+                            "input": {
+                                "ref": {"object": "node", "id": "n1"},
+                                "batch": [{"blocks": {"s1": {"type": "pending"}}}],
+                                "verbose": True,
+                                "engine": "live",
+                            },
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "call-2",
+                            "name": "Bash",
+                            "input": {"command": "true", "env": {"A": "1"}},
+                        },
+                    ]
+                },
+            },
+            {},
+        )
+        inputs = {hit["key"]: hit["value"] for hit in calls if hit["facet_id"] == "tool-input"}
+        self.assertEqual(
+            inputs["mcp__*"],
+            {"ref": {}, "batch": [], "verbose": True, "engine": "live"},
+        )
+        # Built-in tools keep their full input structure.
+        self.assertEqual(inputs["Bash"], {"command": "true", "env": {"A": "1"}})
+
     def test_claude_agent_resume_and_result_status_are_explicit_facets(self) -> None:
         context: dict[str, object] = {}
         calls = extract(
