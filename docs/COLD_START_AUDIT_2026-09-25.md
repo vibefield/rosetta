@@ -474,3 +474,31 @@ Three interleaved live all-agent cold starts of each binary on a calm host (load
 Codex is now the longest capture (38–46 s against Claude's 27–33 s): its largest files form one chain
 that no worker count shortens, and its sessions resolve only after its state database. On a loaded host
 the pooled capture's sensitivity to load is about half the serial walk's (§13).
+
+## 16. Ledger compression in the capture workers, and robustness fixes (2026-09-28)
+
+**Compression (decision D3, still open).** Capture workers can now write the cold ledger as one zstd
+frame per tail batch, concatenated into `RLZ1` segments (`--cold-ledger-codec zstd-frames:N`); the
+default stays plain. Compressed ledgers are byte-identical for any worker count and decode to the plain
+bytes; every digest and ledger source digest equals `main`'s. Live all-agent on a calm host, plain /
+level 1 / level 3:
+
+| | plain | zstd-frames:1 | zstd-frames:3 |
+|---|---:|---:|---:|
+| Canonical ready, internal disk | 53.3 s | 52.1 s | 51.7 s |
+| Daemon CPU by canonical ready | 127.7 s | +12.5 s | +20.4 s |
+| Bytes written by canonical ready | 17.5 GB | 6.4 GB | 5.8 GB |
+| Ledger size | 15.6 GB | 4.4 GB | 3.8 GB |
+| Peak footprint | 4.38 GiB | 3.94 GiB | 3.87 GiB |
+
+With plain, the paced background pass then recompresses the ledger for about an hour (107 CPU-s
+unpaced, reading 19 GB) and ends at 3.68 GB; a compressed cold ledger leaves it nothing to do. On the
+USB SSD a plain ledger made the capture wait about 30 s for the ledger queue (one calm round).
+
+**Robustness.** A fresh (or resumed fresh) start no longer fails when a transcript is caught mid-append:
+the closed walk ends that source's generation at its last complete record, and the live runner lands the
+rest as ordinary growth. Still open, for a decision: a record over the 32 MiB capture limit fails every
+fresh start (the largest on this machine are 26.3 MiB for Grok and 24.5 MiB for Codex, which was 4.85 MiB
+a month earlier), and a live append of one is quarantined without being ledgered; the fresh start also
+still refuses a whole runtime for any hard error, vanished, missing or unidentified file, which the warm
+path tolerates. None of the 233 runs of this campaign hit one of these.
