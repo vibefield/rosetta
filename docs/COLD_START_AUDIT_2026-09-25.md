@@ -452,3 +452,25 @@ that needs an isolated runner, and `watch.toml` records the gap.
   projections keep their earlier drift rows until rebuilt.
 - A new writer field still costs one drift op and one `drift_seen` row per record until the census
   catches up; bounding that needs a change to what drift counts mean or a schema bump.
+
+## 15. End to end after steps 1–4 (2026-09-28, 05:00 PDT)
+
+Three interleaved live all-agent cold starts of each binary on a calm host (load 4–36; about
+698,500 messages), `6a56afd` (after D2) against `d8954d3` (steps 1–4). Means:
+
+| | `6a56afd` | `d8954d3` |
+|---|---:|---:|
+| Canonical ready | 101.3 s | 61.2 s |
+| Search ready | 118.6 s | 69.1 s |
+| Metadata ready | 11.2 s | 4.1 s |
+| Claude capture ends | 74.5 s | 33.6 s |
+| Claude admission | 9.7 s | 1.9 s |
+| Live catch-up | 13.1 s | 1.8 s |
+| Search ready after canonical ready | 17.3 s | 7.9 s |
+| Daemon CPU | 144.8 s | 136.1 s |
+| Retired instructions to canonical ready | 1,015 G | 941 G |
+| Peak footprint | 4.9 GiB | 4.3 GiB |
+
+Codex is now the longest capture (38–46 s against Claude's 27–33 s): its largest files form one chain
+that no worker count shortens, and its sessions resolve only after its state database. On a loaded host
+the pooled capture's sensitivity to load is about half the serial walk's (§13).
