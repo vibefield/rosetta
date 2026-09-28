@@ -82,6 +82,35 @@ fn load_old_by_timeline(tx: &Transaction, timeline_id: &str) -> Result<Option<Ol
     )
 }
 
+/// What a usage snapshot needs of its response row: its identity, owner, and
+/// the model and timestamp the snapshot may only fill in. Every one of these
+/// columns precedes `content`, so the read never walks a row's overflow
+/// chain, and nothing tool-shaped is decoded.
+struct UsageTarget {
+    id: i64,
+    session_id: String,
+    model: Option<String>,
+    ts: Option<Ms>,
+}
+
+fn load_usage_target(
+    tx: &Transaction,
+    timeline_id: &str,
+) -> Result<Option<UsageTarget>, StoreError> {
+    let target = tx
+        .prepare_cached("SELECT id, session_id, model, ts FROM message WHERE timeline_id = ?1")?
+        .query_row(params![timeline_id], |row| {
+            Ok(UsageTarget {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                model: row.get(2)?,
+                ts: row.get(3)?,
+            })
+        })
+        .optional()?;
+    Ok(target)
+}
+
 fn load_old_by_tool(
     tx: &Transaction,
     session_id: &str,
@@ -873,7 +902,7 @@ pub(super) fn apply_usage(
 ) -> Result<bool, StoreError> {
     stats.profile.usage_attempts += 1;
     let started = Instant::now();
-    let loaded = load_old_by_timeline(tx, response);
+    let loaded = load_usage_target(tx, response);
     stats.profile.usage_lookup_nanos += elapsed_nanos(started);
     let Some(old) = loaded? else {
         stats.usage_unmatched += 1;
@@ -929,7 +958,7 @@ pub(super) fn apply_usage(
         let cost = crate::pricing::usage_cost(next_model.as_deref(), next_ts, tokens);
         fx.push(Mutation::Usage {
             session_id: session_id.to_string(),
-            timeline_id: old.timeline_id,
+            timeline_id: response.to_owned(),
             ts: next_ts,
             model: next_model,
             tokens: Box::new(tokens.clone()),
