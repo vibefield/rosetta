@@ -205,7 +205,7 @@ impl WorkClock {
 }
 
 #[cfg(target_os = "macos")]
-fn thread_cpu_time() -> Option<Duration> {
+pub(crate) fn thread_cpu_time() -> Option<Duration> {
     let mut time = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -216,7 +216,7 @@ fn thread_cpu_time() -> Option<Duration> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn thread_cpu_time() -> Option<Duration> {
+pub(crate) fn thread_cpu_time() -> Option<Duration> {
     None
 }
 

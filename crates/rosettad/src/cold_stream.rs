@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{Scope, ScopedJoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::Ledger;
@@ -43,6 +43,7 @@ use serde_json::json;
 
 use crate::cold_progress::ColdProgress;
 use crate::engine::{absorb_effects, now_ms};
+use crate::ledger_compression::thread_cpu_time;
 use crate::serve::counter_source;
 use crate::{
     AppliedColdRuntime, ColdCaptureRequest, Flags, PlannedColdRuntime, bench, identity_name,
@@ -161,6 +162,13 @@ impl ByteBudget {
 
 fn millis(nanos: u64) -> f64 {
     nanos as f64 / 1_000_000.0
+}
+
+/// This thread's CPU since `started`, in milliseconds, where the clock exists.
+fn cpu_millis(started: Option<Duration>) -> Option<f64> {
+    started
+        .zip(thread_cpu_time())
+        .map(|(before, after)| after.saturating_sub(before).as_secs_f64() * 1_000.0)
 }
 
 /// One runtime's producer: setup, streamed capture, then the closing report.
@@ -508,6 +516,9 @@ fn write(
     let mut idle_nanos = 0_u64;
     let mut apply_calls = 0_u64;
     let writer_started = Instant::now();
+    // Writer-thread CPU, whole window and per runtime's streamed applies.
+    let writer_cpu_started = thread_cpu_time();
+    let mut apply_cpu: HashMap<String, Duration> = HashMap::new();
     while closed < workers {
         let message = match pending.take() {
             Some(message) => message,
@@ -597,9 +608,13 @@ fn write(
                 let entry = open.get_mut(&runtime_id).ok_or_else(|| {
                     format!("streamed sources arrived for unopened runtime {runtime_id}")
                 })?;
+                let cpu_before = thread_cpu_time();
                 entry
                     .apply(cx.store, sources, cx.instrument)
                     .map_err(|error| format!("applying streamed {runtime_id} sources: {error}"))?;
+                if let (Some(before), Some(after)) = (cpu_before, thread_cpu_time()) {
+                    *apply_cpu.entry(runtime_id).or_default() += after.saturating_sub(before);
+                }
                 apply_calls += 1;
                 producers.budget.release(bytes);
             }
@@ -609,7 +624,10 @@ fn write(
                 let streamed = open.remove(&runtime.runtime.id).ok_or_else(|| {
                     format!("streamed runtime {} closed unopened", runtime.runtime.id)
                 })?;
-                if let Some(output) = admit(runtime, streamed, &ownership, cx, failures)? {
+                let applied_cpu = apply_cpu.remove(&runtime.runtime.id).unwrap_or_default();
+                if let Some(output) =
+                    admit(runtime, streamed, applied_cpu, &ownership, cx, failures)?
+                {
                     outputs.push(output);
                 }
             }
@@ -624,6 +642,7 @@ fn write(
             "agent": null,
             "wallMs": writer_started.elapsed().as_secs_f64() * 1_000.0,
             "idleMs": millis(idle_nanos),
+            "cpuMs": cpu_millis(writer_cpu_started),
             "applyCalls": apply_calls,
         }));
     }
@@ -632,9 +651,11 @@ fn write(
 
 /// Admit one closed runtime: fold, canonical ordinals, the Pending flip, then
 /// the same publication steps the retained path runs after an apply.
+/// `applied_cpu` is the writer CPU its streamed sources took.
 fn admit(
     runtime: ClosedColdRuntime,
     mut streamed: StreamedRuntime,
+    applied_cpu: Duration,
     ownership: &BTreeMap<String, Option<String>>,
     cx: &mut StreamedCold<'_>,
     failures: &mut Vec<String>,
@@ -697,11 +718,13 @@ fn admit(
             "sources": streamed.sources_applied(),
             "resolvedSessions": resolved_sessions,
             "resolvedToolRows": resolved_tool_rows,
+            "cpuMs": applied_cpu.as_secs_f64() * 1_000.0,
             "lagMs": runtime.captured_at.elapsed().as_secs_f64() * 1_000.0,
         }));
     }
 
     let admission_started = Instant::now();
+    let admission_cpu_started = thread_cpu_time();
     let admission_before = cx.instrument.snapshot();
     // Admission writes no cursor, so these stay the committed checkpoints
     // through finalization and publication.
@@ -731,7 +754,9 @@ fn admit(
         }));
     }
 
+    let admission_cpu_ms = cpu_millis(admission_cpu_started);
     let absorb_started = Instant::now();
+    let absorb_cpu_started = thread_cpu_time();
     absorb_effects(cx.store, cx.hub)?;
     if stage_profiles {
         bench::emit(&json!({
@@ -741,6 +766,8 @@ fn admit(
             "agent": kind,
             "runtime": runtime_id,
             "wallMs": absorb_started.elapsed().as_secs_f64() * 1_000.0,
+            "cpuMs": cpu_millis(absorb_cpu_started),
+            "admissionCpuMs": admission_cpu_ms,
         }));
     }
     let session_ids = cx
