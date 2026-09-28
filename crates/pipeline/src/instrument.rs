@@ -9,7 +9,9 @@ use std::time::Instant;
 use rosetta_adapter_support::{LineOutcome, LineStatus};
 use rosetta_capture::{Ledger, LedgerWriteStats};
 use rosetta_core::IngestOp;
-use rosetta_store::{ApplyStats, Batch, BulkLoadStats, ColdReconciliation, Store, StoreError};
+use rosetta_store::{
+    ApplyStats, Batch, BulkLoadStats, ColdReconciliation, Store, StoreError, StreamedSource,
+};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -503,10 +505,10 @@ impl Instrument {
         &self,
         store: &mut Store,
         state: &mut ColdReconciliation,
-        batches: Vec<Batch>,
+        sources: Vec<StreamedSource>,
     ) -> Result<ApplyStats, StoreError> {
         let result = self.time(Metric::ApplyNanos, || {
-            store.apply_streamed_sources(state, batches)
+            store.apply_streamed_sources(state, sources)
         });
         if let Ok(stats) = &result {
             self.record_apply_stats(stats);

@@ -16,6 +16,7 @@ pub mod closed;
 pub mod command;
 pub mod discover;
 mod document;
+pub mod early;
 pub mod instrument;
 pub mod live;
 pub mod meta;
@@ -35,6 +36,7 @@ pub use command::{RawCommandLocator, read_raw_command};
 pub use discover::{
     CensusRoot, Discovery, discover, discover_root, discover_roots, expand_data_root,
 };
+pub use early::{EarlyToolReport, EarlyToolResolver};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
 pub use live::{
     HintMapping, LiveOptions, LiveReport, LiveRunner, PollEvidence, map_hint, stream_live,

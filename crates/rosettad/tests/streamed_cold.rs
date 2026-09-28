@@ -21,9 +21,10 @@ use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    ClosedSource, IngestOptions, Instrument, PollEvidence, SessionFile, StreamedRuntime,
-    apply_prepared_runtime, discover, expand_data_root, meta_ingest_inventory_into,
-    prepare_captured_runtime, stream_backfill, stream_closed_sources_into, streamed_setup,
+    ClosedSource, EarlyToolReport, EarlyToolResolver, IngestOptions, Instrument, PollEvidence,
+    SessionFile, StreamedRuntime, apply_prepared_runtime, discover, expand_data_root,
+    meta_ingest_inventory_into, prepare_captured_runtime, stream_backfill,
+    stream_closed_sources_into, streamed_setup,
 };
 use rosetta_store::Store;
 use rusqlite::types::Value;
@@ -265,6 +266,43 @@ fn streamed(planned: Planned, canonical: &mut Store) -> (String, HashMap<String,
     (runtime.id, evidence)
 }
 
+/// The streamed path as fresh serve runs it: the producer-side resolver sees
+/// every emission before the writer and resolves the tool rows of each
+/// session it can prove lives in one source. Returns the runtime id and what
+/// the resolver did.
+fn streamed_early(planned: Planned, canonical: &mut Store) -> (String, EarlyToolReport) {
+    let Planned {
+        adapter,
+        runtime,
+        root,
+        mut planner,
+        files,
+        opts,
+    } = planned;
+    let instrument = Instrument::new();
+    let setup = streamed_setup(&files, &mut planner).unwrap();
+    let mut writer =
+        StreamedRuntime::open(adapter, &runtime, setup, canonical, &instrument).unwrap();
+    let mut resolver = EarlyToolResolver::new(&files);
+    stream_closed_sources_into(
+        adapter,
+        &runtime,
+        &root,
+        &mut planner,
+        &files,
+        &opts,
+        &instrument,
+        None,
+        &mut |mut sources| {
+            resolver.resolve(&mut sources)?;
+            writer.apply(canonical, sources, &instrument).map(|_| ())
+        },
+    )
+    .unwrap();
+    writer.admit(canonical, &instrument).unwrap();
+    (runtime.id, resolver.report())
+}
+
 /// The live runner trusts its seed as if it had read each cursor row: after
 /// admission and finalization, every cursor of the runtime must read back as
 /// exactly the evidence the writer handed over.
@@ -502,6 +540,105 @@ fn streamed_projection_matches_for_generated_multi_session_corpora() {
         );
         assert_same_projection(adapter.kind(), &reference, &candidate);
     }
+}
+
+#[test]
+fn tool_rows_resolved_at_file_close_equal_the_admission_fold_for_every_fixture() {
+    let mut resolved = EarlyToolReport::default();
+    let mut compared = 0;
+    for adapter in adapters() {
+        for (scenario, data) in fixture_roots(adapter.kind()) {
+            let label = format!("{}/{scenario}", adapter.kind());
+            let home = home_with(adapter, &data);
+
+            let mut folded = cold_store();
+            let planned = plan(adapter, home.path(), &mut folded);
+            streamed(planned, &mut folded);
+            folded.finish_bulk_load().unwrap();
+
+            let mut early = cold_store();
+            let planned = plan(adapter, home.path(), &mut early);
+            let (_, report) = streamed_early(planned, &mut early);
+            early.finish_bulk_load().unwrap();
+
+            assert_same_projection(&label, &folded, &early);
+            resolved.sources += report.sources;
+            resolved.tool_rows += report.tool_rows;
+            resolved.shared_session += report.shared_session;
+            compared += 1;
+        }
+    }
+    assert!(compared >= 27, "only {compared} fixture scenarios compared");
+    // The comparison is not vacuous: fixtures resolve rows at file close,
+    // and fixtures with several sources per session keep the fold.
+    assert!(resolved.tool_rows > 0, "{resolved:?}");
+    assert!(resolved.shared_session > 0, "{resolved:?}");
+}
+
+#[test]
+fn tool_rows_resolved_at_file_close_equal_the_admission_fold_for_generated_corpora() {
+    use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
+
+    for (adapter, agent, seed) in [
+        (
+            &ClaudeCodeAdapter as &'static dyn AgentAdapter,
+            Agent::ClaudeCode,
+            73,
+        ),
+        (&CodexAdapter, Agent::Codex, 19),
+    ] {
+        let home = TempDir::new().unwrap();
+        let root = expand_data_root(&adapter.layout().data_root, home.path());
+        std::fs::create_dir_all(&root).unwrap();
+        generate(&CorpusSpec::new(agent, 12, 4_000, seed), &root).unwrap();
+
+        let mut reference = cold_store();
+        let planned = plan(adapter, home.path(), &mut reference);
+        retained(planned, &mut reference);
+        reference.finish_bulk_load().unwrap();
+
+        let mut folded = cold_store();
+        let planned = plan(adapter, home.path(), &mut folded);
+        streamed(planned, &mut folded);
+        folded.finish_bulk_load().unwrap();
+
+        let mut early = cold_store();
+        let planned = plan(adapter, home.path(), &mut early);
+        let (runtime_id, report) = streamed_early(planned, &mut early);
+        early.finish_bulk_load().unwrap();
+
+        assert_same_projection(adapter.kind(), &folded, &early);
+        assert_same_projection(adapter.kind(), &reference, &early);
+        eprintln!(
+            "{}: {} of {} tool rows resolved at file close ({report:?})",
+            adapter.kind(),
+            report.tool_rows,
+            runtime_tool_rows(&early, &runtime_id)
+        );
+    }
+}
+
+#[test]
+fn a_session_with_two_transcripts_keeps_the_admission_fold() {
+    let (home, opts) = restarting_home();
+    let mut folded = cold_store();
+    let planned = plan_with(&ClaudeCodeAdapter, home.path(), &mut folded, opts);
+    streamed(planned, &mut folded);
+    folded.finish_bulk_load().unwrap();
+
+    let (home, opts) = restarting_home();
+    let mut early = cold_store();
+    let planned = plan_with(&ClaudeCodeAdapter, home.path(), &mut early, opts);
+    let (_, report) = streamed_early(planned, &mut early);
+    early.finish_bulk_load().unwrap();
+
+    assert_eq!(report.sources, 0, "{report:?}");
+    assert_same_projection_ignoring(
+        "two transcripts",
+        &folded,
+        &early,
+        &[("ingest_cursor", "checkpoint"), ("session", "updated_at")],
+    );
 }
 
 fn runtime_tool_rows(store: &Store, runtime_id: &str) -> i64 {

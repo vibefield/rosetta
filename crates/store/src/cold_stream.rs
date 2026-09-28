@@ -12,7 +12,9 @@ use std::time::Instant;
 
 use rusqlite::params;
 
-use crate::apply::{self, ApplyStats, Batch, BulkReconciliationDelta, SourceMode};
+use crate::apply::{
+    self, ApplyStats, Batch, BulkReconciliationDelta, ResolvedSourceTools, SourceMode,
+};
 use crate::{Store, StoreError, StoreMode, elapsed_nanos, validate_source_batch};
 
 /// One runtime's deferred cold facts — tool openers, lifecycle updates,
@@ -24,18 +26,39 @@ pub struct ColdReconciliation {
     fold: apply::ColdFold,
 }
 
+/// One closed source for [`Store::apply_streamed_sources`]: its batch and,
+/// when its producer proved the source holds every tool fact of its session,
+/// that session's tool lifecycles already resolved
+/// ([`ResolvedSourceTools::resolve`]). The batch's operations are then the
+/// resolved source's, keyed by [`ResolvedSourceTools::positions`].
+#[derive(Debug)]
+pub struct StreamedSource {
+    pub batch: Batch,
+    pub resolved: Option<ResolvedSourceTools>,
+}
+
+impl From<Batch> for StreamedSource {
+    fn from(batch: Batch) -> Self {
+        Self {
+            batch,
+            resolved: None,
+        }
+    }
+}
+
 /// Each applied closed source's deferred facts, with its cursor path.
 type ClosedDeltas = Vec<(BulkReconciliationDelta, Option<String>)>;
 
 impl Store {
     /// The SQL half of applying closed source batches: every source's final
-    /// immediate rows, checkpoint, and generation in one private transaction.
-    /// Returns each source's deferred relational facts with its path for the
-    /// caller's reconciliation; `validate_retries` checks them against the
-    /// store's own buffer first.
+    /// immediate rows, checkpoint, and generation — and the tool rows of a
+    /// source resolved at file close — in one private transaction. Returns
+    /// each source's deferred relational facts with its path for the caller's
+    /// reconciliation; `validate_retries` checks them against the store's own
+    /// buffer first.
     pub(crate) fn apply_closed_source_sql(
         &mut self,
-        batches: Vec<Batch>,
+        sources: Vec<StreamedSource>,
         validate_retries: bool,
     ) -> Result<(ApplyStats, ClosedDeltas), StoreError> {
         if self.mode != StoreMode::Bulk {
@@ -45,10 +68,10 @@ impl Store {
         }
 
         let mut cursor_ids = BTreeSet::new();
-        let mut deltas = Vec::with_capacity(batches.len());
-        let mut asset_totals = Vec::with_capacity(batches.len());
+        let mut deltas = Vec::with_capacity(sources.len());
+        let mut asset_totals = Vec::with_capacity(sources.len());
         let mut abandoned = false;
-        for batch in &batches {
+        for StreamedSource { batch, resolved } in &sources {
             let source = batch
                 .source
                 .as_ref()
@@ -68,6 +91,24 @@ impl Store {
                     ),
                 });
             }
+            if let Some(resolved) = resolved {
+                // Resolved rows carry final ordinals and are the only write
+                // of their tool lifecycles, so they need an activation and a
+                // store that trusts precomputed ordinals.
+                if source.mode != SourceMode::Activate
+                    || !self.bulk_ordinals_precomputed
+                    || resolved.positions().len() != batch.ops.len()
+                    || validate_retries
+                {
+                    return Err(StoreError::BulkLoadState {
+                        message: format!(
+                            "cursor {} carries tool rows resolved at file close outside a \
+                             streamed activation with precomputed ordinals",
+                            source.cursor_id
+                        ),
+                    });
+                }
+            }
             abandoned |= source.mode == SourceMode::Abandon;
             validate_source_batch(batch)?;
             asset_totals.push(self.assets.materialize_batch(batch, false)?);
@@ -75,7 +116,9 @@ impl Store {
 
         let mut totals = ApplyStats::default();
         let tx = self.conn.transaction()?;
-        for (batch, asset_stats) in batches.into_iter().zip(asset_totals) {
+        for (StreamedSource { batch, resolved }, asset_stats) in
+            sources.into_iter().zip(asset_totals)
+        {
             let mut stats = apply::apply_batch(
                 &tx,
                 &batch,
@@ -95,6 +138,12 @@ impl Store {
             stats.asset_bytes = asset_stats.bytes;
             stats.asset_write_nanos = asset_stats.nanos;
             totals.merge_from(&stats);
+            if let Some(resolved) = &resolved {
+                let started = Instant::now();
+                let mut resolved_stats = apply::apply_resolved_tools(&tx, &batch.ops, resolved)?;
+                resolved_stats.canonical_apply_nanos = elapsed_nanos(started);
+                totals.merge_from(&resolved_stats);
+            }
             let path = batch
                 .checkpoints
                 .first()
@@ -102,10 +151,12 @@ impl Store {
             // SQL has consumed the immediate rows. Move deferred facts into
             // the provisional RAM delta and release the rest of this batch
             // now, instead of retaining a second runtime-sized payload tree.
-            let delta = BulkReconciliationDelta::from_owned_batch(batch)?.ok_or_else(|| {
-                StoreError::BulkLoadState {
-                    message: "closed source batch did not produce reconciliation state".to_string(),
-                }
+            let delta = match &resolved {
+                Some(resolved) => BulkReconciliationDelta::from_resolved_batch(batch, resolved)?,
+                None => BulkReconciliationDelta::from_owned_batch(batch)?,
+            }
+            .ok_or_else(|| StoreError::BulkLoadState {
+                message: "closed source batch did not produce reconciliation state".to_string(),
             })?;
             if validate_retries {
                 self.bulk_reconciliation.validate(&delta)?;
@@ -131,9 +182,9 @@ impl Store {
     pub fn apply_streamed_sources(
         &mut self,
         state: &mut ColdReconciliation,
-        batches: Vec<Batch>,
+        sources: Vec<StreamedSource>,
     ) -> Result<ApplyStats, StoreError> {
-        let (mut totals, deltas) = self.apply_closed_source_sql(batches, false)?;
+        let (mut totals, deltas) = self.apply_closed_source_sql(sources, false)?;
         let collect_started = Instant::now();
         for (delta, path) in deltas {
             let path = path.ok_or_else(|| StoreError::BulkLoadState {

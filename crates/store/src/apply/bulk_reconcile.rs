@@ -28,8 +28,10 @@ use super::rows::{
 use super::{ApplyStats, Batch, SourceMode, SourceWrite, apply_op, profile_ordinal_lookup};
 
 mod fold;
+mod resolved;
 
 pub(crate) use fold::ColdFold;
+pub use resolved::ResolvedSourceTools;
 
 #[derive(Debug, Clone)]
 enum DeferredOp {
@@ -128,27 +130,7 @@ impl BulkReconciliationDelta {
                     ),
                 );
             }
-            let deferred_op = match op.into_owned() {
-                IngestOp::Message(row) => DeferredOp::ToolMessage(row),
-                IngestOp::ToolUpdate {
-                    session_id,
-                    correlation_key,
-                    evidence,
-                    patch,
-                    at,
-                } => DeferredOp::ToolUpdate {
-                    session_id,
-                    correlation_key,
-                    evidence,
-                    patch,
-                    at,
-                },
-                op @ (IngestOp::Usage { .. } | IngestOp::FileEdit(_)) => {
-                    DeferredOp::Tail(Box::new(op))
-                }
-                _ => unreachable!("defers admits only relational operations"),
-            };
-            deferred_ops.insert(sequence, deferred_op);
+            deferred_ops.insert(sequence, deferred_op(op.into_owned()));
         }
         Ok(Self {
             cursor_id: source.cursor_id,
@@ -158,6 +140,70 @@ impl BulkReconciliationDelta {
             fingerprints,
             deferred: deferred_ops,
         })
+    }
+
+    /// The delta of a closed source whose tool lifecycles were resolved at
+    /// file close: its resolved tool rows are already written, so only the
+    /// tail it left — usage the source's own tool rows did not absorb, and
+    /// file edits — joins the runtime's fold, at the source positions the
+    /// runtime fold would have given it.
+    pub(crate) fn from_resolved_batch(
+        batch: Batch,
+        resolved: &ResolvedSourceTools,
+    ) -> Result<Option<Self>, StoreError> {
+        let Some(source) = batch.source.as_ref() else {
+            return Ok(None);
+        };
+        let (cursor_id, generation, mode, first_sequence) = (
+            source.cursor_id,
+            source.generation,
+            source.mode,
+            source.first_sequence,
+        );
+        let sequence = |position: u64| {
+            first_sequence
+                .checked_add(position)
+                .ok_or_else(|| StoreError::SourceState {
+                    cursor_id,
+                    message: "source sequence overflowed while buffering a cold operation".into(),
+                })
+        };
+        let mut deferred = BTreeMap::new();
+        for (op, position) in batch.ops.into_iter().zip(resolved.positions()) {
+            if !defers(&op) || matches!(op, IngestOp::Message(_)) {
+                continue;
+            }
+            deferred.insert(sequence(*position)?, deferred_op(op));
+        }
+        Ok(Some(Self {
+            cursor_id,
+            generation,
+            mode,
+            activation_end: sequence(resolved.activation_end())?,
+            fingerprints: BTreeMap::new(),
+            deferred,
+        }))
+    }
+}
+
+fn deferred_op(op: IngestOp) -> DeferredOp {
+    match op {
+        IngestOp::Message(row) => DeferredOp::ToolMessage(row),
+        IngestOp::ToolUpdate {
+            session_id,
+            correlation_key,
+            evidence,
+            patch,
+            at,
+        } => DeferredOp::ToolUpdate {
+            session_id,
+            correlation_key,
+            evidence,
+            patch,
+            at,
+        },
+        op @ (IngestOp::Usage { .. } | IngestOp::FileEdit(_)) => DeferredOp::Tail(Box::new(op)),
+        _ => unreachable!("defers admits only relational operations"),
     }
 }
 
@@ -661,6 +707,42 @@ pub(crate) fn apply_plan(
         if first != last {
             crate::activity::touch_tool(tx, &key.session_id, &key.correlation_key, *last)?;
         }
+    }
+    flush_session_touches(tx, &mut stats)?;
+    debug_assert!(dirty_buckets.is_empty(), "cold maintenance defers buckets");
+    Ok(stats)
+}
+
+/// Write a closed source's resolved tool rows inside its own transaction:
+/// [`apply_plan`]'s writes for the part of the runtime fold that this one
+/// source decided. The rows sit in `ops` at their source positions with
+/// their final ordinals; every tool row there is a resolved row.
+pub(crate) fn apply_resolved_tools(
+    tx: &Transaction,
+    ops: &[IngestOp],
+    resolved: &ResolvedSourceTools,
+) -> Result<ApplyStats, StoreError> {
+    let mut stats = resolved.stats();
+    let mut dirty_buckets = BTreeSet::<BucketKey>::new();
+    for (op, position) in ops.iter().zip(resolved.positions()) {
+        let IngestOp::Message(row) = op else {
+            continue;
+        };
+        if !matches!(row.body, TimelineBody::ToolUse { .. }) {
+            continue;
+        }
+        apply_reconciled_tool_message(
+            tx,
+            row,
+            true,
+            resolved.activity(*position),
+            &mut stats,
+            BULK_MAINTENANCE,
+            &mut dirty_buckets,
+        )?;
+    }
+    for (session_id, at) in resolved.session_touches() {
+        touch_session(tx, session_id, Some(*at), &mut stats)?;
     }
     flush_session_touches(tx, &mut stats)?;
     debug_assert!(dirty_buckets.is_empty(), "cold maintenance defers buckets");

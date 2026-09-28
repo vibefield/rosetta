@@ -225,8 +225,10 @@ mod ram_reconcile;
 mod rows;
 mod usage_owners;
 
+pub use bulk_reconcile::ResolvedSourceTools;
 pub(crate) use bulk_reconcile::{
     BulkReconciliationBuffer, BulkReconciliationDelta, BulkReconciliationPlan, ColdFold,
+    apply_resolved_tools,
 };
 use metadata::{apply_project, apply_runtime, apply_session, apply_session_title};
 pub(crate) use ram_reconcile::RamReconciliationBuffer;

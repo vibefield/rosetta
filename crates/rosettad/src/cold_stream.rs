@@ -33,8 +33,8 @@ use std::time::Instant;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::Ledger;
 use rosetta_pipeline::{
-    ClosedSource, Instrument, InstrumentSnapshot, MetaReport, Metric, StreamReport,
-    StreamedRuntime, StreamedSetup, stream_closed_sources_into, streamed_setup,
+    ClosedSource, EarlyToolResolver, Instrument, InstrumentSnapshot, MetaReport, Metric,
+    StreamReport, StreamedRuntime, StreamedSetup, stream_closed_sources_into, streamed_setup,
 };
 use rosetta_server::{BackfillState, DaemonHealth, Hub, ProgressBoard, RuntimeIdentity};
 use rosetta_store::Store;
@@ -196,6 +196,9 @@ fn produce(
 
     let stream_before = instrument.snapshot();
     let stream_started = Instant::now();
+    // Sessions proven to live wholly in one source have their tool rows
+    // resolved here, off the canonical writer, as each source is emitted.
+    let mut early = EarlyToolResolver::new(&files);
     let stream = stream_closed_sources_into(
         adapter,
         &runtime,
@@ -205,7 +208,8 @@ fn produce(
         &opts,
         &instrument,
         ledger.as_mut(),
-        &mut |sources| {
+        &mut |mut sources| {
+            early.resolve(&mut sources)?;
             let bytes = sources.iter().map(ClosedSource::payload_bytes).sum();
             budget
                 .acquire(bytes)
@@ -224,6 +228,7 @@ fn produce(
     .map_err(|error| error.to_string())?;
     let stream_wall_ms = stream_started.elapsed().as_secs_f64() * 1_000.0;
     let stream_profile = instrument.snapshot().delta_since(&stream_before);
+    let early = early.report();
     drop(planner);
     let closing_started = Instant::now();
     let wall_ms = capture_started.elapsed().as_secs_f64() * 1_000.0;
@@ -248,6 +253,11 @@ fn produce(
             "wallMs": stream_wall_ms,
             "captureWallMs": wall_ms,
             "report": stream_profile.report(),
+            "resolvedSources": early.sources,
+            "resolvedToolRows": early.tool_rows,
+            "sharedSessionSources": early.shared_session,
+            "crossedSources": early.crossed,
+            "resolveMs": millis(early.nanos),
         }));
         // Streamed capture closes each source inside the stream wall; no
         // serial plan preparation follows it any more. The closing work is
@@ -669,6 +679,7 @@ fn admit(
         );
     }
     if stage_profiles {
+        let (resolved_sources, resolved_tool_rows) = streamed.resolved_at_close();
         bench::emit(&json!({
             "event": "stage-profile",
             "command": "serve",
@@ -677,6 +688,8 @@ fn admit(
             "runtime": runtime_id,
             "wallMs": millis(streamed.apply_nanos()),
             "sources": streamed.sources_applied(),
+            "resolvedSources": resolved_sources,
+            "resolvedToolRows": resolved_tool_rows,
             "lagMs": runtime.captured_at.elapsed().as_secs_f64() * 1_000.0,
         }));
     }

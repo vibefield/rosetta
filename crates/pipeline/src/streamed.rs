@@ -16,7 +16,8 @@ use rosetta_adapter_support::AgentAdapter;
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{RuntimeRow, SessionRole, SessionRow, StreamState};
 use rosetta_store::{
-    ApplyStats, Batch, CheckpointUpdate, ColdReconciliation, SourceMode, SourceWrite, Store,
+    ApplyStats, Batch, CheckpointUpdate, ColdReconciliation, ResolvedSourceTools, SourceMode,
+    SourceWrite, Store, StreamedSource,
 };
 
 use crate::PipelineError;
@@ -45,6 +46,8 @@ pub struct StreamedRuntime {
     report: RebuildReport,
     apply_nanos: u64,
     sources_applied: u64,
+    resolved_sources: u64,
+    resolved_tool_rows: u64,
 }
 
 impl StreamedRuntime {
@@ -152,6 +155,8 @@ impl StreamedRuntime {
             report,
             apply_nanos: 0,
             sources_applied: 0,
+            resolved_sources: 0,
+            resolved_tool_rows: 0,
         })
     }
 
@@ -166,6 +171,12 @@ impl StreamedRuntime {
 
     pub fn sources_applied(&self) -> u64 {
         self.sources_applied
+    }
+
+    /// Applied sources whose tool rows were resolved at file close, and
+    /// those rows: written with their sources instead of at admission.
+    pub fn resolved_at_close(&self) -> (u64, u64) {
+        (self.resolved_sources, self.resolved_tool_rows)
     }
 
     /// The live stat poll's evidence for every final checkpoint this writer
@@ -205,37 +216,47 @@ impl StreamedRuntime {
                 )));
             }
             cursor.applied = true;
-            self.ordinals
-                .assign(&source.source.relative_path, &mut source.ops)?;
+            self.ordinals.assign(
+                &source.source.relative_path,
+                &mut source.ops,
+                source.resolved.as_ref().map(ResolvedSourceTools::positions),
+            )?;
             stamp_source_cursor(&mut source.ops, cursor.id);
+            if let Some(resolved) = &source.resolved {
+                self.resolved_sources += 1;
+                self.resolved_tool_rows += resolved.tool_rows();
+            }
             let clean = source.activate && source.generation_clean;
             self.session_health
                 .entry(source.source.session_id.clone())
                 .and_modify(|healthy| *healthy &= clean)
                 .or_insert(clean);
             evidence.push((source.source.relative_path.clone(), source.evidence));
-            batches.push(Batch {
-                ops: source.ops,
-                checkpoints: vec![CheckpointUpdate {
-                    runtime_id: self.runtime_id.clone(),
-                    session_id: source.source.projected_session_id(),
-                    stream: source.source.stream_id,
-                    path: source.source.relative_path,
-                    expected: Some(cursor.initial.clone()),
-                    next: source.checkpoint,
-                    updated_at: None,
-                }],
-                source: Some(SourceWrite {
-                    cursor_id: cursor.id,
-                    session_id: source.source.session_id,
-                    generation: source.generation,
-                    first_sequence: 0,
-                    mode: if source.activate {
-                        SourceMode::Activate
-                    } else {
-                        SourceMode::Abandon
-                    },
-                }),
+            batches.push(StreamedSource {
+                batch: Batch {
+                    ops: source.ops,
+                    checkpoints: vec![CheckpointUpdate {
+                        runtime_id: self.runtime_id.clone(),
+                        session_id: source.source.projected_session_id(),
+                        stream: source.source.stream_id,
+                        path: source.source.relative_path,
+                        expected: Some(cursor.initial.clone()),
+                        next: source.checkpoint,
+                        updated_at: None,
+                    }],
+                    source: Some(SourceWrite {
+                        cursor_id: cursor.id,
+                        session_id: source.source.session_id,
+                        generation: source.generation,
+                        first_sequence: 0,
+                        mode: if source.activate {
+                            SourceMode::Activate
+                        } else {
+                            SourceMode::Abandon
+                        },
+                    }),
+                },
+                resolved: source.resolved,
             });
         }
         let count = u64::try_from(batches.len()).unwrap_or(u64::MAX);
@@ -357,11 +378,24 @@ impl OrdinalPlan {
         Ok(index)
     }
 
-    fn assign(&mut self, path: &str, ops: &mut [IngestOp]) -> Result<(), PipelineError> {
+    /// `positions` gives each op's source position when the source's ops no
+    /// longer sit at their positions (a source resolved at file close);
+    /// otherwise an op's index is its position.
+    fn assign(
+        &mut self,
+        path: &str,
+        ops: &mut [IngestOp],
+        positions: Option<&[u64]>,
+    ) -> Result<(), PipelineError> {
         let source = self.sources;
         self.sources = self.sources.checked_add(1).ok_or_else(|| {
             PipelineError::Config("streamed runtime has more sources than u32".to_string())
         })?;
+        if positions.is_some_and(|positions| positions.len() != ops.len()) {
+            return Err(PipelineError::Config(format!(
+                "resolved source {path} lost its operation positions"
+            )));
+        }
 
         // Final occurrence of each timeline identity within this source.
         let mut keys = Vec::with_capacity(ops.len());
@@ -372,9 +406,12 @@ impl OrdinalPlan {
                 keys.push(None);
                 continue;
             };
-            let sequence = u64::try_from(index).map_err(|_| {
-                PipelineError::Config("source operation sequence exceeds u64".to_string())
-            })?;
+            let sequence = match positions {
+                Some(positions) => positions[index],
+                None => u64::try_from(index).map_err(|_| {
+                    PipelineError::Config("source operation sequence exceeds u64".to_string())
+                })?,
+            };
             let key = timeline_key(&row.timeline_id);
             let session = self.intern(&row.session_id)?;
             let message = FinalMessage {
@@ -577,6 +614,7 @@ mod tests {
             generation_clean: true,
             activate: true,
             payload_bytes: 1,
+            resolved: None,
         }
     }
 

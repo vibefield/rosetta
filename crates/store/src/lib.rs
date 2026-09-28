@@ -27,8 +27,10 @@ use std::time::Instant;
 use rosetta_core::rows::StreamState;
 use rusqlite::{Connection, OpenFlags};
 
-pub use apply::{ApplyProfile, ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite};
-pub use cold_stream::ColdReconciliation;
+pub use apply::{
+    ApplyProfile, ApplyStats, Batch, CheckpointUpdate, ResolvedSourceTools, SourceMode, SourceWrite,
+};
+pub use cold_stream::{ColdReconciliation, StreamedSource};
 pub use hot::{
     Effects, HotConfig, MetaEffects, MetaMirror, Mutation, Replay, RowScope, Stamp, TailRings,
 };
@@ -585,7 +587,8 @@ impl Store {
         &mut self,
         batches: Vec<Batch>,
     ) -> Result<ApplyStats, StoreError> {
-        let (totals, deltas) = self.apply_closed_source_sql(batches, true)?;
+        let (totals, deltas) =
+            self.apply_closed_source_sql(batches.into_iter().map(Into::into).collect(), true)?;
         for (delta, _) in deltas {
             self.bulk_reconciliation.commit(delta);
         }

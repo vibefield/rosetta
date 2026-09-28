@@ -32,7 +32,7 @@ use crate::apply::SourceMode;
 /// A tool opener row, borrowed from a retryable buffer (copied only if it
 /// wins) or owned by a consumed one (moved).
 #[derive(Debug)]
-enum OpenerRow<'a> {
+pub(super) enum OpenerRow<'a> {
     Borrowed(&'a TimelineEntry),
     Owned(Box<TimelineEntry>),
 }
@@ -66,7 +66,7 @@ struct BufferedOpener<'a> {
 /// One lifecycle patch. A source-finalization fact is only a marker: its
 /// patch is the same for every opener, so it is materialized once per fold.
 #[derive(Debug)]
-enum PatchSlot<'a> {
+pub(super) enum PatchSlot<'a> {
     Borrowed(&'a ToolUpdatePatch),
     Owned(Box<ToolUpdatePatch>),
     Finalization,
@@ -100,7 +100,7 @@ fn finalization_patch() -> ToolUpdatePatch {
 
 /// A deferred op split into the parts the fold keeps, copying only what a
 /// borrowed op cannot give up.
-enum DeferredParts<'a> {
+pub(super) enum DeferredParts<'a> {
     Opener(OpenerRow<'a>),
     Update {
         key: ToolKey,
@@ -133,7 +133,7 @@ fn split_borrowed(op: &DeferredOp) -> DeferredParts<'_> {
     }
 }
 
-fn split_owned(op: DeferredOp) -> DeferredParts<'static> {
+pub(super) fn split_owned(op: DeferredOp) -> DeferredParts<'static> {
     match op {
         DeferredOp::ToolMessage(row) => DeferredParts::Opener(OpenerRow::Owned(row)),
         DeferredOp::ToolUpdate {
@@ -198,7 +198,7 @@ impl<'a> FoldState<'a> {
     /// Gather one activated source's deferred ops at `path`. `activation_end`
     /// is the end-exclusive sequence its activation sealed (zero for an
     /// append that began already active: no finalization facts).
-    fn collect_source(
+    pub(super) fn collect_source(
         &mut self,
         source_key: SourceKey,
         activation_end: u64,
@@ -303,7 +303,7 @@ impl<'a> FoldState<'a> {
     /// scans stored openers the facts may target — the retryable path —
     /// while a consumed fold instead returns every session its facts address,
     /// for the caller to prove no stored opener can exist there.
-    fn finish(
+    pub(super) fn finish(
         self,
         prior_usage: Vec<BufferedTail>,
         existing: Option<&Connection>,
