@@ -502,3 +502,27 @@ fresh start (the largest on this machine are 26.3 MiB for Grok and 24.5 MiB for 
 a month earlier), and a live append of one is quarantined without being ledgered; the fresh start also
 still refuses a whole runtime for any hard error, vanished, missing or unidentified file, which the warm
 path tolerates. None of the 233 runs of this campaign hit one of these.
+
+## 17. Decisions of 2026-09-28
+
+- **D3, the cold ledger codec: compress in the capture workers.** Since `d9f632b` a fresh or resumed cold
+  build writes `zstd-frames:1` unless `--cold-ledger-codec plain` is given (numbers in §16). On the
+  frozen snapshot the projection digest and the ledger's source digest equal the plain build's, and the
+  ledger is 1.7 GB instead of about 8.5 GB.
+- **Oversized records: ledger first, quarantine in the pass.** A record up to one raw frame (256 MiB less
+  its prefix) is captured and ledgered whole; a JSONL record over the 32 MiB projection limit becomes one
+  `raw_record` / `over_projection_limit` drift fact instead of being normalized, its generation stays
+  clean and seals, and its session is Indexed. Replay applies the same size rule, so a rebuild from the
+  ledger reproduces the projection. Live appends and new files now agree with the cold path (no silent
+  ledger/projection divergence, no whole-file re-read on every append). Records above the frame limit are
+  still refused. One 200 MiB record costs about 410 MiB of transient memory.
+- **Census identifiers in history:** the values the census tool used to publish stay in the history of
+  the 08-28 and 09-03 census commits; the files themselves are clean.
+- **Still open: how strict a fresh start is.** `record_backfill_failures` refuses a whole runtime, and so
+  the start, for any hard error, vanished, missing or unidentified file, exhausted retries or
+  incomplete file, while the warm path leaves such files to live admission. Recommendation: treat
+  transient per-file conditions (vanished, missing, not yet identifiable, retries exhausted) as the warm
+  path does, apply the documented dirty-first-generation rule to malformed lines (publish the parseable
+  rows, hold that session `Streaming`), and keep refusing only what signals corruption or a bug (a
+  truncated discovery walk, a planner conflict, a record over the frame limit). None of the 233 runs of
+  this campaign hit one of these refusals.
