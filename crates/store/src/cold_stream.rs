@@ -154,7 +154,7 @@ impl Store {
             stats.asset_bytes = asset_stats.bytes;
             stats.asset_write_nanos = asset_stats.nanos;
             totals.merge_from(&stats);
-            for session in resolved {
+            for mut session in resolved {
                 let started = Instant::now();
                 let mut written = session.write(&tx)?;
                 written.canonical_apply_nanos = elapsed_nanos(started);

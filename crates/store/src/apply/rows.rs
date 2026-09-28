@@ -469,6 +469,7 @@ pub(super) fn apply_message(
         false,
         true,
         None,
+        None,
         stats,
         maintenance,
         dirty_buckets,
@@ -477,13 +478,15 @@ pub(super) fn apply_message(
 }
 
 /// Insert a cold-build tool row after its complete lifecycle was folded in
-/// memory. Only the resolved, user-facing interaction crosses into SQLite.
+/// memory. Only the resolved, user-facing interaction crosses into SQLite;
+/// `detail` is its action JSON when the resolver already serialized it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_reconciled_tool_message(
     tx: &Transaction,
     row: &TimelineEntry,
     known_absent: bool,
     activity: Option<(Ms, Ms)>,
+    detail: Option<String>,
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
@@ -494,6 +497,7 @@ pub(super) fn apply_reconciled_tool_message(
         known_absent,
         false,
         activity,
+        detail,
         stats,
         maintenance,
         dirty_buckets,
@@ -508,6 +512,7 @@ fn apply_message_inner(
     known_absent: bool,
     touch_message_session: bool,
     activity: Option<(Ms, Ms)>,
+    tool_detail: Option<String>,
     stats: &mut ApplyStats,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
@@ -569,7 +574,7 @@ fn apply_message_inner(
         TimelineBody::ToolUse { tool } => Some(tool.as_ref()),
         _ => None,
     };
-    let encoded = tool_codec::encode(tool)?;
+    let encoded = tool_codec::encode_with_detail(tool, tool_detail)?;
     let message = message_codec::encode(&emitted)?;
     let (mut activity_first, mut activity_last) = crate::activity::message_bounds(&emitted);
     if let Some((first, last)) = activity {

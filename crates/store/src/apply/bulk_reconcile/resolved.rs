@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use rosetta_core::{IngestOp, TimelineEntry};
+use rosetta_core::{IngestOp, TimelineBody, TimelineEntry};
 use rusqlite::Transaction;
 
 use crate::StoreError;
@@ -133,6 +133,9 @@ struct ResolvedRow {
     origin: usize,
     row: TimelineEntry,
     activity: Option<(i64, i64)>,
+    /// The row's `tool_detail`, serialized where it was resolved; the
+    /// writer takes it instead of serializing the action itself.
+    detail: Option<String>,
 }
 
 /// One session's tool rows, resolved from the withheld facts of all its
@@ -213,12 +216,18 @@ impl ResolvedSession {
         );
         let rows = messages
             .into_iter()
-            .map(|message| ResolvedRow {
-                origin: origins[&message.order.path],
-                row: message.row,
-                activity: message.activity,
+            .map(|message| {
+                let TimelineBody::ToolUse { tool } = &message.row.body else {
+                    unreachable!("a resolved opener remains a tool row")
+                };
+                Ok(ResolvedRow {
+                    origin: origins[&message.order.path],
+                    detail: Some(crate::tool_codec::detail(tool)?),
+                    row: message.row,
+                    activity: message.activity,
+                })
             })
-            .collect();
+            .collect::<Result<_, StoreError>>()?;
         // The tail is in source order; each fact returns to its own source.
         for buffered in tail {
             tails[origins[&buffered.order.path]]
@@ -277,7 +286,7 @@ impl ResolvedSession {
     /// its timestamp touches: [`super::apply_plan`]'s writes for the part of
     /// the runtime fold this session decided. Rows carry their final
     /// ordinals and bound cursors.
-    pub(crate) fn write(&self, tx: &Transaction) -> Result<ApplyStats, StoreError> {
+    pub(crate) fn write(&mut self, tx: &Transaction) -> Result<ApplyStats, StoreError> {
         let mut stats = ApplyStats {
             session_touches: Some(BTreeMap::new()),
             ..ApplyStats::default()
@@ -289,7 +298,7 @@ impl ResolvedSession {
         stats.usage_applied = self.folded_usage;
         stats.profile.bulk_tool_rows_reconciled = self.tool_rows();
         let mut dirty_buckets = BTreeSet::<BucketKey>::new();
-        for resolved in &self.rows {
+        for resolved in &mut self.rows {
             if resolved.row.provenance.src_cursor.is_none() {
                 return Err(StoreError::BulkLoadState {
                     message: format!(
@@ -303,6 +312,7 @@ impl ResolvedSession {
                 &resolved.row,
                 true,
                 resolved.activity,
+                resolved.detail.take(),
                 &mut stats,
                 BULK_MAINTENANCE,
                 &mut dirty_buckets,

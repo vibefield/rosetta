@@ -609,6 +609,7 @@ pub(crate) fn apply_plan(
             &message.row,
             message.known_absent,
             message.activity,
+            None,
             &mut stats,
             BULK_MAINTENANCE,
             &mut dirty_buckets,

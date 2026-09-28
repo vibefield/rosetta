@@ -53,8 +53,27 @@ pub(crate) struct EncodedTool<'a> {
 }
 
 pub(crate) fn encode(tool: Option<&ToolInteraction>) -> Result<EncodedTool<'_>, StoreError> {
+    encode_with_detail(tool, None)
+}
+
+/// The action JSON [`encode`] stores in `tool_detail` — the one costly part of
+/// encoding a tool row, which a producer that resolved the row can do off
+/// the writer.
+pub(crate) fn detail(tool: &ToolInteraction) -> Result<String, StoreError> {
+    Ok(serde_json::to_string(&tool.action)?)
+}
+
+/// [`encode`], with `tool_detail` already serialized by [`detail`] when given.
+pub(crate) fn encode_with_detail(
+    tool: Option<&ToolInteraction>,
+    detail: Option<String>,
+) -> Result<EncodedTool<'_>, StoreError> {
     let Some(tool) = tool else {
         return Ok(EncodedTool::default());
+    };
+    let detail = match detail {
+        Some(detail) => detail,
+        None => self::detail(tool)?,
     };
     let duration_ms = tool
         .timing
@@ -74,7 +93,7 @@ pub(crate) fn encode(tool: Option<&ToolInteraction>) -> Result<EncodedTool<'_>, 
         kind: Some(tool.action.kind().as_str()),
         status: Some(status_name(tool.status.value)),
         status_basis: Some(status_basis_name(tool.status.basis)),
-        detail: Some(serde_json::to_string(&tool.action)?),
+        detail: Some(detail),
         error_kind: tool
             .failure
             .as_ref()
