@@ -273,7 +273,7 @@ machine, which corroborates the quiet-host column.
 
 ## 8. Decisions for James
 
-D1 and D2 were tried on 2026-09-27; see §10 for the outcome.
+D1 and D2 were tried on 2026-09-27; see §10 for the outcome. D4 was measured on 2026-09-28; see §11.
 
 - D1 Validation placement: validate the installed projection after publication (Tier 1 #2) and
   the search generation after readiness (Tier 1 #4), with failure demoting to rebuild. Both checks
@@ -350,3 +350,39 @@ Campaign 3, load mostly 8–23, with the session-index fix (Tier 1 #1) on top of
   tool-row writes out of admission. D3–D5 remain open.
 - Evidence (plans, reports, digests, per-run evidence and binaries):
   `/Volumes/SamsungRed/rosetta-agent-tests/runs/d1d2-campaign-20260927/`.
+
+## 11. Outcome of step 1, the contained Tier 1 batch (2026-09-28)
+
+Three parallel branches, integrated as one batch over `6a56afd`: compiled and pruned layout walks,
+walking every root concurrently, a pooled metadata skim merged in inventory order, one git probe per
+cwd per pass, and each runtime's capture starting as soon as its own metadata is public (Tier 1 #6
+and #7); search woken at publication, poll evidence held in RAM, and a search build with a larger
+build cache, one metadata index, no `ANALYZE` and a single `quick_check` (Tier 1 #3 and #4); a
+journal-free staging copy and an in-memory usage-fold sort (finalize). Every frozen run of the
+batch produced a projection digest equal to `main`'s; workspace tests 1,186 passed.
+
+Interleaved frozen pairs (campaign `cold-t1-20260927`, load 80–135), `main` → batch:
+
+| | `main` | Batch |
+|---|---:|---:|
+| Metadata ready | 23.3 s | 3.4–3.5 s |
+| Claude capture starts | 24.3 s | 3.5 s |
+| Live catch-up | 16.6 s | 0.4–1.6 s |
+| Search ready after canonical ready | 36.5 s | 6.1–9.8 s |
+| Retired instructions to readiness | 730–771 G | 656–685 G |
+
+End-to-end wall times in the same campaign spread over 100–617 s with host load 66–325 and are
+dominated by capture, which this batch does not change (steps 2 and 3 below).
+
+- **Not taken:** enforcing CHECK constraints at write time (`ARCHITECTURE.md` records why); running
+  `quick_check` and `foreign_key_check` concurrently (the shared-cache mutex serializes them); SQLite
+  sorter threads for index builds; memory-mapped canonical reads for the search build (a read I/O
+  error would become SIGBUS).
+- **D4, release profile: not adopted.** Fat LTO with one codegen unit produced an equal digest, but
+  on the frozen workload it retired as many instructions (629–653 G to canonical ready versus
+  619–642 G without it) and spent as many cycles (265–320 G versus 270–309 G), while a clean build
+  took 26 minutes under load. The hot paths are SQLite's C code and serde, which Rust LTO does not
+  reach. The earlier −15 % (E7) came from single runs under changing load.
+- **Follow-ups seen during step 1:** a live admission during catch-up still re-runs the runtime's
+  whole metadata phase (Hermes admits once on every start; Claude once took 22.7 s under load), and
+  a warm start still decodes every checkpoint once on its first poll (1.6–11 s under load).
