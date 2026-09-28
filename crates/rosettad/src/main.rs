@@ -110,7 +110,7 @@ fn main() -> ExitCode {
                 "  watch --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--ticks N] [--profile]"
             );
             eprintln!(
-                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--capture-workers N] [--capture-lookahead BYTES] [--announce [--announce-dir DIR]]"
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--capture-workers N|0] [--capture-lookahead BYTES] [--announce [--announce-dir DIR]]"
             );
             eprintln!(
                 "  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--enroll FILE] [--profile]"
@@ -177,8 +177,9 @@ struct Flags {
     /// `None` = the blessed default; `Some(0)` disables slicing.
     slice_budget: Option<u64>,
     /// serve only: workers of the fresh cold build's shared capture pool.
-    /// `0` captures each runtime's sources one after another on its producer.
-    capture_workers: usize,
+    /// `None` = the pool's default size; `Some(0)` captures each runtime's
+    /// sources one after another on its producer.
+    capture_workers: Option<usize>,
     /// serve only: the capture pool's look-ahead bound in bytes; `None` =
     /// the default.
     capture_look_ahead: Option<u64>,
@@ -269,7 +270,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         stop_after_meta: false,
         restart_incomplete: false,
         slice_budget: None,
-        capture_workers: 0,
+        capture_workers: None,
         capture_look_ahead: None,
         level: None,
         long_window: false,
@@ -333,9 +334,11 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             }
             "--capture-workers" => {
                 let value = take_value(args, &mut at)?;
-                flags.capture_workers = value
-                    .parse()
-                    .map_err(|_| format!("--capture-workers needs a number, got {value}"))?;
+                flags.capture_workers = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("--capture-workers needs a number, got {value}"))?,
+                );
             }
             "--capture-lookahead" => {
                 let value = take_value(args, &mut at)?;

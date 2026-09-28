@@ -102,11 +102,13 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > validated ops — as soon as nothing can supersede it. Only a transcript whose session still has an
 > uncaptured transcript, or a pending sibling heal after a restart, is held; the heal runs as soon
 > as the restarted session's last transcript is captured, so the writer sees exactly one terminal
-> generation per source, in path order (the order every order-sensitive upsert assumes). With
-> `--capture-workers N` (2026-09-27) the producers stop reading their own files: every runtime
-> registers its fresh JSONL sources with one process-wide *capture pool* of N workers, which step
-> each source's pass a tail batch at a time — read, normalize, checkpoint, and the batch's
-> finished ledger frames under its roster key — ahead of its producer. The producer becomes the
+> generation per source, in path order (the order every order-sensitive upsert assumes). The
+> producers do not read their own files (2026-09-27): every runtime registers its fresh JSONL
+> sources with one process-wide *capture pool* — one worker per core but one by default
+> (`--capture-workers N`; `0` restores the walk in which each producer reads its runtime's files in
+> turn) — whose workers
+> step each source's pass a tail batch at a time (read, normalize, checkpoint, and the batch's
+> finished ledger frames under its roster key) ahead of its producer. The producer becomes the
 > runtime's *sequencer*, the only code that touches its planner and ledger, and commits that
 > output strictly in path order, so the ledger bytes, the planner's CAS chain and every closed
 > source are the serial walk's for any worker count or schedule, and an interrupted build leaves
@@ -114,11 +116,19 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > runtimes (`--capture-lookahead`), a per-runtime share of it, and 64 MiB for the source a
 > sequencer commits next, which workers always serve first; work over its bound parks instead of
 > blocking a worker. Snapshot and document groups, sibling heals and non-fresh cursors stay on the
-> sequencer at their path position. `0` keeps one producer reading its runtime's files in turn.
-> A 256 MiB in-flight budget bounds closed sources between producers and the writer. Before a
-> source leaves its producer (its sequencer, when pooled), the runtime's `StreamedPreparer`
-> assigns each message its final
-> presentation ordinal incrementally under the whole-runtime precompute's key (a session a later
+> sequencer at their path position. The 2026-09-27 sweep on the frozen snapshot (23 runs, M1
+> Max, 10 cores, host load 40–270, snapshot and ledger on one USB SSD), fitted against host load:
+> canonical readiness about 131 s / 195 s serial against 102 s / 170 s pooled at load 100 / 200,
+> Claude Code's capture 96 s / 137 s against 63 s / 81 s, at equal CPU and 0.3–0.7 GiB more peak
+> footprint. Four to ten workers were not separable within the noise; eight and ten did slightly
+> better. Past about four workers that setup turned disk-bound (the one USB SSD carries the
+> snapshot and the ledger) and then writer-bound: at 8–10 workers the Codex producer waited up to
+> 40 s for the writer's in-flight budget while the writer applied and admitted Claude Code, and the
+> pool's workers parked. In that sweep the sole canonical writer was the next wall; the preparer
+> below has since taken tool resolution off it. A 256 MiB in-flight budget bounds closed sources
+> between producers and the writer. Before a source leaves its producer (its sequencer, when
+> pooled), the runtime's `StreamedPreparer` assigns each message its final presentation ordinal
+> incrementally under the whole-runtime precompute's key (a session a later
 > source repeats a timeline into, or one that receives a source out of path order, is re-ranked by
 > path and stored ordinal at admission), and takes each activated source's relational facts —
 > tool openers, lifecycle updates, usage, file edits — out of its batch until the session's last

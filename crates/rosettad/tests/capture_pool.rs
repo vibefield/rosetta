@@ -1,7 +1,7 @@
-//! Fresh serve with a capture pool, end to end: the pooled build installs
-//! the serial build's projection, its ledger holds the serial build's source
-//! entries, it reports its pool, and a staged ledger the pool built resumes
-//! on the next boot.
+//! Fresh serve's capture pool, end to end: the default pooled build installs
+//! the serial build's (`--capture-workers 0`) projection, its ledger holds the
+//! serial build's source entries, it reports its pool, and a staged ledger the
+//! pool built resumes on the next boot.
 
 use std::path::Path;
 use std::process::Command;
@@ -9,7 +9,7 @@ use std::process::Command;
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
-use rosetta_pipeline::expand_data_root;
+use rosetta_pipeline::{CapturePool, expand_data_root};
 
 fn rosettad(args: &[&str]) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_rosettad"))
@@ -92,15 +92,15 @@ fn a_pooled_fresh_serve_installs_the_serial_projection_and_ledger() {
     let serial_db = temp.path().join("serial/rosetta.db");
     let pooled_db = temp.path().join("pooled/rosetta.db");
 
-    serve(&home, &serial_db, &[]);
-    let pooled = serve(&home, &pooled_db, &["--capture-workers", "4", "--profile"]);
+    serve(&home, &serial_db, &["--capture-workers", "0"]);
+    let pooled = serve(&home, &pooled_db, &["--profile"]);
     assert!(pooled.contains("milestone: canonical-ready"), "{pooled}");
     let pool = pooled
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find(|event| event["stage"] == "capture-pool")
         .expect("the pool's stage profile");
-    assert_eq!(pool["workers"], 4);
+    assert_eq!(pool["workers"], CapturePool::default_workers());
     assert!(pool["steps"].as_u64().unwrap() > 0, "{pool}");
 
     let (messages, sessions) = projection(&serial_db);
@@ -115,7 +115,7 @@ fn a_pooled_staged_ledger_rebuilds_and_finishes_on_next_boot() {
     let home = temp.path().join("home");
     claude_home(&home);
     let db = temp.path().join("archive/rosetta.db");
-    serve(&home, &db, &["--capture-workers", "3"]);
+    serve(&home, &db, &[]);
     let finished = projection(&db);
 
     // Turn the pool-built ledger back into a staged generation, as an
@@ -140,7 +140,7 @@ fn a_pooled_staged_ledger_rebuilds_and_finishes_on_next_boot() {
     )
     .unwrap();
 
-    let resumed = serve(&home, &db, &["--capture-workers", "3"]);
+    let resumed = serve(&home, &db, &[]);
     assert!(resumed.contains("resuming cold generation"), "{resumed}");
     assert!(resumed.contains("milestone: canonical-ready"), "{resumed}");
     assert!(!staged.exists());

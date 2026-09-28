@@ -2,14 +2,14 @@
 //! fixture of every adapter, generated multi-session corpora, a session that
 //! restarts and heals mid-capture, a roster of many small sources around one
 //! big one, and oversized, over-one-MiB and trailing-partial records, a pool
-//! of 1, 2, 4 or 8 workers — under its priority scheduler and under a seeded
-//! chaos scheduler whose bounds are one byte — leaves exactly what the serial
-//! walk leaves: the same ledger bytes in 4 KiB segments and the same segment
-//! index, the same closed sources in the same order — as the runtime's
-//! `StreamedPreparer` prepared them on emission, with the same hand-off to
-//! admission — the same report counters, the same planner cursors, and the
-//! same canonical rows once the closed sources are admitted. Failures keep
-//! the serial walk's semantics (`faults.rs`).
+//! of 1, 2, 4 or 8 workers or the default size — under its priority scheduler
+//! and under a seeded chaos scheduler whose bounds are one byte — leaves
+//! exactly what the serial walk leaves: the same ledger bytes in 4 KiB
+//! segments and the same segment index, the same closed sources in the same
+//! order — as the runtime's `StreamedPreparer` prepared them on emission,
+//! with the same hand-off to admission — the same report counters, the same
+//! planner cursors, and the same canonical rows once the closed sources are
+//! admitted. Failures keep the serial walk's semantics (`faults.rs`).
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -51,7 +51,7 @@ const SERIAL: Config = Config {
     chaos: None,
 };
 
-const CONFIGS: [Config; 9] = [
+const MATRIX: [Config; 9] = [
     SERIAL,
     Config {
         workers: 1,
@@ -86,6 +86,24 @@ const CONFIGS: [Config; 9] = [
         chaos: Some(53),
     },
 ];
+
+/// The matrix, plus the default pool size under both schedulers when it is
+/// not one of them already.
+fn configs() -> Vec<Config> {
+    let mut configs = MATRIX.to_vec();
+    let default = CapturePool::default_workers();
+    if !configs.iter().any(|config| config.workers == default) {
+        configs.push(Config {
+            workers: default,
+            chaos: None,
+        });
+        configs.push(Config {
+            workers: default,
+            chaos: Some(97),
+        });
+    }
+    configs
+}
 
 /// Everything one capture leaves behind.
 #[derive(Debug, PartialEq)]
@@ -483,7 +501,7 @@ fn assert_matches(label: &str, serial: &Captured, pooled: &Captured, config: Con
 /// result; returns the serial capture.
 fn assert_every_config_like_serial(label: &str, run: impl Fn(Config) -> Captured) -> Captured {
     let serial = run(SERIAL);
-    for config in &CONFIGS[1..] {
+    for config in &configs()[1..] {
         assert_matches(label, &serial, &run(*config), *config);
     }
     serial

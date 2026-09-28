@@ -233,6 +233,16 @@ impl CapturePool {
         Self::build(workers, budgets, None)
     }
 
+    /// The pool size a fresh cold build uses unless told otherwise: one
+    /// worker per core but one, which is left to the sole canonical writer
+    /// (docs/ARCHITECTURE.md, fresh-serve checkpoint, for the sweep).
+    pub fn default_workers() -> usize {
+        std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .saturating_sub(1)
+            .max(1)
+    }
+
     /// The equivalence tests' scheduler: every bound one byte, so nearly
     /// every task parks, picks random among runnable tasks, and random short
     /// pauses between them.

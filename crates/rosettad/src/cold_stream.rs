@@ -16,10 +16,10 @@
 //! a fast producer cannot pile gigabytes up behind the writer while it admits
 //! another runtime.
 //!
-//! With `--capture-workers N` every producer shares one capture pool
-//! (`rosetta_pipeline::capture`): its workers read, normalize and frame the
-//! runtimes' JSONL sources ahead, and each producer, now its runtime's
-//! sequencer, commits them to its planner and ledger in path order.
+//! Every producer shares one capture pool (`rosetta_pipeline::capture`,
+//! `--capture-workers N`, `0` for none): its workers read, normalize and
+//! frame the runtimes' JSONL sources ahead, and each producer, now its
+//! runtime's sequencer, commits them to its planner and ledger in path order.
 //!
 //! Metadata comes first, per runtime: a few planning threads skim runtimes
 //! in registry order while the writer makes each plan's metadata public, also
@@ -379,7 +379,9 @@ pub(crate) fn build_streamed(
     // One capture pool for the whole build: every producer registers its
     // runtime as it starts, and the pool's workers serve them all.
     let pool = CapturePool::new(
-        cx.flags.capture_workers,
+        cx.flags
+            .capture_workers
+            .unwrap_or_else(CapturePool::default_workers),
         PoolBudgets {
             look_ahead_bytes: cx
                 .flags

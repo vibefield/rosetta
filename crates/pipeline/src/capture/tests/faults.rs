@@ -19,8 +19,8 @@ use rosetta_capture::{Ledger, SegmentCodec};
 use tempfile::TempDir;
 
 use super::{
-    CONFIGS, Config, SERIAL, assert_same_dump, capture, capture_into, claude_home, claude_line,
-    cold_store, dump, ledger_files, session_records, tiny_batches,
+    Config, SERIAL, assert_same_dump, capture, capture_into, claude_home, claude_line, cold_store,
+    configs, dump, ledger_files, session_records, tiny_batches,
 };
 use crate::progress::ColdProgressObserver;
 use crate::{
@@ -175,7 +175,7 @@ fn assert_failure_matches(panic: bool) {
         serial.result
     );
     assert!(!serial.emitted.is_empty(), "sources before s4 were emitted");
-    for config in &CONFIGS[1..] {
+    for config in &configs()[1..] {
         let pooled = capture(adapter, home.path(), &opts, *config);
         let label = format!("failure (panic: {panic}) {config:?}");
         let error = pooled.result.as_ref().unwrap_err();
@@ -223,7 +223,7 @@ impl ColdProgressObserver for CancelAt {
 #[test]
 fn cancelling_a_pooled_capture_returns_and_joins_its_workers() {
     let home = faulty_home();
-    for config in CONFIGS {
+    for config in configs() {
         let (done, finished) = mpsc::channel();
         let path = home.path().to_path_buf();
         std::thread::spawn(move || {
