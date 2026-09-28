@@ -1,12 +1,14 @@
 # Claude Code — Ground Truth Reference
 
 Curated catalog of everything rosetta knows about Claude Code's on-disk data.
-Distilled 2026-08-24 and refreshed through 2026-09-03 from four evidence
+Distilled 2026-08-24 and refreshed through 2026-09-28 from four evidence
 channels, strongest first:
 
 1. **Fixtures** — hermetic corpus `fixtures/2.1.241/` (CI-enforced).
 2. **Census** — `groundtruth/claude-code/sources/observed-2026-08-25.json` is
    privacy-bounded organic structure scoped to writer version 2.1.241;
+   `sources/observed-2026-09-28.json` is the same scoped to writer 2.1.283 and is the only
+   evidence for the fields writers 2.1.257–2.1.283 added (§2.2);
    `sources/observed-2026-09-03.json` is an explicitly historical, all-retained-version
    corroboration census covering delegated-work relations and workflow streams. The older
    `groundtruth/claude-code/census/2026-08-24-local-structure.json` records only
@@ -71,6 +73,21 @@ mode 17k, system 14k, fh-snapshot 10k, bridge-session 7k, queue-operation 6k,
 pr-link 4k, fh-delta 3k, **no-type-field lines 2k**, atis-latch 1k.
 `ai-title` is ADDITIVE to `custom-title`, not a rename. `atis-latch` (opaque
 anti-tamper token) first observed 2026-08-24 — the format moves week-to-week.
+
+**Writers 2.1.257–2.1.283** (census pinned to 2.1.283, 2026-09-28) add, all
+ledger-only: on `assistant`, `apiBlockIndex` (number), `perTurnEffort`,
+`advisorModel`, `serverClassifierRequest` (strings), `wireToolInputs` and
+`wireIngestContext` (maps keyed by tool_use id) and `message.input_transformations`
+(only ever `[]`); on `user`, `serverClassifierContext` {context {git_state,
+live_cwd, platform}, request} and `turnOrigin`; on `system`, `commandRun`
+{command, args}; on `queue-operation`, `reason` ('absorbed_mid_turn'); on
+`attachment`, `rendered` [{content}]; on `bridge-session`, `noHistoryBackfill`.
+Before the census, 24 % of retained records raised an unknown-field drift fact
+for them. Still undocumented (outside the census's 256-record shape sample, or
+written only by older releases): `attachment.renderedInHumanTurn`,
+`user.{queueSkipAttachments, mcpMeta, usageLimitNote}`,
+`assistant.message.safeguard_results`, and the `system` retry fields
+(`error`, `retryAttempt`, `maxRetries`, `retryInMs`, `cause`) of writers ≤ 2.1.179.
 
 **user** — extends base: `message` {role:'user', content: string | blocks[]},
 plus optional: `origin`{kind,…}, `thinkingMetadata`{level, disabled, triggers[],

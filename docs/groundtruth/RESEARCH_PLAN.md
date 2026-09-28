@@ -441,6 +441,23 @@ GitHub repo is issues + changelog only). Near-daily releases; npm dist-tags `sta
   evidence, callbacks are attempt-scoped and optional, and a resumed run can finish after its
   first callback failed. Full relationship, lifecycle, and de-duplication constraints are
   catalogued in `docs/groundtruth/claude-code.md` §4.
+- **Writer census (2026-09-28):** `sources/observed-2026-09-28.json` is pinned to writer
+  2.1.283, the newest of the 166 writer versions retained locally (2.1.2–2.1.283). Writers
+  2.1.257–2.1.283 had added fields the canonical lacked, and 522,302 of 2,174,626 retained
+  transcript records (24 %) raised an unknown-field drift fact on every cold start. The pin
+  is what finds them: shapes come from the first 256 records per type in path order, so an
+  unpinned census samples old writers. The census documents thirteen fields
+  (`docs/groundtruth/claude-code.md` §2.2). Two sit on declared, untyped records whose keys are
+  checked against the canonical directly; the adapter types the other eleven, and
+  `system.teamName` from the earlier censuses, as known, unprojected fields. That leaves
+  3,475 drifting records,
+  for fields outside the shape sample or written only by older releases
+  (`attachment.renderedInHumanTurn` 2,166, `user.queueSkipAttachments` 528, the 2.1.50–2.1.179
+  `system` retry fields 398). Reviewing it found three ways ids reached a committed census:
+  maps keyed by `toolu_` ids, epoch-stamped Artifact versions (41 already in the 2026-08-28
+  and 2026-09-03 censuses, now migrated), and per-call keys inside configured MCP tool
+  inputs. The census policy removes all three. This is Channel-4 evidence only: no pinned
+  fixture from a writer at or after 2.1.257 exists, because the farm needs an isolated runner.
 
 ### 5.7 Codex CLI (OpenAI) — **Tier A**
 

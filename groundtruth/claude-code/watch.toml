@@ -5,6 +5,7 @@ status = "captured"
 known_gaps = [
   "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
   "Closed writer: pinned fixtures cover basic chat, tools, and resume; compaction, teams, subagents, workflows, and rare system records rely on organic evidence.",
+  "Transcript fields added by writers 2.1.257–2.1.283 rest on the organic census pinned to writer 2.1.283 alone; a fixture capture at 2.1.283 or later needs an isolated runner.",
 ]
 
 [agent]
