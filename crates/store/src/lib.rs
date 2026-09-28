@@ -29,7 +29,8 @@ use rosetta_core::rows::StreamState;
 use rusqlite::{Connection, OpenFlags};
 
 pub use apply::{
-    ApplyProfile, ApplyStats, Batch, CheckpointUpdate, ResolvedSourceTools, SourceMode, SourceWrite,
+    ApplyProfile, ApplyStats, Batch, CheckpointUpdate, ResolvedSession, SourceMode, SourceWrite,
+    WithheldFacts,
 };
 pub use cold_stream::{ColdReconciliation, StreamedSource};
 pub use hot::{

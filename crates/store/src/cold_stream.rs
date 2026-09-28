@@ -13,7 +13,7 @@ use std::time::Instant;
 use rusqlite::params;
 
 use crate::apply::{
-    self, ApplyStats, Batch, BulkReconciliationDelta, ResolvedSourceTools, SourceMode,
+    self, ApplyStats, Batch, BulkReconciliationDelta, ResolvedSession, SourceMode, WithheldFacts,
 };
 use crate::{Store, StoreError, StoreMode, elapsed_nanos, validate_source_batch};
 
@@ -26,23 +26,39 @@ pub struct ColdReconciliation {
     fold: apply::ColdFold,
 }
 
-/// One closed source for [`Store::apply_streamed_sources`]: its batch and,
-/// when its producer proved the source holds every tool fact of its session,
-/// that session's tool lifecycles already resolved
-/// ([`ResolvedSourceTools::resolve`]). The batch's operations are then the
-/// resolved source's, keyed by [`ResolvedSourceTools::positions`].
+/// One closed source for [`Store::apply_streamed_sources`], as the producer
+/// prepared it: its batch, and what the producer resolved or gave back with
+/// it. Everything but the batch is empty for a source the producer passed
+/// through unchanged.
 #[derive(Debug)]
 pub struct StreamedSource {
     pub batch: Batch,
-    pub resolved: Option<ResolvedSourceTools>,
+    /// The producer took this source's relational facts out of the batch
+    /// ([`WithheldFacts::withhold`]); they reach the runtime's fold later,
+    /// resolved or released, never with the batch.
+    pub withheld: bool,
+    /// Sessions this source completed, resolved from their withheld facts:
+    /// their tool rows are written in this source's transaction.
+    pub resolved: Vec<ResolvedSession>,
+    /// Withheld facts of sessions the producer could not prove
+    /// self-contained, returned unresolved to the runtime's fold.
+    pub released: Vec<WithheldFacts>,
 }
 
 impl From<Batch> for StreamedSource {
     fn from(batch: Batch) -> Self {
         Self {
             batch,
-            resolved: None,
+            withheld: false,
+            resolved: Vec::new(),
+            released: Vec::new(),
         }
+    }
+}
+
+impl StreamedSource {
+    fn prepared(&self) -> bool {
+        self.withheld || !self.resolved.is_empty() || !self.released.is_empty()
     }
 }
 
@@ -51,9 +67,10 @@ type ClosedDeltas = Vec<(BulkReconciliationDelta, Option<String>)>;
 
 impl Store {
     /// The SQL half of applying closed source batches: every source's final
-    /// immediate rows, checkpoint, and generation — and the tool rows of a
-    /// source resolved at file close — in one private transaction. Returns
-    /// each source's deferred relational facts with its path for the caller's
+    /// immediate rows, checkpoint, and generation — and the tool rows of the
+    /// sessions a source completed, resolved on the producer — in one private
+    /// transaction. Returns each source's deferred relational facts, and any
+    /// withheld facts it carries back, with their paths for the caller's
     /// reconciliation; `validate_retries` checks them against the store's own
     /// buffer first.
     pub(crate) fn apply_closed_source_sql(
@@ -71,7 +88,8 @@ impl Store {
         let mut deltas = Vec::with_capacity(sources.len());
         let mut asset_totals = Vec::with_capacity(sources.len());
         let mut abandoned = false;
-        for StreamedSource { batch, resolved } in &sources {
+        for streamed in &sources {
+            let batch = &streamed.batch;
             let source = batch
                 .source
                 .as_ref()
@@ -91,23 +109,17 @@ impl Store {
                     ),
                 });
             }
-            if let Some(resolved) = resolved {
-                // Resolved rows carry final ordinals and are the only write
-                // of their tool lifecycles, so they need an activation and a
-                // store that trusts precomputed ordinals.
-                if source.mode != SourceMode::Activate
-                    || !self.bulk_ordinals_precomputed
-                    || resolved.positions().len() != batch.ops.len()
-                    || validate_retries
-                {
-                    return Err(StoreError::BulkLoadState {
-                        message: format!(
-                            "cursor {} carries tool rows resolved at file close outside a \
-                             streamed activation with precomputed ordinals",
-                            source.cursor_id
-                        ),
-                    });
-                }
+            // Resolved rows carry final ordinals and are the only write of
+            // their tool lifecycles: only a streamed runtime, whose fold
+            // nothing else feeds and whose ordinals are precomputed, may
+            // carry them.
+            if streamed.prepared() && (validate_retries || !self.bulk_ordinals_precomputed) {
+                return Err(StoreError::BulkLoadState {
+                    message: format!(
+                        "cursor {} carries facts prepared for a streamed runtime outside one",
+                        source.cursor_id
+                    ),
+                });
             }
             abandoned |= source.mode == SourceMode::Abandon;
             validate_source_batch(batch)?;
@@ -116,9 +128,13 @@ impl Store {
 
         let mut totals = ApplyStats::default();
         let tx = self.conn.transaction()?;
-        for (StreamedSource { batch, resolved }, asset_stats) in
-            sources.into_iter().zip(asset_totals)
-        {
+        for (streamed, asset_stats) in sources.into_iter().zip(asset_totals) {
+            let StreamedSource {
+                batch,
+                withheld,
+                resolved,
+                released,
+            } = streamed;
             let mut stats = apply::apply_batch(
                 &tx,
                 &batch,
@@ -138,11 +154,31 @@ impl Store {
             stats.asset_bytes = asset_stats.bytes;
             stats.asset_write_nanos = asset_stats.nanos;
             totals.merge_from(&stats);
-            if let Some(resolved) = &resolved {
+            for session in resolved {
                 let started = Instant::now();
-                let mut resolved_stats = apply::apply_resolved_tools(&tx, &batch.ops, resolved)?;
-                resolved_stats.canonical_apply_nanos = elapsed_nanos(started);
-                totals.merge_from(&resolved_stats);
+                let mut written = session.write(&tx)?;
+                written.canonical_apply_nanos = elapsed_nanos(started);
+                totals.merge_from(&written);
+                for tail in session.into_tails() {
+                    let (delta, path) = tail.into_delta()?;
+                    deltas.push((delta, Some(path)));
+                }
+            }
+            for facts in released {
+                let (delta, path) = facts.into_delta()?;
+                deltas.push((delta, Some(path)));
+            }
+            if withheld {
+                // The producer took every relational fact out of this batch;
+                // what is left SQL has consumed.
+                if batch.ops.iter().any(apply::defers_relational) {
+                    return Err(StoreError::BulkLoadState {
+                        message: "a withheld closed source still carries relational facts"
+                            .to_string(),
+                    });
+                }
+                crate::reclaim::release(batch);
+                continue;
             }
             let path = batch
                 .checkpoints
@@ -151,12 +187,10 @@ impl Store {
             // SQL has consumed the immediate rows. Move deferred facts into
             // the provisional RAM delta and release the rest of this batch
             // now, instead of retaining a second runtime-sized payload tree.
-            let delta = match &resolved {
-                Some(resolved) => BulkReconciliationDelta::from_resolved_batch(batch, resolved)?,
-                None => BulkReconciliationDelta::from_owned_batch(batch)?,
-            }
-            .ok_or_else(|| StoreError::BulkLoadState {
-                message: "closed source batch did not produce reconciliation state".to_string(),
+            let delta = BulkReconciliationDelta::from_owned_batch(batch)?.ok_or_else(|| {
+                StoreError::BulkLoadState {
+                    message: "closed source batch did not produce reconciliation state".to_string(),
+                }
             })?;
             if validate_retries {
                 self.bulk_reconciliation.validate(&delta)?;

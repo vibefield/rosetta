@@ -33,8 +33,9 @@ use std::time::Instant;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::Ledger;
 use rosetta_pipeline::{
-    ClosedSource, EarlyToolResolver, Instrument, InstrumentSnapshot, MetaReport, Metric,
-    StreamReport, StreamedRuntime, StreamedSetup, stream_closed_sources_into, streamed_setup,
+    ClosedSource, Instrument, InstrumentSnapshot, MetaReport, Metric, PreparedAdmission,
+    StreamReport, StreamedPreparer, StreamedRuntime, StreamedSetup, stream_closed_sources_into,
+    streamed_setup,
 };
 use rosetta_server::{BackfillState, DaemonHealth, Hub, ProgressBoard, RuntimeIdentity};
 use rosetta_store::Store;
@@ -99,6 +100,7 @@ struct ClosedColdRuntime {
     meta: MetaReport,
     stream: StreamReport,
     ledger: Option<Ledger>,
+    prepared: PreparedAdmission,
     profile: InstrumentSnapshot,
     wall_ms: f64,
     captured_at: Instant,
@@ -196,9 +198,10 @@ fn produce(
 
     let stream_before = instrument.snapshot();
     let stream_started = Instant::now();
-    // Sessions proven to live wholly in one source have their tool rows
-    // resolved here, off the canonical writer, as each source is emitted.
-    let mut early = EarlyToolResolver::new(&files);
+    // Final ordinals, and the tool rows of every session proven
+    // self-contained, are prepared here, off the canonical writer, as each
+    // source is emitted.
+    let mut preparer = StreamedPreparer::new(&files);
     let stream = stream_closed_sources_into(
         adapter,
         &runtime,
@@ -209,7 +212,7 @@ fn produce(
         &instrument,
         ledger.as_mut(),
         &mut |mut sources| {
-            early.resolve(&mut sources)?;
+            preparer.prepare(&mut sources)?;
             let bytes = sources.iter().map(ClosedSource::payload_bytes).sum();
             budget
                 .acquire(bytes)
@@ -228,7 +231,8 @@ fn produce(
     .map_err(|error| error.to_string())?;
     let stream_wall_ms = stream_started.elapsed().as_secs_f64() * 1_000.0;
     let stream_profile = instrument.snapshot().delta_since(&stream_before);
-    let early = early.report();
+    let prepared = preparer.finish().map_err(|error| error.to_string())?;
+    let early = prepared.report();
     drop(planner);
     let closing_started = Instant::now();
     let wall_ms = capture_started.elapsed().as_secs_f64() * 1_000.0;
@@ -253,11 +257,13 @@ fn produce(
             "wallMs": stream_wall_ms,
             "captureWallMs": wall_ms,
             "report": stream_profile.report(),
-            "resolvedSources": early.sources,
+            "resolvedSessions": early.sessions,
             "resolvedToolRows": early.tool_rows,
-            "sharedSessionSources": early.shared_session,
-            "crossedSources": early.crossed,
-            "resolveMs": millis(early.nanos),
+            "withheldSources": early.withheld_sources,
+            "crossedSessions": early.crossed_sessions,
+            "releasedSources": early.released_sources,
+            "peakPendingSessions": early.peak_pending_sessions,
+            "prepareMs": millis(early.nanos),
         }));
         // Streamed capture closes each source inside the stream wall; no
         // serial plan preparation follows it any more. The closing work is
@@ -283,6 +289,7 @@ fn produce(
             meta,
             stream,
             ledger,
+            prepared,
             profile: instrument.snapshot(),
             wall_ms,
             captured_at: Instant::now(),
@@ -679,7 +686,7 @@ fn admit(
         );
     }
     if stage_profiles {
-        let (resolved_sources, resolved_tool_rows) = streamed.resolved_at_close();
+        let (resolved_sessions, resolved_tool_rows) = streamed.resolved_before_admission();
         bench::emit(&json!({
             "event": "stage-profile",
             "command": "serve",
@@ -688,7 +695,7 @@ fn admit(
             "runtime": runtime_id,
             "wallMs": millis(streamed.apply_nanos()),
             "sources": streamed.sources_applied(),
-            "resolvedSources": resolved_sources,
+            "resolvedSessions": resolved_sessions,
             "resolvedToolRows": resolved_tool_rows,
             "lagMs": runtime.captured_at.elapsed().as_secs_f64() * 1_000.0,
         }));
@@ -700,7 +707,7 @@ fn admit(
     // through finalization and publication.
     let poll_evidence = streamed.take_poll_evidence();
     let report = streamed
-        .admit(cx.store, cx.instrument)
+        .admit(cx.store, cx.instrument, &runtime.prepared)
         .map_err(|error| format!("admitting {name}: {error}"))?;
     if stage_profiles {
         bench::emit_command_stage_profile(

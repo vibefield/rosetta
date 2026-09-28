@@ -3,10 +3,12 @@
 //! A runtime's closed sources enter the shared canonical RAM projection while
 //! its capture — and other runtimes' captures — continue. They land exactly as
 //! [`crate::apply_prepared_runtime`] would write them: final canonical rows of
-//! an activated generation, with every relational lifecycle fragment collected
-//! into this runtime's own RAM fold. Nothing becomes public before
+//! an activated generation, with final ordinals and every tool lifecycle the
+//! producer could resolve already ranked and resolved there
+//! ([`crate::StreamedPreparer`]); every other relational lifecycle fragment is
+//! collected into this runtime's own RAM fold. Nothing becomes public before
 //! [`StreamedRuntime::admit`]: its sessions stay `Pending` (the read barrier)
-//! until the fold has written each resolved tool row once and the single
+//! until the fold has written each remaining tool row once and the single
 //! stream-state commit flips them.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -16,13 +18,14 @@ use rosetta_adapter_support::AgentAdapter;
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{RuntimeRow, SessionRole, SessionRow, StreamState};
 use rosetta_store::{
-    ApplyStats, Batch, CheckpointUpdate, ColdReconciliation, ResolvedSourceTools, SourceMode,
-    SourceWrite, Store, StreamedSource,
+    ApplyStats, Batch, CheckpointUpdate, ColdReconciliation, SourceMode, SourceWrite, Store,
+    StreamedSource,
 };
 
 use crate::PipelineError;
 use crate::checkpoint::PipeCheckpoint;
 use crate::closed::{ClosedSource, StreamedSetup};
+use crate::early::PreparedAdmission;
 use crate::instrument::{Instrument, Metric};
 use crate::live::PollEvidence;
 use crate::replay::{RebuildReport, stamp_source_cursor};
@@ -39,14 +42,13 @@ pub struct StreamedRuntime {
     runtime_id: String,
     cursors: HashMap<String, StreamedCursor>,
     reconciliation: ColdReconciliation,
-    ordinals: OrdinalPlan,
     session_health: BTreeMap<String, bool>,
     /// The poll evidence of every final checkpoint committed so far, by path.
     evidence: HashMap<String, PollEvidence>,
     report: RebuildReport,
     apply_nanos: u64,
     sources_applied: u64,
-    resolved_sources: u64,
+    resolved_sessions: u64,
     resolved_tool_rows: u64,
 }
 
@@ -149,13 +151,12 @@ impl StreamedRuntime {
             runtime_id: runtime.id.clone(),
             cursors,
             reconciliation: ColdReconciliation::default(),
-            ordinals: OrdinalPlan::default(),
             session_health: BTreeMap::new(),
             evidence: HashMap::with_capacity(cursors_len),
             report,
             apply_nanos: 0,
             sources_applied: 0,
-            resolved_sources: 0,
+            resolved_sessions: 0,
             resolved_tool_rows: 0,
         })
     }
@@ -173,10 +174,10 @@ impl StreamedRuntime {
         self.sources_applied
     }
 
-    /// Applied sources whose tool rows were resolved at file close, and
-    /// those rows: written with their sources instead of at admission.
-    pub fn resolved_at_close(&self) -> (u64, u64) {
-        (self.resolved_sources, self.resolved_tool_rows)
+    /// Sessions whose tool rows the producer resolved, and those rows:
+    /// written with the sources that completed them instead of at admission.
+    pub fn resolved_before_admission(&self) -> (u64, u64) {
+        (self.resolved_sessions, self.resolved_tool_rows)
     }
 
     /// The live stat poll's evidence for every final checkpoint this writer
@@ -186,10 +187,11 @@ impl StreamedRuntime {
         std::mem::take(&mut self.evidence)
     }
 
-    /// Apply closed sources, in the path order the producer emits them, in
-    /// one private transaction. Messages receive their final presentation
-    /// ordinals here (see [`OrdinalPlan`]); deferred relational facts are
-    /// collected into this runtime's own fold as the transaction commits.
+    /// Apply closed sources, prepared in the path order the producer emits
+    /// them, in one private transaction: their rows with the final ordinals
+    /// the preparer ranked, the tool rows of the sessions they completed, and
+    /// every relational fact left to admission collected into this runtime's
+    /// own fold as the transaction commits.
     pub fn apply(
         &mut self,
         store: &mut Store,
@@ -216,15 +218,32 @@ impl StreamedRuntime {
                 )));
             }
             cursor.applied = true;
-            self.ordinals.assign(
-                &source.source.relative_path,
-                &mut source.ops,
-                source.resolved.as_ref().map(ResolvedSourceTools::positions),
-            )?;
-            stamp_source_cursor(&mut source.ops, cursor.id);
-            if let Some(resolved) = &source.resolved {
-                self.resolved_sources += 1;
-                self.resolved_tool_rows += resolved.tool_rows();
+            let cursor_id = cursor.id;
+            let initial = cursor.initial.clone();
+            let mut prepared = source.prepared.take().ok_or_else(|| {
+                PipelineError::Config(format!(
+                    "streamed source {} reached the writer unprepared",
+                    source.source.relative_path
+                ))
+            })?;
+            stamp_source_cursor(&mut source.ops, cursor_id);
+            // What the preparer resolved or released belongs to the sources
+            // that captured it; stamp their cursors, as on every other row.
+            let cursor_of = |path: &str| self.cursors.get(path).map(|cursor| cursor.id);
+            for session in &mut prepared.resolved {
+                session.bind_cursors(cursor_of)?;
+                self.resolved_sessions += 1;
+                self.resolved_tool_rows += session.tool_rows();
+            }
+            for facts in &mut prepared.released {
+                let cursor_id = cursor_of(facts.path()).ok_or_else(|| {
+                    PipelineError::Config(format!(
+                        "released facts of {} have no cursor in runtime {}",
+                        facts.path(),
+                        self.runtime_id
+                    ))
+                })?;
+                facts.bind_cursor(cursor_id);
             }
             let clean = source.activate && source.generation_clean;
             self.session_health
@@ -240,12 +259,12 @@ impl StreamedRuntime {
                         session_id: source.source.projected_session_id(),
                         stream: source.source.stream_id,
                         path: source.source.relative_path,
-                        expected: Some(cursor.initial.clone()),
+                        expected: Some(initial),
                         next: source.checkpoint,
                         updated_at: None,
                     }],
                     source: Some(SourceWrite {
-                        cursor_id: cursor.id,
+                        cursor_id,
                         session_id: source.source.session_id,
                         generation: source.generation,
                         first_sequence: 0,
@@ -256,7 +275,9 @@ impl StreamedRuntime {
                         },
                     }),
                 },
-                resolved: source.resolved,
+                withheld: prepared.withheld,
+                resolved: prepared.resolved,
+                released: prepared.released,
             });
         }
         let count = u64::try_from(batches.len()).unwrap_or(u64::MAX);
@@ -273,14 +294,16 @@ impl StreamedRuntime {
     }
 
     /// Admit the complete runtime: resolve its collected relational fold in
-    /// RAM and write each resolved tool row once, canonicalize any session a
+    /// RAM and write each remaining tool row once, canonicalize any session a
     /// cross-source repeat left out of order, then flip every source-backed
     /// session out of `Pending` in one commit — the first moment any of its
-    /// rows can be read.
+    /// rows can be read. `prepared` is what the runtime's preparer handed
+    /// over once its last source was emitted.
     pub fn admit(
         mut self,
         store: &mut Store,
         instrument: &Instrument,
+        prepared: &PreparedAdmission,
     ) -> Result<RebuildReport, PipelineError> {
         if let Some((path, _)) = self.cursors.iter().find(|(_, cursor)| !cursor.applied) {
             return Err(PipelineError::Config(format!(
@@ -292,10 +315,10 @@ impl StreamedRuntime {
             instrument.fold_cold_reconciliation(store, std::mem::take(&mut self.reconciliation))?;
         merge_stats(&mut self.report.stats, &reconciled);
 
-        let reorder = self.ordinals.sessions_to_renumber();
+        let reorder = prepared.sessions_to_renumber();
         if !reorder.is_empty() {
             let started = Instant::now();
-            let rows = store.renumber_sessions_by_source_order(&reorder)?;
+            let rows = store.renumber_sessions_by_source_order(reorder)?;
             instrument.add(
                 Metric::SessionRenumbers,
                 u64::try_from(reorder.len()).unwrap_or(u64::MAX),
@@ -339,8 +362,8 @@ impl StreamedRuntime {
 /// breaks the continuation; those sessions are canonicalized at admission by
 /// `(source path, assigned ordinal)`, which is the precompute order again.
 /// Everything here is RAM only: a 128-bit key per timeline identity.
-#[derive(Default)]
-struct OrdinalPlan {
+#[derive(Debug, Default)]
+pub(crate) struct OrdinalPlan {
     next: HashMap<u32, i64>,
     sessions: HashMap<String, u32>,
     names: Vec<String>,
@@ -378,24 +401,11 @@ impl OrdinalPlan {
         Ok(index)
     }
 
-    /// `positions` gives each op's source position when the source's ops no
-    /// longer sit at their positions (a source resolved at file close);
-    /// otherwise an op's index is its position.
-    fn assign(
-        &mut self,
-        path: &str,
-        ops: &mut [IngestOp],
-        positions: Option<&[u64]>,
-    ) -> Result<(), PipelineError> {
+    pub(crate) fn assign(&mut self, path: &str, ops: &mut [IngestOp]) -> Result<(), PipelineError> {
         let source = self.sources;
         self.sources = self.sources.checked_add(1).ok_or_else(|| {
             PipelineError::Config("streamed runtime has more sources than u32".to_string())
         })?;
-        if positions.is_some_and(|positions| positions.len() != ops.len()) {
-            return Err(PipelineError::Config(format!(
-                "resolved source {path} lost its operation positions"
-            )));
-        }
 
         // Final occurrence of each timeline identity within this source.
         let mut keys = Vec::with_capacity(ops.len());
@@ -406,12 +416,9 @@ impl OrdinalPlan {
                 keys.push(None);
                 continue;
             };
-            let sequence = match positions {
-                Some(positions) => positions[index],
-                None => u64::try_from(index).map_err(|_| {
-                    PipelineError::Config("source operation sequence exceeds u64".to_string())
-                })?,
-            };
+            let sequence = u64::try_from(index).map_err(|_| {
+                PipelineError::Config("source operation sequence exceeds u64".to_string())
+            })?;
             let key = timeline_key(&row.timeline_id);
             let session = self.intern(&row.session_id)?;
             let message = FinalMessage {
@@ -501,7 +508,7 @@ impl OrdinalPlan {
         ))
     }
 
-    fn sessions_to_renumber(&self) -> Vec<String> {
+    pub(crate) fn sessions_to_renumber(&self) -> Vec<String> {
         self.renumber
             .iter()
             .map(|session| self.names[*session as usize].clone())
@@ -614,8 +621,28 @@ mod tests {
             generation_clean: true,
             activate: true,
             payload_bytes: 1,
-            resolved: None,
+            prepared: None,
         }
+    }
+
+    fn roster(sources: &[(SourceDef, Vec<IngestOp>)]) -> Vec<crate::meta::SessionFile> {
+        sources
+            .iter()
+            .map(|(source, _)| crate::meta::SessionFile {
+                ledger_only: false,
+                relative_path: source.relative_path.clone(),
+                stream_id: source.stream_id.clone(),
+                file_format: rosetta_adapter_support::FileFormat::Jsonl,
+                discipline: rosetta_adapter_support::FileDiscipline::AppendOnly,
+                driver: rosetta_adapter_support::StreamDriver::JsonLines,
+                session_id: source.session_id.clone(),
+                native_session_id: source.native_session_id.clone(),
+                size: 1,
+                modified_ms: 1,
+                agent_version: None,
+                source_missing: false,
+            })
+            .collect()
     }
 
     /// Apply `sources` through the streamed writer in `order` and read every
@@ -650,15 +677,15 @@ mod tests {
             &mut store,
             &instrument,
         )?;
+        let mut preparer = crate::StreamedPreparer::new(&roster(sources));
         for index in order {
             let (source, ops) = &sources[*index];
-            writer.apply(
-                &mut store,
-                vec![closed(source.clone(), ops.clone())],
-                &instrument,
-            )?;
+            let mut emitted = vec![closed(source.clone(), ops.clone())];
+            preparer.prepare(&mut emitted)?;
+            writer.apply(&mut store, emitted, &instrument)?;
         }
-        writer.admit(&mut store, &instrument)?;
+        let prepared = preparer.finish()?;
+        writer.admit(&mut store, &instrument, &prepared)?;
         let ordinals = store
             .conn()
             .prepare("SELECT timeline_id, ordinal FROM message")

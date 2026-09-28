@@ -5,8 +5,8 @@ use rosetta_core::{
     EvidenceOrder, IngestOp, MessageRow, SessionRow, SourceIdentity, ToolUpdatePatch,
 };
 use rosetta_store::{
-    ApplyStats, Batch, CheckpointUpdate, ColdReconciliation, ResolvedSourceTools, SourceMode,
-    SourceWrite, Store, StoreError, StreamedSource,
+    ApplyStats, Batch, CheckpointUpdate, ColdReconciliation, ResolvedSession, SourceMode,
+    SourceWrite, Store, StoreError, StreamedSource, WithheldFacts,
 };
 use serde_json::json;
 
@@ -95,7 +95,15 @@ fn result(path: &str) -> IngestOp {
     }
 }
 
-fn closed(store: &Store, path: &str, ops: Vec<IngestOp>) -> Batch {
+/// A closed source's batch, its rows stamped with its cursor as the
+/// streamed writer stamps every row it applies.
+fn closed(store: &Store, path: &str, mut ops: Vec<IngestOp>) -> Batch {
+    let cursor_id = cursor(store, path);
+    for op in &mut ops {
+        if let IngestOp::Message(row) = op {
+            row.provenance.src_cursor = Some(cursor_id);
+        }
+    }
     Batch {
         ops,
         checkpoints: vec![CheckpointUpdate {
@@ -213,24 +221,35 @@ fn file_edit(timeline: &str) -> IngestOp {
     )
 }
 
-/// Every lifecycle shape one source can carry: a losing duplicate opener, an
-/// undated opener, matched and unmatched updates, usage absorbed into a
-/// dated tool row, usage left for an undated one and for an agent row (one
-/// with an ownership identity), and a file edit on a tool row.
-fn lifecycle_source() -> Vec<IngestOp> {
-    vec![
-        tool_opener("tool-a", "call-a", 0, Some(10), "first"),
-        tool_opener("tool-b", "call-b", 1, None, "undated"),
-        agent_reply("reply", 2),
-        update("call-a", 3, "succeeded", Some(20)),
-        update("call-b", 4, "failed", Some(30)),
-        tool_opener("tool-a", "call-a", 0, Some(11), "repeated"),
-        update("call-z", 6, "succeeded", Some(40)),
-        usage("tool-a", 50, 7, None),
-        usage("tool-b", 51, 8, None),
-        usage("reply", 52, 9, Some("msg-1:req-1")),
-        file_edit("tool-a"),
-        agent_reply("after", 3),
+/// Every lifecycle shape one session can carry, split over its two sources:
+/// a duplicate opener whose later copy wins from the second source, an
+/// undated opener, matched and unmatched updates, usage absorbed into a dated
+/// tool row, usage left for an undated one and for an agent row (one with an
+/// ownership identity), and a file edit on a tool row.
+fn lifecycle_sources() -> [(&'static str, Vec<IngestOp>); 2] {
+    [
+        (
+            "a.jsonl",
+            vec![
+                tool_opener("tool-a", "call-a", 0, Some(10), "first"),
+                tool_opener("tool-b", "call-b", 1, None, "undated"),
+                agent_reply("reply", 2),
+                update("call-a", 3, "succeeded", Some(20)),
+            ],
+        ),
+        (
+            "b.jsonl",
+            vec![
+                update("call-b", 4, "failed", Some(30)),
+                tool_opener("tool-a", "call-a", 0, Some(11), "repeated"),
+                update("call-z", 6, "succeeded", Some(40)),
+                usage("tool-a", 50, 7, None),
+                usage("tool-b", 51, 8, None),
+                usage("reply", 52, 9, Some("msg-1:req-1")),
+                file_edit("tool-a"),
+                agent_reply("after", 3),
+            ],
+        ),
     ]
 }
 
@@ -271,72 +290,120 @@ fn lifecycle_rows(store: &Store) -> Vec<String> {
     rows
 }
 
-#[test]
-fn a_source_resolved_at_file_close_writes_what_the_admission_fold_writes() {
-    let mut folded = cold_store();
-    let mut state = ColdReconciliation::default();
-    let batch = closed(&folded, "a.jsonl", lifecycle_source());
-    let applied = folded
-        .apply_streamed_sources(&mut state, vec![batch.into()])
-        .unwrap();
-    let admitted = folded.fold_cold_reconciliation(state).unwrap();
+fn totals(applied: &ApplyStats, admitted: &ApplyStats) -> (u64, u64, u64, u64, u64) {
+    (
+        applied.messages_inserted + admitted.messages_inserted,
+        applied.tool_results_merged + admitted.tool_results_merged,
+        applied.tool_results_unmatched + admitted.tool_results_unmatched,
+        applied.usage_applied + admitted.usage_applied,
+        applied.profile.bulk_tool_rows_reconciled + admitted.profile.bulk_tool_rows_reconciled,
+    )
+}
 
-    let mut early = cold_store();
+/// The admission fold's projection of `lifecycle_sources`.
+fn folded() -> (Store, (u64, u64, u64, u64, u64)) {
+    let mut store = cold_store();
     let mut state = ColdReconciliation::default();
-    let (ops, resolved) = ResolvedSourceTools::resolve("a.jsonl", 1, lifecycle_source()).unwrap();
-    assert_eq!(resolved.tool_rows(), 2);
-    // The losing opener, both matched updates, the unmatched one and the
-    // usage absorbed into tool-a are consumed; tool-a's resolved row takes
-    // its winning opener's position and the rest keeps its own.
-    assert_eq!(resolved.positions(), &[1, 2, 5, 8, 9, 10, 11]);
-    let batch = closed(&early, "a.jsonl", ops);
-    let resolved_applied = early
-        .apply_streamed_sources(
-            &mut state,
-            vec![StreamedSource {
-                batch,
-                resolved: Some(resolved),
-            }],
-        )
-        .unwrap();
-    // The source's tool rows are written with it, before admission.
-    assert_eq!(tool_status(&early).len(), 2);
-    let resolved_admitted = early.fold_cold_reconciliation(state).unwrap();
+    let batches = lifecycle_sources()
+        .into_iter()
+        .map(|(path, ops)| closed(&store, path, ops).into())
+        .collect();
+    let applied = store.apply_streamed_sources(&mut state, batches).unwrap();
+    let admitted = store.fold_cold_reconciliation(state).unwrap();
+    (store, totals(&applied, &admitted))
+}
 
-    assert_eq!(lifecycle_rows(&folded), lifecycle_rows(&early));
-    let totals = |applied: &ApplyStats, admitted: &ApplyStats| {
-        (
-            applied.messages_inserted + admitted.messages_inserted,
-            applied.tool_results_merged + admitted.tool_results_merged,
-            applied.tool_results_unmatched + admitted.tool_results_unmatched,
-            applied.usage_applied + admitted.usage_applied,
-            applied.profile.bulk_tool_rows_reconciled + admitted.profile.bulk_tool_rows_reconciled,
-        )
-    };
-    assert_eq!(
-        totals(&applied, &admitted),
-        totals(&resolved_applied, &resolved_admitted)
-    );
+/// Each source's batch without its relational facts, and those facts.
+fn withheld(store: &Store) -> Vec<(Batch, WithheldFacts)> {
+    lifecycle_sources()
+        .into_iter()
+        .map(|(path, ops)| {
+            let (kept, facts) = WithheldFacts::withhold(path, 1, ops);
+            (closed(store, path, kept), facts)
+        })
+        .collect()
 }
 
 #[test]
-fn a_resolved_source_needs_a_streamed_activation() {
-    let mut store = cold_store();
+fn a_session_resolved_before_admission_writes_what_the_admission_fold_writes() {
+    let (folded, folded_totals) = folded();
+
+    let mut early = cold_store();
     let mut state = ColdReconciliation::default();
-    let (ops, resolved) = ResolvedSourceTools::resolve("a.jsonl", 1, lifecycle_source()).unwrap();
-    let mut batch = closed(&store, "a.jsonl", ops);
-    batch.source.as_mut().unwrap().mode = SourceMode::Abandon;
+    let (batches, facts): (Vec<_>, Vec<_>) = withheld(&early).into_iter().unzip();
+    let mut session = ResolvedSession::resolve(facts).unwrap();
+    assert_eq!(session.tool_rows(), 2);
+    session
+        .bind_cursors(|path| Some(cursor(&early, path)))
+        .unwrap();
+    let mut batches = batches.into_iter();
+    // The first source lands without its facts; the second completes the
+    // session and carries its resolved rows.
+    let first = StreamedSource {
+        withheld: true,
+        ..batches.next().unwrap().into()
+    };
+    let second = StreamedSource {
+        withheld: true,
+        resolved: vec![session],
+        ..batches.next().unwrap().into()
+    };
+    let applied = early
+        .apply_streamed_sources(&mut state, vec![first, second])
+        .unwrap();
+    // The session's tool rows are written before admission.
+    assert_eq!(tool_status(&early).len(), 2);
+    let admitted = early.fold_cold_reconciliation(state).unwrap();
+
+    assert_eq!(lifecycle_rows(&folded), lifecycle_rows(&early));
+    assert_eq!(folded_totals, totals(&applied, &admitted));
+}
+
+#[test]
+fn released_facts_join_the_admission_fold_unresolved() {
+    let (folded, folded_totals) = folded();
+
+    let mut released = cold_store();
+    let mut state = ColdReconciliation::default();
+    let mut applied = ApplyStats::default();
+    for (batch, mut facts) in withheld(&released) {
+        facts.bind_cursor(cursor(&released, facts.path()));
+        let stats = released
+            .apply_streamed_sources(
+                &mut state,
+                vec![StreamedSource {
+                    withheld: true,
+                    released: vec![facts],
+                    ..batch.into()
+                }],
+            )
+            .unwrap();
+        applied.merge_from(&stats);
+    }
+    assert!(tool_status(&released).is_empty());
+    let admitted = released.fold_cold_reconciliation(state).unwrap();
+
+    assert_eq!(lifecycle_rows(&folded), lifecycle_rows(&released));
+    assert_eq!(folded_totals, totals(&applied, &admitted));
+}
+
+#[test]
+fn prepared_facts_need_a_streamed_runtime_with_precomputed_ordinals() {
+    let mut store = Store::open_in_memory_for_rebuild().unwrap();
+    let template = cold_store();
+    let mut state = ColdReconciliation::default();
+    let (batch, _) = withheld(&template).into_iter().next().unwrap();
     let error = store
         .apply_streamed_sources(
             &mut state,
             vec![StreamedSource {
-                batch,
-                resolved: Some(resolved),
+                withheld: true,
+                ..batch.into()
             }],
         )
         .unwrap_err();
     assert!(
-        matches!(&error, StoreError::BulkLoadState { message } if message.contains("resolved at file close")),
+        matches!(&error, StoreError::BulkLoadState { message } if message.contains("prepared for a streamed runtime")),
         "{error}"
     );
 }

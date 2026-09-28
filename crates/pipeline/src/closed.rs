@@ -22,7 +22,7 @@ use rosetta_adapter_support::{AgentAdapter, StreamDriver};
 use rosetta_capture::{SourceDef, Tailer};
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{RuntimeRow, StreamState};
-use rosetta_store::{Batch, ResolvedSourceTools, SourceMode, Store, queries};
+use rosetta_store::{Batch, SourceMode, Store, queries};
 
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
@@ -47,9 +47,9 @@ pub struct ClosedSource {
     pub(crate) generation_clean: bool,
     pub(crate) activate: bool,
     pub(crate) payload_bytes: u64,
-    /// The source's tool lifecycles, when [`crate::EarlyToolResolver`]
-    /// resolved them at emission; `ops` are then the resolved operations.
-    pub(crate) resolved: Option<ResolvedSourceTools>,
+    /// What [`crate::StreamedPreparer`] did to the source as it was emitted;
+    /// the writer applies only prepared sources.
+    pub(crate) prepared: Option<crate::early::Prepared>,
 }
 
 impl ClosedSource {
@@ -222,7 +222,7 @@ fn close_file(
         generation_clean: checkpoint.generation_clean,
         activate: cursor.active_generation == generation,
         payload_bytes,
-        resolved: None,
+        prepared: None,
     })
 }
 

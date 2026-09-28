@@ -21,9 +21,9 @@ use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    ClosedSource, EarlyToolReport, EarlyToolResolver, IngestOptions, Instrument, PollEvidence,
-    SessionFile, StreamedRuntime, apply_prepared_runtime, discover, expand_data_root,
-    meta_ingest_inventory_into, prepare_captured_runtime, stream_backfill,
+    ClosedSource, EarlyToolReport, IngestOptions, Instrument, PollEvidence, PreparedAdmission,
+    SessionFile, StreamedPreparer, StreamedRuntime, apply_prepared_runtime, discover,
+    expand_data_root, meta_ingest_inventory_into, prepare_captured_runtime, stream_backfill,
     stream_closed_sources_into, streamed_setup,
 };
 use rosetta_store::Store;
@@ -185,9 +185,10 @@ fn retained(planned: Planned, canonical: &mut Store) {
     apply_prepared_runtime(adapter, &runtime, prepared, canonical, &instrument).unwrap();
 }
 
-/// Capture one runtime as closed sources without applying them.
+/// Capture and prepare one runtime's closed sources without applying them.
 fn capture(
     planned: Planned,
+    preparer: fn(&[SessionFile]) -> StreamedPreparer,
 ) -> (
     StreamedSetupAndSources,
     &'static dyn AgentAdapter,
@@ -203,6 +204,7 @@ fn capture(
     } = planned;
     let instrument = Instrument::new();
     let setup = streamed_setup(&files, &mut planner).unwrap();
+    let mut preparer = preparer(&files);
     let mut emitted: Vec<Vec<ClosedSource>> = Vec::new();
     stream_closed_sources_into(
         adapter,
@@ -213,7 +215,8 @@ fn capture(
         &opts,
         &instrument,
         None,
-        &mut |sources| {
+        &mut |mut sources| {
+            preparer.prepare(&mut sources)?;
             emitted.push(sources);
             Ok(())
         },
@@ -223,6 +226,7 @@ fn capture(
         StreamedSetupAndSources {
             setup: Some(setup),
             emitted,
+            prepared: preparer.finish().unwrap(),
         },
         adapter,
         runtime,
@@ -232,45 +236,34 @@ fn capture(
 struct StreamedSetupAndSources {
     setup: Option<rosetta_pipeline::StreamedSetup>,
     emitted: Vec<Vec<ClosedSource>>,
+    prepared: PreparedAdmission,
 }
 
-/// The streamed path for one runtime, applying each emission as it arrives.
-/// Returns the runtime id and the poll evidence its writer hands the runner.
+/// The streamed path for one runtime as fresh serve runs it, applying each
+/// emission as it arrives after the producer-side preparer has ranked it and
+/// resolved every session it can prove self-contained. Returns the runtime id
+/// and the poll evidence its writer hands the runner.
 fn streamed(planned: Planned, canonical: &mut Store) -> (String, HashMap<String, PollEvidence>) {
-    let Planned {
-        adapter,
-        runtime,
-        root,
-        mut planner,
-        files,
-        opts,
-    } = planned;
-    let instrument = Instrument::new();
-    let setup = streamed_setup(&files, &mut planner).unwrap();
-    let mut writer =
-        StreamedRuntime::open(adapter, &runtime, setup, canonical, &instrument).unwrap();
-    stream_closed_sources_into(
-        adapter,
-        &runtime,
-        &root,
-        &mut planner,
-        &files,
-        &opts,
-        &instrument,
-        None,
-        &mut |sources| writer.apply(canonical, sources, &instrument).map(|_| ()),
-    )
-    .unwrap();
-    let evidence = writer.take_poll_evidence();
-    writer.admit(canonical, &instrument).unwrap();
-    (runtime.id, evidence)
+    let (runtime_id, evidence, _) = stream_runtime(planned, canonical, StreamedPreparer::new);
+    (runtime_id, evidence)
 }
 
-/// The streamed path as fresh serve runs it: the producer-side resolver sees
-/// every emission before the writer and resolves the tool rows of each
-/// session it can prove lives in one source. Returns the runtime id and what
-/// the resolver did.
+/// The streamed path with every tool lifecycle left to the admission fold.
+fn streamed_fold(planned: Planned, canonical: &mut Store) {
+    stream_runtime(planned, canonical, StreamedPreparer::without_early_tools);
+}
+
+/// The streamed path with early tool resolution, reporting what it resolved.
 fn streamed_early(planned: Planned, canonical: &mut Store) -> (String, EarlyToolReport) {
+    let (runtime_id, _, report) = stream_runtime(planned, canonical, StreamedPreparer::new);
+    (runtime_id, report)
+}
+
+fn stream_runtime(
+    planned: Planned,
+    canonical: &mut Store,
+    preparer: fn(&[SessionFile]) -> StreamedPreparer,
+) -> (String, HashMap<String, PollEvidence>, EarlyToolReport) {
     let Planned {
         adapter,
         runtime,
@@ -283,7 +276,7 @@ fn streamed_early(planned: Planned, canonical: &mut Store) -> (String, EarlyTool
     let setup = streamed_setup(&files, &mut planner).unwrap();
     let mut writer =
         StreamedRuntime::open(adapter, &runtime, setup, canonical, &instrument).unwrap();
-    let mut resolver = EarlyToolResolver::new(&files);
+    let mut preparer = preparer(&files);
     stream_closed_sources_into(
         adapter,
         &runtime,
@@ -294,13 +287,15 @@ fn streamed_early(planned: Planned, canonical: &mut Store) -> (String, EarlyTool
         &instrument,
         None,
         &mut |mut sources| {
-            resolver.resolve(&mut sources)?;
+            preparer.prepare(&mut sources)?;
             writer.apply(canonical, sources, &instrument).map(|_| ())
         },
     )
     .unwrap();
-    writer.admit(canonical, &instrument).unwrap();
-    (runtime.id, resolver.report())
+    let evidence = writer.take_poll_evidence();
+    let prepared = preparer.finish().unwrap();
+    writer.admit(canonical, &instrument, &prepared).unwrap();
+    (runtime.id, evidence, prepared.report())
 }
 
 /// The live runner trusts its seed as if it had read each cursor row: after
@@ -553,7 +548,7 @@ fn tool_rows_resolved_at_file_close_equal_the_admission_fold_for_every_fixture()
 
             let mut folded = cold_store();
             let planned = plan(adapter, home.path(), &mut folded);
-            streamed(planned, &mut folded);
+            streamed_fold(planned, &mut folded);
             folded.finish_bulk_load().unwrap();
 
             let mut early = cold_store();
@@ -562,17 +557,18 @@ fn tool_rows_resolved_at_file_close_equal_the_admission_fold_for_every_fixture()
             early.finish_bulk_load().unwrap();
 
             assert_same_projection(&label, &folded, &early);
-            resolved.sources += report.sources;
+            resolved.sessions += report.sessions;
             resolved.tool_rows += report.tool_rows;
-            resolved.shared_session += report.shared_session;
+            resolved.withheld_sources += report.withheld_sources;
             compared += 1;
         }
     }
     assert!(compared >= 27, "only {compared} fixture scenarios compared");
-    // The comparison is not vacuous: fixtures resolve rows at file close,
-    // and fixtures with several sources per session keep the fold.
-    assert!(resolved.tool_rows > 0, "{resolved:?}");
-    assert!(resolved.shared_session > 0, "{resolved:?}");
+    // The comparison is not vacuous: fixtures resolve sessions early.
+    assert!(
+        resolved.sessions > 0 && resolved.tool_rows > 0,
+        "{resolved:?}"
+    );
 }
 
 #[test]
@@ -599,7 +595,7 @@ fn tool_rows_resolved_at_file_close_equal_the_admission_fold_for_generated_corpo
 
         let mut folded = cold_store();
         let planned = plan(adapter, home.path(), &mut folded);
-        streamed(planned, &mut folded);
+        streamed_fold(planned, &mut folded);
         folded.finish_bulk_load().unwrap();
 
         let mut early = cold_store();
@@ -619,11 +615,11 @@ fn tool_rows_resolved_at_file_close_equal_the_admission_fold_for_generated_corpo
 }
 
 #[test]
-fn a_session_with_two_transcripts_keeps_the_admission_fold() {
+fn a_restarted_two_transcript_session_prepares_like_the_fold() {
     let (home, opts) = restarting_home();
     let mut folded = cold_store();
     let planned = plan_with(&ClaudeCodeAdapter, home.path(), &mut folded, opts);
-    streamed(planned, &mut folded);
+    streamed_fold(planned, &mut folded);
     folded.finish_bulk_load().unwrap();
 
     let (home, opts) = restarting_home();
@@ -632,7 +628,8 @@ fn a_session_with_two_transcripts_keeps_the_admission_fold() {
     let (_, report) = streamed_early(planned, &mut early);
     early.finish_bulk_load().unwrap();
 
-    assert_eq!(report.sources, 0, "{report:?}");
+    // Both healed transcripts were withheld until the session completed.
+    assert_eq!(report.withheld_sources, 2, "{report:?}");
     assert_same_projection_ignoring(
         "two transcripts",
         &folded,
@@ -697,8 +694,12 @@ fn admitting_one_runtime_never_folds_another_runtimes_facts() {
     let claude = plan(&ClaudeCodeAdapter, home.path(), &mut candidate);
     let codex = plan(&CodexAdapter, home.path(), &mut candidate);
     let instrument = Instrument::new();
-    let (mut claude_capture, claude_adapter, claude_runtime) = capture(claude);
-    let (mut codex_capture, codex_adapter, codex_runtime) = capture(codex);
+    // Every tool lifecycle is left to the admission folds here: the
+    // property under test is that one runtime's fold never takes another's.
+    let (mut claude_capture, claude_adapter, claude_runtime) =
+        capture(claude, StreamedPreparer::without_early_tools);
+    let (mut codex_capture, codex_adapter, codex_runtime) =
+        capture(codex, StreamedPreparer::without_early_tools);
     let mut claude_writer = StreamedRuntime::open(
         claude_adapter,
         &claude_runtime,
@@ -738,7 +739,9 @@ fn admitting_one_runtime_never_folds_another_runtimes_facts() {
     assert_eq!(runtime_tool_rows(&candidate, &claude_runtime.id), 0);
     assert_eq!(runtime_tool_rows(&candidate, &codex_runtime.id), 0);
 
-    codex_writer.admit(&mut candidate, &instrument).unwrap();
+    codex_writer
+        .admit(&mut candidate, &instrument, &codex_capture.prepared)
+        .unwrap();
     assert!(runtime_tool_rows(&candidate, &codex_runtime.id) > 0);
     // Claude's deferred facts stayed in Claude's buffer: no Claude tool row
     // was folded or written by Codex's admission, and Claude is still behind
@@ -750,7 +753,9 @@ fn admitting_one_runtime_never_folds_another_runtimes_facts() {
     let (_, codex_pending) = runtime_pending_sessions(&candidate, &codex_runtime.id);
     assert_eq!(codex_pending, 0);
 
-    claude_writer.admit(&mut candidate, &instrument).unwrap();
+    claude_writer
+        .admit(&mut candidate, &instrument, &claude_capture.prepared)
+        .unwrap();
     assert!(runtime_tool_rows(&candidate, &claude_runtime.id) > 0);
     candidate.finish_bulk_load().unwrap();
     assert_same_projection("claude+codex interleaved", &reference, &candidate);
@@ -900,6 +905,7 @@ fn a_restarted_session_heals_before_its_sources_stream() {
     let setup = streamed_setup(&files, &mut planner).unwrap();
     let mut writer =
         StreamedRuntime::open(adapter, &runtime, setup, &mut candidate, &instrument).unwrap();
+    let mut preparer = StreamedPreparer::new(&files);
     let mut emissions = Vec::new();
     let report = stream_closed_sources_into(
         adapter,
@@ -910,13 +916,14 @@ fn a_restarted_session_heals_before_its_sources_stream() {
         &opts,
         &instrument,
         None,
-        &mut |sources| {
+        &mut |mut sources| {
             emissions.push(
                 sources
                     .iter()
                     .map(|source| source.relative_path().to_owned())
                     .collect::<Vec<_>>(),
             );
+            preparer.prepare(&mut sources)?;
             writer
                 .apply(&mut candidate, sources, &instrument)
                 .map(|_| ())
@@ -934,7 +941,9 @@ fn a_restarted_session_heals_before_its_sources_stream() {
         emissions,
         vec![vec![HEAL_TRANSCRIPT.to_owned(), HEAL_JOURNAL.to_owned()]]
     );
-    writer.admit(&mut candidate, &instrument).unwrap();
+    writer
+        .admit(&mut candidate, &instrument, &preparer.finish().unwrap())
+        .unwrap();
     candidate.finish_bulk_load().unwrap();
 
     let generations: Vec<(String, i64, i64)> = candidate
@@ -1090,7 +1099,7 @@ fn streamed_rows_stay_behind_the_pending_barrier_until_admission() {
     streamed(claude, &mut store);
 
     let instrument = Instrument::new();
-    let (mut grok_capture, grok_adapter, grok_runtime) = capture(grok);
+    let (mut grok_capture, grok_adapter, grok_runtime) = capture(grok, StreamedPreparer::new);
     let mut grok_writer = StreamedRuntime::open(
         grok_adapter,
         &grok_runtime,
@@ -1099,9 +1108,12 @@ fn streamed_rows_stay_behind_the_pending_barrier_until_admission() {
         &instrument,
     )
     .unwrap();
-    for sources in grok_capture.emitted {
+    for sources in std::mem::take(&mut grok_capture.emitted) {
         grok_writer.apply(&mut store, sources, &instrument).unwrap();
     }
+    // Tool rows resolved before admission are in SQLite too, and just as
+    // hidden as every other row below.
+    assert!(runtime_tool_rows(&store, &grok_id) > 0);
 
     // Grok's rows are in SQLite, but its sessions are still Pending.
     let (session, timeline) = one_session_with_rows(&store, &grok_id);
@@ -1141,7 +1153,9 @@ fn streamed_rows_stay_behind_the_pending_barrier_until_admission() {
     );
     assert_eq!(status, 200);
 
-    grok_writer.admit(&mut store, &instrument).unwrap();
+    grok_writer
+        .admit(&mut store, &instrument, &grok_capture.prepared)
+        .unwrap();
     let (status, page) = get(&router, &format!("/api/sessions/{session}/timeline"));
     assert_eq!(status, 200);
     assert!(!page["entries"].as_array().unwrap().is_empty());
