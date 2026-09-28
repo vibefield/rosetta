@@ -1,16 +1,19 @@
 //! What a fresh build can no longer read, or read cleanly, no longer fails it.
-//! A source gone before capture reached it closes skipped; one gone after
-//! part of it was read ends its generation where the file stopped; a sibling
-//! gone before its heal keeps the generation it was held with; and an unclean
-//! replacement generation activates. Every such session is held Streaming, as
-//! a live pass leaves it, and every configuration leaves exactly what the
-//! serial walk leaves.
+//! A source gone before capture reached it closes skipped — a transcript, or
+//! every member of a snapshot database or document that is gone or never
+//! reads stably; one gone after part of it was read ends its generation where
+//! the file stopped; a sibling gone before its heal keeps the generation it
+//! was held with; and an unclean replacement generation activates. Every such
+//! session is held Streaming, as a live pass leaves it, and every
+//! configuration leaves exactly what the serial walk leaves.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
+use rosetta_adapter_codex::CodexAdapter;
+use rosetta_adapter_copilot::CopilotAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{LedgerEntry, scan_ledger};
 use rusqlite::types::Value;
@@ -21,7 +24,7 @@ use super::{
     capture_into_after, claude_home, heal_options, reset_heal_transcript, session_records,
     stream_state, tiny_batches,
 };
-use crate::closed::tests::{HEAL_JOURNAL, HEAL_TRANSCRIPT};
+use crate::closed::tests::{HEAL_JOURNAL, HEAL_TRANSCRIPT, copy_tree, fixture_roots};
 use crate::meta::SessionFile;
 use crate::progress::ColdProgressObserver;
 use crate::{IngestOptions, expand_data_root};
@@ -339,4 +342,211 @@ fn a_sibling_lost_before_its_heal_keeps_its_generation_streaming() {
     }
     assert_eq!(stream_state(&serial.canonical, "heal-session"), "streaming");
     assert_eq!(serial.canonical["workflow_journal"].len(), 1);
+}
+
+/// The Copilot basic-chat session's workspace document, a document-driver
+/// group of one member.
+const COPILOT_WORKSPACE: &str = "session-state/8f0e1895-c442-4ac2-828d-6b2ea7b5421d/workspace.yaml";
+
+/// A home holding `adapter`'s recorded basic-chat scenario, and its data root.
+fn basic_chat_home(adapter: &dyn AgentAdapter) -> (TempDir, PathBuf) {
+    let (_, data) = fixture_roots(adapter.kind())
+        .into_iter()
+        .find(|(scenario, _)| scenario == "basic-chat")
+        .expect("a basic-chat fixture");
+    let home = TempDir::new().unwrap();
+    let root = expand_data_root(&adapter.layout().data_root, home.path());
+    copy_tree(&data, &root);
+    (home, root)
+}
+
+/// Every emitted member of the group read from `physical` — a source named
+/// `<physical>#<native id>` — with the native session id it names.
+fn group_members<'a>(captured: &'a Captured, physical: &str) -> Vec<(&'a str, &'a str)> {
+    let prefix = format!("relative_path: \"{physical}#");
+    let marker = "native_session_id: \"";
+    captured
+        .emitted
+        .iter()
+        .filter(|source| source.contains(&prefix))
+        .map(|source| {
+            let start = source.find(marker).expect("a native session id") + marker.len();
+            let end = start + source[start..].find('"').expect("a closing quote");
+            (source.as_str(), &source[start..end])
+        })
+        .collect()
+}
+
+/// Every member of `physical`'s group closed skipped — no generation, no
+/// ops, incomplete, its planner cursor still fresh — with its session held
+/// Streaming. Returns the group's size.
+fn assert_group_skipped(label: &str, captured: &Captured, physical: &str) -> u64 {
+    let members = group_members(captured, physical);
+    assert!(!members.is_empty(), "{label}: no member of {physical}");
+    for (source, native) in &members {
+        for field in ["generation: 0,", "ops: [],", "complete: false,"] {
+            assert!(source.contains(field), "{label}: {field}: {source}");
+        }
+        assert_eq!(
+            stream_state(&captured.canonical, native),
+            "streaming",
+            "{label}: {native}"
+        );
+    }
+    for (path, active, highest) in generations(captured) {
+        if path.starts_with(&format!("{physical}#")) {
+            assert_eq!(
+                (active, highest),
+                (Value::Integer(0), Value::Integer(0)),
+                "{label}: {path}"
+            );
+        }
+    }
+    members.len() as u64
+}
+
+/// Nothing of `physical`'s group reached the ledger at `ledger`.
+fn assert_group_unledgered(label: &str, ledger: &Path, physical: &str) {
+    let prefix = format!("{physical}#");
+    let entries = scan_ledger(ledger).unwrap().entries;
+    assert!(
+        !entries.iter().any(|entry| match entry {
+            LedgerEntry::Raw { source, .. } | LedgerEntry::GenerationComplete { source, .. } => {
+                source.relative_path.starts_with(&prefix)
+            }
+            _ => false,
+        }),
+        "{label}: {physical} reached the ledger"
+    );
+}
+
+/// A snapshot database and a document gone before capture reaches them —
+/// moved away after the metadata phase, as a deleted file is — close every
+/// member of their group skipped, identically in every configuration: no
+/// generation and a fresh cursor, nothing ledgered, each member's session
+/// held Streaming, and the build publishes.
+#[test]
+fn snapshot_and_document_groups_lost_before_capture_close_skipped() {
+    for (adapter, physical) in [
+        (&CodexAdapter as &'static dyn AgentAdapter, "state_5.sqlite"),
+        (&CopilotAdapter, COPILOT_WORKSPACE),
+    ] {
+        let label = format!("{} {physical} lost", adapter.kind());
+        let (home, root) = basic_chat_home(adapter);
+        let (path, stash) = (root.join(physical), home.path().join("stash"));
+        let run = |config: Config, ledger: &Path| {
+            restore(&path, &stash);
+            capture_into_after(
+                adapter,
+                home.path(),
+                &IngestOptions::default(),
+                config,
+                ledger,
+                &|| std::fs::rename(&path, &stash).unwrap(),
+            )
+        };
+        let serial =
+            assert_every_config(&label, |config| run(config, TempDir::new().unwrap().path()));
+        assert_published(&label, &serial);
+        let members = assert_group_skipped(&label, &serial, physical);
+        // Files missing: the whole group.
+        assert_eq!(serial.report[1], members, "{label}: {:?}", serial.report);
+        let ledger = TempDir::new().unwrap();
+        assert_eq!(run(SERIAL, ledger.path()).emitted, serial.emitted);
+        assert_group_unledgered(&label, ledger.path(), physical);
+        restore(&path, &stash);
+    }
+}
+
+/// Stands in for a document every read of which is unstable: a FIFO at its
+/// path whose writer hands each reader one byte its stated length never
+/// shows, however many times the read is retried.
+struct UnstableDocument {
+    path: PathBuf,
+    stop: Arc<AtomicBool>,
+    writer: Option<std::thread::JoinHandle<()>>,
+}
+
+impl UnstableDocument {
+    fn at(path: &Path) -> Self {
+        let made = std::process::Command::new("mkfifo")
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo {}", path.display());
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (path, stop) = (path.to_path_buf(), stop.clone());
+            std::thread::spawn(move || {
+                loop {
+                    // Opening blocks until a reader opens the other end.
+                    let mut fifo = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let _ = std::io::Write::write_all(&mut fifo, b"x");
+                }
+            })
+        };
+        Self {
+            path: path.to_path_buf(),
+            stop,
+            writer: Some(writer),
+        }
+    }
+}
+
+impl Drop for UnstableDocument {
+    fn drop(&mut self) {
+        // The writer only ever stops inside an open, so one last reader
+        // releases it.
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = std::fs::read(&self.path);
+        if let Some(writer) = self.writer.take() {
+            writer.join().unwrap();
+        }
+        std::fs::remove_file(&self.path).unwrap();
+    }
+}
+
+/// A document whose every read is unstable — its length changes across the
+/// read, under every retry — closes its group skipped like one that is gone,
+/// identically in every configuration: the build publishes with the member's
+/// session held Streaming.
+#[test]
+fn a_document_unstable_under_every_retry_closes_its_group_skipped() {
+    let label = "copilot workspace unstable";
+    let (home, root) = basic_chat_home(&CopilotAdapter);
+    let (path, stash) = (root.join(COPILOT_WORKSPACE), home.path().join("stash"));
+    let run = |config: Config, ledger: &Path| {
+        restore(&path, &stash);
+        let unstable = std::cell::RefCell::new(None);
+        let captured = capture_into_after(
+            &CopilotAdapter,
+            home.path(),
+            &IngestOptions::default(),
+            config,
+            ledger,
+            &|| {
+                std::fs::rename(&path, &stash).unwrap();
+                *unstable.borrow_mut() = Some(UnstableDocument::at(&path));
+            },
+        );
+        drop(unstable.into_inner());
+        captured
+    };
+    let serial = assert_every_config(label, |config| run(config, TempDir::new().unwrap().path()));
+    assert_published(label, &serial);
+    let members = assert_group_skipped(label, &serial, COPILOT_WORKSPACE);
+    // Files missing, retries exhausted: the whole group, never missing.
+    assert_eq!(
+        (serial.report[1], serial.report[12]),
+        (0, members),
+        "{:?}",
+        serial.report
+    );
+    let ledger = TempDir::new().unwrap();
+    assert_eq!(run(SERIAL, ledger.path()).emitted, serial.emitted);
+    assert_group_unledgered(label, ledger.path(), COPILOT_WORKSPACE);
+    restore(&path, &stash);
 }

@@ -432,6 +432,72 @@ fn a_rollout_caught_writing_its_first_record_is_admitted_live_once_written() {
     child.0.wait().unwrap();
 }
 
+/// An unterminated opening record over the 32 MiB projection limit is more
+/// than the metadata skim reads, so today its rollout counts as unidentified,
+/// not unfinished. A fresh start publishes past it; the strict gate of a
+/// finite `ingest` refuses it.
+#[test]
+fn an_unterminated_opening_record_over_the_projection_limit_is_tolerated_only_fresh() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let codex = home.join(".codex");
+    copy_tree(
+        &fixture("codex", "0.149.1", "basic-chat", "codex-home"),
+        &codex,
+    );
+    let rollout = codex.join(
+        "sessions/2026/08/25/rollout-2026-08-25T11-00-00-03c258e7-8a3a-7515-ae29-f6652985a62d.jsonl",
+    );
+    std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+    let mut record = String::from(
+        "{\"timestamp\":\"2026-08-25T02:35:03.601Z\",\"type\":\"session_meta\",\
+         \"payload\":{\"id\":\"03c258e7-8a3a-7515-ae29-f6652985a62d\",\"base_instructions\":\"",
+    );
+    record.push_str(&"q".repeat(33 * 1024 * 1024));
+    std::fs::write(&rollout, record).unwrap();
+
+    let stdout = assert_success(&run_serve(
+        &home,
+        &temp.path().join("fresh/rosetta.db"),
+        "codex",
+    ));
+    let meta = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "meta" && event["agent"] == "codex")
+        .expect("a codex meta event");
+    assert_eq!(
+        (&meta["filesUnidentified"], &meta["filesUnfinished"]),
+        (&serde_json::json!(1), &serde_json::json!(0)),
+        "{meta}"
+    );
+    assert!(
+        tolerated(&stdout).contains("unfinished=0, unidentified=1"),
+        "{stdout}"
+    );
+
+    let strict_db = temp.path().join("strict/rosetta.db");
+    std::fs::create_dir_all(strict_db.parent().unwrap()).unwrap();
+    let strict = Command::new(env!("CARGO_BIN_EXE_rosettad"))
+        .args([
+            "ingest",
+            "--db",
+            strict_db.to_str().unwrap(),
+            "--home",
+            home.to_str().unwrap(),
+            "--agent",
+            "codex",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&strict.stderr);
+    assert!(!strict.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("codex left 1 streamable files unidentified"),
+        "{stderr}"
+    );
+}
+
 /// Removes one roster source the first time capture reports bytes for
 /// another — `trigger`, earlier in path order — so the serial walk finds it
 /// gone when its turn comes: deleted between metadata and capture.
