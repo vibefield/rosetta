@@ -214,13 +214,24 @@ fn produce(
 
     let stream_before = instrument.snapshot();
     let stream_started = Instant::now();
+    // This thread's CPU over the walk: all of capture on the serial walk, the
+    // sequencer's own share (planner, ledger hand-off, preparer, inline
+    // groups) on the pooled one.
+    let stream_cpu_started = thread_cpu_time();
     // Final ordinals, and the tool rows of every session proven
     // self-contained, are prepared here, off the canonical writer, as each
     // source is emitted — in path order on the pooled walk too, where this
     // thread is the runtime's sequencer.
     let mut preparer = StreamedPreparer::new(&files);
+    let mut prepare_cpu = Duration::ZERO;
     let mut emit = |mut sources: Vec<ClosedSource>| {
+        let prepare_started = stage_profiles.then(thread_cpu_time).flatten();
         preparer.prepare(&mut sources)?;
+        if let Some(before) = prepare_started
+            && let Some(after) = thread_cpu_time()
+        {
+            prepare_cpu += after.saturating_sub(before);
+        }
         let bytes = sources.iter().map(ClosedSource::payload_bytes).sum();
         instrument
             .time(Metric::WriterBudgetWaitNanos, || budget.acquire(bytes))
@@ -262,6 +273,10 @@ fn produce(
     }
     .map_err(|error| error.to_string())?;
     let stream_wall_ms = stream_started.elapsed().as_secs_f64() * 1_000.0;
+    let stream_cpu_ms = cpu_millis(stream_cpu_started);
+    let prepare_cpu_ms = stream_cpu_started
+        .filter(|_| stage_profiles)
+        .map(|_| prepare_cpu.as_secs_f64() * 1_000.0);
     let stream_profile = instrument.snapshot().delta_since(&stream_before);
     let prepared = preparer.finish().map_err(|error| error.to_string())?;
     let early = prepared.report();
@@ -287,6 +302,7 @@ fn produce(
             "agent": adapter.kind(),
             "runtime": runtime.id,
             "wallMs": stream_wall_ms,
+            "cpuMs": stream_cpu_ms,
             "captureWallMs": wall_ms,
             "report": stream_profile.report(),
             "resolvedSessions": early.sessions,
@@ -296,6 +312,7 @@ fn produce(
             "releasedSources": early.released_sources,
             "peakPendingSessions": early.peak_pending_sessions,
             "prepareMs": millis(early.nanos),
+            "prepareCpuMs": prepare_cpu_ms,
         }));
         // Streamed capture closes each source inside the stream wall; no
         // serial plan preparation follows it any more. The closing work is
