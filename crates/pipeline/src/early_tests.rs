@@ -1,7 +1,7 @@
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_support::{AgentAdapter, FileDiscipline, FileFormat, StreamDriver};
 use rosetta_capture::SourceDef;
-use rosetta_core::rows::MessageRow;
+use rosetta_core::rows::{MessageRow, SessionUsageRow, TokenSnapshot};
 use rosetta_core::{EvidenceOrder, SourceIdentity};
 use serde_json::json;
 
@@ -247,4 +247,149 @@ fn without_early_tools_every_fact_stays_in_its_batch() {
     preparer.prepare(&mut sources).unwrap();
     assert_eq!(prepared(&sources), [(false, 0, 0)]);
     assert_eq!(sources[0].ops.len(), 2);
+}
+
+/// A roster entry for a Codex guardian review: a ledger-only source whose own
+/// thread never becomes a canonical session.
+fn ledger_only_file(path: &str, session_id: &str) -> SessionFile {
+    SessionFile {
+        ledger_only: true,
+        ..file(path, session_id)
+    }
+}
+
+fn ledger_only(path: &str, session_id: &str, ops: Vec<IngestOp>) -> ClosedSource {
+    let mut source = closed(path, session_id, ops);
+    source.source.ledger_only = true;
+    source
+}
+
+/// All a guardian review emits (adapter audit E1): a usage sample on the
+/// parent session that ran it.
+fn parent_sample(parent: &str, review: &str) -> IngestOp {
+    IngestOp::SessionUsage(SessionUsageRow {
+        session_id: parent.into(),
+        key: format!("guardian:{review}:tc:1"),
+        ts: 30,
+        model: Some("codex-auto-review".into()),
+        tokens: TokenSnapshot {
+            input: Some(300),
+            output: Some(30),
+            ..TokenSnapshot::default()
+        },
+        identity: None,
+    })
+}
+
+/// Adapter audit E1: a Codex guardian review is a ledger-only source that
+/// names its parent only through `SessionUsage` samples. A sample is not a
+/// relational fact — it lands in `session_usage`, applied with its source's
+/// batch, and never meets a tool fold — so it neither crosses the parent nor
+/// is withheld, whether the review is emitted before the parent completes or
+/// after the parent was resolved.
+#[test]
+fn a_guardian_usage_sample_neither_crosses_nor_is_withheld() {
+    let roster = [
+        file("a1.jsonl", "s-p"),
+        ledger_only_file("b1-guardian.jsonl", "s-g1"),
+        file("c1.jsonl", "s-p"),
+        ledger_only_file("d1-guardian.jsonl", "s-g2"),
+    ];
+    let mut preparer = StreamedPreparer::new(&roster);
+    let mut sources = vec![
+        closed("a1.jsonl", "s-p", vec![opener("s-p", "k1")]),
+        ledger_only(
+            "b1-guardian.jsonl",
+            "s-g1",
+            vec![parent_sample("s-p", "g1")],
+        ),
+        closed("c1.jsonl", "s-p", vec![update("s-p", "k1")]),
+        ledger_only(
+            "d1-guardian.jsonl",
+            "s-g2",
+            vec![parent_sample("s-p", "g2")],
+        ),
+    ];
+    preparer.prepare(&mut sources).unwrap();
+    // The parent resolves with its last source; neither review withholds or
+    // releases anything.
+    assert_eq!(
+        prepared(&sources),
+        [(true, 0, 0), (true, 0, 0), (true, 1, 0), (true, 0, 0)]
+    );
+    // Each sample stays in its review's batch and is applied with it.
+    for review in [&sources[1], &sources[3]] {
+        assert!(
+            matches!(review.ops.as_slice(), [IngestOp::SessionUsage(sample)] if sample.session_id == "s-p"),
+            "{:?}",
+            review.ops
+        );
+    }
+    let report = preparer.finish().unwrap().report();
+    assert_eq!(
+        (
+            report.sessions,
+            report.crossed_sessions,
+            report.released_sources
+        ),
+        (1, 0, 0)
+    );
+}
+
+/// The store refuses a ledger-only source anything but samples and drift.
+/// Should one carry a row or a relational fact anyway, the preparer has
+/// already treated every session it names — and its own — as crossed: a
+/// named session's withheld facts go back to the admission fold with it,
+/// and that session's later sources keep theirs.
+#[test]
+fn a_ledger_only_source_with_a_relational_fact_crosses_what_it_names() {
+    let roster = [
+        file("a1.jsonl", "s-p"),
+        ledger_only_file("b1-guardian.jsonl", "s-g"),
+        file("c1.jsonl", "s-p"),
+    ];
+    let mut preparer = StreamedPreparer::new(&roster);
+    let mut sources = vec![
+        closed("a1.jsonl", "s-p", vec![opener("s-p", "k1")]),
+        ledger_only("b1-guardian.jsonl", "s-g", vec![update("s-p", "k1")]),
+        closed("c1.jsonl", "s-p", vec![update("s-p", "k1")]),
+    ];
+    preparer.prepare(&mut sources).unwrap();
+    assert_eq!(
+        prepared(&sources),
+        [(true, 0, 0), (false, 0, 1), (false, 0, 0)]
+    );
+    assert_eq!(sources[1].ops.len(), 1);
+    assert_eq!(sources[2].ops.len(), 1);
+    let report = preparer.finish().unwrap().report();
+    assert_eq!(
+        (
+            report.sessions,
+            report.crossed_sessions,
+            report.released_sources
+        ),
+        (0, 2, 1)
+    );
+}
+
+/// The same ledger-only fact arriving after its session was resolved can no
+/// longer be folded with it: the start fails closed.
+#[test]
+fn a_ledger_only_relational_fact_for_a_resolved_session_fails_closed() {
+    let roster = [
+        file("a1.jsonl", "s-p"),
+        ledger_only_file("b1-guardian.jsonl", "s-g"),
+    ];
+    let mut preparer = StreamedPreparer::new(&roster);
+    let mut first = vec![closed("a1.jsonl", "s-p", vec![opener("s-p", "k1")])];
+    preparer.prepare(&mut first).unwrap();
+    assert_eq!(prepared(&first), [(true, 1, 0)]);
+
+    let mut later = vec![ledger_only(
+        "b1-guardian.jsonl",
+        "s-g",
+        vec![update("s-p", "k1")],
+    )];
+    let error = preparer.prepare(&mut later).unwrap_err();
+    assert!(error.to_string().contains("already resolved"), "{error}");
 }

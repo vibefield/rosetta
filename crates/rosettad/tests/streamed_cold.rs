@@ -614,6 +614,128 @@ fn tool_rows_resolved_at_file_close_equal_the_admission_fold_for_generated_corpo
     }
 }
 
+/// One Codex guardian review rollout (adapter audit E1): a ledger-only thread
+/// whose token counts become `SessionUsage` samples on `parent`.
+fn write_guardian_review(dir: &Path, stamp: &str, review: &str, parent: &str, cwd: &str) {
+    let usage = |input: i64, output: i64| {
+        serde_json::json!({
+            "input_tokens": input, "cached_input_tokens": 0, "cache_write_input_tokens": 0,
+            "output_tokens": output, "reasoning_output_tokens": 0, "total_tokens": input + output,
+        })
+    };
+    let records = [
+        serde_json::json!({
+            "timestamp": "2026-08-25T02:36:00.000Z", "ordinal": 0, "type": "session_meta",
+            "payload": {
+                "id": review, "timestamp": "2026-08-25T02:36:00.000Z", "cwd": cwd,
+                "originator": "codex_exec", "cli_version": "0.149.1",
+                "source": {"subagent": {"other": "guardian"}},
+                "thread_source": "guardian_review", "model_provider": "openai",
+                "parent_thread_id": parent,
+            },
+        }),
+        serde_json::json!({
+            "timestamp": "2026-08-25T02:36:01.000Z", "ordinal": 1, "type": "turn_context",
+            "payload": {"cwd": cwd, "model": "codex-auto-review"},
+        }),
+        serde_json::json!({
+            "timestamp": "2026-08-25T02:36:05.000Z", "ordinal": 2, "type": "event_msg",
+            "payload": {"type": "token_count", "info": {
+                "total_token_usage": usage(300, 30), "last_token_usage": usage(300, 30),
+            }},
+        }),
+    ];
+    let text = records
+        .iter()
+        .map(serde_json::Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(dir.join(format!("rollout-{stamp}-{review}.jsonl")), text).unwrap();
+}
+
+/// Adapter audit E1 end to end, with early tools on as fresh serve runs them:
+/// Codex guardian reviews — ledger-only rollouts that name their parent thread
+/// only through usage samples, one sorting before and one after the parent's
+/// rollout — leave the parent self-contained. Its tool rows resolve on the
+/// producer, the samples land on it, and the projection equals the fold path's.
+#[test]
+fn codex_guardian_reviews_leave_their_parent_resolved_like_the_fold() {
+    let (_, data) = fixture_roots("codex")
+        .into_iter()
+        .find(|(scenario, _)| scenario == "tool-use")
+        .expect("the Codex tool-use fixture");
+    let home = home_with(&CodexAdapter, &data);
+    let root = expand_data_root(&CodexAdapter.layout().data_root, home.path());
+    let rollout = walkdir(&root)
+        .into_iter()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("rollout-"))
+        })
+        .expect("the fixture's parent rollout");
+    let header: serde_json::Value = serde_json::from_str(
+        std::fs::read_to_string(&rollout)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    let parent = header["payload"]["id"].as_str().unwrap().to_owned();
+    let cwd = header["payload"]["cwd"].as_str().unwrap().to_owned();
+    let dir = rollout.parent().unwrap();
+    write_guardian_review(
+        dir,
+        "2026-08-24T19-30-00",
+        "0199aaaa-0000-7000-8000-00000000000a",
+        &parent,
+        &cwd,
+    );
+    write_guardian_review(
+        dir,
+        "2026-08-24T19-40-00",
+        "0199aaaa-0000-7000-8000-00000000000b",
+        &parent,
+        &cwd,
+    );
+
+    let mut folded = cold_store();
+    let planned = plan(&CodexAdapter, home.path(), &mut folded);
+    assert_eq!(
+        planned.files.iter().filter(|file| file.ledger_only).count(),
+        2,
+        "both reviews are ledger-only roster sources"
+    );
+    streamed_fold(planned, &mut folded);
+    folded.finish_bulk_load().unwrap();
+
+    let mut early = cold_store();
+    let planned = plan(&CodexAdapter, home.path(), &mut early);
+    let (_, report) = streamed_early(planned, &mut early);
+    early.finish_bulk_load().unwrap();
+
+    // The samples never cross the parent: it resolves before admission.
+    assert_eq!(report.crossed_sessions, 0, "{report:?}");
+    assert_eq!(report.sessions, 1, "{report:?}");
+    assert!(report.tool_rows > 0, "{report:?}");
+    // Both reviews' samples landed on the parent session.
+    let samples: i64 = early
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM session_usage u
+             JOIN ingest_cursor review ON review.id = u.src_cursor
+             JOIN ingest_cursor rollout ON rollout.session_id = u.session_id
+             WHERE review.session_id IS NULL
+               AND rollout.path LIKE '%' || ?1 || '.jsonl'",
+            [&parent],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(samples, 2);
+    assert_same_projection("codex guardian reviews", &folded, &early);
+}
+
 #[test]
 fn a_restarted_two_transcript_session_prepares_like_the_fold() {
     let (home, opts) = restarting_home();
