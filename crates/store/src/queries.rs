@@ -710,8 +710,41 @@ pub fn all_sessions(conn: &Connection) -> Result<Vec<SessionRow>, StoreError> {
     let mut stmt = conn.prepare_cached("SELECT * FROM session ORDER BY id")?;
     let rows = stmt.query_map([], session_from_row)?;
     let mut rows = rows.collect::<Result<Vec<_>, _>>()?;
+    let mut activity =
+        crate::activity::sessions_activity(conn, rows.iter().map(|row| row.id.as_str()))?;
     for row in &mut rows {
-        row.activity = crate::activity::session_activity(conn, &row.id)?;
+        row.activity = activity.remove(&row.id).flatten();
+    }
+    Ok(rows)
+}
+
+/// [`session`] for each of `session_ids`, paired with its id — the same rows,
+/// with every activity rolled up in one pass instead of one family walk per
+/// session.
+pub fn named_sessions<'a>(
+    conn: &Connection,
+    session_ids: &'a BTreeSet<String>,
+) -> Result<Vec<(&'a str, Option<SessionRow>)>, StoreError> {
+    let mut statement = conn.prepare_cached("SELECT * FROM session WHERE id = ?1")?;
+    let mut rows = Vec::with_capacity(session_ids.len());
+    for session_id in session_ids {
+        rows.push((
+            session_id.as_str(),
+            statement
+                .query_row(params![session_id], session_from_row)
+                .optional()?,
+        ));
+    }
+    let mut activity = crate::activity::sessions_activity(
+        conn,
+        rows.iter()
+            .filter(|(_, row)| row.is_some())
+            .map(|(session_id, _)| *session_id),
+    )?;
+    for (session_id, row) in &mut rows {
+        if let Some(row) = row {
+            row.activity = activity.remove(*session_id).flatten();
+        }
     }
     Ok(rows)
 }

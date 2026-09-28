@@ -629,7 +629,7 @@ impl MetaMirror {
         let runtimes = fetch_named(conn, &effects.touched_runtimes, queries::runtime)?;
         let projects = fetch_named(conn, &effects.touched_projects, queries::project)?;
         let session_ids = self.activity_dependents(conn, &effects.touched_sessions)?;
-        let sessions = fetch_named(conn, &session_ids, queries::session)?;
+        let sessions = fetch_sessions(conn, &session_ids)?;
 
         let mut events = Vec::new();
         for (_, row) in runtimes {
@@ -672,7 +672,7 @@ impl MetaMirror {
         let runtimes = fetch_named(conn, &effects.runtimes, queries::runtime)?;
         let projects = fetch_named(conn, &effects.projects, queries::project)?;
         let session_ids = self.activity_dependents(conn, &effects.sessions)?;
-        let sessions = fetch_named(conn, &session_ids, queries::session)?;
+        let sessions = fetch_sessions(conn, &session_ids)?;
 
         let mut events = Vec::new();
         for (id, row) in runtimes {
@@ -763,6 +763,24 @@ impl MetaMirror {
 
     pub fn runtimes(&self) -> impl Iterator<Item = &RuntimeRow> {
         self.runtimes.values()
+    }
+}
+
+/// Above this many named sessions a refresh reads them in one pass
+/// ([`queries::named_sessions`]): a cold runtime's admission names every one
+/// of its sessions, and a family walk per session dominated that refresh.
+const BULK_SESSION_READ: usize = 64;
+
+/// [`fetch_named`] for sessions: the same rows and answers, read in one pass
+/// once there are many of them.
+fn fetch_sessions<'a>(
+    conn: &Connection,
+    ids: &'a BTreeSet<String>,
+) -> Result<Vec<(&'a str, Option<SessionRow>)>, StoreError> {
+    if ids.len() > BULK_SESSION_READ {
+        queries::named_sessions(conn, ids)
+    } else {
+        fetch_named(conn, ids, queries::session)
     }
 }
 

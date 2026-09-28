@@ -731,7 +731,18 @@ fn admit(
         }));
     }
 
+    let absorb_started = Instant::now();
     absorb_effects(cx.store, cx.hub)?;
+    if stage_profiles {
+        bench::emit(&json!({
+            "event": "stage-profile",
+            "command": "serve",
+            "stage": "admission-absorb",
+            "agent": kind,
+            "runtime": runtime_id,
+            "wallMs": absorb_started.elapsed().as_secs_f64() * 1_000.0,
+        }));
+    }
     let session_ids = cx
         .store
         .runtime_session_ids(&runtime_id)
