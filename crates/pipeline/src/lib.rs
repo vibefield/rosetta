@@ -164,13 +164,13 @@ pub struct IngestOptions {
     /// their revision identity is a whole-content hash.
     pub starter_budget: Option<SliceBudget>,
     /// `true` for a one-shot pass that must end every JSONL source at a
-    /// terminal generation — the fresh cold build's closed-source walk sets
-    /// it. A source whose writer is mid-append (the file ends inside a record)
-    /// then ends its generation at its last complete record, exactly as if the
-    /// file ended there, and its unterminated suffix stays in the checkpoint
-    /// as ordinary append growth for the live runner. `false` — the default,
-    /// and every other pass — leaves such a generation staged until a read
-    /// finds the record complete.
+    /// terminal generation — the fresh cold build's closed-source walk and a
+    /// resumed fresh start's catch-up set it. A source whose writer is
+    /// mid-append (the file ends inside a record) then ends its generation at
+    /// its last complete record, exactly as if the file ended there, and its
+    /// unterminated suffix stays in the checkpoint as ordinary append growth
+    /// for the live runner. `false` — the default, and every other pass —
+    /// leaves such a generation staged until a read finds the record complete.
     pub stop_at_partial_record: bool,
     /// Process-local cooperative cancellation. It is deliberately not a
     /// checkpoint or canonical fact; cold workers check it at bounded record

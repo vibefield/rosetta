@@ -360,23 +360,16 @@ fn completed_second_boot_is_live_incremental_catch_up() {
     );
 }
 
-#[test]
-fn staged_cold_ledger_rebuilds_and_finishes_on_next_boot() {
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    let claude = home.join(".claude");
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../groundtruth/claude-code/fixtures/2.1.241/basic-chat/claude-config");
-    copy_tree(&fixture, &claude);
-    let db = temp.path().join("archive/rosetta.db");
-    assert_success(&run_serve(&home, &db));
-
+/// Turn a finished start back into an interrupted one: the projection is
+/// gone and its ledger is the named staged generation, with its manifest.
+/// Returns the staged directory.
+fn stage_ledger(db: &Path, claude: &Path) -> std::path::PathBuf {
     let ledger = db.with_extension("ledger");
     let staged = ledger.with_file_name(format!(
         "{}.staged",
         ledger.file_name().unwrap().to_string_lossy()
     ));
-    std::fs::remove_file(&db).unwrap();
+    std::fs::remove_file(db).unwrap();
     std::fs::rename(&ledger, &staged).unwrap();
     let manifest = serde_json::json!({
         "format": 1,
@@ -390,6 +383,21 @@ fn staged_cold_ledger_rebuilds_and_finishes_on_next_boot() {
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
+    staged
+}
+
+#[test]
+fn staged_cold_ledger_rebuilds_and_finishes_on_next_boot() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let claude = home.join(".claude");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../groundtruth/claude-code/fixtures/2.1.241/basic-chat/claude-config");
+    copy_tree(&fixture, &claude);
+    let db = temp.path().join("archive/rosetta.db");
+    assert_success(&run_serve(&home, &db));
+    let ledger = db.with_extension("ledger");
+    let staged = stage_ledger(&db, &claude);
 
     let resumed = assert_success(&run_serve(&home, &db));
     assert!(resumed.contains("resuming cold generation"), "{resumed}");
@@ -406,6 +414,52 @@ fn staged_cold_ledger_rebuilds_and_finishes_on_next_boot() {
         })
         .unwrap();
     assert_eq!(ready, 1);
+}
+
+/// A resumed start closes a transcript caught mid-append the way a fresh one
+/// does: the interrupted generation replays, the catch-up over the current
+/// file stops at its last complete record, and the start publishes with the
+/// session Streaming instead of failing on an incomplete file.
+#[test]
+fn a_resumed_start_closes_a_transcript_caught_mid_append() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let claude = home.join(".claude");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../groundtruth/claude-code/fixtures/2.1.241/basic-chat/claude-config");
+    copy_tree(&fixture, &claude);
+    let db = temp.path().join("archive/rosetta.db");
+    assert_success(&run_serve(&home, &db));
+    let staged = stage_ledger(&db, &claude);
+
+    // While no daemon ran, the agent went on writing and is mid-append now.
+    let transcript = find_project_jsonl(&claude.join("projects"));
+    let native = transcript
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap()
+        .write_all(br#"{"type":"user","message":{"role":"user","content":"unfin"#)
+        .unwrap();
+
+    let resumed = assert_success(&run_serve(&home, &db));
+    assert!(resumed.contains("resuming cold generation"), "{resumed}");
+    assert!(resumed.contains("milestone: canonical-ready"), "{resumed}");
+    assert!(!staged.exists());
+    let state = format!("SELECT stream_state FROM session WHERE native_session_id = '{native}'");
+    assert_eq!(scalar(&db, &state).as_deref(), Some("streaming"));
+    let generations = scalar(
+        &db,
+        "SELECT active_generation || '/' || highest_generation FROM ingest_cursor
+         WHERE path LIKE '%.jsonl'",
+    )
+    .unwrap();
+    let (active, highest) = generations.split_once('/').unwrap();
+    assert_eq!(active, highest, "no generation is left staged");
 }
 
 /// Every canonical row a reader can see, with surrogate ids mapped to stable

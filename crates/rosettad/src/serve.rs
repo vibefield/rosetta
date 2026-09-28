@@ -1087,9 +1087,13 @@ fn run_resumed_fresh_serve(
     store.observe_meta_effects();
     let wake = SourceWake::default();
     let stage_root = ledger_stage.path().to_path_buf();
+    // Publication needs every source at a terminal generation, so a source
+    // caught mid-append ends at its last complete record here too, exactly
+    // as on a fresh build's closed walk; the live runner lands the rest.
     let cold_opts = IngestOptions {
         starter_budget: None,
         audit_files_per_run: 0,
+        stop_at_partial_record: true,
         cancel: Some(stop.clone()),
         ..opts.clone()
     };

@@ -160,8 +160,9 @@ Interrupted disk-progressive work is durable and resumable. Interrupted fresh RA
 installs an incomplete canonical database; it retains a named `<ledger>.staged` generation with a
 fsynced manifest binding projection, ledger, enrollment, and runtime roots. The next plain `serve`
 replays sealed evidence into fresh canonical RAM, ignores raw-only tails, reserves their generation
-in RAM so source retries allocate strictly above it, finishes from the current source inventory, and
-publishes the same generation. The recovery marker survives ledger promotion and is removed only
+in RAM so source retries allocate strictly above it, finishes from the current source inventory
+(a source caught mid-append again ends at its last complete record), and publishes the same
+generation. The recovery marker survives ledger promotion and is removed only
 after SQLite installation. The app does not pass `--restart-incomplete`; that flag remains an
 explicit legacy archive/restart operation for old incomplete projection sets. A complete projection
 is never moved. `pnpm dev` builds `rosettad --release` and

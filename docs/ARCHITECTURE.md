@@ -295,8 +295,10 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > a fsynced `.cold-generation.json` inside `<ledger>.staged` binds the projection/ledger names,
 > enrollment, and runtime roots. An exit discards only canonical RAM. The next launch reconstructs
 > it from sealed staged-ledger generations, treats a raw-only tail as unfinished, reserves that
-> generation in RAM, and rereads the source strictly above it. A crash after ledger promotion but
-> before SQLite installation remains resumable because the marker moves with the ledger; successful
+> generation in RAM, and rereads the source strictly above it; its catch-up passes, like the fresh
+> build's, stop a source caught mid-append at its last complete record. A crash after ledger
+> promotion but before SQLite installation remains resumable because the marker moves with the
+> ledger; successful
 > SQLite installation removes it last. `--restart-incomplete` remains an explicit legacy
 > archive/restart command, not app startup policy. Recovery never treats RAM as durable state.
 >
