@@ -96,7 +96,7 @@ pub(crate) fn stream_document_group(
 
     let path = root.join(relative_path);
     let document_limit =
-        adapter.document_size_limit(&group[0].stream_id, opts.tail.max_record_bytes);
+        adapter.document_size_limit(&group[0].stream_id, crate::MAX_PROJECTED_RECORD_BYTES);
     let mut retries = 0_u32;
     let snapshot = loop {
         opts.check_cancelled()?;

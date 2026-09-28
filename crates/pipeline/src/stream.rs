@@ -11,9 +11,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use rosetta_adapter_support::AgentAdapter;
+use rosetta_adapter_support::{AgentAdapter, StreamDriver};
 use rosetta_capture::Tailer;
-use rosetta_core::rows::{RuntimeRow, StreamState};
+use rosetta_core::IngestOp;
+use rosetta_core::rows::{DriftFact, RuntimeRow, StreamState};
 use rosetta_store::{
     ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries,
 };
@@ -40,7 +41,13 @@ pub struct StreamReport {
     /// re-reads) amplify `BytesRead` past any census figure; payload never
     /// exceeds the source's raw size, so meters against census bytes hold.
     pub payload_bytes: u64,
+    /// Records past the tailer's capture limit: skipped unread, never
+    /// ledgered, and the generation that held one can never activate.
     pub oversized: u64,
+    /// Records over [`crate::MAX_PROJECTED_RECORD_BYTES`]: ledgered whole and
+    /// projected as one drift fact instead of normalized. Deliberate, never a
+    /// failure.
+    pub quarantined: u64,
     pub parsed: u64,
     pub unknown: u64,
     pub hard_errors: u64,
@@ -72,6 +79,7 @@ impl StreamReport {
         self.records += part.records;
         self.payload_bytes += part.payload_bytes;
         self.oversized += part.oversized;
+        self.quarantined += part.quarantined;
         self.parsed += part.parsed;
         self.unknown += part.unknown;
         self.hard_errors += part.hard_errors;
@@ -536,4 +544,38 @@ pub(crate) fn apply_pass_batch(
 
 pub(crate) fn merge_stats(total: &mut ApplyStats, batch: &ApplyStats) {
     total.merge_from(batch);
+}
+
+/// Whether a record is quarantined instead of normalized: a JSONL record
+/// over [`crate::MAX_PROJECTED_RECORD_BYTES`]. Decided by size alone, so a
+/// capture pass and a replay of its ledger decide it the same way.
+pub(crate) fn over_projection_limit(
+    adapter: &dyn AgentAdapter,
+    stream_id: &str,
+    payload: &[u8],
+) -> bool {
+    payload.len() > crate::MAX_PROJECTED_RECORD_BYTES
+        && adapter.stream_driver(stream_id) == Some(StreamDriver::JsonLines)
+}
+
+/// All a quarantined record projects: one drift fact at its offset. The
+/// record itself is in the raw ledger, whole.
+pub(crate) fn quarantined_record(
+    runtime_id: &str,
+    agent_version: Option<&str>,
+    stream_id: &str,
+    cursor_id: Option<i64>,
+    start_offset: u64,
+) -> IngestOp {
+    IngestOp::Drift(DriftFact {
+        runtime_id: runtime_id.to_owned(),
+        agent_version: agent_version.unwrap_or_default().to_owned(),
+        stream: stream_id.to_owned(),
+        record_kind: "raw_record".to_owned(),
+        error_code: "over_projection_limit".to_owned(),
+        shape_hash: String::new(),
+        at: None,
+        sample_cursor: cursor_id,
+        sample_offset: Some(start_offset as i64),
+    })
 }

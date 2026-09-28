@@ -370,8 +370,9 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > follows live-growth semantics on every cold path (decided 2026-08-31): a dirty FIRST generation
 > activates its parseable rows and the session holds Streaming, never Indexed — identical sliced,
 > unsliced, or rebuilt, with rebuild electing latest seals for only-dirty paths — while a dirty
-> REPLACEMENT still abandons to protect the active clean generation, and oversized or
-> raw-incomplete sources still abandon. An idle daemon appends NOTHING to the raw ledger
+> REPLACEMENT still abandons to protect the active clean generation, and a raw-incomplete source
+> (one holding a record past the capture limit, §3.5) still abandons. An idle daemon appends
+> NOTHING to the raw ledger
 > (fixed 2026-08-31, found by visual QA): the rotating audit re-reads a quiet file against the
 > tail checkpoint's committed content chain (checkpoint v2 — a resumable byte fold over
 > `0..committed`; v1 blobs still decode and the first audit establishes their chain in place) and
@@ -640,6 +641,22 @@ capture contract explicit.
   The head hash detects rewrite/truncation (Claude Code rewrites files on compaction);
   on mismatch, the file re-ingests under a new **epoch**. Partial trailing lines are
   buffered, never half-parsed.
+- **Record limits** (2026-09-28): the tailer captures any record one raw ledger frame can
+  hold (`MAX_RAW_RECORD_BYTES`, 256 MiB less the frame's 20-byte prefix), so every captured
+  record is ledgered whole; batches of ordinary records keep their 32 MiB cap, and a larger
+  record is a batch of its own. The pipeline normalizes records up to
+  `MAX_PROJECTED_RECORD_BYTES` (32 MiB, also the metadata skim's bound on one record and the
+  default document limit). A longer JSONL record is quarantined by the pass instead: ledgered
+  whole and projected as one `raw_record`/`over_projection_limit` drift fact, like a record
+  type the adapter does not project, so its generation stays clean, seals and activates, and
+  its session can be Indexed; replay applies the same rule by size, so a rebuild reproduces
+  it, and cold, live-append and live first-generation passes agree. Only a record past the
+  capture limit is *oversized*: skipped unread, never ledgered, its generation raw-incomplete
+  (it abandons, and a fresh start still refuses it). A large record in flight costs about twice
+  its size — the tailer's buffer, then its finished frame: one 200 MiB record raised a fresh
+  start's peak footprint by about 410 MiB, alike with plain or zstd-frames ledgers and serial or
+  pooled capture. The capture pool's look-ahead budgets bound what queues behind it, not the
+  step that holds it.
 - **Bounded metadata fallback**: the ordinary 64 KiB head + 16 KiB tail skim remains
   the default. An adapter may opt a source into a separately metered scan of complete
   records when one optional fact is still missing; the generic 128 KiB / 256-record

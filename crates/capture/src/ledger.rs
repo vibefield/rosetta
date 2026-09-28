@@ -58,6 +58,9 @@ const TAG_META_VERSIONED: u8 = 5;
 /// across the capture batch they already received.
 const TAG_RAW_BATCH: u8 = 6;
 const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
+/// The largest raw record one `TAG_RAW` frame holds, and so the largest the
+/// ledger keeps whole: the tailer's default capture limit.
+pub const MAX_RAW_RECORD_BYTES: usize = MAX_FRAME_BYTES - frames::RAW_FIXED_BYTES;
 // One frozen mixed-corpus cold batch averaged about 1.10 MiB of ledger frames.
 // A 1 MiB buffer amortizes writes within that checkpoint boundary while
 // preserving the caller's explicit flush/durability cadence.

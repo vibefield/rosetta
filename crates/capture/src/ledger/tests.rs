@@ -14,6 +14,18 @@ fn source(path: &str) -> SourceDef {
 }
 
 #[test]
+fn the_largest_raw_record_fills_one_frame_exactly() {
+    assert_eq!(
+        frames::raw_body_len(MAX_RAW_RECORD_BYTES).unwrap(),
+        MAX_FRAME_BYTES
+    );
+    assert!(matches!(
+        frames::raw_body_len(MAX_RAW_RECORD_BYTES + 1),
+        Err(CaptureError::LimitExceeded(_))
+    ));
+}
+
+#[test]
 fn source_admission_is_backward_compatible_and_round_trips() {
     let legacy = br#"{"file_id":"0","relative_path":"a.jsonl","stream_id":"rollout","session_id":"s","native_session_id":"n","agent_version":"1"}"#;
     assert!(!decode_define(legacy).unwrap().1.ledger_only);

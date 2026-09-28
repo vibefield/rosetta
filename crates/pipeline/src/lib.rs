@@ -66,6 +66,14 @@ pub use streamed::StreamedRuntime;
 /// session and removes streamed workspace observations from the projection.
 pub const LEDGER_META_SCHEMA_VERSION: u32 = 2;
 
+/// The largest record the pipeline normalizes. A longer JSONL record is still
+/// captured and ledgered whole, up to what one raw ledger frame holds
+/// ([`rosetta_capture::MAX_RAW_RECORD_BYTES`]), but projects only a drift
+/// fact, like a record type an adapter does not project; replay applies the
+/// same rule by size, so a rebuild reproduces it. It is also the metadata
+/// skim's bound on one record and every document's default size limit.
+pub const MAX_PROJECTED_RECORD_BYTES: usize = 32 * 1024 * 1024;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

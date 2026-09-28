@@ -22,6 +22,9 @@ pub enum Metric {
     SessionsDiscovered,
     RecordsFramed,
     RecordsOversized,
+    /// Records ledgered whole but over the projection limit, so projected as
+    /// a drift fact.
+    RecordsQuarantined,
     LinesParsed,
     LinesUnknown,
     LinesHardError,
@@ -125,7 +128,7 @@ pub enum Metric {
     LiveStreamNanos,
 }
 
-const METRIC_COUNT: usize = 94;
+const METRIC_COUNT: usize = 95;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -134,6 +137,10 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::SessionsDiscovered, "sessions discovered"),
     (Metric::RecordsFramed, "records framed"),
     (Metric::RecordsOversized, "records oversized"),
+    (
+        Metric::RecordsQuarantined,
+        "records over the projection limit",
+    ),
     (Metric::LinesParsed, "lines parsed"),
     (Metric::LinesUnknown, "lines unknown-type"),
     (Metric::LinesHardError, "lines hard-error"),

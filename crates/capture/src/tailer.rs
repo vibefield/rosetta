@@ -52,18 +52,21 @@ const READ_BUFFER_BYTES: usize = 64 * 1024;
 pub struct TailConfig {
     pub delimiter: u8,
     pub normalize_crlf: bool,
+    /// The capture limit: a longer record is `Oversized` — skipped with its
+    /// length, its payload never held.
     pub max_record_bytes: usize,
+    /// Payload bytes one batch of several records never exceeds. A single
+    /// record larger than this is a batch of its own.
     pub max_batch_bytes: usize,
     pub max_records_per_batch: usize,
     pub prefix_anchor_bytes: usize,
     /// Close the batch at the first record boundary at or past this many
-    /// payload bytes. Unlike `max_batch_bytes` — a hard cap that must admit a
-    /// maximum-size record and therefore cannot sit below it — the soft cap
-    /// always admits the record that crosses it, so it may be arbitrarily
-    /// small. This is how a budgeted slice gets byte-sized batches without
-    /// shrinking `max_record_bytes` and turning large valid records into
-    /// oversized drift. `None` (the default) leaves batching to the hard
-    /// bounds alone.
+    /// payload bytes. Unlike `max_batch_bytes`, which closes a batch before
+    /// a record that would push it past the cap, the soft cap always admits
+    /// the record that crosses it, so it may be arbitrarily small. This is how
+    /// a budgeted slice gets byte-sized batches without shrinking
+    /// `max_record_bytes` and turning large valid records into oversized
+    /// drift. `None` (the default) leaves batching to the hard bounds alone.
     pub soft_batch_bytes: Option<usize>,
 }
 
@@ -73,10 +76,11 @@ impl TailConfig {
             delimiter: b'\n',
             normalize_crlf: true,
             // Transcript records can legitimately carry pasted images or
-            // other inline media. Keep them bounded, but above the largest
-            // fixture/live-corpus records so valid user messages are not
-            // converted into irreversible oversized drift markers.
-            max_record_bytes: 32 * 1024 * 1024,
+            // other inline media. Capture anything the raw ledger can keep
+            // whole, so a valid record is never an irreversible oversized
+            // drift marker; what the pipeline normalizes is its own, smaller
+            // limit.
+            max_record_bytes: crate::ledger::MAX_RAW_RECORD_BYTES,
             max_batch_bytes: 32 * 1024 * 1024,
             max_records_per_batch: 1_024,
             prefix_anchor_bytes: 4 * 1024,
@@ -366,11 +370,6 @@ impl Tailer {
                 "tailer bounds must all be greater than zero".to_string(),
             ));
         }
-        if config.max_record_bytes > config.max_batch_bytes {
-            return Err(CaptureError::InvalidConfig(
-                "max_record_bytes must not exceed max_batch_bytes".to_string(),
-            ));
-        }
         if config.max_records_per_batch > u32::MAX as usize {
             return Err(CaptureError::InvalidConfig(
                 "max_records_per_batch exceeds ordinal range".to_string(),
@@ -636,7 +635,11 @@ impl Tailer {
                 pending.push(&chunk[segment_start..index]);
                 let record_end = read_offset + index as u64 + 1;
                 let payload_len = pending.delivered_len(self.config.normalize_crlf);
+                // A record that would push the batch past its cap waits for
+                // the next one; a record larger than a whole batch is a batch
+                // of its own.
                 if !pending.oversized()
+                    && !output.items.is_empty()
                     && batch_payload_bytes.saturating_add(payload_len) > self.config.max_batch_bytes
                 {
                     output.more_available = true;
@@ -662,7 +665,7 @@ impl Tailer {
                 segment_start = index + 1;
 
                 if output.items.len() == self.config.max_records_per_batch
-                    || batch_payload_bytes == self.config.max_batch_bytes
+                    || batch_payload_bytes >= self.config.max_batch_bytes
                     || self
                         .config
                         .soft_batch_bytes
@@ -1314,13 +1317,43 @@ mod tests {
             Tailer::new(zero),
             Err(CaptureError::InvalidConfig(_))
         ));
+    }
 
-        let mut inverted = TailConfig::json_lines();
-        inverted.max_record_bytes = inverted.max_batch_bytes + 1;
-        assert!(matches!(
-            Tailer::new(inverted),
-            Err(CaptureError::InvalidConfig(_))
-        ));
+    #[test]
+    fn a_record_larger_than_a_batch_is_a_batch_of_its_own() {
+        // The default captures whatever one raw ledger frame holds, while
+        // batches of ordinary records keep their 32 MiB cap.
+        let default = TailConfig::json_lines();
+        assert_eq!(default.max_record_bytes, crate::MAX_RAW_RECORD_BYTES);
+        assert_eq!(default.max_batch_bytes, 32 * 1024 * 1024);
+
+        let mut config = TailConfig::json_lines();
+        config.max_record_bytes = 16;
+        config.max_batch_bytes = 8;
+        let tailer = Tailer::new(config).unwrap();
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"one\ntwo\n0123456789ab\nsix\n").unwrap();
+        file.flush().unwrap();
+
+        // The big record waits for a batch of its own, then closes it.
+        let first = batch(tailer.read(file.path(), None, false).unwrap());
+        assert_eq!(payloads(&first.items), [b"one".to_vec(), b"two".to_vec()]);
+        assert!(first.more_available);
+        let second = batch(
+            tailer
+                .read(file.path(), Some(&first.checkpoint), false)
+                .unwrap(),
+        );
+        assert_eq!(payloads(&second.items), [b"0123456789ab".to_vec()]);
+        assert!(second.more_available);
+        let third = batch(
+            tailer
+                .read(file.path(), Some(&second.checkpoint), false)
+                .unwrap(),
+        );
+        assert_eq!(payloads(&third.items), [b"six".to_vec()]);
+        assert!(!third.more_available);
+        assert_eq!(third.checkpoint.committed_offset, 25);
     }
 
     #[test]

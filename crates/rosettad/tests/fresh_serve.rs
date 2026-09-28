@@ -703,6 +703,63 @@ fn a_transcript_caught_mid_append_publishes_and_the_live_runner_finishes_it() {
     assert_eq!(seals, [(1, true)]);
 }
 
+/// A record over the 32 MiB projection limit no longer fails a fresh start:
+/// it is captured into the raw ledger whole, projects one drift fact, and its
+/// session is published Indexed.
+#[test]
+fn a_record_over_the_projection_limit_publishes_as_a_drift_fact() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let claude = home.join(".claude");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../groundtruth/claude-code/fixtures/2.1.241/basic-chat/claude-config");
+    copy_tree(&fixture, &claude);
+    let transcript = find_project_jsonl(&claude.join("projects"));
+    let native = transcript
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let huge = format!(
+        "{{\"type\":\"user\",\"attachment\":\"{}\"}}\n",
+        "q".repeat(33 * 1024 * 1024)
+    );
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap()
+        .write_all(huge.as_bytes())
+        .unwrap();
+    let db = temp.path().join("archive/rosetta.db");
+
+    let stdout = assert_success(&run_serve(&home, &db));
+    let prepared = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "stream-prepared")
+        .expect("a stream-prepared event");
+    assert_eq!(
+        (&prepared["quarantined"], &prepared["oversized"]),
+        (&serde_json::json!(1), &serde_json::json!(0)),
+        "{prepared}"
+    );
+    let state = format!("SELECT stream_state FROM session WHERE native_session_id = '{native}'");
+    assert_eq!(scalar(&db, &state).as_deref(), Some("indexed"));
+    assert_eq!(
+        scalar(
+            &db,
+            "SELECT error_code FROM drift_agg WHERE error_code = 'over_projection_limit'"
+        )
+        .as_deref(),
+        Some("over_projection_limit")
+    );
+    let scan = scan_ledger(&db.with_extension("ledger").join("claude-code")).unwrap();
+    assert!(scan.entries.iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Raw { payload, .. } if payload.len() == huge.len() - 1
+    )));
+}
+
 #[test]
 fn warm_daemon_append_reaches_sqlite_raw_ledger_and_websocket() {
     let temp = tempfile::tempdir().unwrap();

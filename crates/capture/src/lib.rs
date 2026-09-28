@@ -21,8 +21,9 @@ pub use discovery::{
 pub use document::{DocumentOutcome, DocumentSnapshot, snapshot as snapshot_document};
 pub use ledger::{
     EntryDigest, EntryTally, Ledger, LedgerEntry, LedgerScan, LedgerVerify, LedgerVisit,
-    LedgerWriteStats, PrebuiltFrames, SegmentVerify, SourceDef, scan as scan_ledger,
-    verify as verify_ledger, visit as visit_ledger, visit_segments as visit_ledger_segments,
+    LedgerWriteStats, MAX_RAW_RECORD_BYTES, PrebuiltFrames, SegmentVerify, SourceDef,
+    scan as scan_ledger, verify as verify_ledger, visit as visit_ledger,
+    visit_segments as visit_ledger_segments,
 };
 pub use recompress::{RecompressOutcome, recompress_segment, recompress_segment_controlled};
 pub use segment::{FrameCompressor, SMALLEST_COMPRESSED_BATCH, SegmentCodec, sniff_segment};

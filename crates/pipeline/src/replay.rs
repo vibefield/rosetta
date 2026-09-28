@@ -28,7 +28,7 @@ use crate::checkpoint::{PIPE_CHECKPOINT_VERSION, PipeCheckpoint};
 use crate::instrument::{Instrument, Metric};
 use crate::meta::SessionFile;
 use crate::stream::StreamReport;
-use crate::stream::merge_stats;
+use crate::stream::{merge_stats, over_projection_limit, quarantined_record};
 
 mod admission;
 use admission::{AdmissionScan, ReplayAdmission};
@@ -378,6 +378,9 @@ pub struct RebuildReport {
     pub parsed: u64,
     pub unknown: u64,
     pub hard_errors: u64,
+    /// Records over [`crate::MAX_PROJECTED_RECORD_BYTES`], projected as one
+    /// drift fact each, exactly as capture projected them.
+    pub quarantined: u64,
     /// Highest raw generation per source that has no matching complete marker.
     /// Resume callers use this only as an in-memory generation fence before
     /// rereading the source; it is never canonical application data.
@@ -856,20 +859,32 @@ pub fn rebuild_runtime_with_options(
                 report.raw_records += 1;
                 instrument.add(Metric::RecordsFramed, 1);
                 file.ctx.src_offset = Some(start_offset as i64);
-                let outcome = instrument.time(Metric::NormalizeNanos, || {
-                    adapter
-                        .ingest_line(&mut file.ctx, &file.source.stream_id, &payload)
-                        .into_projection()
-                });
-                match &outcome.status {
-                    LineStatus::Parsed => report.parsed += 1,
-                    LineStatus::UnknownType => report.unknown += 1,
-                    LineStatus::HardError { .. } => {
-                        file.generation_clean = false;
-                        report.hard_errors += 1;
+                if over_projection_limit(adapter, &file.source.stream_id, &payload) {
+                    report.quarantined += 1;
+                    instrument.add(Metric::RecordsQuarantined, 1);
+                    file.ops.push(quarantined_record(
+                        &runtime.id,
+                        file.ctx.agent_version.as_deref(),
+                        &file.source.stream_id,
+                        file.ctx.src_cursor,
+                        start_offset,
+                    ));
+                } else {
+                    let outcome = instrument.time(Metric::NormalizeNanos, || {
+                        adapter
+                            .ingest_line(&mut file.ctx, &file.source.stream_id, &payload)
+                            .into_projection()
+                    });
+                    match &outcome.status {
+                        LineStatus::Parsed => report.parsed += 1,
+                        LineStatus::UnknownType => report.unknown += 1,
+                        LineStatus::HardError { .. } => {
+                            file.generation_clean = false;
+                            report.hard_errors += 1;
+                        }
                     }
+                    file.ops.extend(outcome.ops);
                 }
-                file.ops.extend(outcome.ops);
                 if file.ops.len() >= options.chunk_ops {
                     let mode = if file.activated {
                         SourceMode::Append
@@ -1152,6 +1167,18 @@ pub fn prepare_runtime(
                 file.ctx.src_offset = Some(start_offset as i64);
                 report.raw_records += 1;
                 instrument.add(Metric::RecordsFramed, 1);
+                if over_projection_limit(adapter, &file.source.stream_id, &payload) {
+                    report.quarantined += 1;
+                    instrument.add(Metric::RecordsQuarantined, 1);
+                    file.ops.push(quarantined_record(
+                        &runtime.id,
+                        file.ctx.agent_version.as_deref(),
+                        &file.source.stream_id,
+                        file.ctx.src_cursor,
+                        start_offset,
+                    ));
+                    return Ok(());
+                }
                 let outcome = instrument.time(Metric::NormalizeNanos, || {
                     adapter
                         .ingest_line(&mut file.ctx, &file.source.stream_id, &payload)
@@ -1472,6 +1499,7 @@ pub fn prepare_captured_runtime(
             parsed: stream.parsed,
             unknown: stream.unknown,
             hard_errors: stream.hard_errors,
+            quarantined: stream.quarantined,
             ..RebuildReport::default()
         },
         meta_ops,

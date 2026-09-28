@@ -77,7 +77,7 @@ pub(crate) fn skim_transcript(
             rosetta_capture::first_record(
                 &path,
                 opts.tail.delimiter,
-                opts.tail.max_record_bytes,
+                crate::MAX_PROJECTED_RECORD_BYTES,
                 opts.tail.normalize_crlf,
             )
         })?
@@ -104,7 +104,7 @@ pub(crate) fn skim_transcript(
                 opts.skim_fallback_bytes,
                 opts.skim_fallback_records,
                 opts.tail.delimiter,
-                opts.tail.max_record_bytes,
+                crate::MAX_PROJECTED_RECORD_BYTES,
                 opts.tail.normalize_crlf,
             )
         })? {
@@ -132,7 +132,7 @@ pub(crate) fn read_document(
     instrument: &Instrument,
 ) -> Result<Skimmed, PipelineError> {
     let path = root.join(&file.relative_path);
-    let document_limit = adapter.document_size_limit(&stream.id, opts.tail.max_record_bytes);
+    let document_limit = adapter.document_size_limit(&stream.id, crate::MAX_PROJECTED_RECORD_BYTES);
     let mut retries = 0_u32;
     let snapshot = loop {
         match instrument.time(Metric::SkimNanos, || {

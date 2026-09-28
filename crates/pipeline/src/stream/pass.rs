@@ -21,7 +21,9 @@ use rosetta_core::fold::CumulativeUsage;
 use rosetta_core::rows::{DriftFact, RuntimeRow};
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries};
 
-use super::{FilePass, PassMode, StreamReport, merge_stats};
+use super::{
+    FilePass, PassMode, StreamReport, merge_stats, over_projection_limit, quarantined_record,
+};
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::meta::SessionFile;
@@ -65,6 +67,7 @@ pub(crate) struct ReportDelta {
     pub(crate) unknown: u64,
     pub(crate) hard_errors: u64,
     pub(crate) oversized: u64,
+    pub(crate) quarantined: u64,
 }
 
 impl ReportDelta {
@@ -78,6 +81,7 @@ impl ReportDelta {
         report.unknown += self.unknown;
         report.hard_errors += self.hard_errors;
         report.oversized += self.oversized;
+        report.quarantined += self.quarantined;
     }
 }
 
@@ -413,6 +417,21 @@ impl IngestPass {
                         .budget_bytes
                         .saturating_add(record.payload.len() as u64);
                     instrument.add(Metric::RecordsFramed, 1);
+                    if over_projection_limit(adapter, &file.stream_id, &record.payload) {
+                        // Too large to normalize, never too large to keep: the
+                        // record goes to the ledger whole and projects one drift
+                        // fact, leaving the generation clean and complete.
+                        deltas.quarantined += 1;
+                        instrument.add(Metric::RecordsQuarantined, 1);
+                        ops.push(quarantined_record(
+                            &runtime.id,
+                            file.agent_version.as_deref(),
+                            &file.stream_id,
+                            Some(self.cursor_id),
+                            record.start_offset,
+                        ));
+                        continue;
+                    }
                     self.ctx.src_offset = Some(record.start_offset as i64);
                     self.ctx.source_generation = self.source_generation;
                     let outcome = instrument.time(Metric::NormalizeNanos, || {
@@ -542,8 +561,8 @@ impl IngestPass {
             return Ok(PassStep::Finished(self.finished(), deltas));
         }
 
-        // Oversized records are quarantined by the tailer and carry no
-        // payload, so only ordinary records reach the ledger.
+        // Oversized records are skipped by the tailer and carry no payload, so
+        // every other record reaches the ledger, quarantined ones included.
         let records: Vec<(u64, Vec<u8>)> = batch
             .items
             .iter_mut()

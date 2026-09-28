@@ -778,6 +778,7 @@ fn admit(
             "unknown": runtime.stream.unknown,
             "hardErrors": runtime.stream.hard_errors,
             "oversized": runtime.stream.oversized,
+            "quarantined": runtime.stream.quarantined,
             "filesMissing": runtime.stream.files_missing,
             "retriesExhausted": runtime.stream.retries_exhausted,
             "conflicts": runtime.stream.conflicts,

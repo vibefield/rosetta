@@ -284,6 +284,7 @@ fn capture_into(
                 report.files_paused,
                 report.sessions_indexed,
                 report.siblings_healed,
+                report.quarantined,
             ];
             (Ok(()), counters, admission, canonical)
         }
@@ -887,8 +888,9 @@ fn the_pool_matches_the_serial_walk_on_oversized_large_and_partial_records() {
         serial.canonical.keys()
     );
 
-    // An oversized record leaves its first generation raw-incomplete, so it
-    // is abandoned, and admission refuses the runtime, as serve does.
+    // A record past the capture limit (lowered to 2 MiB here) is skipped by
+    // the tailer and never ledgered: its first generation is raw-incomplete,
+    // so it is abandoned, and admission refuses the runtime, as serve does.
     sessions.insert(
         1,
         ("b-oversized".to_string(), with("b-oversized", &oversized)),
@@ -1111,3 +1113,4 @@ fn stream_state(canonical: &BTreeMap<String, Vec<String>>, native: &str) -> Stri
 }
 
 mod faults;
+mod oversized;
