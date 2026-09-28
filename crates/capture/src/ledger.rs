@@ -127,6 +127,9 @@ pub struct LedgerWriteStats {
     pub segments_opened: u64,
     /// Body construction/copy plus frame-header and checksum work.
     pub frame_nanos: u64,
+    /// Compressing capture batches that reached a zstd-frames segment plain.
+    /// Staged small frames compress inside the buffered write and flush times.
+    pub compress_nanos: u64,
     /// Bytes handed to the buffered writer, including any writes it triggers.
     pub buffer_write_nanos: u64,
     pub flush_nanos: u64,
@@ -236,6 +239,13 @@ impl Ledger {
     pub fn with_codec(mut self, codec: SegmentCodec) -> Self {
         self.codec = codec;
         self
+    }
+
+    /// The container of segments this ledger creates. With
+    /// [`SegmentCodec::ZstdFrames`], callers that finish frames ahead of the
+    /// ledger may compress them ([`PrebuiltFrames::compress`]).
+    pub fn codec(&self) -> SegmentCodec {
+        self.codec
     }
 
     /// Defer physical sync at projection checkpoints. This is safe only for
@@ -373,6 +383,14 @@ impl Ledger {
                 frames.key()
             )));
         }
+        if frames.is_compressed() && frames.compression_level() != self.codec.batch_level() {
+            return Err(CaptureError::InvalidConfig(format!(
+                "prebuilt frames for {} are compressed at level {:?}, but this ledger writes {:?}",
+                source.relative_path,
+                frames.compression_level(),
+                self.codec
+            )));
+        }
         if self.async_backend.is_some() {
             return self.send_async(AsyncCommand::Prebuilt {
                 source: source.clone(),
@@ -380,7 +398,7 @@ impl Ledger {
             });
         }
         let file_id = self.define(source)?;
-        self.write_frames(file_id, &frames)
+        self.write_frames(file_id, frames)
     }
 
     /// Append a version-routed serialized meta-ops batch.

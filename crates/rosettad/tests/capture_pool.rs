@@ -1,7 +1,9 @@
 //! Fresh serve's capture pool, end to end: the default pooled build installs
 //! the serial build's (`--capture-workers 0`) projection, its ledger holds the
 //! serial build's source entries, it reports its pool, and a staged ledger the
-//! pool built resumes on the next boot.
+//! pool built resumes on the next boot. With `--cold-ledger-codec
+//! zstd-frames:N` the workers compress the ledger instead: the same
+//! projection and source entries, and nothing left to compress.
 
 use std::path::Path;
 use std::process::Command;
@@ -145,4 +147,101 @@ fn a_pooled_staged_ledger_rebuilds_and_finishes_on_next_boot() {
     assert!(resumed.contains("milestone: canonical-ready"), "{resumed}");
     assert!(!staged.exists());
     assert_eq!(projection(&db), finished);
+}
+
+#[test]
+fn a_zstd_frames_cold_ledger_installs_the_plain_projection_with_nothing_to_compress() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    claude_home(&home);
+    let plain_db = temp.path().join("plain/rosetta.db");
+    let frames_db = temp.path().join("frames/rosetta.db");
+
+    serve(&home, &plain_db, &[]);
+    let frames = serve(
+        &home,
+        &frames_db,
+        &["--cold-ledger-codec", "zstd-frames:1", "--profile"],
+    );
+    assert!(frames.contains("milestone: canonical-ready"), "{frames}");
+    assert_eq!(projection(&frames_db), projection(&plain_db));
+    assert_eq!(source_digest(&frames_db), source_digest(&plain_db));
+
+    let verify: serde_json::Value = serde_json::from_str(
+        rosettad(&[
+            "ledger",
+            "verify",
+            "--db",
+            frames_db.to_str().unwrap(),
+            "--json",
+        ])
+        .trim(),
+    )
+    .unwrap();
+    let segments: Vec<&serde_json::Value> = verify["runtimes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|runtime| runtime["segments"].as_array().unwrap())
+        .collect();
+    assert!(!segments.is_empty());
+    for segment in &segments {
+        assert_eq!(segment["container"], "zstd", "{segment}");
+        assert_eq!(segment["clean"], true, "{segment}");
+    }
+    let disk: u64 = segments
+        .iter()
+        .map(|segment| segment["diskBytes"].as_u64().unwrap())
+        .sum();
+    let decoded: u64 = segments
+        .iter()
+        .map(|segment| segment["decodedBytes"].as_u64().unwrap())
+        .sum();
+    assert!(disk * 3 < decoded, "{disk} on disk for {decoded} decoded");
+
+    // What the background pass would do: nothing.
+    let compact: serde_json::Value = serde_json::from_str(
+        rosettad(&[
+            "ledger",
+            "compact",
+            "--db",
+            frames_db.to_str().unwrap(),
+            "--json",
+        ])
+        .trim(),
+    )
+    .unwrap();
+    for runtime in compact["runtimes"].as_array().unwrap() {
+        assert_eq!(runtime["rewritten"], 0, "{runtime}");
+        assert_eq!(runtime["unchanged"], runtime["segments"], "{runtime}");
+    }
+    assert_eq!(source_digest(&frames_db), source_digest(&plain_db));
+}
+
+#[test]
+fn the_cold_ledger_codec_flag_takes_plain_or_a_zstd_frames_level() {
+    for bad in [
+        "zstd",
+        "zstd-frames",
+        "zstd-frames:0",
+        "zstd-frames:20",
+        "zstd-frames:x",
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rosettad"))
+            .args([
+                "serve",
+                "--db",
+                "/nonexistent/rosetta.db",
+                "--cold-ledger-codec",
+                bad,
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{bad}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--cold-ledger-codec wants"),
+            "{bad}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use rosetta_adapter_support::{AgentAdapter, StreamDriver};
-use rosetta_capture::{Ledger, Tailer};
+use rosetta_capture::{Ledger, SegmentCodec, Tailer};
 use rosetta_core::rows::RuntimeRow;
 use rosetta_store::{Store, queries};
 
@@ -36,7 +36,9 @@ impl Pooled<'_> {
 /// a first generation, read to EOF. Everything else — snapshot and document
 /// groups, a resumed cursor, a starter budget's paused passes, the boundary
 /// sample the audit tool takes from the first records the runtime's own
-/// instrument sees — stays on the sequencer at its path position.
+/// instrument sees — stays on the sequencer at its path position. With a
+/// ledger (`ledger_codec`), workers finish each batch's frames, compressed
+/// when its segments are zstd frames.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn register<'p>(
     pool: &'p CapturePool,
@@ -47,7 +49,7 @@ pub(crate) fn register<'p>(
     ordered: &[&SessionFile],
     opts: &IngestOptions,
     instrument: &Instrument,
-    frames: bool,
+    ledger_codec: Option<SegmentCodec>,
 ) -> Result<Pooled<'p>, PipelineError> {
     let mut units = vec![None; ordered.len()];
     let mut specs = Vec::new();
@@ -81,7 +83,8 @@ pub(crate) fn register<'p>(
         root: root.to_path_buf(),
         opts: opts.clone(),
         tailer: Tailer::new(opts.tail.clone())?,
-        frames,
+        frames: ledger_codec.is_some(),
+        compress: ledger_codec.and_then(SegmentCodec::batch_level),
         units: specs,
     });
     Ok(Pooled { lane, units })

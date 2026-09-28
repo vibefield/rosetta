@@ -24,15 +24,17 @@ impl Ledger {
             .frame_nanos
             .saturating_add(elapsed_nanos(started));
         framed?;
-        self.write_frames(file_id, &frames)
+        self.write_frames(file_id, frames)
     }
 
     /// Write finished frames of a source this segment has defined as
-    /// `file_id`, verbatim.
+    /// `file_id`, verbatim. A zstd-frames segment first compresses frames
+    /// that arrive plain exactly as a capture worker would have, so its bytes
+    /// do not depend on who compressed them.
     pub(super) fn write_frames(
         &mut self,
         file_id: u32,
-        frames: &PrebuiltFrames,
+        mut frames: PrebuiltFrames,
     ) -> Result<(), CaptureError> {
         if frames.is_empty() {
             return Ok(());
@@ -40,12 +42,21 @@ impl Ledger {
         self.note_generation(file_id, frames.generation());
         self.ensure_writer()?;
         let path = self.dir.join(segment_name(self.segment_seq));
+        let writer = self.writer.as_mut().expect("ensure_writer just ran");
+        if let Some(compressor) = writer.batch_compressor() {
+            let started = Instant::now();
+            let compressed = frames.compress(compressor);
+            self.write_stats.compress_nanos = self
+                .write_stats
+                .compress_nanos
+                .saturating_add(elapsed_nanos(started));
+            compressed?;
+        }
         let started = Instant::now();
-        let written = self
-            .writer
-            .as_mut()
-            .expect("ensure_writer just ran")
-            .write_all(frames.bytes());
+        let (compressed, plain) = frames.parts();
+        let written = compressed
+            .map_or(Ok(()), |frame| writer.write_zstd_frame(frame))
+            .and_then(|()| writer.write_all(plain));
         self.write_stats.buffer_write_nanos = self
             .write_stats
             .buffer_write_nanos

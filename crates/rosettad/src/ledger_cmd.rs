@@ -309,6 +309,7 @@ fn print_row(name: &str, tally: &Tally, dry_run: bool) {
 fn json_report(root: &Path, codec: SegmentCodec, flags: &Flags, report: &CompactReport) -> Value {
     let (level, long_window) = match codec {
         SegmentCodec::Zstd { level, long_window } => (level, long_window),
+        SegmentCodec::ZstdFrames { level } => (level, false),
         SegmentCodec::Plain => (0, false),
     };
     json!({

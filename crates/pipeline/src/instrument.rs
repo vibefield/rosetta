@@ -57,6 +57,9 @@ pub enum Metric {
     LedgerElectionReadNanos,
     LedgerReplayReadNanos,
     LedgerFrameNanos,
+    /// Compressing capture batches for zstd-frames segments, by capture
+    /// workers or by the ledger itself.
+    LedgerCompressNanos,
     LedgerBufferWriteNanos,
     LedgerFlushNanos,
     LedgerSyncNanos,
@@ -122,7 +125,7 @@ pub enum Metric {
     LiveStreamNanos,
 }
 
-const METRIC_COUNT: usize = 93;
+const METRIC_COUNT: usize = 94;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -163,6 +166,7 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::LedgerElectionReadNanos, "ledger election read time"),
     (Metric::LedgerReplayReadNanos, "ledger replay read time"),
     (Metric::LedgerFrameNanos, "ledger framing time"),
+    (Metric::LedgerCompressNanos, "ledger compression time"),
     (Metric::LedgerBufferWriteNanos, "ledger buffered write time"),
     (Metric::LedgerFlushNanos, "ledger flush time"),
     (Metric::LedgerSyncNanos, "ledger sync time"),
@@ -447,6 +451,7 @@ impl Instrument {
         self.add(Metric::LedgerDirectorySyncs, stats.directory_syncs);
         self.add(Metric::LedgerSegmentsOpened, stats.segments_opened);
         self.add(Metric::LedgerFrameNanos, stats.frame_nanos);
+        self.add(Metric::LedgerCompressNanos, stats.compress_nanos);
         self.add(Metric::LedgerBufferWriteNanos, stats.buffer_write_nanos);
         self.add(Metric::LedgerFlushNanos, stats.flush_nanos);
         self.add(Metric::LedgerSyncNanos, stats.sync_nanos);

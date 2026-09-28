@@ -26,6 +26,18 @@
 //! different: the decoder rejects it while input remains, and the segment is
 //! reported torn wherever the decoded prefix happens to end — which is what a
 //! checksum mismatch inside a plain frame reports.
+//!
+//! A cold build's capture workers may compress instead ([`SegmentCodec::ZstdFrames`]):
+//! each capture batch's finished frames become one independent zstd frame
+//! where they were framed, and the ledger writes it verbatim; its own small
+//! frames (defines, metadata, seals written inline, batches under
+//! [`SMALLEST_COMPRESSED_BATCH`]) are staged and leave as one zstd frame at the
+//! next flush or precompressed frame. The container is still `RLZ1`: a zstd
+//! reader concatenates frames until end of file, and a crash truncates at
+//! most the last frame, whose complete blocks still decode. Per-batch frames
+//! give up the stream's window across neighbouring sources — on the frozen
+//! corpus 5.3× against 5.6× at level 3, almost all of it Claude Code's many
+//! one-batch sessions — and cost less CPU per byte than the stream encoder.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Write};
@@ -37,6 +49,13 @@ pub const MAGIC_LEN: usize = 4;
 /// The write-path level: 1.0–1.6 GB/s on an M1 Max, which is dozens of times
 /// the rate the pipeline produces ledger bytes, at 5.6× on a real archive.
 pub const DEFAULT_ZSTD_LEVEL: i32 = 3;
+/// A capture batch with fewer frame bytes than this stays plain in a
+/// zstd-frames segment and is staged with the ledger's own frames: alone it
+/// would compress about 2× and pay a frame header.
+pub const SMALLEST_COMPRESSED_BATCH: usize = 4 * 1024;
+/// Staged plain bytes of a zstd-frames segment leave as one frame at the
+/// latest when this many are staged.
+const STAGED_FRAME_BYTES: usize = 1024 * 1024;
 /// The widest window a stock zstd decoder accepts without configuration
 /// (`ZSTD_WINDOWLOG_LIMIT_DEFAULT`). Offline recompression may use it; the
 /// write path never does — it costs 128 MiB per open stream and half the speed
@@ -49,7 +68,16 @@ const READ_BUFFER_BYTES: usize = 256 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SegmentCodec {
     Plain,
-    Zstd { level: i32, long_window: bool },
+    /// One zstd stream per segment.
+    Zstd {
+        level: i32,
+        long_window: bool,
+    },
+    /// Independent zstd frames: one per capture batch, compressed by
+    /// whoever framed it, plus the ledger's own staged small frames.
+    ZstdFrames {
+        level: i32,
+    },
 }
 
 impl Default for SegmentCodec {
@@ -72,12 +100,51 @@ impl SegmentCodec {
     pub fn magic(self) -> &'static [u8; 4] {
         match self {
             Self::Plain => MAGIC_PLAIN,
-            Self::Zstd { .. } => MAGIC_ZSTD,
+            Self::Zstd { .. } | Self::ZstdFrames { .. } => MAGIC_ZSTD,
         }
     }
 
     pub fn is_compressed(self) -> bool {
-        matches!(self, Self::Zstd { .. })
+        !matches!(self, Self::Plain)
+    }
+
+    /// The level capture batches are compressed at before they reach the
+    /// ledger, when segments are zstd frames.
+    pub fn batch_level(self) -> Option<i32> {
+        match self {
+            Self::ZstdFrames { level } => Some(level),
+            Self::Plain | Self::Zstd { .. } => None,
+        }
+    }
+}
+
+/// Compresses bytes into one zstd frame, from a context reused across calls
+/// and owned by one thread — a capture worker, or a zstd-frames segment's
+/// writer. The frame is a pure function of the bytes and the level, so a
+/// batch a worker compressed is byte-identical to the same batch compressed
+/// by the ledger.
+pub struct FrameCompressor {
+    level: i32,
+    context: zstd::bulk::Compressor<'static>,
+}
+
+impl FrameCompressor {
+    pub fn new(level: i32) -> io::Result<Self> {
+        Ok(Self {
+            level,
+            context: zstd::bulk::Compressor::new(level)?,
+        })
+    }
+
+    pub fn level(&self) -> i32 {
+        self.level
+    }
+
+    /// One zstd frame holding `bytes`, in an allocation of its own size.
+    pub fn frame(&mut self, bytes: &[u8]) -> io::Result<Vec<u8>> {
+        let mut frame = self.context.compress(bytes)?;
+        frame.shrink_to_fit();
+        Ok(frame)
     }
 }
 
@@ -105,6 +172,49 @@ impl Write for CountingFile {
 pub(crate) enum SegmentWriter {
     Plain(BufWriter<CountingFile>),
     Zstd(BufWriter<zstd::Encoder<'static, CountingFile>>),
+    Frames(FramesWriter),
+}
+
+/// A zstd-frames segment: precompressed frames go to the file in order, and
+/// plain bytes are staged until they leave as one frame of their own.
+pub(crate) struct FramesWriter {
+    file: BufWriter<CountingFile>,
+    staged: Vec<u8>,
+    compressor: FrameCompressor,
+}
+
+impl FramesWriter {
+    fn stage(&mut self, mut bytes: &[u8]) -> io::Result<()> {
+        while !bytes.is_empty() {
+            let take = (STAGED_FRAME_BYTES - self.staged.len()).min(bytes.len());
+            self.staged.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+            if self.staged.len() == STAGED_FRAME_BYTES {
+                self.emit_staged()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Staged bytes first, so the decoded order is the order of the calls.
+    fn emit_staged(&mut self) -> io::Result<()> {
+        if self.staged.is_empty() {
+            return Ok(());
+        }
+        let frame = self.compressor.frame(&self.staged)?;
+        self.staged.clear();
+        self.file.write_all(&frame)
+    }
+
+    fn write_frame(&mut self, frame: &[u8]) -> io::Result<()> {
+        self.emit_staged()?;
+        self.file.write_all(frame)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.emit_staged()?;
+        self.file.flush()
+    }
 }
 
 impl SegmentWriter {
@@ -133,6 +243,33 @@ impl SegmentWriter {
                 }
                 Ok(Self::Zstd(BufWriter::with_capacity(buffer_bytes, encoder)))
             }
+            SegmentCodec::ZstdFrames { level } => Ok(Self::Frames(FramesWriter {
+                file: BufWriter::with_capacity(buffer_bytes, file),
+                staged: Vec::new(),
+                compressor: FrameCompressor::new(level)?,
+            })),
+        }
+    }
+
+    /// The compressor capture batches of this segment use, when they are
+    /// compressed at all: a batch that reaches the ledger plain is compressed
+    /// here exactly as a capture worker would have.
+    pub(crate) fn batch_compressor(&mut self) -> Option<&mut FrameCompressor> {
+        match self {
+            Self::Frames(writer) => Some(&mut writer.compressor),
+            Self::Plain(_) | Self::Zstd(_) => None,
+        }
+    }
+
+    /// Append one zstd frame compressed ahead of the ledger. Only a
+    /// zstd-frames segment takes one.
+    pub(crate) fn write_zstd_frame(&mut self, frame: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Frames(writer) => writer.write_frame(frame),
+            Self::Plain(_) | Self::Zstd(_) => Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "a compressed capture batch needs a zstd-frames segment",
+            )),
         }
     }
 
@@ -141,11 +278,13 @@ impl SegmentWriter {
         match self {
             Self::Plain(writer) => writer.get_ref().bytes,
             Self::Zstd(writer) => writer.get_ref().get_ref().bytes,
+            Self::Frames(writer) => writer.file.get_ref().bytes,
         }
     }
 
     /// Close the container: a plain segment drains, a zstd segment writes its
-    /// frame epilogue. Returns the segment's final size on disk.
+    /// frame epilogue, a zstd-frames segment emits its staged frame. Returns
+    /// the segment's final size on disk.
     pub(crate) fn finish(self) -> io::Result<u64> {
         match self {
             Self::Plain(mut writer) => {
@@ -157,6 +296,10 @@ impl SegmentWriter {
                 let file = encoder.finish()?;
                 Ok(file.bytes)
             }
+            Self::Frames(mut writer) => {
+                writer.flush()?;
+                Ok(writer.file.get_ref().bytes)
+            }
         }
     }
 }
@@ -166,6 +309,7 @@ impl Write for SegmentWriter {
         match self {
             Self::Plain(writer) => writer.write(buf),
             Self::Zstd(writer) => writer.write(buf),
+            Self::Frames(writer) => writer.stage(buf).map(|()| buf.len()),
         }
     }
 
@@ -173,6 +317,7 @@ impl Write for SegmentWriter {
         match self {
             Self::Plain(writer) => writer.write_all(buf),
             Self::Zstd(writer) => writer.write_all(buf),
+            Self::Frames(writer) => writer.stage(buf),
         }
     }
 
@@ -180,6 +325,7 @@ impl Write for SegmentWriter {
         match self {
             Self::Plain(writer) => writer.flush(),
             Self::Zstd(writer) => writer.flush(),
+            Self::Frames(writer) => writer.flush(),
         }
     }
 }
@@ -296,6 +442,8 @@ pub fn sniff_segment(path: &Path) -> io::Result<Option<SegmentCodec>> {
 // Retain the original public module path for offline callers.
 pub use crate::recompress::{RecompressOutcome, recompress_segment};
 
+#[cfg(test)]
+mod frames_tests;
 #[cfg(test)]
 mod tests {
     use std::fs::OpenOptions;

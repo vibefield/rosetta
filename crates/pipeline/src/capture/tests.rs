@@ -10,6 +10,11 @@
 //! with the same hand-off to admission — the same report counters, the same
 //! planner cursors, and the same canonical rows once the closed sources are
 //! admitted. Failures keep the serial walk's semantics (`faults.rs`).
+//!
+//! Every configuration is then repeated into a zstd-frames ledger, whose
+//! capture workers (or, serially, the ledger itself) compress each batch:
+//! all of them leave byte-identical segments that decode, segment by
+//! segment, to the plain serial walk's bytes, and nothing else changes.
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -23,7 +28,8 @@ use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_codex::CodexAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
-use rosetta_capture::{Ledger, LedgerEntry, SegmentCodec, TailConfig, scan_ledger};
+use rosetta_capture::segment::DEFAULT_ZSTD_LEVEL;
+use rosetta_capture::{Ledger, LedgerEntry, SegmentCodec, TailConfig, scan_ledger, verify_ledger};
 use rosetta_store::Store;
 use rusqlite::types::Value;
 use tempfile::TempDir;
@@ -39,52 +45,47 @@ use crate::{
 };
 
 /// One way to capture: the serial walk (`workers == 0`), or the pool under
-/// its priority scheduler or a seeded chaos scheduler.
+/// its priority scheduler or a seeded chaos scheduler, into a ledger of
+/// `codec`'s segments.
 #[derive(Debug, Clone, Copy)]
 struct Config {
     workers: usize,
     chaos: Option<u64>,
+    codec: SegmentCodec,
 }
 
-const SERIAL: Config = Config {
-    workers: 0,
-    chaos: None,
-};
+const fn config(workers: usize, chaos: Option<u64>) -> Config {
+    Config {
+        workers,
+        chaos,
+        codec: SegmentCodec::Plain,
+    }
+}
+
+impl Config {
+    /// The same configuration into a zstd-frames ledger.
+    fn zstd_frames(self) -> Self {
+        Self {
+            codec: SegmentCodec::ZstdFrames {
+                level: DEFAULT_ZSTD_LEVEL,
+            },
+            ..self
+        }
+    }
+}
+
+const SERIAL: Config = config(0, None);
 
 const MATRIX: [Config; 9] = [
     SERIAL,
-    Config {
-        workers: 1,
-        chaos: None,
-    },
-    Config {
-        workers: 1,
-        chaos: Some(11),
-    },
-    Config {
-        workers: 2,
-        chaos: None,
-    },
-    Config {
-        workers: 2,
-        chaos: Some(23),
-    },
-    Config {
-        workers: 4,
-        chaos: None,
-    },
-    Config {
-        workers: 4,
-        chaos: Some(37),
-    },
-    Config {
-        workers: 8,
-        chaos: None,
-    },
-    Config {
-        workers: 8,
-        chaos: Some(53),
-    },
+    config(1, None),
+    config(1, Some(11)),
+    config(2, None),
+    config(2, Some(23)),
+    config(4, None),
+    config(4, Some(37)),
+    config(8, None),
+    config(8, Some(53)),
 ];
 
 /// The matrix, plus the default pool size under both schedulers when it is
@@ -93,14 +94,8 @@ fn configs() -> Vec<Config> {
     let mut configs = MATRIX.to_vec();
     let default = CapturePool::default_workers();
     if !configs.iter().any(|config| config.workers == default) {
-        configs.push(Config {
-            workers: default,
-            chaos: None,
-        });
-        configs.push(Config {
-            workers: default,
-            chaos: Some(97),
-        });
+        configs.push(config(default, None));
+        configs.push(config(default, Some(97)));
     }
     configs
 }
@@ -123,6 +118,10 @@ struct Captured {
     /// Every file of the ledger directory — segments and segment index —
     /// in name order.
     ledger: Vec<(String, Vec<u8>)>,
+    /// What each segment decodes to — sequence, decoded bytes, verdict,
+    /// frame digest, entries — then the entry and index digests: equal
+    /// whatever the container.
+    decoded: Vec<String>,
     /// Every canonical table once the closed sources are admitted; empty
     /// when the capture failed.
     canonical: BTreeMap<String, Vec<String>>,
@@ -160,7 +159,7 @@ fn capture_into(
     runtime.discovered_at = 1;
     let mut ledger = Ledger::open(ledger_dir)
         .unwrap()
-        .with_codec(SegmentCodec::Plain)
+        .with_codec(config.codec)
         .with_max_segment_bytes(4 * 1024)
         .defer_sync_until_flush()
         .into_async_bounded(64 * 1024);
@@ -297,8 +296,32 @@ fn capture_into(
         admission,
         report,
         ledger: ledger_files(ledger_dir),
+        decoded: decoded(ledger_dir),
         canonical,
     }
+}
+
+fn decoded(dir: &Path) -> Vec<String> {
+    let verified = verify_ledger(dir).unwrap();
+    let mut decoded: Vec<String> = verified
+        .segments
+        .iter()
+        .map(|segment| {
+            format!(
+                "{} {} {} {} {}",
+                segment.sequence,
+                segment.decoded_bytes,
+                segment.clean,
+                segment.frame_digest,
+                segment.entries
+            )
+        })
+        .collect();
+    decoded.push(format!(
+        "entries {} index {:?}",
+        verified.entry_digest, verified.index_digest
+    ));
+    decoded
 }
 
 fn capture(
@@ -497,12 +520,51 @@ fn assert_matches(label: &str, serial: &Captured, pooled: &Captured, config: Con
     assert_same_dump(&label, &serial.canonical, &pooled.canonical);
 }
 
+/// A zstd-frames capture against the plain one of the same configuration:
+/// every segment decodes to the plain segment's bytes, the segment index is
+/// the same file, and nothing else differs.
+fn assert_decodes_like(label: &str, plain: &Captured, frames: &Captured) {
+    let label = format!("{label} zstd frames");
+    assert_eq!(frames.result, plain.result, "{label}: result");
+    assert_eq!(frames.report, plain.report, "{label}: report");
+    assert_eq!(frames.cursors, plain.cursors, "{label}: planner cursors");
+    assert_eq!(frames.emitted, plain.emitted, "{label}: closed sources");
+    assert_eq!(
+        frames.admission, plain.admission,
+        "{label}: preparer hand-off"
+    );
+    assert_eq!(frames.decoded, plain.decoded, "{label}: decoded segments");
+    assert_eq!(
+        frames.ledger.len(),
+        plain.ledger.len(),
+        "{label}: ledger files"
+    );
+    for ((name, frames), (plain_name, plain)) in frames.ledger.iter().zip(&plain.ledger) {
+        assert_eq!(name, plain_name, "{label}: ledger files");
+        if name.ends_with(".rledger") {
+            assert_eq!(&frames[..4], b"RLZ1", "{label}: {name} container");
+            assert_eq!(&plain[..4], b"RLG1", "{label}: {name} container");
+        } else {
+            assert!(frames == plain, "{label}: {name} differs");
+        }
+    }
+    assert_same_dump(&label, &plain.canonical, &frames.canonical);
+}
+
 /// Every configuration against the serial walk, whatever the serial walk's
-/// result; returns the serial capture.
+/// result — then every configuration again into a zstd-frames ledger, against
+/// the serial walk into one and against the plain serial walk; returns the
+/// plain serial capture.
 fn assert_every_config_like_serial(label: &str, run: impl Fn(Config) -> Captured) -> Captured {
     let serial = run(SERIAL);
     for config in &configs()[1..] {
         assert_matches(label, &serial, &run(*config), *config);
+    }
+    let frames = run(SERIAL.zstd_frames());
+    assert_decodes_like(label, &serial, &frames);
+    for config in &configs()[1..] {
+        let config = config.zstd_frames();
+        assert_matches(label, &frames, &run(config), config);
     }
     serial
 }

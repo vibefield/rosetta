@@ -46,7 +46,7 @@ impl AsyncCommand {
                 .iter()
                 .map(|(_, payload)| payload.len() as u64)
                 .sum(),
-            Self::Prebuilt { frames, .. } => frames.frame_bytes(),
+            Self::Prebuilt { frames, .. } => frames.held_bytes(),
             Self::Meta { payload, .. } => payload.len() as u64,
             Self::Complete { .. } | Self::SourceKeys(_) | Self::Checkpoint => 0,
         };

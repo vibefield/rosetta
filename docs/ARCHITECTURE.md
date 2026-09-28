@@ -213,6 +213,21 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > Deferred compression trades additional temporary disk space and a later read/write pass
 > for removing compression from cold capture; final ledger durability is never deferred.
 >
+> `serve --cold-ledger-codec zstd-frames:LEVEL` (default `plain`) moves that compression
+> into the fresh build's capture workers instead: each worker compresses its batch's
+> finished frames into one independent zstd frame (a trailing seal stays plain), and the
+> ledger writes it verbatim into an `RLZ1` segment; the ledger's own small frames — defines,
+> metadata, seals, batches under 4 KiB, inline groups — are staged and leave as one zstd
+> frame at the next flush or precompressed frame. A batch that reaches the ledger plain (the
+> serial walk) is compressed there the same way, so the segments are byte-identical for any
+> worker count and decode, segment by segment, to the plain build's bytes; rotation counts
+> decoded bytes. The background pass then finds every closed segment already compressed.
+> On the frozen corpus per-batch frames reach 5.3× at level 3 (a single stream per segment
+> reaches 5.6×; the gap is Claude Code's many one-batch sessions) and 4.7× at level 1, and
+> cost 1.45–1.6 (level 3) or 1.0–1.1 (level 1) CPU-ms per decoded MB. A flipped byte tears
+> the segment, or — as in the stream container — makes a frame run past the end of the file
+> and reads as a truncated tail. The resumed path still writes plain.
+>
 > After every runtime closes, set-based indexes/rollups, `ANALYZE`, quick/FK checks, and projection
 > validation run against that RAM generation. The named `<ledger>.staged` raw generation is then drained and fsynced;
 > the canonical database is backed up to a same-filesystem private file, synced, installed by
@@ -667,7 +682,9 @@ capture contract explicit.
   runtimes") lives in `<projection>.ledger/<agent>~<digest>/`, and every runtime
   directory carries a `runtime.json` stamp naming its owner. Since 2026-09-04 the default
   container is one zstd stream (magic `RLZ1`); fresh/resumed RAM cold serve instead writes
-  plain segments and compresses closed segments after readiness as described above. The
+  plain segments and compresses closed segments after readiness as described above (or, with
+  `--cold-ledger-codec zstd-frames:LEVEL`, writes `RLZ1` segments of independent per-batch
+  zstd frames, which every reader decodes because a zstd reader concatenates frames). The
   frame stream inside either container is byte-for-byte the
   plain `RLG1` one, per-frame blake3 integrity is unchanged, and readers keep both containers
   forever, so nothing is rebuilt for the format's sake. The stream flushes at every checkpoint

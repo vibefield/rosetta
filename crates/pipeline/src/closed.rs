@@ -537,7 +537,7 @@ pub fn stream_closed_sources_pooled(
         &ordered,
         opts,
         instrument,
-        ledger.is_some(),
+        ledger.as_deref().map(rosetta_capture::Ledger::codec),
     )?;
     walk_closed_sources(
         adapter,

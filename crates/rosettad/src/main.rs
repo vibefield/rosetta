@@ -110,7 +110,7 @@ fn main() -> ExitCode {
                 "  watch --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--ticks N] [--profile]"
             );
             eprintln!(
-                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--capture-workers N|0] [--capture-lookahead BYTES] [--announce [--announce-dir DIR]]"
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--capture-workers N|0] [--capture-lookahead BYTES] [--cold-ledger-codec plain|zstd-frames:LEVEL] [--announce [--announce-dir DIR]]"
             );
             eprintln!(
                 "  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--enroll FILE] [--profile]"
@@ -183,6 +183,11 @@ struct Flags {
     /// serve only: the capture pool's look-ahead bound in bytes; `None` =
     /// the default.
     capture_look_ahead: Option<u64>,
+    /// serve only: the container of a fresh cold build's raw ledger. Plain by
+    /// default (a background pass compresses closed segments after
+    /// readiness); `zstd-frames:LEVEL` has the capture workers compress each
+    /// batch instead.
+    cold_ledger_codec: rosetta_capture::SegmentCodec,
     /// `ledger compact` only: the zstd level for rewritten segments.
     /// `None` = the write path's blessed default.
     level: Option<i32>,
@@ -272,6 +277,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         slice_budget: None,
         capture_workers: None,
         capture_look_ahead: None,
+        cold_ledger_codec: rosetta_capture::SegmentCodec::Plain,
         level: None,
         long_window: false,
         force: false,
@@ -347,6 +353,10 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
                     return Err("--capture-lookahead must be greater than zero".to_string());
                 }
                 flags.capture_look_ahead = Some(bytes);
+            }
+            "--cold-ledger-codec" => {
+                let value = take_value(args, &mut at)?;
+                flags.cold_ledger_codec = parse_cold_ledger_codec(&value)?;
             }
             "--level" => {
                 let value = take_value(args, &mut at)?;
@@ -489,6 +499,25 @@ fn parse_byte_size(flag: &str, value: &str) -> Result<u64, String> {
     number
         .checked_mul(unit)
         .ok_or_else(|| format!("{flag} {value} overflows"))
+}
+
+/// `--cold-ledger-codec`: `plain`, or `zstd-frames:LEVEL` with a zstd level
+/// in −7..=19 other than 0 (zstd's alias for 3).
+fn parse_cold_ledger_codec(value: &str) -> Result<rosetta_capture::SegmentCodec, String> {
+    if value == "plain" {
+        return Ok(rosetta_capture::SegmentCodec::Plain);
+    }
+    match value
+        .strip_prefix("zstd-frames:")
+        .and_then(|level| level.parse::<i32>().ok())
+    {
+        Some(level) if (-7..=19).contains(&level) && level != 0 => {
+            Ok(rosetta_capture::SegmentCodec::ZstdFrames { level })
+        }
+        _ => Err(format!(
+            "--cold-ledger-codec wants plain or zstd-frames:LEVEL (−7..=19, not 0), got {value}"
+        )),
+    }
 }
 
 fn take_value(args: &[String], at: &mut usize) -> Result<String, String> {

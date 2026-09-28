@@ -25,7 +25,7 @@ pub use ledger::{
     verify as verify_ledger, visit as visit_ledger, visit_segments as visit_ledger_segments,
 };
 pub use recompress::{RecompressOutcome, recompress_segment, recompress_segment_controlled};
-pub use segment::{SegmentCodec, sniff_segment};
+pub use segment::{FrameCompressor, SMALLEST_COMPRESSED_BATCH, SegmentCodec, sniff_segment};
 pub use segment_index::{
     IndexedSource, SegmentFilter, SegmentIndexLine, candidate_segments, rebuild_segment_index,
     segment_filter,

@@ -19,7 +19,7 @@ use rosetta_capture::{Ledger, SegmentCodec};
 use tempfile::TempDir;
 
 use super::{
-    Config, SERIAL, assert_same_dump, capture, capture_into, claude_home, claude_line, cold_store,
+    SERIAL, assert_same_dump, capture, capture_into, claude_home, claude_line, cold_store, config,
     configs, dump, ledger_files, session_records, tiny_batches,
 };
 use crate::progress::ColdProgressObserver;
@@ -344,10 +344,7 @@ fn an_interrupted_pooled_ledger_resumes_like_the_serial_one() {
     let serial = capture_into(adapter, home.path(), &opts, SERIAL, serial_ledger.path());
     assert!(serial.result.is_err());
     let pooled_ledger = TempDir::new().unwrap();
-    let chaos = Config {
-        workers: 4,
-        chaos: Some(71),
-    };
+    let chaos = config(4, Some(71));
     let pooled = capture_into(adapter, home.path(), &opts, chaos, pooled_ledger.path());
     assert!(pooled.ledger == serial.ledger, "interrupted ledgers differ");
 
@@ -391,6 +388,81 @@ fn an_interrupted_pooled_ledger_resumes_like_the_serial_one() {
         "resumed against uninterrupted",
         &without_generations(&uninterrupted),
         &without_generations(&from_pool),
+    );
+}
+
+/// A staged ledger of zstd frames — what an interrupted fresh cold build with
+/// compressing workers leaves — holds the plain one's bytes, replays to the
+/// same unsealed source, and resumes to the same projection; the resumed
+/// generation lands in plain segments after the compressed ones.
+#[test]
+fn an_interrupted_zstd_frames_ledger_resumes_like_the_plain_one() {
+    let adapter: &'static dyn AgentAdapter = Box::leak(Box::new(Faulty {
+        marker: MARKER,
+        panic: false,
+    }));
+    let home = faulty_home();
+    let opts = IngestOptions {
+        audit_files_per_run: 0,
+        ..tiny_batches(2)
+    };
+    let plain_ledger = TempDir::new().unwrap();
+    let plain = capture_into(adapter, home.path(), &opts, SERIAL, plain_ledger.path());
+    assert!(plain.result.is_err());
+    let frames_ledger = TempDir::new().unwrap();
+    let frames = capture_into(
+        adapter,
+        home.path(),
+        &opts,
+        config(4, Some(71)).zstd_frames(),
+        frames_ledger.path(),
+    );
+    assert_eq!(frames.result, plain.result);
+    assert_eq!(
+        frames.decoded, plain.decoded,
+        "interrupted ledgers decode alike"
+    );
+    assert!(
+        frames
+            .ledger
+            .iter()
+            .filter(|(name, _)| name.ends_with(".rledger"))
+            .all(|(_, bytes)| bytes.starts_with(b"RLZ1")),
+        "the interrupted ledger is zstd frames"
+    );
+
+    let mut runtime = discover(&[adapter], home.path(), &opts, &Instrument::new())
+        .unwrap()
+        .pop()
+        .unwrap()
+        .runtime;
+    runtime.enabled = true;
+    let replayed = rebuild_runtime_with_options(
+        adapter,
+        &runtime,
+        frames_ledger.path(),
+        &mut cold_store(),
+        &Instrument::new(),
+        RebuildOptions {
+            flush_reconciliation: false,
+            allow_unsealed_sources: true,
+            ..RebuildOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(replayed.torn_segments, 0);
+    assert_eq!(
+        replayed.unsealed_sources.keys().collect::<Vec<_>>(),
+        ["projects/-w-pool/s4.jsonl"]
+    );
+
+    let from_plain = resume(home.path(), plain_ledger.path(), &opts);
+    let from_frames = resume(home.path(), frames_ledger.path(), &opts);
+    assert_same_dump("resumed from zstd frames", &from_plain, &from_frames);
+    assert_eq!(
+        super::decoded(frames_ledger.path()),
+        super::decoded(plain_ledger.path()),
+        "resumed ledgers decode alike"
     );
 }
 

@@ -7,7 +7,10 @@
 //! installed ([`Ledger::set_source_keys`]) a source's id in every segment is
 //! its key. [`PrebuiltFrames`] holds one source generation's finished frames;
 //! [`Ledger::append_prebuilt`] writes them verbatim after the source's
-//! define, exactly where the ledger's own framing would have put them.
+//! define, exactly where the ledger's own framing would have put them. For a
+//! ledger whose segments are zstd frames the caller may also compress them
+//! ([`PrebuiltFrames::compress`]); the ledger compresses what arrives plain
+//! the same way, so the segment bytes do not depend on who compressed.
 //!
 //! [`Ledger::set_source_keys`]: super::Ledger::set_source_keys
 //! [`Ledger::append_prebuilt`]: super::Ledger::append_prebuilt
@@ -15,6 +18,7 @@
 use super::{
     CHECKSUM_BYTES, CaptureError, MAX_FRAME_BYTES, TAG_GENERATION_COMPLETE, TAG_RAW, TAG_RAW_BATCH,
 };
+use crate::segment::{FrameCompressor, SMALLEST_COMPRESSED_BATCH};
 
 /// Small records of one capture batch share a frame up to this body size.
 const BATCH_BODY_BYTES: usize = 1024 * 1024;
@@ -25,6 +29,7 @@ const LARGEST_BATCHED_PAYLOAD: usize = BATCH_BODY_BYTES - BATCH_HEADER_BYTES - R
 pub(super) const RAW_FIXED_BYTES: usize = 20;
 const SEAL_BODY_BYTES: usize = 17;
 const HEAD_BYTES: usize = 5;
+const SEAL_FRAME_BYTES: usize = HEAD_BYTES + SEAL_BODY_BYTES + CHECKSUM_BYTES;
 
 /// `tag ∙ u32 body-len`.
 pub(super) fn frame_head(tag: u8, body_len: usize) -> [u8; HEAD_BYTES] {
@@ -90,9 +95,15 @@ pub(super) fn seal_body(
 pub struct PrebuiltFrames {
     key: u32,
     generation: u64,
+    /// The frames — or, once compressed, one zstd frame of them all but a
+    /// trailing seal, which stays plain in `tail`.
     bytes: Vec<u8>,
+    tail: Vec<u8>,
     frames: u64,
     seals: bool,
+    /// The compressed frames' own length and the zstd level, once `bytes`
+    /// holds them compressed.
+    compressed: Option<(u64, i32)>,
 }
 
 impl PrebuiltFrames {
@@ -101,8 +112,10 @@ impl PrebuiltFrames {
             key,
             generation,
             bytes: Vec::new(),
+            tail: Vec::new(),
             frames: 0,
             seals: false,
+            compressed: None,
         }
     }
 
@@ -119,9 +132,28 @@ impl PrebuiltFrames {
         self.frames
     }
 
-    /// Frame bytes built so far, heads and checksums included.
+    /// Frame bytes built so far, heads and checksums included — what the
+    /// segment holds once decoded, compressed or not.
     pub fn frame_bytes(&self) -> u64 {
-        self.bytes.len() as u64
+        let body = self
+            .compressed
+            .map_or(self.bytes.len() as u64, |(frame_bytes, _)| frame_bytes);
+        body + self.tail.len() as u64
+    }
+
+    /// Bytes held: the frames, or their zstd frame and a plain seal once
+    /// compressed.
+    pub fn held_bytes(&self) -> u64 {
+        (self.bytes.len() + self.tail.len()) as u64
+    }
+
+    pub fn is_compressed(&self) -> bool {
+        self.compressed.is_some()
+    }
+
+    /// The zstd level the frames were compressed at, if they were.
+    pub fn compression_level(&self) -> Option<i32> {
+        self.compressed.map(|(_, level)| level)
     }
 
     /// Whether the last frame seals the generation.
@@ -133,8 +165,45 @@ impl PrebuiltFrames {
         self.frames == 0
     }
 
-    pub(super) fn bytes(&self) -> &[u8] {
+    /// The frame bytes of frames that are not compressed.
+    #[cfg(test)]
+    fn bytes(&self) -> &[u8] {
+        assert!(!self.is_compressed());
         &self.bytes
+    }
+
+    /// What the ledger writes: the zstd frame, if compressed, then plain
+    /// frame bytes.
+    pub(super) fn parts(&self) -> (Option<&[u8]>, &[u8]) {
+        match self.compressed {
+            Some(_) => (Some(&self.bytes), &self.tail),
+            None => (None, &self.bytes),
+        }
+    }
+
+    /// Replace the frames by one zstd frame of them, for a ledger whose
+    /// segments are zstd frames ([`crate::SegmentCodec::ZstdFrames`]).
+    /// Nothing more may be framed after this. A trailing seal stays plain,
+    /// and frames below [`SMALLEST_COMPRESSED_BATCH`] stay plain entirely:
+    /// the ledger stages both with its own frames, so the segment holds the
+    /// bytes it holds when the ledger frames the batch and writes the seal
+    /// itself.
+    pub fn compress(&mut self, compressor: &mut FrameCompressor) -> Result<(), CaptureError> {
+        let body = self.bytes.len() - if self.seals { SEAL_FRAME_BYTES } else { 0 };
+        if self.is_compressed() || body < SMALLEST_COMPRESSED_BATCH {
+            return Ok(());
+        }
+        let frame = compressor
+            .frame(&self.bytes[..body])
+            .map_err(|source| CaptureError::Io {
+                operation: "compressing",
+                path: format!("ledger frames of file id {}", self.key),
+                source,
+            })?;
+        self.tail = self.bytes.split_off(body);
+        self.compressed = Some((body as u64, compressor.level()));
+        self.bytes = frame;
+        Ok(())
     }
 
     /// Frame one capture batch's records: small records share `TAG_RAW_BATCH`
@@ -213,6 +282,10 @@ impl PrebuiltFrames {
 
     fn check_open(&self) {
         assert!(!self.seals, "a sealed generation takes no more frames");
+        assert!(
+            !self.is_compressed(),
+            "compressed frames take no more frames"
+        );
     }
 
     /// Close the open batch: one `TAG_RAW_BATCH` frame, or a `TAG_RAW` frame

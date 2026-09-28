@@ -304,3 +304,63 @@ fn nothing_follows_a_seal() {
     frames.push_seal(1, true);
     frames.push_record(0, b"late").unwrap();
 }
+
+#[test]
+fn compressing_keeps_the_frames_and_leaves_a_trailing_seal_plain() {
+    let records = |count: u64| -> Vec<(u64, Vec<u8>)> {
+        (0..count)
+            .map(|at| {
+                (
+                    at * 100,
+                    format!("{{\"record\":{at},\"text\":\"same words\"}}\n").into_bytes(),
+                )
+            })
+            .collect()
+    };
+    let mut compressor = FrameCompressor::new(3).unwrap();
+
+    // A sealed batch: the records become one zstd frame, the seal stays plain.
+    let mut plain = PrebuiltFrames::new(3, 5);
+    plain.push_records(records(400)).unwrap();
+    plain.push_seal(2, true);
+    let mut compressed = plain.clone();
+    compressed.compress(&mut compressor).unwrap();
+    assert!(compressed.is_compressed());
+    assert_eq!(compressed.compression_level(), Some(3));
+    assert_eq!(compressed.frame_bytes(), plain.frame_bytes());
+    assert_eq!(compressed.frames(), plain.frames());
+    assert!(compressed.seals());
+    assert!(compressed.held_bytes() * 4 < plain.held_bytes());
+    let (frame, tail) = compressed.parts();
+    let mut decoded = zstd::stream::decode_all(frame.unwrap()).unwrap();
+    assert_eq!(tail.len(), SEAL_FRAME_BYTES);
+    decoded.extend_from_slice(tail);
+    assert_eq!(decoded, plain.bytes());
+    // Compressing twice changes nothing.
+    let again = compressed.clone();
+    compressed.compress(&mut compressor).unwrap();
+    assert_eq!(compressed, again);
+
+    // Under the threshold (seal excluded) the frames stay plain.
+    let mut small = PrebuiltFrames::new(3, 5);
+    small.push_records(records(20)).unwrap();
+    small.push_seal(2, true);
+    assert!(small.frame_bytes() < SMALLEST_COMPRESSED_BATCH as u64);
+    let before = small.clone();
+    small.compress(&mut compressor).unwrap();
+    assert_eq!(small, before);
+    assert_eq!(small.parts(), (None, before.bytes()));
+}
+
+#[test]
+#[should_panic(expected = "compressed frames take no more frames")]
+fn nothing_follows_compression() {
+    let mut frames = PrebuiltFrames::new(1, 1);
+    frames
+        .push_records((0..400).map(|at| (at, vec![b'x'; 64])).collect())
+        .unwrap();
+    frames
+        .compress(&mut FrameCompressor::new(1).unwrap())
+        .unwrap();
+    frames.push_record(0, b"late").unwrap();
+}

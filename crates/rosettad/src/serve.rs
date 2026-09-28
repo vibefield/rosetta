@@ -1437,7 +1437,7 @@ fn run_fresh_fast_serve(
                 opts: cold_opts.clone(),
                 write_raw_ledger: true,
                 async_raw_ledger: true,
-                ledger_codec: rosetta_capture::SegmentCodec::Plain,
+                ledger_codec: flags.cold_ledger_codec,
                 instrument: Arc::new(Instrument::new()),
             },
         });
