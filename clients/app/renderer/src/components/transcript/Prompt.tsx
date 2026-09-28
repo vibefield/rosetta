@@ -17,7 +17,8 @@ import { firstLine } from "../../lib/transcript";
 import { clock } from "../../lib/format";
 import { Anchor } from "./Anchor";
 import { AuthoredMessage } from "./AuthoredMessage";
-import { Prose, SegmentActs } from "./Prose";
+import { MessagePreview } from "./MessagePreview";
+import { SegmentActs } from "./Prose";
 
 export interface PromptPanelProps {
   readonly prompt: PromptModel;
@@ -77,6 +78,7 @@ function MachinePrompt({
 }) {
   const machine = prompt.machine;
   if (machine === null) return null;
+  const recordedText = prompt.row.body.type === "collaboration" ? prompt.row.body.event.body : null;
   const facts = [
     machine.label,
     machine.sender === null ? null : `from ${senderLabel(machine.sender)}`,
@@ -89,10 +91,12 @@ function MachinePrompt({
       data-timeline-id={prompt.row.timeline_id}
     >
       <span className="tr-assignment__head">{facts.join(" · ")}</span>
-      {prompt.text === null ? (
+      {prompt.text === null && recordedText?.type !== "member" ? (
         <span className="tr-quiet">no message body recorded</span>
       ) : (
-        <Prose text={prompt.text} onReceipt={onReceipt} />
+        <MessagePreview messageKey={`${prompt.row.session_id}:${prompt.row.timeline_id}`} role="agent"
+          title={`${machine.label}${machine.sender === null ? "" : ` from ${senderLabel(machine.sender)}`}`}
+          text={prompt.text ?? ""} recordedText={recordedText} onReceipt={onReceipt} />
       )}
     </div>
   );
