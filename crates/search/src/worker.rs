@@ -26,6 +26,13 @@ use crate::sidecar::{
 
 const WORKER_POLL: Duration = Duration::from_millis(200);
 const STOP_CHECK_ROWS: u64 = 1_024;
+/// Pager cache of the private build connection, in KiB. It holds a whole
+/// generation (about 200 MB for 160k documents) with room to grow, so the
+/// insert transaction never spills pages to the file and the index, FTS5
+/// check, commit and `quick_check` that follow never read them back.
+/// Demand-allocated and freed when the connection closes; query and repair
+/// connections keep SQLite's default.
+const BUILD_CACHE_KIB: i64 = 512 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchAck {
@@ -142,13 +149,12 @@ fn finish_private_generation(
     progress: &crate::progress::BuildProgress,
 ) -> Result<u64, SearchError> {
     // This connection owns an unpublished generation and closes after the
-    // build. A bounded 16 MiB pager cache avoids repeated small-cache spills
-    // without retaining this allowance on query or live-repair connections.
-    conn.execute_batch(
+    // build, taking its pager cache with it.
+    conn.execute_batch(&format!(
         "PRAGMA journal_mode = MEMORY;
          PRAGMA synchronous = OFF;
-         PRAGMA cache_size = -16384;",
-    )
+         PRAGMA cache_size = -{BUILD_CACHE_KIB};"
+    ))
     .map_err(|error| backend(format!("configuring private search build: {error}")))?;
     conn.execute_batch(SEARCH_DDL)
         .map_err(|error| backend(format!("creating private search schema: {error}")))?;

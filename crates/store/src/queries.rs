@@ -520,6 +520,14 @@ fn visit_search_documents_where(
     );
     let mut statement = conn.prepare(&sql)?;
     let decoder = message_codec::Decoder::new(&statement)?;
+    // A by-name `Row::get` rescans every column name per call; over a full
+    // build that cost more than decoding the entries themselves.
+    let id = statement.column_index("id")?;
+    let runtime_id = statement.column_index("search_runtime_id")?;
+    let agent = statement.column_index("search_agent")?;
+    let project_id = statement.column_index("search_project_id")?;
+    let ts = statement.column_index("ts")?;
+    let kind = statement.column_index("type")?;
     let mut rows = match session_id {
         Some(session_id) => statement.query(params![session_id])?,
         None => statement.query([])?,
@@ -532,14 +540,14 @@ fn visit_search_documents_where(
             _ => None,
         };
         visit(SearchDocument {
-            id: row.get("id")?,
+            id: row.get(id)?,
             timeline_id: entry.timeline_id,
             session_id: entry.session_id,
-            runtime_id: row.get("search_runtime_id")?,
-            agent: row.get("search_agent")?,
-            project_id: row.get("search_project_id")?,
-            ts: row.get("ts")?,
-            kind: row.get("type")?,
+            runtime_id: row.get(runtime_id)?,
+            agent: row.get(agent)?,
+            project_id: row.get(project_id)?,
+            ts: row.get(ts)?,
+            kind: row.get(kind)?,
             is_error: status.and_then(|status| match status {
                 rosetta_core::ToolStatus::Succeeded => Some(false),
                 rosetta_core::ToolStatus::Failed

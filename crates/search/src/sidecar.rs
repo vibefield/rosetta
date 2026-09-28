@@ -48,15 +48,14 @@ CREATE VIRTUAL TABLE message_fts USING fts5(
 );
 "#;
 
+/// Every query drives from the FTS match and joins documents by rowid; the
+/// session index serves live repair's per-session deletes. Generations built
+/// before 2026-09-27 also carry runtime, agent, project, ts, kind and error
+/// indexes plus `ANALYZE` statistics: they stay valid under this schema, and
+/// repair keeps maintaining them. Without statistics no filter shape plans
+/// through a metadata index, so none is built.
 pub(crate) const SEARCH_INDEXES: &str = r#"
 CREATE INDEX search_document_session ON search_document(session_id);
-CREATE INDEX search_document_runtime ON search_document(runtime_id);
-CREATE INDEX search_document_agent ON search_document(agent);
-CREATE INDEX search_document_project ON search_document(project_id);
-CREATE INDEX search_document_ts ON search_document(ts);
-CREATE INDEX search_document_kind ON search_document(kind);
-CREATE INDEX search_document_error ON search_document(is_error);
-ANALYZE;
 "#;
 
 #[derive(Debug, Clone)]
@@ -344,10 +343,9 @@ impl Fts5SidecarSearch {
     }
 }
 
-fn query_generation(
-    conn: &Connection,
-    query: &SearchQuery,
-) -> Result<Vec<queries::SearchHit>, SearchError> {
+/// The ranked, filtered statement one query runs against a generation, with
+/// its bound values in placeholder order.
+fn search_statement(query: &SearchQuery) -> (String, Vec<Value>) {
     let filter = SearchFilter {
         session: query.session.clone(),
         sessions: query.sessions.clone(),
@@ -436,6 +434,14 @@ fn query_generation(
         " ORDER BY rank, d.timeline_id COLLATE BINARY LIMIT ?{}",
         binds.len()
     ));
+    (sql, binds)
+}
+
+fn query_generation(
+    conn: &Connection,
+    query: &SearchQuery,
+) -> Result<Vec<queries::SearchHit>, SearchError> {
+    let (sql, binds) = search_statement(query);
     let mut statement = conn
         .prepare(&sql)
         .map_err(|error| SearchError::Backend(format!("preparing sidecar search: {error}")))?;
@@ -519,4 +525,94 @@ fn serves_hits(readiness: SearchReadiness) -> bool {
         readiness,
         SearchReadiness::Ready | SearchReadiness::CatchingUp
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TextQuery;
+
+    fn plan(conn: &Connection, sql: &str, binds: Vec<Value>) -> Vec<String> {
+        conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map(rusqlite::params_from_iter(binds), |row| row.get(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// Every filter combination the backend accepts drives from the FTS
+    /// match and joins documents by rowid, on a generation shaped exactly as
+    /// the worker builds one; only live repair's deletes use an index.
+    #[test]
+    fn every_filter_shape_plans_from_the_fts_match() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = Connection::open(dir.path().join("generation.sqlite")).unwrap();
+        conn.execute_batch(SEARCH_DDL).unwrap();
+        conn.execute_batch(SEARCH_INDEXES).unwrap();
+        let base = SearchQuery {
+            text: TextQuery::parse("alpha \"beta gamma\"").unwrap(),
+            prefix: false,
+            limit: 50,
+            session: None,
+            sessions: Vec::new(),
+            runtime: None,
+            agent: None,
+            project: None,
+            kind: None,
+            is_error: None,
+            after_ts: None,
+            before_ts: None,
+        };
+        let mut shapes = 0;
+        for mask in 0_u32..(1 << 9) {
+            let bit = |index: u32| mask & (1 << index) != 0;
+            if bit(0) && bit(1) {
+                continue;
+            }
+            let mut query = base.clone();
+            query.prefix = bit(8);
+            query.session = bit(0).then(|| "s1".to_string());
+            if bit(1) {
+                query.sessions = vec!["s1".into(), "s2".into(), "s3".into()];
+            }
+            query.runtime = bit(2).then(|| "rt1".to_string());
+            query.agent = bit(3).then(|| "codex".to_string());
+            query.project = bit(4).then(|| "p1".to_string());
+            query.kind = bit(5).then(|| "user".to_string());
+            query.after_ts = bit(6).then_some(1);
+            query.before_ts = bit(7).then_some(2);
+            query.validate().unwrap();
+            let (sql, binds) = search_statement(&query);
+            let steps = plan(&conn, &sql, binds);
+            assert!(
+                steps[0].starts_with("SCAN message_fts VIRTUAL TABLE"),
+                "{steps:?}"
+            );
+            assert!(
+                steps.contains(&"SEARCH d USING INTEGER PRIMARY KEY (rowid=?)".to_string()),
+                "{steps:?}"
+            );
+            assert!(
+                steps.iter().all(|step| !step.contains("search_document_")),
+                "{steps:?}"
+            );
+            shapes += 1;
+        }
+        assert_eq!(shapes, 384);
+
+        for repair in [
+            "DELETE FROM message_fts WHERE rowid IN
+               (SELECT id FROM search_document WHERE session_id = ?1)",
+            "DELETE FROM search_document WHERE session_id = ?1",
+        ] {
+            let steps = plan(&conn, repair, vec![Value::from("s1".to_string())]);
+            assert!(
+                steps
+                    .iter()
+                    .any(|step| step.contains("INDEX search_document_session (session_id=?)")),
+                "{steps:?}"
+            );
+        }
+    }
 }

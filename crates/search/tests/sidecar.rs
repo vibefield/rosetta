@@ -683,6 +683,78 @@ fn a_commit_landing_during_the_initial_build_is_repaired_after_it() {
     worker.stop();
 }
 
+/// Generations built before the metadata indexes were trimmed also carry
+/// runtime, agent, project, ts, kind and error indexes plus planner
+/// statistics. The search schema did not change, so such a generation stays
+/// current — no rebuild — keeps answering, and takes live repairs in place.
+#[test]
+fn a_generation_with_the_former_metadata_indexes_stays_current_and_repairs() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (path, mut store) = canonical(&dir);
+    let search = Fts5SidecarSearch::new(&path);
+    let stop = AtomicBool::new(false);
+    let first = synchronize_fts5_once(&search, &stop).unwrap().unwrap();
+    store
+        .acknowledge_search(&first.projection_epoch, first.revision)
+        .unwrap();
+    let generation = search.current_generation_path().unwrap().unwrap();
+    let former = Connection::open(&generation).unwrap();
+    former
+        .execute_batch(
+            "CREATE INDEX search_document_runtime ON search_document(runtime_id);
+             CREATE INDEX search_document_agent ON search_document(agent);
+             CREATE INDEX search_document_project ON search_document(project_id);
+             CREATE INDEX search_document_ts ON search_document(ts);
+             CREATE INDEX search_document_kind ON search_document(kind);
+             CREATE INDEX search_document_error ON search_document(is_error);
+             ANALYZE;",
+        )
+        .unwrap();
+    drop(former);
+
+    assert_eq!(
+        synchronize_fts5_once(&search, &stop).unwrap().unwrap(),
+        first
+    );
+    assert_eq!(
+        search.current_generation_path().unwrap().unwrap(),
+        generation
+    );
+    assert_eq!(search.state().readiness, SearchReadiness::Ready);
+
+    store
+        .apply(&Batch {
+            ops: vec![message_op(message("m2", "s1", 1, "omega replacement"))],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+    let repaired = synchronize_fts5_once(&search, &stop).unwrap().unwrap();
+    assert!(repaired.revision > first.revision);
+    assert_eq!(
+        search.current_generation_path().unwrap().unwrap(),
+        generation,
+        "repaired in place, not rebuilt"
+    );
+    store
+        .acknowledge_search(&repaired.projection_epoch, repaired.revision)
+        .unwrap();
+    assert_eq!(search.search(query("omega")).unwrap().hits.len(), 1);
+    assert!(search.search(query("gamma")).unwrap().hits.is_empty());
+    let mut filtered = query("alpha");
+    filtered.agent = Some("codex".into());
+    assert_eq!(search.search(filtered).unwrap().hits.len(), 2);
+    let indexes: i64 = Connection::open(&generation)
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type = 'index' AND name LIKE 'search_document_%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexes, 7);
+}
+
 #[test]
 fn metadata_project_assignment_repairs_structured_search_filters() {
     let dir = tempfile::TempDir::new().unwrap();

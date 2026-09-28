@@ -1750,10 +1750,22 @@ still require a driver-specific frozen pair or a declared production-weighted ag
   bucket once.
 - Detached search construction resolves message/tool column positions once per SELECT and reuses
   the ordinary typed decoder and its validation. Single-row callers retain named-column decoding;
-  cached positions are derived from the actual statement, including session-scoped repair scans.
-  The unpublished FTS generation uses a 16 MiB pager cache, released when its build connection
-  closes. Search extraction, member verification, FTS integrity checks, SQLite quick checks, syncs,
-  and atomic generation publication remain part of the measured work. SQLite documents this
+  cached positions are derived from the actual statement, including session-scoped repair scans,
+  and so are the document's id, runtime, agent, project, timestamp and kind columns (by-name
+  lookups had cost more than decoding the entries). The canonical snapshot keeps ordinary reads,
+  not a memory map: the map saved little and would turn a read I/O error into a crash. The
+  unpublished FTS generation uses a 512 MiB pager
+  cache, released when its build connection closes, so a whole generation (about 250 MB) never
+  spills and is never read back from the file during its index, check and commit. The generation
+  carries one metadata index, `search_document_session`, for live repair's per-session deletes:
+  with no planner statistics every filter combination the backend accepts plans from the FTS
+  match and joins documents by rowid (a unit test checks all 384 shapes), so the runtime, agent,
+  project, ts, kind and error indexes and the database-wide `ANALYZE` were pure build cost.
+  Generations built before 2026-09-27 keep those indexes and statistics and remain valid under
+  search schema 4; with statistics, only five-or-more-filter combinations mixing API-only runtime,
+  session or time filters with a very rare value ever planned through them. Search extraction,
+  member verification, FTS integrity checks, SQLite quick checks, syncs, and atomic generation
+  publication remain part of the measured work. SQLite documents this
   [connection-local, demand-allocated cache setting](https://www.sqlite.org/pragma.html#pragma_cache_size).
   Frozen campaign `rosetta-cold-ingest-20260906` compared the retained `7e6b873` working-tree
   binary with this change on an Apple M1 Max / 64 GiB, macOS 26.5.2 arm64, Rust 1.97.1 release,
