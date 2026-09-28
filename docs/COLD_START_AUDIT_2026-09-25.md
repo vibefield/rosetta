@@ -434,3 +434,21 @@ than block. Every frozen digest and ledger source digest equals `main`'s.
 - **Found while testing, not yet fixed:** a transcript that ends inside a record makes the fresh
   pass end staged, and the whole cold start fails; a record over 32 MiB abandons its first
   generation and admission then refuses the whole build.
+
+## 14. Outcome of step 4, the Claude Code census refresh (2026-09-28)
+
+A census pinned to writer 2.1.283 (the newest of 166 writer versions on this machine) documents 13
+transcript fields and 2 subagent-sidecar fields that writers 2.1.257–2.1.283 added; the adapter's raw
+types now know them, and none is projected. The census tool also stopped publishing three kinds of
+native identifiers (tool-use ids used as map keys, epoch-stamped artifact version ids, per-call block
+ids); 41 such values already committed in the 08-28 and 09-03 censuses were migrated out of the
+files, although they remain in the repository's history. No fixture was farmed for the new fields:
+that needs an isolated runner, and `watch.toml` records the gap.
+
+- Live all-agent, interleaved: drift ops per cold start 566,876 → 41,398; `drift_seen` rows about
+  235 MB → 17 MB; the writer's drift apply 3.0 → 0.31 s; retired instructions 1,045 G → 993 G.
+- `normalizer_version` stays 30: only drift facts change, and the store never retracts a drift row,
+  so a bump would replay every Claude source on the next warm start without removing any. Existing
+  projections keep their earlier drift rows until rebuilt.
+- A new writer field still costs one drift op and one `drift_seen` row per record until the census
+  catches up; bounding that needs a change to what drift counts mean or a schema bump.
