@@ -13,6 +13,7 @@ pub mod hot;
 mod message_codec;
 pub mod pricing;
 pub mod queries;
+mod reclaim;
 pub mod schema;
 mod search_sync;
 pub mod timeline_meta;
@@ -626,7 +627,7 @@ impl Store {
         stats.sqlite_commit_nanos = elapsed_nanos(commit_started);
         let cleanup_started = Instant::now();
         self.bulk_reconciliation.committed(&plan);
-        drop(plan);
+        reclaim::release(plan);
         stats.profile.tool_reconcile_cleanup_nanos = elapsed_nanos(cleanup_started);
         Ok(stats)
     }

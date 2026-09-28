@@ -69,7 +69,13 @@ impl BulkReconciliationDelta {
         let Some(source) = batch.source.as_ref() else {
             return Ok(None);
         };
-        Self::from_ops(source, batch.ops.iter().map(Cow::Borrowed), true).map(Some)
+        Self::from_ops(
+            source,
+            batch.ops.iter().map(Cow::Borrowed),
+            true,
+            &mut Vec::new(),
+        )
+        .map(Some)
     }
 
     /// A closed source's delta, which never carries retry identity: a closed
@@ -77,17 +83,27 @@ impl BulkReconciliationDelta {
     /// within one transaction and fails its checkpoint compare-and-set in any
     /// later one — so hashing every deferred op for a retry that cannot
     /// happen would only serialize the runtime's relational payload twice.
+    /// The rows SQL has consumed are freed off the calling thread.
     pub(crate) fn from_owned_batch(batch: Batch) -> Result<Option<Self>, StoreError> {
         let Some(source) = batch.source.as_ref() else {
             return Ok(None);
         };
-        Self::from_ops(source, batch.ops.into_iter().map(Cow::Owned), false).map(Some)
+        let mut consumed = Vec::new();
+        let delta = Self::from_ops(
+            source,
+            batch.ops.into_iter().map(Cow::Owned),
+            false,
+            &mut consumed,
+        );
+        crate::reclaim::release(consumed);
+        delta.map(Some)
     }
 
     fn from_ops<'a>(
         source: &SourceWrite,
         ops: impl ExactSizeIterator<Item = Cow<'a, IngestOp>>,
         fingerprint: bool,
+        consumed: &mut Vec<IngestOp>,
     ) -> Result<Self, StoreError> {
         let activation_end = source
             .first_sequence
@@ -117,6 +133,9 @@ impl BulkReconciliationDelta {
             if !defers(op.as_ref()) {
                 if fingerprint {
                     fingerprints.insert(sequence, OpFingerprint::Immediate);
+                }
+                if let Cow::Owned(op) = op {
+                    consumed.push(op);
                 }
                 continue;
             }
@@ -169,12 +188,15 @@ impl BulkReconciliationDelta {
                 })
         };
         let mut deferred = BTreeMap::new();
+        let mut consumed = Vec::with_capacity(batch.ops.len());
         for (op, position) in batch.ops.into_iter().zip(resolved.positions()) {
             if !defers(&op) || matches!(op, IngestOp::Message(_)) {
+                consumed.push(op);
                 continue;
             }
             deferred.insert(sequence(*position)?, deferred_op(op));
         }
+        crate::reclaim::release(consumed);
         Ok(Some(Self {
             cursor_id,
             generation,

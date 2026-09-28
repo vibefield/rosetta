@@ -249,7 +249,7 @@ impl Store {
         tx.commit()?;
         stats.sqlite_commit_nanos = elapsed_nanos(commit_started);
         let cleanup_started = Instant::now();
-        drop(plan);
+        crate::reclaim::release(plan);
         stats.profile.tool_reconcile_cleanup_nanos = elapsed_nanos(cleanup_started);
         Ok(stats)
     }
