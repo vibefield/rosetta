@@ -50,6 +50,10 @@ pub struct ClosedSource {
     pub(crate) evidence: PollEvidence,
     pub(crate) generation_clean: bool,
     pub(crate) activate: bool,
+    /// The source ends inside a record its writer has not finished: the
+    /// generation stopped at its last complete record, and its session stays
+    /// `Streaming` until a live pass lands the rest.
+    pub(crate) partial_record: bool,
     pub(crate) payload_bytes: u64,
     /// What [`crate::StreamedPreparer`] did to the source as it was emitted;
     /// the writer applies only prepared sources.
@@ -222,6 +226,9 @@ fn close_file(
         generation,
         ops,
         evidence: PollEvidence::of(Some(&checkpoint)),
+        partial_record: checkpoint
+            .tail_checkpoint()
+            .is_some_and(|tail| tail.incomplete_suffix_len > 0),
         checkpoint: cursor.checkpoint,
         generation_clean: checkpoint.generation_clean,
         activate: cursor.active_generation == generation,
@@ -459,6 +466,12 @@ fn virtual_parent(file: &SessionFile) -> Result<&str, PipelineError> {
 /// them one at a time, so each cursor gets the rowid it always had. The
 /// ledger's file id for each source is its index in that order (its roster
 /// key), in every segment.
+///
+/// Every pass of the walk runs with
+/// [`IngestOptions::stop_at_partial_record`]: a source whose writer is
+/// mid-append still ends at a terminal generation, at its last complete
+/// record, and the record it has not finished is append growth for the live
+/// runner.
 #[allow(clippy::too_many_arguments)]
 pub fn stream_closed_sources_into(
     adapter: &dyn AgentAdapter,
@@ -471,6 +484,7 @@ pub fn stream_closed_sources_into(
     mut ledger: Option<&mut rosetta_capture::Ledger>,
     emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
 ) -> Result<StreamReport, PipelineError> {
+    let opts = &closed_pass_options(opts);
     let ordered = path_ordered(files);
     set_up_roster(
         adapter,
@@ -504,6 +518,7 @@ pub fn stream_closed_sources_pooled(
     mut ledger: Option<&mut rosetta_capture::Ledger>,
     emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
 ) -> Result<StreamReport, PipelineError> {
+    let opts = &closed_pass_options(opts);
     let ordered = path_ordered(files);
     set_up_roster(
         adapter,
@@ -536,6 +551,16 @@ pub fn stream_closed_sources_pooled(
         Some(pooled),
         emit,
     )
+}
+
+/// The options every closed-source pass runs under: the walk hands the writer
+/// only terminal generations ([`close_file`]), so a pass may never leave one
+/// staged behind a record its writer has not finished.
+fn closed_pass_options(opts: &IngestOptions) -> IngestOptions {
+    IngestOptions {
+        stop_at_partial_record: true,
+        ..opts.clone()
+    }
 }
 
 /// Every roster source's cursor, created up front, and its roster key

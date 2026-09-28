@@ -102,7 +102,15 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > validated ops — as soon as nothing can supersede it. Only a transcript whose session still has an
 > uncaptured transcript, or a pending sibling heal after a restart, is held; the heal runs as soon
 > as the restarted session's last transcript is captured, so the writer sees exactly one terminal
-> generation per source, in path order (the order every order-sensitive upsert assumes). The
+> generation per source, in path order (the order every order-sensitive upsert assumes). A
+> transcript caught mid-append (its file ends inside a record its writer has not finished) still
+> closes (2026-09-28): the walk runs every pass with `IngestOptions::stop_at_partial_record`, so the
+> generation ends at the last complete record exactly as if the file ended there — the end-of-file
+> rules decide activation and the seal, for a replacement generation too, since it has read every
+> complete record and nothing of the source is public yet — the checkpoint keeps the unfinished
+> suffix, the session is admitted `Streaming`, and the live runner lands the record as ordinary
+> append growth. Live and disk-cold passes still leave such a generation staged until a read finds
+> the record complete. The
 > producers do not read their own files (2026-09-27): every runtime registers its fresh JSONL
 > sources with one process-wide *capture pool* — one worker per core but one by default
 > (`--capture-workers N`; `0` restores the walk in which each producer reads its runtime's files in

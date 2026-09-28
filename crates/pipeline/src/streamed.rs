@@ -245,7 +245,10 @@ impl StreamedRuntime {
                 })?;
                 facts.bind_cursor(cursor_id);
             }
-            let clean = source.activate && source.generation_clean;
+            // A source stopped before a record its writer has not finished
+            // holds its session Streaming, exactly as a live pass that finds
+            // that suffix does, until the live runner lands the record.
+            let clean = source.activate && source.generation_clean && !source.partial_record;
             self.session_health
                 .entry(source.source.session_id.clone())
                 .and_modify(|healthy| *healthy &= clean)
@@ -620,6 +623,7 @@ mod tests {
             checkpoint: checkpoint.encode(),
             generation_clean: true,
             activate: true,
+            partial_record: false,
             payload_bytes: 1,
             prepared: None,
         }

@@ -49,6 +49,7 @@ fn closed(path: &str, session_id: &str, ops: Vec<IngestOp>) -> ClosedSource {
         checkpoint: checkpoint.encode(),
         generation_clean: true,
         activate: true,
+        partial_record: false,
         payload_bytes: 1,
         prepared: None,
     }

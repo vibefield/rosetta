@@ -163,6 +163,15 @@ pub struct IngestOptions {
     /// EOF. Snapshot-driver sources (SQLite/document) always stream whole:
     /// their revision identity is a whole-content hash.
     pub starter_budget: Option<SliceBudget>,
+    /// `true` for a one-shot pass that must end every JSONL source at a
+    /// terminal generation — the fresh cold build's closed-source walk sets
+    /// it. A source whose writer is mid-append (the file ends inside a record)
+    /// then ends its generation at its last complete record, exactly as if the
+    /// file ended there, and its unterminated suffix stays in the checkpoint
+    /// as ordinary append growth for the live runner. `false` — the default,
+    /// and every other pass — leaves such a generation staged until a read
+    /// finds the record complete.
+    pub stop_at_partial_record: bool,
     /// Process-local cooperative cancellation. It is deliberately not a
     /// checkpoint or canonical fact; cold workers check it at bounded record
     /// batches so app shutdown can discard the private build cleanly.
@@ -197,6 +206,7 @@ impl Default for IngestOptions {
             max_retries: 3,
             audit_files_per_run: 1,
             starter_budget: None,
+            stop_at_partial_record: false,
             cancel: None,
             progress: None,
         }

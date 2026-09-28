@@ -88,7 +88,9 @@ runtime's capture waits for a later runtime's skim. Adapters stream, ledger, and
 parallel through private RAM planners, handing each source to the sole canonical writer as a
 closed source (terminal generation, final checkpoint) in path order as soon as nothing can
 supersede it — a session is held only while a restart's sibling heal could still replace its
-transcripts — under a 256 MiB in-flight budget. One capture pool shared by every runtime (a
+transcripts — under a 256 MiB in-flight budget. A source caught mid-append ends at its last
+complete record (`stop_at_partial_record`): its session is admitted Streaming and the live runner
+lands the unfinished record as append growth. One capture pool shared by every runtime (a
 worker per core but one by default; `--capture-workers 0` restores one producer reading its
 runtime's files in turn) reads, normalizes and frames the fresh JSONL sources a batch at a
 time ahead of each producer, which becomes its runtime's sequencer and commits them strictly

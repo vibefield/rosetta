@@ -111,6 +111,8 @@ pub(crate) struct IngestPass {
     budget_tailer: Option<Tailer>,
     budget_bytes: u64,
     budget_records: u64,
+    /// [`IngestOptions::stop_at_partial_record`].
+    stop_at_partial_record: bool,
     retries: u32,
     force_replay: bool,
     staged: Option<Staged>,
@@ -243,6 +245,7 @@ impl IngestPass {
             budget_tailer,
             budget_bytes: 0,
             budget_records: 0,
+            stop_at_partial_record: opts.stop_at_partial_record,
             retries: 0,
             force_replay,
             staged: None,
@@ -474,6 +477,18 @@ impl IngestPass {
             .checked_add(ops.len() as u64)
             .ok_or_else(|| PipelineError::Config("source sequence overflowed".to_string()))?;
         let complete = !batch.more_available && batch.checkpoint.incomplete_suffix_len == 0;
+        // The partial-record stop: all that is left is a record its writer
+        // has not finished, and this pass must end its generation anyway
+        // ([`IngestOptions::stop_at_partial_record`]). Every rule below reads
+        // it as the end of the file — the generation ends at its last
+        // complete record exactly as if the file ended there — while the
+        // checkpoint keeps the unterminated suffix unconsumed, so the finished
+        // record later arrives as ordinary append growth. A replacement
+        // generation ends here too: unlike a budget pause it has read every
+        // complete record the file holds, and the pass that sets this option
+        // has published no generation of the source for it to hide.
+        let partial_stop = self.stop_at_partial_record && !batch.more_available && !complete;
+        let ended = complete || partial_stop;
         // The slice boundary: enough clean bytes and complete records are
         // framed that this pass may stop. A fresh generation stops by
         // ACTIVATING and sealing its prefix, so the unread remainder becomes
@@ -488,9 +503,9 @@ impl IngestPass {
             });
         let source_mode = if self.source_generation == self.active_generation {
             SourceMode::Append
-        } else if (complete || budget_stop) && self.generation_clean {
+        } else if (ended || budget_stop) && self.generation_clean {
             SourceMode::Activate
-        } else if complete && self.active_generation == 0 && self.generation_raw_complete {
+        } else if ended && self.active_generation == 0 && self.generation_raw_complete {
             // The live-growth rule, converged (product decision 2026-08-31):
             // a FIRST generation that reaches EOF unclean still activates its
             // parseable rows and the session holds Streaming — exactly what
@@ -499,7 +514,7 @@ impl IngestPass {
             // survives, and a raw-incomplete (oversized) generation still
             // abandons because an unsealable generation must never activate.
             SourceMode::Activate
-        } else if complete {
+        } else if ended {
             SourceMode::Abandon
         } else {
             SourceMode::Stage
@@ -540,7 +555,7 @@ impl IngestPass {
             })
             .collect();
         let seal = (self.source_generation != self.active_generation
-            && (complete || budget_stop)
+            && (ended || budget_stop)
             && self.generation_raw_complete)
             .then_some(self.generation_clean);
         let write = Batch {
@@ -607,13 +622,18 @@ impl IngestPass {
     }
 
     fn finished(&self) -> FilePass {
-        FilePass::Finished(
-            self.generation_clean
-                && self.active_generation == self.source_generation
-                && self
-                    .tail
-                    .as_ref()
-                    .is_some_and(|checkpoint| checkpoint.incomplete_suffix_len == 0),
-        )
+        let active_clean =
+            self.generation_clean && self.active_generation == self.source_generation;
+        let suffix = self
+            .tail
+            .as_ref()
+            .map(|checkpoint| checkpoint.incomplete_suffix_len);
+        if self.stop_at_partial_record && active_clean && suffix.is_some_and(|len| len > 0) {
+            // Stopped before a record its writer has not finished: the clean
+            // prefix is active, and the record is append growth for a later
+            // pass. Deliberate, like a budget pause — never a failure.
+            return FilePass::Paused;
+        }
+        FilePass::Finished(active_clean && suffix == Some(0))
     }
 }

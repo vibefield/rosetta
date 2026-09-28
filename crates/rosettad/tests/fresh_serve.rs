@@ -408,6 +408,247 @@ fn staged_cold_ledger_rebuilds_and_finishes_on_next_boot() {
     assert_eq!(ready, 1);
 }
 
+/// Every canonical row a reader can see, with surrogate ids mapped to stable
+/// identities (cursor ids to paths, message ids to timeline ids) and rows
+/// sorted. Runtime rows (discovery time), cursors (their checkpoints name
+/// file identities) and the search/readiness bookkeeping are left out.
+fn canonical_rows(db: &Path) -> std::collections::BTreeMap<String, Vec<String>> {
+    let conn = rusqlite::Connection::open(db).unwrap();
+    let lookup = |sql: &str| -> std::collections::HashMap<i64, String> {
+        conn.prepare(sql)
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let cursors = lookup("SELECT id, path FROM ingest_cursor");
+    let messages = lookup("SELECT id, timeline_id FROM message");
+    let mut out = std::collections::BTreeMap::new();
+    for table in [
+        "project",
+        "session",
+        "plan",
+        "task",
+        "workflow_run",
+        "workflow_journal",
+        "message",
+        "file_edit",
+        "git_commit",
+        "drift_agg",
+        "drift_seen",
+        "session_usage",
+        "usage_bucket",
+    ] {
+        let mut statement = conn.prepare(&format!("SELECT * FROM {table}")).unwrap();
+        let columns: Vec<String> = statement
+            .column_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let mut rows = statement
+            .query_map([], |row| {
+                let mut fields = Vec::new();
+                for (index, column) in columns.iter().enumerate() {
+                    if table == "message" && column == "id" {
+                        continue;
+                    }
+                    let value: rusqlite::types::Value = row.get(index)?;
+                    let shown = match (&value, column.as_str()) {
+                        (rusqlite::types::Value::Integer(id), name) if name.ends_with("cursor") => {
+                            cursors[id].clone()
+                        }
+                        (rusqlite::types::Value::Integer(id), "message_id") => messages[id].clone(),
+                        _ => format!("{value:?}"),
+                    };
+                    fields.push(format!("{column}={shown}"));
+                }
+                Ok(fields.join(" | "))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        rows.sort();
+        out.insert(table.to_string(), rows);
+    }
+    out
+}
+
+fn scalar(db: &Path, sql: &str) -> Option<String> {
+    rusqlite::Connection::open(db)
+        .and_then(|conn| conn.query_row(sql, [], |row| row.get(0)))
+        .ok()
+}
+
+/// A transcript caught mid-append at a fresh start — its file ends inside a
+/// tool result its writer has not finished — no longer fails the start: the
+/// clean prefix publishes with its session held Streaming, and once the
+/// writer finishes, the live runner reads only the growth. The published
+/// projection then holds exactly the rows a start over the finished file
+/// publishes, and the raw ledger holds every record once, in one sealed
+/// generation.
+#[test]
+fn a_transcript_caught_mid_append_publishes_and_the_live_runner_finishes_it() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../groundtruth/claude-code/fixtures/2.1.241/tool-use/claude-config");
+    let temp = tempfile::tempdir().unwrap();
+
+    // The transcript, cut inside the tool result.
+    let home = temp.path().join("live");
+    let claude = home.join(".claude");
+    copy_tree(&fixture, &claude);
+    let transcript = find_project_jsonl(&claude.join("projects"));
+    let text = std::fs::read(&transcript).unwrap();
+    let result = text
+        .windows(br#""type":"tool_result""#.len())
+        .position(|window| window == br#""type":"tool_result""#)
+        .expect("the fixture holds a tool result");
+    std::fs::write(&transcript, &text[..result]).unwrap();
+    let cut_at = std::fs::metadata(&transcript).unwrap().modified().unwrap();
+    let suffix = text[result..].to_vec();
+    let native = transcript
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let db = temp.path().join("live/rosetta.db");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rosettad"))
+        .args([
+            "serve",
+            "--db",
+            db.to_str().unwrap(),
+            "--home",
+            home.to_str().unwrap(),
+            "--agent",
+            "claude-code",
+            "--addr",
+            "127.0.0.1:0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let mut child = ChildGuard(child);
+    let (sender, receiver) = mpsc::channel();
+    let errors = sender.clone();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = sender.send(line);
+        }
+    });
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = errors.send(format!("stderr: {line}"));
+        }
+    });
+    let mut log = Vec::new();
+    loop {
+        let line = receiver
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("no canonical-ready:\n{}", log.join("\n")));
+        let ready = line.contains("milestone: canonical-ready");
+        log.push(line);
+        if ready {
+            break;
+        }
+    }
+
+    // Published with the unfinished record left out: the prefix is active
+    // (one generation, no staged one) and the session is Streaming.
+    let state = format!("SELECT stream_state FROM session WHERE native_session_id = '{native}'");
+    assert_eq!(scalar(&db, &state).as_deref(), Some("streaming"), "{log:?}");
+    let generations = scalar(
+        &db,
+        "SELECT active_generation || '/' || highest_generation FROM ingest_cursor
+         WHERE path LIKE '%.jsonl'",
+    );
+    assert_eq!(generations.as_deref(), Some("1/1"));
+    let published: i64 = scalar(&db, "SELECT CAST(COUNT(*) AS TEXT) FROM message")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(published > 0);
+
+    // The writer finishes the record and the session. FSEvents may be
+    // suppressed in a sandbox; the 30-second stat poll must converge anyway.
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    file.write_all(&suffix).unwrap();
+    file.sync_data().unwrap();
+    drop(file);
+    let deadline = Instant::now() + Duration::from_secs(45);
+    while scalar(&db, &state).as_deref() != Some("indexed") {
+        assert_eq!(child.0.try_wait().unwrap(), None, "daemon exited early");
+        assert!(
+            Instant::now() < deadline,
+            "the live runner never finished it"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+
+    // The reference: a fresh start over the finished transcript as it would
+    // have stood at the start — modified when the cut one was, since a
+    // session's `updated_at` starts from the mtime its metadata skim reads.
+    let whole_home = temp.path().join("whole");
+    copy_tree(&fixture, &whole_home.join(".claude"));
+    let whole_transcript = find_project_jsonl(&whole_home.join(".claude/projects"));
+    std::fs::File::options()
+        .write(true)
+        .open(&whole_transcript)
+        .unwrap()
+        .set_modified(cut_at)
+        .unwrap();
+    let whole_db = temp.path().join("whole/rosetta.db");
+    assert_success(&run_serve(&whole_home, &whole_db));
+    let whole = canonical_rows(&whole_db);
+    assert!(published < whole["message"].len() as i64);
+    let live = canonical_rows(&db);
+    for (table, rows) in &whole {
+        assert_eq!(&live[table], rows, "{table}");
+    }
+
+    // Every record reached the ledger once, in the one generation its seal
+    // closed at the cut: the growth was appended, the prefix never replayed.
+    let scan = scan_ledger(&db.with_extension("ledger").join("claude-code")).unwrap();
+    let mut offsets = Vec::new();
+    let mut seals = Vec::new();
+    for entry in scan.entries {
+        match entry {
+            LedgerEntry::Raw {
+                source,
+                generation,
+                start_offset,
+                ..
+            } if source.relative_path.ends_with(".jsonl") => {
+                offsets.push((generation, start_offset));
+            }
+            LedgerEntry::GenerationComplete {
+                source,
+                generation,
+                normalized_clean,
+                ..
+            } if source.relative_path.ends_with(".jsonl") => {
+                seals.push((generation, normalized_clean));
+            }
+            _ => {}
+        }
+    }
+    let lines = text.split(|byte| *byte == b'\n').count() - 1;
+    let mut unique = offsets.clone();
+    unique.dedup();
+    assert_eq!(unique, offsets, "no record was framed twice");
+    assert_eq!(offsets.len(), lines);
+    assert!(offsets.iter().all(|(generation, _)| *generation == 1));
+    assert_eq!(seals, [(1, true)]);
+}
+
 #[test]
 fn warm_daemon_append_reaches_sqlite_raw_ledger_and_websocket() {
     let temp = tempfile::tempdir().unwrap();

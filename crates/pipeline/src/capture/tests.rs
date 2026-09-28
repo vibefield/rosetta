@@ -23,7 +23,7 @@ use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_codex::CodexAdapter;
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
-use rosetta_capture::{Ledger, SegmentCodec, TailConfig};
+use rosetta_capture::{Ledger, LedgerEntry, SegmentCodec, TailConfig, scan_ledger};
 use rosetta_store::Store;
 use rusqlite::types::Value;
 use tempfile::TempDir;
@@ -577,20 +577,108 @@ fn the_pool_matches_the_serial_walk_on_generated_corpora() {
 /// before either is emitted.
 #[test]
 fn the_pool_matches_the_serial_walk_across_a_restart_and_heal() {
+    assert_restart_and_heal("restart", "");
+}
+
+/// The same restart and heal while the journal's writer is mid-append: its
+/// first generation, and the replacement generation the heal replays it
+/// into, both end at the last complete record, so the build succeeds with
+/// the replacement active and sealed and the unfinished record unread.
+#[test]
+fn the_pool_matches_the_serial_walk_when_a_healed_sibling_ends_mid_record() {
+    let (serial, home) = assert_restart_and_heal(
+        "restart, journal mid-append",
+        r#"{"type":"result","key":"worker-2","result":{"ok""#,
+    );
+    // Files incomplete, files paused: the journal's pass and its heal paused.
+    assert_eq!(
+        (serial.report[13], serial.report[14]),
+        (0, 2),
+        "{:?}",
+        serial.report
+    );
+    let journal = serial
+        .emitted
+        .iter()
+        .filter(|source| source.contains(HEAL_JOURNAL))
+        .collect::<Vec<_>>();
+    assert_eq!(journal.len(), 1, "one terminal generation per source");
+    for field in ["generation: 2,", "activate: true,", "partial_record: true,"] {
+        assert!(journal[0].contains(field), "{field}: {}", journal[0]);
+    }
+    let ledger = TempDir::new().unwrap();
+    let root = expand_data_root(&ClaudeCodeAdapter.layout().data_root, home.path());
+    capture_into(
+        &ClaudeCodeAdapter,
+        home.path(),
+        &heal_options(&root),
+        SERIAL,
+        ledger.path(),
+    );
+    let seals: Vec<_> = scan_ledger(ledger.path())
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            LedgerEntry::GenerationComplete {
+                source,
+                generation,
+                normalized_clean,
+                ..
+            } if source.relative_path == HEAL_JOURNAL => Some((generation, normalized_clean)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(seals, [(1, true), (2, true)]);
+}
+
+/// Five user lines, each tagged with `prefix`.
+fn heal_lines(prefix: &str) -> String {
+    (1..=5)
+        .map(|index| {
+            claude_user(
+                &format!("{prefix}-{index}"),
+                &format!("{prefix} line {index}"),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+/// Two-record batches, with the transcript rewritten once after its first.
+fn heal_options(root: &Path) -> IngestOptions {
+    IngestOptions {
+        progress: Some(Arc::new(RewriteOnce {
+            root: root.to_path_buf(),
+            target: HEAL_TRANSCRIPT.into(),
+            replacement: heal_lines("new"),
+            done: AtomicBool::new(false),
+        })),
+        ..tiny_batches(2)
+    }
+}
+
+/// Put the transcript back as every restart-and-heal capture starts: its
+/// original lines, with the modification time discovery reads pinned.
+fn reset_heal_transcript(root: &Path) {
+    let transcript = root.join(HEAL_TRANSCRIPT);
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, heal_lines("old")).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&transcript)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_790_000_000))
+        .unwrap();
+}
+
+/// Every configuration across the restart and heal, with `journal_tail`
+/// after the journal's two complete records; returns the serial capture and
+/// the home.
+fn assert_restart_and_heal(label: &str, journal_tail: &str) -> (Captured, TempDir) {
     let home = TempDir::new().unwrap();
     let root = expand_data_root(&ClaudeCodeAdapter.layout().data_root, home.path());
-    let lines = |prefix: &str| {
-        (1..=5)
-            .map(|index| {
-                claude_user(
-                    &format!("{prefix}-{index}"),
-                    &format!("{prefix} line {index}"),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n"
-    };
     let journal = root.join(HEAL_JOURNAL);
     std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
     std::fs::write(
@@ -600,38 +688,29 @@ fn the_pool_matches_the_serial_walk_across_a_restart_and_heal() {
             r#"{"type":"result","key":"worker-1","result":{"ok":true}}"#,
         ]
         .join("\n")
-            + "\n",
+            + "\n"
+            + journal_tail,
     )
     .unwrap();
-    let transcript = root.join(HEAL_TRANSCRIPT);
-    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
-    let serial = assert_every_config("restart", |config| {
-        std::fs::write(&transcript, lines("old")).unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(&transcript)
-            .unwrap()
-            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_790_000_000))
-            .unwrap();
-        let opts = IngestOptions {
-            progress: Some(Arc::new(RewriteOnce {
-                root: root.clone(),
-                target: HEAL_TRANSCRIPT.into(),
-                replacement: lines("new"),
-                done: AtomicBool::new(false),
-            })),
-            ..tiny_batches(2)
-        };
-        capture(&ClaudeCodeAdapter, home.path(), &opts, config)
+    let serial = assert_every_config(label, |config| {
+        reset_heal_transcript(&root);
+        capture(
+            &ClaudeCodeAdapter,
+            home.path(),
+            &heal_options(&root),
+            config,
+        )
     });
     // Both sources restarted or healed: the transcript restarts, the heal
     // replays its sibling into a replacement generation.
     assert_eq!(
         (serial.report[9], serial.report[16]),
         (2, 1),
-        "{:?}",
+        "{label}: {:?}",
         serial.report
     );
+    reset_heal_transcript(&root);
+    (serial, home)
 }
 
 fn claude_line(session: &str, uuid: &str, content: &str) -> String {
@@ -659,7 +738,11 @@ fn claude_home(sessions: &[(String, Vec<String>)], partial_tail: Option<&str>) -
         .join("projects/-w-pool");
     std::fs::create_dir_all(&project).unwrap();
     for (session, records) in sessions {
-        let mut body = records.join("\n") + "\n";
+        let mut body = if records.is_empty() {
+            String::new()
+        } else {
+            records.join("\n") + "\n"
+        };
         if let Some(tail) = partial_tail.filter(|_| session.ends_with("partial")) {
             body.push_str(tail);
         }
@@ -759,28 +842,210 @@ fn the_pool_matches_the_serial_walk_on_oversized_large_and_partial_records() {
         serial.canonical.keys()
     );
 
-    // A transcript that ends inside a record stops without a terminal
-    // generation, which fails the streamed build closed at that source —
-    // the serial walk's behaviour, which the pool keeps, prefix and all.
+    // Transcripts whose writer is mid-append — one after three complete
+    // records, one before its first — end at their last complete record: the
+    // build succeeds, identically in every configuration, with each clean
+    // prefix active and sealed, the unfinished records left unread as append
+    // growth, and their sessions held Streaming.
+    sessions.remove(1);
     sessions.insert(
-        2,
+        1,
         (
             "c-partial".to_string(),
             session_records("c-partial", 3, "complete"),
         ),
     );
+    sessions.push(("e-only-partial".to_string(), Vec::new()));
     let home = claude_home(
         &sessions,
         Some(r#"{"type":"user","message":{"role":"user","content":"cut"#),
     );
-    let serial = assert_every_config_like_serial("partial record", |config| {
+    let serial = assert_every_config("partial record", |config| {
         capture(&ClaudeCodeAdapter, home.path(), &opts, config)
     });
-    let error = serial.result.unwrap_err();
-    assert!(
-        error.contains("c-partial.jsonl stopped without a terminal generation"),
-        "{error}"
+    // Files incomplete, files paused: none failed, both unfinished paused.
+    assert_eq!(
+        (serial.report[13], serial.report[14]),
+        (0, 2),
+        "{:?}",
+        serial.report
     );
+    let messages = &serial.canonical["message"];
+    let with = |content: &str| {
+        let field = format!("content=Text(\"{content}\")");
+        messages
+            .iter()
+            .filter(|row| row.split(" | ").any(|column| column == field))
+            .count()
+    };
+    assert_eq!((with("complete"), with("cut")), (3, 0));
+    for (native, state) in [
+        ("a-large", "indexed"),
+        ("c-partial", "streaming"),
+        ("d-plain", "indexed"),
+        ("e-only-partial", "streaming"),
+    ] {
+        assert_eq!(stream_state(&serial.canonical, native), state, "{native}");
+    }
+    // Every planner cursor ends on its active first generation.
+    for cursor in &serial.cursors {
+        assert_eq!(
+            (&cursor[5], &cursor[6]),
+            (&Value::Integer(1), &Value::Integer(1)),
+            "{cursor:?}"
+        );
+    }
+    // Each unfinished transcript's generation is sealed clean, and no byte
+    // of its unfinished record reached the ledger.
+    let ledger = TempDir::new().unwrap();
+    capture_into(
+        &ClaudeCodeAdapter,
+        home.path(),
+        &opts,
+        SERIAL,
+        ledger.path(),
+    );
+    let entries = scan_ledger(ledger.path()).unwrap().entries;
+    for path in ["c-partial.jsonl", "e-only-partial.jsonl"] {
+        let seals: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                LedgerEntry::GenerationComplete {
+                    source,
+                    generation,
+                    normalized_clean,
+                    ..
+                } if source.relative_path.ends_with(path) => Some((*generation, *normalized_clean)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(seals, [(1, true)], "{path}");
+    }
+    assert!(!entries.iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Raw { payload, .. } if payload.windows(3).any(|window| window == b"cut")
+    )));
+}
+
+/// Transcripts caught mid-append behind content that is already unclean end
+/// exactly like transcripts that end at their last complete record: a dirty
+/// first generation activates its parseable rows and seals unclean with its
+/// session held Streaming (the live-growth rule), and a raw-incomplete one —
+/// it holds an oversized record — abandons unsealed, which admission refuses.
+#[test]
+fn the_pool_matches_the_serial_walk_on_unfinished_dirty_and_oversized_transcripts() {
+    let mut tail = TailConfig::json_lines();
+    tail.max_record_bytes = 2 * 1024 * 1024;
+    tail.max_records_per_batch = 2;
+    let opts = IngestOptions {
+        tail,
+        ..IngestOptions::default()
+    };
+    let around = |session: &str, middle: String| {
+        let mut records = session_records(session, 2, "before");
+        records.push(middle);
+        records.extend(
+            (0..2).map(|index| claude_line(session, &format!("{session}-after-{index}"), "after")),
+        );
+        (session.to_string(), records)
+    };
+    let partial = Some(r#"{"type":"user","message":{"role":"user","content":"cut"#);
+    let seals = |home: &Path, path: &str| {
+        let ledger = TempDir::new().unwrap();
+        capture_into(&ClaudeCodeAdapter, home, &opts, SERIAL, ledger.path());
+        scan_ledger(ledger.path())
+            .unwrap()
+            .entries
+            .into_iter()
+            .filter_map(|entry| match entry {
+                LedgerEntry::GenerationComplete {
+                    source,
+                    generation,
+                    normalized_clean,
+                    ..
+                } if source.relative_path.ends_with(path) => Some((generation, normalized_clean)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let dirty = claude_home(
+        &[
+            (
+                "a-plain".to_string(),
+                session_records("a-plain", 3, "plain"),
+            ),
+            around("f-dirty-partial", "{not json".to_string()),
+        ],
+        partial,
+    );
+    let serial = assert_every_config("dirty, mid-append", |config| {
+        capture(&ClaudeCodeAdapter, dirty.path(), &opts, config)
+    });
+    // Hard errors, files incomplete, files paused.
+    assert_eq!(
+        (serial.report[8], serial.report[13], serial.report[14]),
+        (1, 1, 0),
+        "{:?}",
+        serial.report
+    );
+    assert_eq!(stream_state(&serial.canonical, "a-plain"), "indexed");
+    assert_eq!(
+        stream_state(&serial.canonical, "f-dirty-partial"),
+        "streaming"
+    );
+    let contents = |content: &str| {
+        let field = format!("content=Text(\"{content}\")");
+        serial.canonical["message"]
+            .iter()
+            .filter(|row| row.split(" | ").any(|column| column == field))
+            .count()
+    };
+    assert_eq!(
+        (contents("before"), contents("after"), contents("cut")),
+        (2, 2, 0)
+    );
+    assert_eq!(seals(dirty.path(), "f-dirty-partial.jsonl"), [(1, false)]);
+
+    let oversized = claude_home(
+        &[
+            (
+                "a-plain".to_string(),
+                session_records("a-plain", 3, "plain"),
+            ),
+            around(
+                "g-oversized-partial",
+                claude_line("g-oversized-partial", "g-big", &"y".repeat(3 * 1024 * 1024)),
+            ),
+        ],
+        partial,
+    );
+    let serial = assert_every_config("oversized, mid-append", |config| {
+        capture(&ClaudeCodeAdapter, oversized.path(), &opts, config)
+    });
+    assert_eq!(serial.report[5], 1, "{:?}", serial.report);
+    assert!(
+        serial.canonical.contains_key("<refused>"),
+        "{:?}",
+        serial.canonical.keys()
+    );
+    assert!(seals(oversized.path(), "g-oversized-partial.jsonl").is_empty());
+}
+
+/// The stream state a canonical dump holds for one native session.
+fn stream_state(canonical: &BTreeMap<String, Vec<String>>, native: &str) -> String {
+    let native_field = format!("native_session_id=Text(\"{native}\")");
+    canonical["session"]
+        .iter()
+        .find(|row| row.split(" | ").any(|column| column == native_field))
+        .and_then(|row| {
+            row.split(" | ")
+                .find_map(|column| column.strip_prefix("stream_state="))
+        })
+        .unwrap_or_else(|| panic!("no session {native}"))
+        .trim_start_matches("Text(\"")
+        .trim_end_matches("\")")
+        .to_owned()
 }
 
 mod faults;
