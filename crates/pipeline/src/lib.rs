@@ -11,6 +11,7 @@
 //! rosetta id (runtime, project, session, timeline prefix inputs) is minted
 //! here from `rosetta_core::ids`.
 
+pub mod capture;
 pub mod checkpoint;
 pub mod closed;
 pub mod command;
@@ -30,8 +31,12 @@ mod snapshot;
 pub mod stream;
 pub mod streamed;
 
+pub use capture::{CapturePool, PoolBudgets, PoolStats};
 pub use checkpoint::PipeCheckpoint;
-pub use closed::{ClosedSource, StreamedSetup, stream_closed_sources_into, streamed_setup};
+pub use closed::{
+    ClosedSource, StreamedSetup, stream_closed_sources_into, stream_closed_sources_pooled,
+    streamed_setup,
+};
 pub use command::{RawCommandLocator, read_raw_command};
 pub use discover::{
     CensusRoot, Discovery, discover, discover_root, discover_roots, expand_data_root,

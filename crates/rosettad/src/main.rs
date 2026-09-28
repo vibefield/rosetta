@@ -110,7 +110,7 @@ fn main() -> ExitCode {
                 "  watch --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--ticks N] [--profile]"
             );
             eprintln!(
-                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--announce [--announce-dir DIR]]"
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--capture-workers N] [--capture-lookahead BYTES] [--announce [--announce-dir DIR]]"
             );
             eprintln!(
                 "  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--enroll FILE] [--profile]"
@@ -176,6 +176,12 @@ struct Flags {
     /// serve only: starter-slice byte budget for the cold scheduler.
     /// `None` = the blessed default; `Some(0)` disables slicing.
     slice_budget: Option<u64>,
+    /// serve only: workers of the fresh cold build's shared capture pool.
+    /// `0` captures each runtime's sources one after another on its producer.
+    capture_workers: usize,
+    /// serve only: the capture pool's look-ahead bound in bytes; `None` =
+    /// the default.
+    capture_look_ahead: Option<u64>,
     /// `ledger compact` only: the zstd level for rewritten segments.
     /// `None` = the write path's blessed default.
     level: Option<i32>,
@@ -263,6 +269,8 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         stop_after_meta: false,
         restart_incomplete: false,
         slice_budget: None,
+        capture_workers: 0,
+        capture_look_ahead: None,
         level: None,
         long_window: false,
         force: false,
@@ -321,7 +329,21 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             }
             "--slice-budget" => {
                 let value = take_value(args, &mut at)?;
-                flags.slice_budget = Some(parse_byte_size(&value)?);
+                flags.slice_budget = Some(parse_byte_size("--slice-budget", &value)?);
+            }
+            "--capture-workers" => {
+                let value = take_value(args, &mut at)?;
+                flags.capture_workers = value
+                    .parse()
+                    .map_err(|_| format!("--capture-workers needs a number, got {value}"))?;
+            }
+            "--capture-lookahead" => {
+                let value = take_value(args, &mut at)?;
+                let bytes = parse_byte_size("--capture-lookahead", &value)?;
+                if bytes == 0 {
+                    return Err("--capture-lookahead must be greater than zero".to_string());
+                }
+                flags.capture_look_ahead = Some(bytes);
             }
             "--level" => {
                 let value = take_value(args, &mut at)?;
@@ -445,7 +467,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
 
 /// `256k`-style byte sizes for the slice budget: plain digits, or a `k`/`m`
 /// suffix (KiB/MiB). `0` means slicing off.
-fn parse_byte_size(value: &str) -> Result<u64, String> {
+fn parse_byte_size(flag: &str, value: &str) -> Result<u64, String> {
     let lower = value.trim().to_ascii_lowercase();
     let (digits, unit) = match lower.strip_suffix(['k', 'm']) {
         Some(digits) => (
@@ -460,10 +482,10 @@ fn parse_byte_size(value: &str) -> Result<u64, String> {
     };
     let number: u64 = digits
         .parse()
-        .map_err(|_| format!("--slice-budget wants BYTES, `NNNk`, `NNNm`, or 0 — got {value}"))?;
+        .map_err(|_| format!("{flag} wants BYTES, `NNNk`, `NNNm`, or 0 — got {value}"))?;
     number
         .checked_mul(unit)
-        .ok_or_else(|| format!("--slice-budget {value} overflows"))
+        .ok_or_else(|| format!("{flag} {value} overflows"))
 }
 
 fn take_value(args: &[String], at: &mut usize) -> Result<String, String> {
@@ -2622,11 +2644,12 @@ mod tests {
 
     #[test]
     fn slice_budget_sizes_parse_with_suffixes() {
-        assert_eq!(parse_byte_size("0").unwrap(), 0);
-        assert_eq!(parse_byte_size("4096").unwrap(), 4096);
-        assert_eq!(parse_byte_size("256k").unwrap(), 256 * 1024);
-        assert_eq!(parse_byte_size("1M").unwrap(), 1024 * 1024);
-        assert!(parse_byte_size("many").is_err());
-        assert!(parse_byte_size("1g").is_err());
+        let parse = |value| parse_byte_size("--slice-budget", value);
+        assert_eq!(parse("0").unwrap(), 0);
+        assert_eq!(parse("4096").unwrap(), 4096);
+        assert_eq!(parse("256k").unwrap(), 256 * 1024);
+        assert_eq!(parse("1M").unwrap(), 1024 * 1024);
+        assert!(parse("many").is_err());
+        assert!(parse("1g").is_err());
     }
 }

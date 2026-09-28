@@ -92,6 +92,12 @@ pub enum Metric {
     /// Time a fresh cold producer waited for the canonical writer's in-flight
     /// byte budget: capture blocked on the writer, not on its own work.
     WriterBudgetWaitNanos,
+    /// Capture-pool worker time spent stepping this runtime's sources, summed
+    /// over workers: read, normalize, checkpoint and frame work.
+    CaptureStepNanos,
+    /// Time a runtime's sequencer waited for the source it commits next:
+    /// capture blocked on the pool's workers.
+    SequencerWaitNanos,
     BulkFinalizeNanos,
     BulkRenumberRows,
     BulkRenumberNanos,
@@ -116,7 +122,7 @@ pub enum Metric {
     LiveStreamNanos,
 }
 
-const METRIC_COUNT: usize = 91;
+const METRIC_COUNT: usize = 93;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -199,6 +205,8 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     ),
     (Metric::ColdPrepareNanos, "cold plan preparation time"),
     (Metric::WriterBudgetWaitNanos, "writer budget wait time"),
+    (Metric::CaptureStepNanos, "capture step time"),
+    (Metric::SequencerWaitNanos, "sequencer head wait time"),
     (Metric::BulkFinalizeNanos, "bulk finalization time"),
     (Metric::BulkRenumberRows, "bulk renumber rows"),
     (Metric::BulkRenumberNanos, "bulk renumber time"),
@@ -286,6 +294,11 @@ impl Instrument {
             .expect("boundary evidence mutex poisoned") = Some(BoundaryCapture::default());
         self.boundary_complete.store(false, Ordering::Relaxed);
         self.boundary_enabled.store(true, Ordering::Release);
+    }
+
+    /// Whether [`Instrument::enable_boundary_evidence`] is collecting a sample.
+    pub fn boundary_evidence_enabled(&self) -> bool {
+        self.boundary_enabled.load(Ordering::Acquire)
     }
 
     /// Capture the same native bytes and canonical ops that crossed the real

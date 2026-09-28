@@ -26,7 +26,7 @@ use super::*;
 use crate::progress::ColdProgressObserver;
 use crate::{discover, expand_data_root, meta_ingest_inventory_into};
 
-fn adapters() -> Vec<&'static dyn AgentAdapter> {
+pub(crate) fn adapters() -> Vec<&'static dyn AgentAdapter> {
     vec![
         &AntigravityAdapter,
         &ClaudeCodeAdapter,
@@ -40,7 +40,7 @@ fn adapters() -> Vec<&'static dyn AgentAdapter> {
     ]
 }
 
-fn copy_tree(from: &Path, to: &Path) {
+pub(crate) fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     let mut entries = std::fs::read_dir(from)
         .unwrap()
@@ -59,7 +59,7 @@ fn copy_tree(from: &Path, to: &Path) {
 }
 
 /// Every recorded fixture scenario of one adapter: `(name, data root)`.
-fn fixture_roots(kind: &str) -> Vec<(String, PathBuf)> {
+pub(crate) fn fixture_roots(kind: &str) -> Vec<(String, PathBuf)> {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../groundtruth")
         .join(kind)
@@ -174,6 +174,7 @@ fn capture(
             opts,
             &instrument,
             Some(&mut ledger),
+            None,
             &mut emit,
         )
     }
@@ -292,11 +293,11 @@ fn eager_cursors_and_roster_keys_match_the_lazy_dense_walk_on_every_fixture() {
 /// its first batch was framed and before the next read — so the tailer sees
 /// a changed anchor and restarts the generation mid-pass.
 #[derive(Debug)]
-struct RewriteOnce {
-    root: PathBuf,
-    target: String,
-    replacement: String,
-    done: AtomicBool,
+pub(crate) struct RewriteOnce {
+    pub(crate) root: PathBuf,
+    pub(crate) target: String,
+    pub(crate) replacement: String,
+    pub(crate) done: AtomicBool,
 }
 
 impl ColdProgressObserver for RewriteOnce {
@@ -309,7 +310,7 @@ impl ColdProgressObserver for RewriteOnce {
     fn reading_finished(&self) {}
 }
 
-fn claude_user(uuid: &str, content: &str) -> String {
+pub(crate) fn claude_user(uuid: &str, content: &str) -> String {
     serde_json::json!({
         "parentUuid": null,
         "isSidechain": false,
@@ -326,8 +327,8 @@ fn claude_user(uuid: &str, content: &str) -> String {
     .to_string()
 }
 
-const HEAL_TRANSCRIPT: &str = "projects/-w-heal/heal-session.jsonl";
-const HEAL_JOURNAL: &str =
+pub(crate) const HEAL_TRANSCRIPT: &str = "projects/-w-heal/heal-session.jsonl";
+pub(crate) const HEAL_JOURNAL: &str =
     "projects/-w-heal/heal-session/subagents/workflows/wf_heal/journal.jsonl";
 
 /// A two-transcript session (transcript + workflow journal) whose transcript

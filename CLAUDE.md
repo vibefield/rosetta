@@ -88,7 +88,11 @@ runtime's capture waits for a later runtime's skim. Adapters stream, ledger, and
 parallel through private RAM planners, handing each source to the sole canonical writer as a
 closed source (terminal generation, final checkpoint) in path order as soon as nothing can
 supersede it — a session is held only while a restart's sibling heal could still replace its
-transcripts — under a 256 MiB in-flight budget. On its way out, each producer's
+transcripts — under a 256 MiB in-flight budget. With `--capture-workers N` one capture pool
+shared by every runtime reads, normalizes and frames the fresh JSONL sources a batch at a time
+ahead of each producer, which becomes its runtime's sequencer and commits them strictly in path
+order, so ledger bytes, planner and closed sources equal the serial walk's for any worker count;
+look-ahead is byte-bounded and parks rather than blocks. On its way out, each producer's
 `StreamedPreparer` ranks final ordinals and withholds each session's tool/usage/file-edit facts
 until the session's last roster source; a session no other source crossed is folded right there
 (the admission fold's own code) and its resolved tool rows travel with that source, while a

@@ -102,9 +102,22 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > validated ops — as soon as nothing can supersede it. Only a transcript whose session still has an
 > uncaptured transcript, or a pending sibling heal after a restart, is held; the heal runs as soon
 > as the restarted session's last transcript is captured, so the writer sees exactly one terminal
-> generation per source, in path order (the order every order-sensitive upsert assumes). A 256 MiB
-> in-flight budget bounds closed sources between producers and the writer. Before a source
-> leaves its producer, the runtime's `StreamedPreparer` assigns each message its final
+> generation per source, in path order (the order every order-sensitive upsert assumes). With
+> `--capture-workers N` (2026-09-27) the producers stop reading their own files: every runtime
+> registers its fresh JSONL sources with one process-wide *capture pool* of N workers, which step
+> each source's pass a tail batch at a time — read, normalize, checkpoint, and the batch's
+> finished ledger frames under its roster key — ahead of its producer. The producer becomes the
+> runtime's *sequencer*, the only code that touches its planner and ledger, and commits that
+> output strictly in path order, so the ledger bytes, the planner's CAS chain and every closed
+> source are the serial walk's for any worker count or schedule, and an interrupted build leaves
+> the serial walk's prefix. Look-ahead is bounded in bytes of queued output: 512 MiB across all
+> runtimes (`--capture-lookahead`), a per-runtime share of it, and 64 MiB for the source a
+> sequencer commits next, which workers always serve first; work over its bound parks instead of
+> blocking a worker. Snapshot and document groups, sibling heals and non-fresh cursors stay on the
+> sequencer at their path position. `0` keeps one producer reading its runtime's files in turn.
+> A 256 MiB in-flight budget bounds closed sources between producers and the writer. Before a
+> source leaves its producer (its sequencer, when pooled), the runtime's `StreamedPreparer`
+> assigns each message its final
 > presentation ordinal incrementally under the whole-runtime precompute's key (a session a later
 > source repeats a timeline into, or one that receives a source out of path order, is re-ranked by
 > path and stored ordinal at admission), and takes each activated source's relational facts —
@@ -623,7 +636,10 @@ capture contract explicit.
   appearance in the segment; a fresh cold capture installs *roster keys* instead — each
   source's id is its index in the path-ordered roster, in every segment — so a batch's
   frames (one encoder, `ledger/frames.rs`) can be finished before the segment they land in is
-  known. Readers accept any id and decode the same entries either way. The private cold
+  known — which is what lets a capture-pool worker finish a batch's frames before its
+  sequencer commits them (`Ledger::append_prebuilt` writes them verbatim, exactly where the
+  ledger's own framing would have put them). Readers accept any id and decode the same entries
+  either way. The private cold
   ledger's worker is fed through a queue bounded by the bytes it holds (64 MiB), not by
   command count, so a batch's checkpoint and seal commands take no room from the next batch.
   *Correction (2026-09-12):* the per-`<agent>` directory is the DISCOVERED runtime's

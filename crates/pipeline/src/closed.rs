@@ -25,6 +25,7 @@ use rosetta_core::IngestOp;
 use rosetta_core::rows::{RuntimeRow, StreamState};
 use rosetta_store::{Batch, SourceMode, Store, queries};
 
+use crate::capture::{CapturePool, Pooled};
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::live::PollEvidence;
@@ -82,7 +83,7 @@ impl StreamedSetup {
     }
 }
 
-fn source_def(file: &SessionFile) -> SourceDef {
+pub(crate) fn source_def(file: &SessionFile) -> SourceDef {
     SourceDef {
         ledger_only: file.ledger_only,
         relative_path: file.relative_path.clone(),
@@ -471,13 +472,87 @@ pub fn stream_closed_sources_into(
     emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
 ) -> Result<StreamReport, PipelineError> {
     let ordered = path_ordered(files);
-    create_roster_cursors(adapter, runtime, planner, &ordered, instrument)?;
-    if let Some(ledger) = ledger.as_deref_mut() {
-        ledger.set_source_keys(Arc::new(roster_keys(&ordered)?))?;
-    }
+    set_up_roster(
+        adapter,
+        runtime,
+        planner,
+        &ordered,
+        instrument,
+        ledger.as_deref_mut(),
+    )?;
     walk_closed_sources(
-        adapter, runtime, root, planner, &ordered, opts, instrument, ledger, emit,
+        adapter, runtime, root, planner, &ordered, opts, instrument, ledger, None, emit,
     )
+}
+
+/// [`stream_closed_sources_into`] with its sources captured on a shared
+/// [`CapturePool`]: this thread becomes the runtime's sequencer. Workers
+/// read, normalize and frame the JSONL sources ahead of it, and it commits
+/// their output to the planner and the ledger strictly in path order, so
+/// the ledger bytes, the planner and every emitted source are those of the
+/// serial walk, whatever the pool's size or schedule.
+#[allow(clippy::too_many_arguments)]
+pub fn stream_closed_sources_pooled(
+    pool: &CapturePool,
+    adapter: &'static dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    planner: &mut Store,
+    files: &[SessionFile],
+    opts: &IngestOptions,
+    instrument: &Instrument,
+    mut ledger: Option<&mut rosetta_capture::Ledger>,
+    emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
+) -> Result<StreamReport, PipelineError> {
+    let ordered = path_ordered(files);
+    set_up_roster(
+        adapter,
+        runtime,
+        planner,
+        &ordered,
+        instrument,
+        ledger.as_deref_mut(),
+    )?;
+    let pooled = crate::capture::register(
+        pool,
+        adapter,
+        runtime,
+        root,
+        planner,
+        &ordered,
+        opts,
+        instrument,
+        ledger.is_some(),
+    )?;
+    walk_closed_sources(
+        adapter,
+        runtime,
+        root,
+        planner,
+        &ordered,
+        opts,
+        instrument,
+        ledger,
+        Some(pooled),
+        emit,
+    )
+}
+
+/// Every roster source's cursor, created up front, and its roster key
+/// installed on the ledger.
+fn set_up_roster(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    planner: &mut Store,
+    ordered: &[&SessionFile],
+    instrument: &Instrument,
+    ledger: Option<&mut rosetta_capture::Ledger>,
+) -> Result<(), PipelineError> {
+    create_roster_cursors(adapter, runtime, planner, ordered, instrument)?;
+    if let Some(ledger) = ledger {
+        ledger.set_source_keys(Arc::new(roster_keys(ordered)?))?;
+    }
+    Ok(())
 }
 
 /// Each roster source's ledger file id: its index in path order.
@@ -532,7 +607,9 @@ fn create_roster_cursors(
 }
 
 /// The walk behind [`stream_closed_sources_into`], over the roster in path
-/// order. A source without a cursor gets one at its turn.
+/// order. A source without a cursor gets one at its turn. A source `pooled`
+/// captures is committed from its workers' output; every other source is
+/// captured here.
 #[allow(clippy::too_many_arguments)]
 fn walk_closed_sources(
     adapter: &dyn AgentAdapter,
@@ -543,6 +620,7 @@ fn walk_closed_sources(
     opts: &IngestOptions,
     instrument: &Instrument,
     mut ledger: Option<&mut rosetta_capture::Ledger>,
+    pooled: Option<Pooled<'_>>,
     emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
 ) -> Result<StreamReport, PipelineError> {
     let tailer = Tailer::new(opts.tail.clone())?;
@@ -577,19 +655,34 @@ fn walk_closed_sources(
             } else {
                 PassMode::Normal
             };
-            let outcome = ingest_file(
-                adapter,
-                runtime,
-                root,
-                planner,
-                file,
-                &tailer,
-                opts,
-                instrument,
-                &mut report,
-                mode,
-                ledger.as_deref_mut(),
-            )?;
+            let outcome = match pooled
+                .as_ref()
+                .and_then(|pooled| Some((pooled, pooled.unit(index)?)))
+            {
+                Some((pooled, unit)) => crate::capture::consume(
+                    pooled,
+                    unit,
+                    file,
+                    planner,
+                    ledger.as_deref_mut(),
+                    &mut report,
+                    instrument,
+                    opts,
+                )?,
+                None => ingest_file(
+                    adapter,
+                    runtime,
+                    root,
+                    planner,
+                    file,
+                    &tailer,
+                    opts,
+                    instrument,
+                    &mut report,
+                    mode,
+                    ledger.as_deref_mut(),
+                )?,
+            };
             if report.generations_restarted > restarts_before {
                 restarted_files.insert(file.relative_path.clone());
                 frontier.restarted.insert(file.session_id.clone());
@@ -735,4 +828,4 @@ fn walk_closed_sources(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

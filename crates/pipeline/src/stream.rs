@@ -25,7 +25,7 @@ use crate::{IngestOptions, PipelineError};
 
 mod pass;
 
-pub(crate) use pass::{IngestPass, PassStep};
+pub(crate) use pass::{IngestPass, PassOutput, PassStep, RawOut, ReportDelta};
 
 #[derive(Debug, Default)]
 pub struct StreamReport {
@@ -494,27 +494,40 @@ pub(crate) fn ingest_file(
             })?;
         }
 
-        let ops_count = output.batch.ops.len() as u64;
-        instrument.observe_write_batch(&output.batch);
-        let applied = instrument.apply_owned(store, output.batch);
-        let stats = match applied {
-            Ok(stats) => stats,
-            Err(StoreError::CheckpointConflict { .. }) => {
-                // Another writer owns this file now; abandon it untouched.
-                report.conflicts += 1;
-                instrument.add(Metric::CheckpointConflicts, 1);
-                return Ok(FilePass::Finished(false));
-            }
-            Err(error) => return Err(error.into()),
-        };
-        merge_stats(&mut report.stats, &stats);
-        report.batches += 1;
-        instrument.add(Metric::OpsEmitted, ops_count);
-        instrument.add(Metric::BatchesApplied, 1);
+        if !apply_pass_batch(store, output.batch, report, instrument)? {
+            return Ok(FilePass::Finished(false));
+        }
         if let Some(outcome) = pass.committed() {
             return Ok(outcome);
         }
     }
+}
+
+/// Apply one batch a pass produced to the store under its cursor's CAS,
+/// after its raw records went to the ledger. `false` is a CAS conflict:
+/// another writer owns the file now, and the pass abandons it untouched.
+pub(crate) fn apply_pass_batch(
+    store: &mut Store,
+    batch: Batch,
+    report: &mut StreamReport,
+    instrument: &Instrument,
+) -> Result<bool, PipelineError> {
+    let ops_count = batch.ops.len() as u64;
+    instrument.observe_write_batch(&batch);
+    let stats = match instrument.apply_owned(store, batch) {
+        Ok(stats) => stats,
+        Err(StoreError::CheckpointConflict { .. }) => {
+            report.conflicts += 1;
+            instrument.add(Metric::CheckpointConflicts, 1);
+            return Ok(false);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    merge_stats(&mut report.stats, &stats);
+    report.batches += 1;
+    instrument.add(Metric::OpsEmitted, ops_count);
+    instrument.add(Metric::BatchesApplied, 1);
+    Ok(true)
 }
 
 pub(crate) fn merge_stats(total: &mut ApplyStats, batch: &ApplyStats) {

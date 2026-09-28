@@ -16,6 +16,11 @@
 //! a fast producer cannot pile gigabytes up behind the writer while it admits
 //! another runtime.
 //!
+//! With `--capture-workers N` every producer shares one capture pool
+//! (`rosetta_pipeline::capture`): its workers read, normalize and frame the
+//! runtimes' JSONL sources ahead, and each producer, now its runtime's
+//! sequencer, commits them to its planner and ledger in path order.
+//!
 //! Metadata comes first, per runtime: a few planning threads skim runtimes
 //! in registry order while the writer makes each plan's metadata public, also
 //! in registry order, and starts that runtime's producer right away. A large
@@ -33,9 +38,9 @@ use std::time::{Duration, Instant};
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::Ledger;
 use rosetta_pipeline::{
-    ClosedSource, Instrument, InstrumentSnapshot, MetaReport, Metric, PreparedAdmission,
-    StreamReport, StreamedPreparer, StreamedRuntime, StreamedSetup, stream_closed_sources_into,
-    streamed_setup,
+    CapturePool, ClosedSource, Instrument, InstrumentSnapshot, MetaReport, Metric, PoolBudgets,
+    PreparedAdmission, StreamReport, StreamedPreparer, StreamedRuntime, StreamedSetup,
+    stream_closed_sources_into, stream_closed_sources_pooled, streamed_setup,
 };
 use rosetta_server::{BackfillState, DaemonHealth, Hub, ProgressBoard, RuntimeIdentity};
 use rosetta_store::Store;
@@ -172,11 +177,14 @@ fn cpu_millis(started: Option<Duration>) -> Option<f64> {
 }
 
 /// One runtime's producer: setup, streamed capture, then the closing report.
+/// With a capture pool the producer is the runtime's sequencer: the pool's
+/// workers read and normalize its sources, and it commits them in path order.
 fn produce(
     planned: PlannedColdRuntime,
     sender: &Sender<StreamMessage>,
     budget: &ByteBudget,
     stage_profiles: bool,
+    pool: Option<&CapturePool>,
 ) -> Result<(), String> {
     let PlannedColdRuntime {
         adapter,
@@ -208,34 +216,50 @@ fn produce(
     let stream_started = Instant::now();
     // Final ordinals, and the tool rows of every session proven
     // self-contained, are prepared here, off the canonical writer, as each
-    // source is emitted.
+    // source is emitted — in path order on the pooled walk too, where this
+    // thread is the runtime's sequencer.
     let mut preparer = StreamedPreparer::new(&files);
-    let stream = stream_closed_sources_into(
-        adapter,
-        &runtime,
-        &root,
-        &mut planner,
-        &files,
-        &opts,
-        &instrument,
-        ledger.as_mut(),
-        &mut |mut sources| {
-            preparer.prepare(&mut sources)?;
-            let bytes = sources.iter().map(ClosedSource::payload_bytes).sum();
-            instrument
-                .time(Metric::WriterBudgetWaitNanos, || budget.acquire(bytes))
-                .map_err(rosetta_pipeline::PipelineError::Config)?;
-            sender
-                .send(StreamMessage::Sources {
-                    runtime_id: runtime.id.clone(),
-                    sources,
-                    bytes,
-                })
-                .map_err(|_| {
-                    rosetta_pipeline::PipelineError::Config("fresh cold writer stopped".into())
-                })
-        },
-    )
+    let mut emit = |mut sources: Vec<ClosedSource>| {
+        preparer.prepare(&mut sources)?;
+        let bytes = sources.iter().map(ClosedSource::payload_bytes).sum();
+        instrument
+            .time(Metric::WriterBudgetWaitNanos, || budget.acquire(bytes))
+            .map_err(rosetta_pipeline::PipelineError::Config)?;
+        sender
+            .send(StreamMessage::Sources {
+                runtime_id: runtime.id.clone(),
+                sources,
+                bytes,
+            })
+            .map_err(|_| {
+                rosetta_pipeline::PipelineError::Config("fresh cold writer stopped".into())
+            })
+    };
+    let stream = match pool {
+        Some(pool) => stream_closed_sources_pooled(
+            pool,
+            adapter,
+            &runtime,
+            &root,
+            &mut planner,
+            &files,
+            &opts,
+            &instrument,
+            ledger.as_mut(),
+            &mut emit,
+        ),
+        None => stream_closed_sources_into(
+            adapter,
+            &runtime,
+            &root,
+            &mut planner,
+            &files,
+            &opts,
+            &instrument,
+            ledger.as_mut(),
+            &mut emit,
+        ),
+    }
     .map_err(|error| error.to_string())?;
     let stream_wall_ms = stream_started.elapsed().as_secs_f64() * 1_000.0;
     let stream_profile = instrument.snapshot().delta_since(&stream_before);
@@ -352,37 +376,79 @@ pub(crate) fn build_streamed(
             .collect::<VecDeque<_>>(),
     );
     let abandoned = AtomicBool::new(false);
-    std::thread::scope(|scope| {
-        let (sender, receiver) = mpsc::channel();
-        let mut handles = Vec::with_capacity(names.len() + METADATA_PLANNERS);
-        for _ in 0..METADATA_PLANNERS.min(names.len()) {
-            let sender = sender.clone();
-            let (queue, abandoned, health, stop) = (&queue, &abandoned, cx.health, cx.stop);
-            handles.push(scope.spawn(move || plan_queued(queue, abandoned, &sender, health, stop)));
-        }
-        let mut producers = Producers {
-            scope,
-            sender: Some(sender),
-            budget: &budget,
-            stage_profiles,
-            handles: &mut handles,
-        };
-        let written = write(receiver, &names, &mut producers, &mut cx, failures);
-        if written.is_err() {
-            // Planners stop before their next runtime. Producers blocked on
-            // the budget must see the writer is gone; the dropped receiver
-            // fails every later send.
-            abandoned.store(true, Ordering::SeqCst);
-            budget.abort();
-        }
-        drop(producers);
-        for handle in handles {
-            handle
-                .join()
-                .map_err(|_| "fresh cold capture worker panicked".to_string())?;
-        }
-        written
-    })
+    // One capture pool for the whole build: every producer registers its
+    // runtime as it starts, and the pool's workers serve them all.
+    let pool = CapturePool::new(
+        cx.flags.capture_workers,
+        PoolBudgets {
+            look_ahead_bytes: cx
+                .flags
+                .capture_look_ahead
+                .unwrap_or(PoolBudgets::DEFAULT.look_ahead_bytes),
+            ..PoolBudgets::DEFAULT
+        },
+    );
+    let pooled = (pool.workers() > 0).then_some(&pool);
+    let pool_started = Instant::now();
+    let built = pool.scoped(|| {
+        std::thread::scope(|scope| {
+            let (sender, receiver) = mpsc::channel();
+            let mut handles = Vec::with_capacity(names.len() + METADATA_PLANNERS);
+            for _ in 0..METADATA_PLANNERS.min(names.len()) {
+                let sender = sender.clone();
+                let (queue, abandoned, health, stop) = (&queue, &abandoned, cx.health, cx.stop);
+                handles.push(
+                    scope.spawn(move || plan_queued(queue, abandoned, &sender, health, stop)),
+                );
+            }
+            let mut producers = Producers {
+                scope,
+                sender: Some(sender),
+                budget: &budget,
+                stage_profiles,
+                pool: pooled,
+                handles: &mut handles,
+            };
+            let written = write(receiver, &names, &mut producers, &mut cx, failures);
+            if written.is_err() {
+                // Planners stop before their next runtime. Producers blocked
+                // on the budget must see the writer is gone; the dropped
+                // receiver fails every later send, and a closed pool fails
+                // every sequencer waiting on its workers.
+                abandoned.store(true, Ordering::SeqCst);
+                budget.abort();
+                pool.close();
+            }
+            drop(producers);
+            for handle in handles {
+                handle
+                    .join()
+                    .map_err(|_| "fresh cold capture worker panicked".to_string())?;
+            }
+            written
+        })
+    });
+    if stage_profiles && let Some(pool) = pooled {
+        let stats = pool.stats();
+        bench::emit(&json!({
+            "event": "stage-profile",
+            "command": "serve",
+            "stage": "capture-pool",
+            "agent": null,
+            "workers": pool.workers(),
+            "lookAheadBytes": pool.budgets().look_ahead_bytes,
+            "wallMs": pool_started.elapsed().as_secs_f64() * 1_000.0,
+            "busyMs": millis(stats.busy_nanos),
+            "idleMs": millis(stats.idle_nanos),
+            "tailMs": millis(stats.tail_nanos),
+            "parkedMs": millis(stats.parked_nanos),
+            "steps": stats.steps,
+            "runtimes": stats.runtimes,
+            "peakLookAheadBytes": stats.peak_look_ahead_bytes,
+            "peakHeadBytes": stats.peak_head_bytes,
+        }));
+    }
+    built
 }
 
 /// One planning thread: skim queued runtimes, earliest in registry order
@@ -436,6 +502,7 @@ struct Producers<'h, 'scope, 'env> {
     sender: Option<Sender<StreamMessage>>,
     budget: &'scope ByteBudget,
     stage_profiles: bool,
+    pool: Option<&'scope CapturePool>,
     handles: &'h mut Vec<ScopedJoinHandle<'scope, ()>>,
 }
 
@@ -449,9 +516,9 @@ impl Producers<'_, '_, '_> {
         let Some(sender) = sender else {
             return;
         };
-        let (budget, stage_profiles) = (self.budget, self.stage_profiles);
+        let (budget, stage_profiles, pool) = (self.budget, self.stage_profiles, self.pool);
         self.handles.push(self.scope.spawn(move || {
-            if let Err(error) = produce(plan, &sender, budget, stage_profiles) {
+            if let Err(error) = produce(plan, &sender, budget, stage_profiles, pool) {
                 let _ = sender.send(StreamMessage::Failed(error));
             }
         }));
