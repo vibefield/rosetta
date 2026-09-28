@@ -113,11 +113,20 @@ fn a_pooled_fresh_serve_installs_the_serial_projection_and_ledger() {
 
 #[test]
 fn a_pooled_staged_ledger_rebuilds_and_finishes_on_next_boot() {
+    staged_ledger_rebuilds_and_finishes_on_next_boot(&[]);
+}
+
+#[test]
+fn a_zstd_frames_staged_ledger_rebuilds_and_finishes_on_next_boot() {
+    staged_ledger_rebuilds_and_finishes_on_next_boot(&["--cold-ledger-codec", "zstd-frames:3"]);
+}
+
+fn staged_ledger_rebuilds_and_finishes_on_next_boot(first_boot: &[&str]) {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     claude_home(&home);
     let db = temp.path().join("archive/rosetta.db");
-    serve(&home, &db, &[]);
+    serve(&home, &db, first_boot);
     let finished = projection(&db);
 
     // Turn the pool-built ledger back into a staged generation, as an
@@ -141,6 +150,21 @@ fn a_pooled_staged_ledger_rebuilds_and_finishes_on_next_boot() {
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
+    let runtime_dir = std::fs::read_dir(&staged)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("claude-code"))
+        })
+        .expect("the runtime's ledger directory");
+    let first_segment = std::fs::read(runtime_dir.join("00000000.rledger")).unwrap();
+    let container = if first_boot.is_empty() {
+        b"RLG1"
+    } else {
+        b"RLZ1"
+    };
+    assert_eq!(&first_segment[..4], container);
 
     let resumed = serve(&home, &db, &[]);
     assert!(resumed.contains("resuming cold generation"), "{resumed}");
