@@ -101,15 +101,27 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > uncaptured transcript, or a pending sibling heal after a restart, is held; the heal runs as soon
 > as the restarted session's last transcript is captured, so the writer sees exactly one terminal
 > generation per source, in path order (the order every order-sensitive upsert assumes). A 256 MiB
-> in-flight budget bounds closed sources between producers and the writer. The writer applies them
-> while capture continues, several queued sources of one runtime per bounded transaction: the same
-> final canonical rows the retained path writes, with each message's final presentation ordinal
-> assigned incrementally under the whole-runtime precompute's key (a session a later source
-> repeats a timeline into, or one that receives a source out of path order, is re-ranked by path
-> and stored ordinal at admission). Deferred tool, usage and file-edit facts are collected into
-> that runtime's own RAM fold as its sources commit — never another runtime's. When a producer
-> closes, the writer admits its runtime: the fold resolves each correlation once and writes each
-> final tool row once, then one stream-state commit flips every source-backed session out of
+> in-flight budget bounds closed sources between producers and the writer. Before a source
+> leaves its producer, the runtime's `StreamedPreparer` assigns each message its final
+> presentation ordinal incrementally under the whole-runtime precompute's key (a session a later
+> source repeats a timeline into, or one that receives a source out of path order, is re-ranked by
+> path and stored ordinal at admission), and takes each activated source's relational facts —
+> tool openers, lifecycle updates, usage, file edits — out of its batch until the session's last
+> roster source has been emitted. A session is then *self-contained* unless some source crossed
+> it: a row, tool fact, usage or file edit of another session's (or a ledger-only) source that
+> names it, or one of its own sources naming another session. A self-contained session's facts
+> are folded right there, with the admission fold's own collect-and-finish, so the resolved tool
+> rows travel with the source that completed the session; a crossed session gets its withheld
+> facts back unresolved and keeps the admission fold, and a source that names an already resolved
+> session fails the start closed. The writer applies closed sources while capture continues,
+> several queued sources of one runtime per bounded transaction: the same final canonical rows the
+> retained path writes, plus the resolved tool rows of the sessions they completed, each stamped
+> with its own source's cursor and written once. What is left — usage no resolved row absorbed,
+> file edits, and every fact of a crossed session — is collected into that runtime's own RAM fold
+> at its original source positions, never another runtime's. When a producer closes, the writer
+> admits its runtime: the fold resolves each remaining correlation once and writes each remaining
+> tool row once, identity-bearing usage is claimed in runtime tail order exactly as before, then
+> one stream-state commit flips every source-backed session out of
 > `Pending`. Pending sessions are the admission barrier: rows of an unadmitted runtime may sit in the
 > RAM generation, but no timeline, entry, collaboration, plan, file-target or report-work read
 > exposes them, their stubs stay out of the metadata mirror, and no row effects are observed.
@@ -125,7 +137,10 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > authoritative source position, then clones only the selected row into its retryable plan; the
 > source buffer survives until successful commit. Closed source application consumes its batches:
 > immediate rows are written first, deferred payloads move into provisional reconciliation deltas,
-> and each consumed batch releases its remaining data. A closed delta carries no retry
+> and each consumed batch releases its remaining data — as does each admitted plan after its
+> commit — on a bounded background reclaimer thread instead of the writer. A usage snapshot reads
+> only its response row's id, session, model and timestamp (all stored before `content`, so no
+> overflow chain is walked). A closed delta carries no retry
 > fingerprint: a closed generation is applied exactly once, a repeated cursor is refused inside its
 > transaction and fails its checkpoint CAS in any later one. The fold is two order-independent
 > steps shared by both paths — collect (winning opener per correlation, identity-deduped facts
@@ -269,7 +284,10 @@ evidence never starts a wall-clock duration or an indefinite activity animation.
 > rewarm poll is gone: metadata effects (identity keys only, collected on every path including
 > cold generations) are drained by the writer thread between passes into `Hub::absorb_meta`,
 > fanning precise `/ws/meta` diffs with no polling, no second read connection pinning the cold
-> WAL, and no hub mutation off the writer thread. Row effects run SCOPED during cold: each pass
+> WAL, and no hub mutation off the writer thread. A refresh naming many sessions (a cold
+> runtime's admission names all of them) reads them in one pass: each member's own activity
+> bounds once, families rolled up in RAM along the parent links — the same answer as the
+> per-session family walk, which smaller refreshes keep. Row effects run SCOPED during cold: each pass
 > arms the store with `Hub::watched_sessions` (the open `/ws/session` subscriptions), so an open
 > transcript receives its prioritized cold rows — appends push precise rows; a cold seal, retry sweep,
 > abandon, or append renumber pushes one `SessionSwept` marker and the subscriber re-snapshots —

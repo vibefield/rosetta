@@ -88,11 +88,15 @@ runtime's capture waits for a later runtime's skim. Adapters stream, ledger, and
 parallel through private RAM planners, handing each source to the sole canonical writer as a
 closed source (terminal generation, final checkpoint) in path order as soon as nothing can
 supersede it — a session is held only while a restart's sibling heal could still replace its
-transcripts — under a 256 MiB in-flight budget. The writer lands those final rows in the
-canonical RAM generation while capture continues (messages carry final ordinals; deferred
-tool/usage facts collect into that runtime's own RAM fold, never another's), but admits only a
-complete, clean runtime: at its producer's close the fold writes each resolved tool row once,
-and only its final readiness commit (the Pending flip) makes the canonical timeline visible
+transcripts — under a 256 MiB in-flight budget. On its way out, each producer's
+`StreamedPreparer` ranks final ordinals and withholds each session's tool/usage/file-edit facts
+until the session's last roster source; a session no other source crossed is folded right there
+(the admission fold's own code) and its resolved tool rows travel with that source, while a
+crossed session's facts go back unresolved. The writer lands those final rows — and the
+resolved tool rows, each written once — in the canonical RAM generation while capture
+continues; whatever is left collects into that runtime's own RAM fold, never another's. It
+admits only a complete, clean runtime: at its producer's close the fold writes each remaining
+tool row once, and only its final readiness commit (the Pending flip) makes the canonical timeline visible
 through the ordinary REST/WS queries — every payload read route honours Pending. No runtime is
 retained whole in RAM. Open session subscriptions receive one resync barrier; parser
 fragments and reconciliation state are never public. This is deliberately runtime-granular:
