@@ -525,4 +525,8 @@ path tolerates. None of the 233 runs of this campaign hit one of these.
   path does, apply the documented dirty-first-generation rule to malformed lines (publish the parseable
   rows, hold that session `Streaming`), and keep refusing only what signals corruption or a bug (a
   truncated discovery walk, a planner conflict, a record over the frame limit). None of the 233 runs of
-  this campaign hit one of these refusals.
+  this campaign hit one of these refusals. **Approved and implemented the same day** (`24431c9`, tests
+  `b76aa68`): under `IngestOptions::private_build` a source the fresh or resumed build could not read
+  closes skipped (fresh cursor, nothing ledgered) and a partly read or dirty one seals what it read; those
+  sessions publish `Streaming`, the live runner picks the files up, and one stdout line per runtime counts
+  what was tolerated. Finite `ingest`, `watch` and the disk `ColdEngine` keep the strict gate.
