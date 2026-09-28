@@ -44,6 +44,9 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // transient identity, streaming writers' placeholder output is
         // unrecorded, sample-held usage moves to the first visible row, and
         // a replayed owner record re-states its fact (2026-09-23 audit).
+        // Still 30 after typing the 2.1.257–2.1.283 fields (census
+        // 2026-09-28): they project nothing, so only drift facts changed, and
+        // a replay cannot retract drift rows already recorded.
         30
     }
 

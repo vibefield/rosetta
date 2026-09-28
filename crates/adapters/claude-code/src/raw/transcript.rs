@@ -2,9 +2,10 @@
 //!
 //! Evidence: THE CANONICAL `groundtruth.json` (iron rule #6) — fixtures at
 //! 2.1.241 merged with the structure census of 1.2M organic records across
-//! ~40 writer versions. Field optionality mirrors the canonical file, not the
-//! fixtures alone: a field is required here only if every observed record
-//! carries it.
+//! ~40 writer versions, and the census pinned to writer 2.1.283
+//! (`observed-2026-09-28`) for the fields writers 2.1.257–2.1.283 added. Field
+//! optionality mirrors the canonical file, not the fixtures alone: a field is
+//! required here only if every observed record carries it.
 //!
 //! Record types typed below: user, assistant, system, ai-title, custom-title,
 //! atis-latch, queue-operation, last-prompt, mode. The remaining canonical types
@@ -189,6 +190,12 @@ pub struct UserLine {
     /// Rare marker on tool_result user lines (probe: 575).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_ends_turn: Option<bool>,
+    // Writers 2.1.278–2.1.283 (census 2.1.283); ledger-only.
+    /// `{context: {git_state, live_cwd, platform}, request}` — kept raw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_classifier_context: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_origin: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -384,6 +391,21 @@ pub struct AssistantLine {
     pub attribution_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_error: Option<String>,
+    // Writers 2.1.257–2.1.283 (census 2.1.283); ledger-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_block_index: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_turn_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advisor_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_classifier_request: Option<String>,
+    /// Tool inputs keyed by tool_use id — kept raw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_tool_inputs: Option<Value>,
+    /// Keyed by tool_use id — kept raw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_ingest_context: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -419,6 +441,9 @@ pub struct AssistantMessage {
     pub context_management: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<Value>,
+    /// Writers from 2.1.270; only ever empty in the census.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_transformations: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -597,6 +622,11 @@ pub struct SystemLine {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
+    /// `{command, args}` (census 2.1.283) — kept raw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_run: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -640,6 +670,9 @@ pub struct QueueOperationLine {
     pub operation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Census value: `absorbed_mid_turn`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub timestamp: String,
     pub session_id: String,
     #[serde(flatten)]

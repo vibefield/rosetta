@@ -38,6 +38,11 @@ pub struct SubagentMeta {
     pub tool_use_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
+    // Census 2026-09-28.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_non_interactive: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_shape: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
