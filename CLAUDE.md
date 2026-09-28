@@ -74,11 +74,11 @@ deterministic adapter checkpoints, watch-before-scan live ingestion, polling/aud
 recovery, and an append-only checksummed raw ledger whose segments are zstd streams
 (`RLZ1`, since 2026-09-04; plain `RLG1` is read forever and `rosettad ledger compact`
 rewrites it in place) with a derived per-runtime `.segments` index for scoped reads.
-Fresh/resumed RAM cold serve writes plain segments first (unless fresh serve is given
-`--cold-ledger-codec zstd-frames:LEVEL`, whose capture workers compress each batch into
-its own zstd frame of an `RLZ1` segment). After canonical/search readiness,
-one background worker compresses only closed segments, targeting 10% of one core with
-macOS utility QoS. Atomic verified replacement preserves concurrent reads and crash
+Fresh/resumed RAM cold serve has its capture workers compress each batch into its own zstd
+frame of an `RLZ1` segment (level 1 by default; `--cold-ledger-codec plain` writes plain
+segments instead). After canonical/search readiness, one background worker compresses any
+closed plain segments that remain (a plain cold build, older archives), targeting 10% of one
+core with macOS utility QoS. Atomic verified replacement preserves concurrent reads and crash
 recovery; interrupted maintenance resumes from remaining plain segments on a warm start.
 A normal fresh `serve` binds HTTP/WS
 before discovery, then constructs the canonical schema in a named shared-memory SQLite

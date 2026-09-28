@@ -277,7 +277,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         slice_budget: None,
         capture_workers: None,
         capture_look_ahead: None,
-        cold_ledger_codec: rosetta_capture::SegmentCodec::Plain,
+        cold_ledger_codec: DEFAULT_COLD_LEDGER_CODEC,
         level: None,
         long_window: false,
         force: false,
@@ -500,6 +500,14 @@ fn parse_byte_size(flag: &str, value: &str) -> Result<u64, String> {
         .checked_mul(unit)
         .ok_or_else(|| format!("{flag} {value} overflows"))
 }
+
+/// The fresh and resumed cold builds' raw-ledger codec when `--cold-ledger-codec`
+/// is not given: capture workers compress each batch into its own zstd frame.
+/// Level 1 against plain on the live all-agent corpus (2026-09-28): the same
+/// readiness, +12.5 CPU-s per start, 11 GB fewer bytes written, a 4.4 GB instead
+/// of a 15.6 GB ledger, and no hour-long recompression pass after readiness.
+pub(crate) const DEFAULT_COLD_LEDGER_CODEC: rosetta_capture::SegmentCodec =
+    rosetta_capture::SegmentCodec::ZstdFrames { level: 1 };
 
 /// `--cold-ledger-codec`: `plain`, or `zstd-frames:LEVEL` with a zstd level
 /// in −7..=19 other than 0 (zstd's alias for 3).

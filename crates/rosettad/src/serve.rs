@@ -1170,7 +1170,7 @@ fn run_resumed_fresh_serve(
         // source must still be present: otherwise there is no complete evidence
         // from which this generation can ever be published.
         let mut ledger = open_runtime_ledger(&stage_root, &runtime)?
-            .with_codec(rosetta_capture::SegmentCodec::Plain)
+            .with_codec(flags.cold_ledger_codec)
             .defer_sync_until_flush()
             .into_async_bounded(crate::runtime_ledger::COLD_LEDGER_QUEUE_BYTES);
         health.ingest_skim(
