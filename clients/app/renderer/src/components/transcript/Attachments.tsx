@@ -1,10 +1,25 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AttachmentFact } from "../../lib/transcript";
 import { fmtBytes } from "../../lib/format";
 import { imageMediaTypeFromBytes } from "../../lib/image-media";
 import { client } from "../../lib/rosetta";
-import { attachmentAssetUrl } from "./attachment-file-source";
+import { attachmentAssetUrl, canOpenAttachment } from "./attachment-file-source";
 import "../../styles/attachments.css";
+
+/** Explicitly shared only by messages whose images are gathered in this run. */
+export const ActivityImagesContext = createContext<((fact: AttachmentFact) => void) | null>(null);
+
+export function useAttachmentActions(onOpenAttachment: (fact: AttachmentFact) => void, onReceipt: (text: string) => void) {
+  const [reveal, setReveal] = useState<{ key: string; request: number } | null>(null);
+  const open = (fact: AttachmentFact) => {
+    if (canOpenAttachment(fact)) onOpenAttachment(fact);
+    else {
+      setReveal(old => ({ key: fact.key, request: (old?.request ?? 0) + 1 }));
+      onReceipt(attachmentStatus(fact));
+    }
+  };
+  return { open, reveal };
+}
 
 export function attachmentStatus(fact: AttachmentFact): string {
   if (fact.readPath) return "Image file is unavailable";

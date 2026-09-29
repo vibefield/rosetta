@@ -251,6 +251,7 @@ fn collaboration_entry() -> TimelineEntry {
         effort: None,
         body: TimelineBody::Collaboration {
             event: Box::new(CollaborationEvent {
+                attachments: None,
                 kind: CollaborationEventKind::Report,
                 channel: CollaborationChannel::Team,
                 sender: Some("w2-docs".into()),

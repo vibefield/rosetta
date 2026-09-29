@@ -17,7 +17,7 @@ import { firstLine } from "../../lib/transcript";
 import { clock } from "../../lib/format";
 import { Anchor } from "./Anchor";
 import { AuthoredMessage } from "./AuthoredMessage";
-import { MessagePreview } from "./MessagePreview";
+import { messageAttachments } from "../../lib/transcript/images";
 import { SegmentActs } from "./Prose";
 import { ActivityEvent } from "./Activity";
 import { FamilyGlyph } from "./glyphs";
@@ -74,12 +74,14 @@ function MachinePrompt({
   prompt,
   domId,
   onReceipt,
+  onOpenAttachment,
   hit,
   forceOpen,
 }: {
   readonly prompt: PromptModel;
   readonly domId: string;
   readonly onReceipt: (message: string) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
   readonly hit: boolean;
   readonly forceOpen: boolean;
 }) {
@@ -99,7 +101,8 @@ function MachinePrompt({
       {prompt.text === null && recordedText?.type !== "member" ? (
         <span className="tr-quiet">no message body recorded</span>
       ) : (
-        <MessagePreview messageKey={`${prompt.row.session_id}:${prompt.row.timeline_id}`} role="agent"
+        <AuthoredMessage messageKey={`${prompt.row.session_id}:${prompt.row.timeline_id}`} role="agent"
+          attachments={messageAttachments(prompt.row)} imagesOutside onOpenAttachment={onOpenAttachment}
           matched={hit}
           title={`${machine.label}${machine.sender === null ? "" : ` from ${senderLabel(machine.sender)}`}`}
           text={prompt.text ?? ""} recordedText={recordedText} onReceipt={onReceipt} />
@@ -174,6 +177,7 @@ export function Prompt({
             prompt={prompt}
             domId={domIdOf(prompt.row.timeline_id)}
             onReceipt={onReceipt}
+            onOpenAttachment={onOpenAttachment}
             hit={landedTimelineId === prompt.row.timeline_id}
             forceOpen={focusTimelineId === prompt.row.timeline_id}
           />

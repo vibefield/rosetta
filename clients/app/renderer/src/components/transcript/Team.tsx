@@ -14,13 +14,14 @@ import type {
 import { AgentMark } from "../../lib/agents";
 import { clock } from "../../lib/format";
 import type {
+  AttachmentFact,
   CollaborationTimeBasis,
   RuntimeProfile,
   TeamMemberPresentation,
   TeamParticipantPresentation,
 } from "../../lib/transcript";
 import { canonicalText, firstLine, runtimeProfile, spanText } from "../../lib/transcript";
-import { MessagePreview } from "./MessagePreview";
+import { AuthoredMessage } from "./AuthoredMessage";
 import { LineChevron } from "./glyphs";
 import { ActivityEvent } from "./Activity";
 import { useRowDisclosure } from "./disclosure-state";
@@ -405,6 +406,8 @@ function lifecycleText(event: CollaborationEvent): string {
 
 function TeamReport({
   event,
+  attachments,
+  onOpenAttachment,
   at,
   timeBasis,
   domId,
@@ -417,6 +420,8 @@ function TeamReport({
   onReceipt,
 }: {
   readonly event: CollaborationEvent;
+  readonly attachments: readonly AttachmentFact[];
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
   readonly at: number | null;
   readonly timeBasis: CollaborationTimeBasis;
   readonly domId: string;
@@ -486,7 +491,8 @@ function TeamReport({
           </div>
           {body !== null ? (
             <div className="tm-message__body tr-prose">
-              <MessagePreview messageKey={domId} role="agent"
+              <AuthoredMessage messageKey={domId} role="agent"
+                attachments={attachments} imagesOutside onOpenAttachment={onOpenAttachment}
                 matched={hit}
                 title={`Team report from ${speaker(event.sender)}`}
                 text={body} recordedText={event.body} onReceipt={onReceipt} />
@@ -515,6 +521,8 @@ function TeamReport({
 
 export interface TeamEventProps {
   readonly event: CollaborationEvent;
+  readonly attachments: readonly AttachmentFact[];
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
   readonly at: number | null;
   readonly timeBasis: CollaborationTimeBasis;
   readonly domId: string;
@@ -536,6 +544,8 @@ export interface TeamReportWorkPresentation {
 
 export function TeamEvent({
   event,
+  attachments,
+  onOpenAttachment,
   at,
   timeBasis,
   domId,
@@ -553,6 +563,8 @@ export function TeamEvent({
     return (
       <TeamReport
         event={event}
+        attachments={attachments}
+        onOpenAttachment={onOpenAttachment}
         at={at}
         timeBasis={timeBasis}
         domId={domId}
@@ -574,7 +586,8 @@ export function TeamEvent({
         at={at} hit={hit} forceOpen={forceOpen} failed={failed} glyph={<TeamAvatar color={color} name={event.sender} />}>
         <p>{lifecycleText(event)}</p>
         <TeamTime at={at} basis={timeBasis} />
-        {eventBody(event) !== null && <MessagePreview messageKey={domId} role="agent" title="Team update"
+        {eventBody(event) !== null && <AuthoredMessage messageKey={domId} role="agent" title="Team update"
+          attachments={attachments} imagesOutside onOpenAttachment={onOpenAttachment}
           matched={hit}
           text={eventBody(event) ?? ""} recordedText={event.body} onReceipt={onReceipt} />}
       </ActivityEvent>
@@ -607,7 +620,8 @@ export function TeamEvent({
       )}
       {body !== null ? (
         <div className="tm-message__body tr-prose">
-          <MessagePreview messageKey={domId} role="agent"
+          <AuthoredMessage messageKey={domId} role="agent"
+            attachments={attachments} imagesOutside onOpenAttachment={onOpenAttachment}
             matched={hit}
             title={`${label} from ${speaker(event.sender)}`}
             text={body} recordedText={event.body} onReceipt={onReceipt} />

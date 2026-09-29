@@ -712,9 +712,11 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
         .as_ref()
         .is_some_and(|origin| matches!(origin.kind.as_str(), "peer" | "coordinator"));
     let collaboration = if structured_delivery
-        || (media_sources.is_empty() && !has_other_block && !text.is_empty())
+        || (!has_other_block && (!text.is_empty() || !media_sources.is_empty()))
     {
-        if let Some(notification) = crate::envelope::task_notification(&text) {
+        if media_sources.is_empty()
+            && let Some(notification) = crate::envelope::task_notification(&text)
+        {
             let has_event = notification.task_id.is_some()
                 || notification.tool_use_id.is_some()
                 || notification.status.is_some()
@@ -731,12 +733,27 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
                 line.team_name.as_deref(),
                 emit.stream_id == spec::SUBAGENT_TRANSCRIPT,
             )
+            // Media on a multi-envelope record has no exact delivery owner.
+            // Preserve that record intact instead of guessing or dropping it.
+            .filter(|drafts| media_sources.is_empty() || drafts.len() == 1)
         }
     } else {
         None
     };
 
     if let Some(drafts) = collaboration {
+        // Only a single delivered event can own the containing record's media.
+        // Never copy the same attachments onto several sibling deliveries.
+        let mut delivered_attachments = Vec::new();
+        if drafts.len() == 1 {
+            for (index, kind, source) in media_sources {
+                let (attachment, asset) =
+                    crate::media::authored_attachment(&format!("attachment-{index}"), kind, source);
+                delivered_attachments.push(attachment);
+                emit.ops
+                    .extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
+            }
+        }
         // A single delivered envelope can retain the exact sender tool id on
         // its containing user record. Multiple sibling envelopes cannot all
         // own that one id, so leave those unresolved instead of collapsing
@@ -748,10 +765,17 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
             if draft.delivery_id.is_none() {
                 draft.delivery_id = source_delivery_id.clone();
             }
+            let mut attachments = std::mem::take(&mut delivered_attachments);
+            crate::media::bind_paste_images(
+                draft.body.as_deref().unwrap_or_default(),
+                line.image_paste_ids.as_ref(),
+                &mut attachments,
+            );
             emit.push_collaboration(
                 &seed,
                 &format!("{}#collaboration-{index}", line.uuid),
                 draft,
+                (!attachments.is_empty()).then_some(attachments),
             );
         }
     // A turn made only of tool_results is the report-back for a tool call — it
@@ -1416,6 +1440,7 @@ impl<'a> Emit<'a> {
         seed: &Seed,
         discriminator: &str,
         draft: crate::envelope::CollaborationDraft,
+        attachments: Option<Vec<rosetta_core::timeline::AttachmentRef>>,
     ) {
         let row = self.row(seed, MessageKind::System, discriminator);
         let (body, asset) = match draft.body {
@@ -1448,6 +1473,7 @@ impl<'a> Emit<'a> {
             effort: None,
             body: TimelineBody::Collaboration {
                 event: Box::new(CollaborationEvent {
+                    attachments,
                     kind: draft.kind,
                     channel: draft.channel,
                     sender: draft.sender,

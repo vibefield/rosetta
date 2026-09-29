@@ -41,6 +41,14 @@ function message(text, id, attachments) {
   });
 }
 function activity() {
+  const peerText = "Compare [Image #1]; [Image #2] was not recorded.\n\n" + "Review the image and retain these implementation notes.\n\n".repeat(80);
+  const delivery = (id, channel, kind, text, attachments) => entry({ type: "collaboration", event: {
+    kind, channel, sender: channel === "coordinator" ? "coordinator" : "reviewer", recipient: null,
+    team: null, color: null, summary: null, body: text === null ? null : inline(text), attachments,
+    task_id: kind === "report" ? "review-task" : null, delivery_id: null, status: null, authored_at: null,
+    source_session_id: kind === "report" ? "s1" : null, source_response_id: kind === "report" ? "review-response" : null,
+    work_start_timeline_id: null, work_end_timeline_id: null,
+  } }, { timeline_id: id });
   const rows = [
     tool({ type: "file_read", targets: [
       { resource: file("/demo/README.md"), range: null, media_kind: null },
@@ -48,9 +56,19 @@ function activity() {
     ], outcome: null }, { timeline_id: "image-read" }),
     tool({ type: "artifact", operation: "create", artifact_kind: "image", name: "Revised view", description: null,
       resources: [file("/demo/revised.png")], media: { media_type: "image/png", width: 960, height: 480, duration_ms: null } }, { timeline_id: "image-artifact" }),
+    delivery("image-team", "team", "message", "[Image #1] shows the team’s review.", [image("1", "portrait.png", [{ start: 0, end: 10 }])]),
+    delivery("image-peer", "peer", "message", peerText, [
+      image("1", "landscape.png", markerRanges(peerText, "[Image #1]")),
+      image("2", "absent.png", markerRanges(peerText, "[Image #2]"), { type: "unavailable", reason: "not_recorded" }),
+    ]),
+    delivery("image-report", "team", "report", "[Image #1] is the finished design.", [image("1", "portrait.png", [{ start: 0, end: 10 }])]),
+    entry({ type: "user", text: inline("Inspect [Image #1]."), attachments: [image("1", "landscape.png", [{ start: 8, end: 18 }])] }, { timeline_id: "image-assignment" }),
+    delivery("image-coordinator", "coordinator", "message", "Use [Image #1].", [image("1", "portrait.png", [{ start: 4, end: 14 }])]),
+    delivery("image-peer-only", "peer", "message", null, [image("1", "landscape.png")]),
     entry({ type: "agent", text: inline("The revised screens keep the reading area quiet. Here is the final comparison."), attachments: [image("reply-image", "landscape.png")], citations: [] }, { timeline_id: "image-reply" }),
   ];
-  return rows.map(row => ({ ...row, ordinal: ++ordinal, at: now + ordinal * 1000, group: { id: "image-activity", kind: "agent_cycle", derivation: "native" } }));
+  return rows.map(row => ({ ...row, ordinal: ++ordinal, at: now + ordinal * 1000,
+    group: { id: "image-activity", kind: row.timeline_id === "image-assignment" ? "parent_invocation" : "agent_cycle", derivation: "native" } }));
 }
 const single = "😀 [Image #1] Can we make these screens easier to scan?";
 const long = "Please review [Image #1].\n\n" + "## Review notes\n\nKeep the image beside the original prompt and preserve every detail.\n\n".repeat(36)

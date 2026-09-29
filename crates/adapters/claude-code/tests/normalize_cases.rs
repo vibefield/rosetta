@@ -12,9 +12,9 @@ use rosetta_core::rows::{
     DriftFact, EditKind, FileEditRow, ServiceTier, SessionUsageRow, TitleKind, TokenSnapshot,
 };
 use rosetta_core::timeline::{
-    AttachmentKind, CollaborationChannel, CollaborationEventKind, CollaborationOp,
-    CollaborationStatus, Notice, ParticipantColor, SummaryPurpose, TimelineBody, TimelineEntry,
-    ToolAction, ToolStatus,
+    AttachmentKind, AttachmentSource, CollaborationChannel, CollaborationEventKind,
+    CollaborationOp, CollaborationStatus, Notice, ParticipantColor, SummaryPurpose, TimelineBody,
+    TimelineEntry, ToolAction, ToolStatus,
 };
 use rosetta_core::{IngestOp, ids};
 use serde_json::{Value, json};
@@ -3036,4 +3036,106 @@ fn image_only_prompt_retains_its_native_paste_label() {
     assert!(text.is_none());
     assert_eq!(attachments[0].label.as_deref(), Some("[Image #19]"));
     assert!(attachments[0].message_ranges.is_empty());
+}
+
+#[test]
+fn collaboration_deliveries_retain_images_and_bind_the_delivered_body() {
+    for (stream, content, extra, channel) in [
+        (
+            "transcript",
+            "short preview",
+            json!({"origin": {"kind": "peer", "from": "worker", "body": "😀 Look at [Image #7]."}, "imagePasteIds": [7]}),
+            CollaborationChannel::Peer,
+        ),
+        (
+            "transcript",
+            "<teammate-message teammate_id=\"worker\">😀 Look at [Image #7].</teammate-message>",
+            json!({"imagePasteIds": [7]}),
+            CollaborationChannel::Team,
+        ),
+        (
+            "subagent-transcript",
+            "😀 Look at [Image #7].",
+            json!({"imagePasteIds": [7]}),
+            CollaborationChannel::Coordinator,
+        ),
+    ] {
+        let (ops, _) = run_stream(
+            stream,
+            &[user(
+                json!([
+                    {"type": "text", "text": content},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpib2R5"}}
+                ]),
+                extra,
+            )],
+        );
+        let rows = messages(&ops);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].validate().is_ok());
+        let TimelineBody::Collaboration { event } = &rows[0].body else {
+            panic!("collaboration")
+        };
+        assert_eq!(event.channel, channel);
+        let attachments = event.attachments.as_ref().unwrap();
+        assert_eq!(attachments.len(), 1);
+        assert!(matches!(
+            attachments[0].source,
+            AttachmentSource::Asset { .. }
+        ));
+        assert_eq!(attachments[0].label.as_deref(), Some("[Image #7]"));
+        assert_eq!(attachments[0].message_ranges.len(), 1);
+        let chars: Vec<char> = event.body.as_ref().unwrap().as_preview().chars().collect();
+        let range = attachments[0].message_ranges[0];
+        assert_eq!(
+            chars[range.start as usize..range.end as usize]
+                .iter()
+                .collect::<String>(),
+            "[Image #7]"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, IngestOp::ProjectionAsset { .. }))
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn image_only_peer_deliveries_remain_valid_and_missing_media_keeps_its_slot() {
+    let (ops, _) = run(&[user(
+        json!([
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "invalid"}}
+        ]),
+        json!({"origin": {"kind": "peer", "from": "worker"}, "imagePasteIds": [9]}),
+    )]);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].validate().is_ok());
+    let TimelineBody::Collaboration { event } = &rows[0].body else {
+        panic!("collaboration")
+    };
+    assert!(event.body.is_none());
+    let image = &event.attachments.as_ref().unwrap()[0];
+    assert!(matches!(image.source, AttachmentSource::Unavailable { .. }));
+    assert_eq!(image.label.as_deref(), Some("[Image #9]"));
+    assert!(image.message_ranges.is_empty());
+}
+
+#[test]
+fn ambiguous_sibling_delivery_images_are_preserved_without_copying() {
+    let (ops, _) = run(&[user(
+        json!([
+            {"type": "text", "text": "<teammate-message teammate_id=\"a\">A</teammate-message><teammate-message teammate_id=\"b\">B</teammate-message>"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpib2R5"}}
+        ]),
+        json!({}),
+    )]);
+    let rows = messages(&ops);
+    assert_eq!(rows.len(), 1);
+    let TimelineBody::User { attachments, .. } = &rows[0].body else {
+        panic!("intact record")
+    };
+    assert_eq!(attachments.len(), 1);
 }

@@ -55,3 +55,24 @@ function rowImages(row: TimelineEntry): AttachmentFact[] {
 export function activityImages(members: readonly LedgerMember[]): AttachmentFact[] {
   return members.flatMap(member => member.kind === "line" ? member.line.rows.flatMap(rowImages) : []);
 }
+
+/** Attachment ids belong to a message, not to the whole transcript. */
+export function messageAttachments(row: TimelineEntry): AttachmentFact[] {
+  const refs = row.body.type === "user" || row.body.type === "agent" ? row.body.attachments
+    : row.body.type === "collaboration" ? row.body.event.attachments ?? [] : [];
+  return readAttachments(null, refs).attachments.map(fact => ({
+    ...fact, key: `${row.session_id}:${row.timeline_id}:attachment:${fact.key}`,
+  }));
+}
+
+/** One rail for every image occurrence in the run, regardless of row type. */
+export function timelineImages(rows: readonly TimelineEntry[]): AttachmentFact[] {
+  const seen = new Set<string>();
+  return rows.flatMap(row => {
+    const identity = JSON.stringify([row.session_id, row.timeline_id]);
+    if (seen.has(identity)) return [];
+    seen.add(identity);
+    return row.body.type === "tool_use" ? rowImages(row)
+      : messageAttachments(row).filter(fact => fact.kind === "image");
+  });
+}

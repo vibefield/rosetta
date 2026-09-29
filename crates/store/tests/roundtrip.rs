@@ -1141,7 +1141,21 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
 
     let prose = "team result ".repeat(INLINE_TEXT_MAX_BYTES / 4);
     let (body, asset) = CanonicalText::externalize(prose.clone());
+    let image_asset = ProjectionAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
+    let image = AttachmentRef::new(
+        "review-image",
+        AttachmentKind::Image,
+        rosetta_core::timeline::AttachmentSource::Asset {
+            asset: rosetta_core::timeline::AssetRef {
+                url: image_asset.url().unwrap(),
+                digest: image_asset.digest.clone(),
+                media_type: image_asset.media_type.clone(),
+                byte_len: image_asset.bytes.len() as u64,
+            },
+        },
+    );
     let event = CollaborationEvent {
+        attachments: Some(vec![image.clone()]),
         kind: CollaborationEventKind::Report,
         channel: CollaborationChannel::Team,
         sender: Some("w2-docs-deltas".into()),
@@ -1193,6 +1207,9 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
                 IngestOp::ProjectionAsset {
                     asset: asset.expect("large collaboration body is externalized"),
                 },
+                IngestOp::ProjectionAsset {
+                    asset: image_asset.clone(),
+                },
                 message_op(runtime_row),
                 IngestOp::Message(Box::new(entry)),
             ],
@@ -1208,6 +1225,15 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
     let TimelineBody::Collaboration { event: stored } = &stored.body else {
         panic!("expected collaboration body, got {:?}", stored.body);
     };
+    assert_eq!(
+        stored.attachments.as_deref(),
+        Some(std::slice::from_ref(&image))
+    );
+    assert_eq!(
+        std::fs::read(assets::asset_root(&projection).join(image_asset.file_name().unwrap()))
+            .unwrap(),
+        image_asset.bytes
+    );
     assert_eq!(stored.sender.as_deref(), Some("w2-docs-deltas"));
     assert_eq!(stored.color, Some(ParticipantColor::Green));
     assert_eq!(stored.task_id.as_deref(), Some("task-2"));
@@ -1221,6 +1247,10 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
             .collect::<Vec<_>>(),
         ["team-report"]
     );
+    let TimelineBody::Collaboration { event: boundary } = &boundaries[0].body else {
+        panic!("collaboration boundary")
+    };
+    assert_eq!(boundary.attachments, stored.attachments);
     assert_eq!(
         runtimes,
         [queries::ResponseRuntime {

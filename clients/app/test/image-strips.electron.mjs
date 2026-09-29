@@ -95,16 +95,17 @@ async function run() {
       const run = document.querySelector(selector);
       return { closed: run.querySelector('.tr-fold').getAttribute('aria-expanded'),
         hidden: getComputedStyle(run.querySelector('.tr-activity__list')).display,
-        count: run.querySelectorAll('.tr-activity-tools > .tr-attachments figure').length,
+        count: run.querySelectorAll(':scope > .tr-attachments figure').length,
         nested: run.querySelectorAll('.tr-detail .tr-att').length };
-    }, activity), { closed: 'false', hidden: 'none', count: 6, nested: 0 });
+    }, activity), { closed: 'false', hidden: 'none', count: 13, nested: 0 });
+    await until(() => document.querySelector('.tr-activity > .tr-attachments img')?.naturalWidth > 0, 'Closed activity image did not load');
     await check(selector => {
       const run = document.querySelector(selector);
       window.stripBefore = run.querySelector('.tr-att');
       run.querySelector('.tr-fold').click();
     }, activity);
     assert.equal(await check(selector => getComputedStyle(document.querySelector(selector + ' .tr-activity__list')).display !== 'none', activity), true);
-    await until(() => document.querySelector('.tr-activity-tools > .tr-attachments img')?.naturalWidth > 0, 'Revealed tool image did not load');
+    await until(() => document.querySelector('.tr-activity > .tr-attachments img')?.naturalWidth > 0, 'Revealed tool image did not load');
     const readsBefore = await check(async () => (await fetch('/test/image-reads')).json());
     assert.equal(readsBefore['image-read:0'], undefined, 'Text target must not be read as image');
     assert.equal(await check(selector => document.querySelector(selector + ' .tr-att') === window.stripBefore, activity), true);
@@ -113,8 +114,7 @@ async function run() {
     assert.equal(await check(selector => document.querySelector(selector + ' .tr-att') === window.stripBefore, activity), true);
     await check(selector => document.querySelector(selector + ' .tr-fold').click(), activity);
     await capture('folded');
-    assert.equal(await check(selector => document.querySelector(selector + ' .tr-att').getClientRects().length, activity), 0, 'tool images belong to the closed activity group');
-    await check(selector => document.querySelector(selector + ' .tr-fold').click(), activity);
+    assert.equal(await check(selector => document.querySelector(selector + ' .tr-att').getClientRects().length > 0, activity), true, 'all gathered images stay visible while activity is closed');
 
     await check(selector => document.querySelector(selector + ' button.tr-att__tile').focus({ preventScroll: true }), activity);
     const before = await check(() => ({ top: document.querySelector('.tr-scroll').scrollTop, room: document.querySelector('.ah-room').getBoundingClientRect().top }));
@@ -139,10 +139,36 @@ async function run() {
     assert.equal(await check(() => document.documentElement.scrollWidth <= window.innerWidth), true);
     await capture('narrow');
     await show(activity);
-    await until(() => Boolean(document.querySelector('.tr-activity-tools .tr-att__retry')), 'Tool failure did not retain a retry slot');
-    await check(() => document.querySelector('.tr-activity-tools .tr-att__retry').click());
-    await until(() => !document.querySelector('.tr-activity-tools .tr-att__retry'), 'Tool retry did not recover');
-    await until(() => [...document.querySelectorAll('.tr-activity-tools > .tr-attachments img')].every(img => img.naturalWidth > 0), 'Tool retry bytes did not decode');
+    await until(() => Boolean(document.querySelector('.tr-activity > .tr-attachments .tr-att__retry')), 'Tool failure did not retain a retry slot');
+    await check(() => document.querySelector('.tr-activity > .tr-attachments .tr-att__retry').click());
+    await until(() => !document.querySelector('.tr-activity > .tr-attachments .tr-att__retry'), 'Tool retry did not recover');
+    await until(() => [...document.querySelectorAll('.tr-activity > .tr-attachments img')].every(img => img.naturalWidth > 0), 'Tool retry bytes did not decode');
+
+    // Every secondary message shares the outer rail, including its text links.
+    win.setSize(940, 1050); await pause(150);
+    await show(activity);
+    await check(selector => document.querySelector(selector + ' .tr-fold').click(), activity);
+    for (const id of ['image-team', 'image-peer', 'image-report', 'image-assignment', 'image-coordinator']) {
+      await check(id => {
+        const row = document.querySelector('[id][data-timeline-id="' + id + '"]');
+        (row.querySelector('summary') ?? row).click();
+      }, id);
+      await until(() => document.querySelector('.tr-activity__list .tr-image-link'), 'Delivery image link did not mount');
+      assert.equal(await check(id => Boolean(document.querySelector('[id][data-timeline-id="' + id + '"] .tr-image-link')
+        ?? document.querySelector('[id][data-timeline-id="' + id + '"]').parentElement.querySelector('.tr-image-link')), id), true);
+    }
+    assert.equal(await check(selector => document.querySelectorAll(selector + ' .tr-activity__list .tr-attachments').length, activity), 0, 'Opening message bodies must not duplicate the gallery');
+    await check(() => document.querySelector('[id][data-timeline-id="image-peer"] .tr-image-link').click());
+    await until(() => document.querySelector('.ah-image__frame img')?.naturalWidth === 960, 'Peer marker did not open its image');
+    await close();
+    await check(() => document.querySelectorAll('[id][data-timeline-id="image-peer"] .tr-image-link')[1].click());
+    assert.equal(await check(() => document.activeElement.closest('figure')?.dataset.attachmentId), 's1:image-peer:attachment:2');
+    assert.equal(await check(() => document.activeElement.closest('.tr-attachments').parentElement.classList.contains('tr-activity')), true, 'Missing peer marker focuses the visible outer gallery');
+    await check(() => document.querySelector('[id][data-timeline-id="image-peer"] .tr-message__open').click());
+    await until(() => document.querySelectorAll('.ah-md .tr-att figure').length === 2, 'Full peer message did not retain its attachments');
+    await check(() => document.querySelector('.ah-md .tr-image-link').click());
+    await until(() => document.querySelectorAll('[role=dialog]').length === 2, 'Peer full-message image did not open nested viewer');
+    await close(1); await close();
 
     await show('[data-timeline-id="missing"]');
     await check(() => document.querySelector('[data-timeline-id="missing"] .tr-image-link').click());

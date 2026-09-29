@@ -490,7 +490,7 @@ export function Ledger({
           )}
         </span>
       </div> : null}
-      <Attachments facts={images} onOpenAttachment={onOpenAttachment} />
+      {!embedded && <Attachments facts={images} onOpenAttachment={onOpenAttachment} />}
       {/* One wrapper in both states keeps each line's open state (R-5).
           Always in the DOM, shown by the head's own `aria-expanded`. */}
       <div className={closed ? "tr-ladder" : undefined}>{drawn}</div>

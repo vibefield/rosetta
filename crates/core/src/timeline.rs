@@ -893,6 +893,10 @@ pub struct CollaborationEvent {
     pub color: Option<ParticipantColor>,
     pub summary: Option<String>,
     pub body: Option<CanonicalText>,
+    /// Media retained by this exact delivered message; older records omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub attachments: Option<Vec<AttachmentRef>>,
     pub task_id: Option<String>,
     pub delivery_id: Option<String>,
     pub status: Option<CollaborationStatus>,
@@ -958,6 +962,10 @@ impl CollaborationEvent {
             ID_MAX_BYTES,
         )?;
         validate_optional_text(self.body.as_ref())?;
+        attachment::validate_attachments(
+            self.attachments.as_deref().unwrap_or_default(),
+            self.body.as_ref(),
+        )?;
         let visible_body = self
             .body
             .as_ref()
@@ -973,6 +981,7 @@ impl CollaborationEvent {
                 | CollaborationEventKind::Report
         ) && !visible_body
             && !visible_summary
+            && self.attachments.as_ref().is_none_or(Vec::is_empty)
         {
             return Err(CanonicalError::Invalid(
                 "collaboration event has no visible fact".into(),
@@ -4370,6 +4379,11 @@ impl TimelineEntry {
                 lanes.push_text(SearchLane::Prose, text);
             }
             TimelineBody::Collaboration { event } => {
+                for attachment in event.attachments.as_deref().unwrap_or_default() {
+                    if let Some(name) = &attachment.name {
+                        SearchLanes::push(&mut lanes.target, name);
+                    }
+                }
                 if let Some(body) = &event.body {
                     lanes.push_text(SearchLane::Prose, body);
                 }
@@ -5109,6 +5123,7 @@ mod tests {
     fn collaboration_lifecycle_kind_is_itself_a_visible_fact() {
         let row = base(TimelineBody::Collaboration {
             event: Box::new(CollaborationEvent {
+                attachments: None,
                 kind: CollaborationEventKind::StopApproved,
                 channel: CollaborationChannel::Team,
                 sender: Some("w1".into()),
@@ -5134,6 +5149,7 @@ mod tests {
     fn collaboration_prose_requires_non_whitespace_content() {
         let row = base(TimelineBody::Collaboration {
             event: Box::new(CollaborationEvent {
+                attachments: None,
                 kind: CollaborationEventKind::Message,
                 channel: CollaborationChannel::Team,
                 sender: Some("w1".into()),
@@ -5156,9 +5172,42 @@ mod tests {
     }
 
     #[test]
+    fn collaboration_media_is_optional_on_old_records_and_validated_when_present() {
+        let legacy =
+            serde_json::json!({"kind": "message", "channel": "peer", "summary": "Delivered"});
+        let mut event: CollaborationEvent = serde_json::from_value(legacy).unwrap();
+        assert!(event.attachments.is_none());
+        assert!(event.validate().is_ok());
+        assert!(
+            serde_json::to_value(&event)
+                .unwrap()
+                .get("attachments")
+                .is_none()
+        );
+        event.summary = None;
+        assert!(event.validate().is_err());
+        let mut image = AttachmentRef::unavailable(
+            "image-1",
+            AttachmentKind::Image,
+            AttachmentUnavailableReason::NotRecorded,
+        );
+        image.name = Some("review.png".into());
+        event.attachments = Some(vec![image]);
+        assert!(event.validate().is_ok());
+        let restored: CollaborationEvent =
+            serde_json::from_value(serde_json::to_value(&event).unwrap()).unwrap();
+        assert_eq!(event, restored);
+        event.attachments.as_mut().unwrap()[0]
+            .message_ranges
+            .push(TextRange { start: 0, end: 1 });
+        assert!(event.validate().is_err());
+    }
+
+    #[test]
     fn collaboration_report_work_requires_exact_paired_bounds() {
         let mut row = base(TimelineBody::Collaboration {
             event: Box::new(CollaborationEvent {
+                attachments: None,
                 kind: CollaborationEventKind::Report,
                 channel: CollaborationChannel::Team,
                 sender: Some("w1".into()),
@@ -5527,6 +5576,7 @@ mod tests {
 
         let message = base(TimelineBody::Collaboration {
             event: Box::new(CollaborationEvent {
+                attachments: None,
                 kind: CollaborationEventKind::Message,
                 channel: CollaborationChannel::Peer,
                 sender: Some("w2-docs".into()),

@@ -1078,6 +1078,7 @@ mod tests {
         boundary.model = None;
         boundary.body = TimelineBody::Collaboration {
             event: Box::new(CollaborationEvent {
+                attachments: None,
                 kind: CollaborationEventKind::Message,
                 channel: CollaborationChannel::Team,
                 sender: None,

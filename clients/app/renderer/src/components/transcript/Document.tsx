@@ -50,6 +50,7 @@ import type { TranscriptModel } from "./document-model";
 import { activityCuts, activityPlan, activityRows } from "./activity-plan";
 import type { ActivityItem, ReadingBlock } from "./activity-plan";
 import { ActivityGroup, ContextEvent, revealActivityTarget } from "./Activity";
+import { messageAttachments } from "../../lib/transcript/images";
 import { DisclosureState } from "./disclosure-state";
 import { ThreadNavigationContext } from "./thread-navigation";
 import { Ledger } from "./Ledger";
@@ -757,6 +758,8 @@ export function TranscriptDocument({
           <TeamEvent
             key={segment.key}
             event={event}
+            attachments={messageAttachments(segment.row)}
+            onOpenAttachment={onOpenAttachment}
             at={stamp.at}
             timeBasis={stamp.basis}
             domId={domIdOf(rowId)}
@@ -838,6 +841,7 @@ export function TranscriptDocument({
         const forceOpen = block.items.some(item => childIsFocused(item) ||
           activityRows(item).some(row => row.timeline_id === focusTimelineId));
         return <ActivityGroup items={block.items} rows={block.rows} partial={block.partial} forceOpen={forceOpen}
+          onOpenAttachment={onOpenAttachment} onReceipt={onReceipt}
           highlightedId={hit} alive={row => recentActivity && row.session_id === session.id &&
             feed.watermark !== null && row.ordinal > feed.watermark}>
           {renderItems(block.items)}

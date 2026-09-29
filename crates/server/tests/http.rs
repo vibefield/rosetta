@@ -328,6 +328,7 @@ async fn collaboration_history_returns_boundaries_without_private_rows() {
         effort: None,
         body: TimelineBody::Collaboration {
             event: Box::new(CollaborationEvent {
+                attachments: None,
                 kind: CollaborationEventKind::Message,
                 channel: CollaborationChannel::Team,
                 sender: Some("w1".into()),
@@ -406,6 +407,7 @@ async fn report_work_resolves_only_its_recorded_source_response_and_bounds() {
     report.provenance.src_cursor = None;
     report.body = TimelineBody::Collaboration {
         event: Box::new(CollaborationEvent {
+            attachments: None,
             kind: CollaborationEventKind::Report,
             channel: CollaborationChannel::Team,
             sender: None,

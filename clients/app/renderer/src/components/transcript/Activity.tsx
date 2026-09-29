@@ -8,7 +8,9 @@ import { useGroupDisclosure, useRowDisclosure } from "./disclosure-state";
 import { useFoldPreference } from "./fold-preference";
 import { FamilyGlyph, LineChevron } from "./glyphs";
 import { MessagePreview } from "./MessagePreview";
-import type { Segment } from "../../lib/transcript";
+import type { AttachmentFact, Segment } from "../../lib/transcript";
+import { timelineImages } from "../../lib/transcript/images";
+import { ActivityImagesContext, Attachments, useAttachmentActions } from "./Attachments";
 import { scrollRowTo } from "./scroll-to-row";
 import "../../styles/transcript-activity.css";
 
@@ -21,13 +23,15 @@ export function revealActivityTarget(element: HTMLElement): void {
   target?.focus({ preventScroll: true });
 }
 
-export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, alive, children }: {
+export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, alive, onOpenAttachment, onReceipt, children }: {
   readonly items: readonly ActivityItem[];
   readonly rows: readonly TimelineEntry[];
   readonly partial: boolean;
   readonly forceOpen: boolean;
   readonly highlightedId: string | null;
   readonly alive: (row: TimelineEntry) => boolean;
+  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onReceipt: (text: string) => void;
   readonly children: ReactNode;
 }) {
   const preference = useFoldPreference();
@@ -50,6 +54,8 @@ export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, 
     return () => cancelAnimationFrame(frame);
   }, [expanded, highlightedId]);
   const summary = useMemo(() => summarizeActivity(items), [items]);
+  const images = useMemo(() => timelineImages(rows), [rows]);
+  const { open: openImage, reveal } = useAttachmentActions(onOpenAttachment, onReceipt);
   const running = summary.runningRows.some(alive);
   const text = summary.nouns.map(noun => [noun.text, noun.names.join(", "), noun.more > 0 ? `… ${noun.more} more` : ""].filter(Boolean).join(" ")).join(" · ");
   const range = summary.firstAt === null ? null : summary.lastAt === null || summary.firstAt === summary.lastAt
@@ -75,7 +81,10 @@ export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, 
         {range !== null && <span className="t">{range}</span>}
       </span>
     </button>
-    <div id={listId} className="tr-activity__list" hidden={!expanded}>{children}</div>
+    <Attachments facts={images} onOpenAttachment={openImage} reveal={reveal} />
+    <ActivityImagesContext.Provider value={openImage}>
+      <div id={listId} className="tr-activity__list" hidden={!expanded}>{children}</div>
+    </ActivityImagesContext.Provider>
   </div>;
 }
 

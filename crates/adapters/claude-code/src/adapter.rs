@@ -47,7 +47,8 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // Still 30 after typing the 2.1.257–2.1.283 fields (census
         // 2026-09-28): they project nothing, so only drift facts changed, and
         // a replay cannot retract drift rows already recorded.
-        30
+        // 31: exact single team/peer/coordinator deliveries retain authored media.
+        31
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

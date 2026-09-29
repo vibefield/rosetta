@@ -1,12 +1,38 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { imageMediaTypeFromBytes } from '../renderer/src/lib/image-media.ts';
-import { activityImages } from '../renderer/src/lib/transcript/images.ts';
+import { activityImages, messageAttachments, timelineImages } from '../renderer/src/lib/transcript/images.ts';
 import { ledgerLine } from '../renderer/src/lib/transcript/index.ts';
-import { tool, read, file, inline } from './support/ledger-fixtures.mjs';
+import { entry, tool, read, file, inline } from './support/ledger-fixtures.mjs';
 
 const images = (...rows) => activityImages(rows.map(row => ({ kind: 'line', line: ledgerLine(row) })));
 const asset = { type: 'asset', asset: { url: '/api/assets/image.png', digest: 'a'.repeat(64), media_type: 'image/png', byte_len: 42 } };
+
+const attachment = (over = {}) => ({ id: '1', kind: 'image', label: '[Image #1]', name: 'review.png',
+  media_type: 'image/png', byte_len: 42, dimensions: null, message_ranges: [{ start: 0, end: 10 }], source: asset, ...over });
+
+test('mixed activity gathers tool, assignment, team and peer images in message order', () => {
+  const assignment = entry({ type: 'user', text: inline('[Image #1]'), attachments: [attachment()] });
+  const team = entry({ type: 'collaboration', event: { channel: 'team', attachments: [attachment()] } });
+  const peer = entry({ type: 'collaboration', event: { channel: 'peer', attachments: [attachment({ source: { type: 'unavailable', reason: 'not_recorded' } })] } });
+  const report = entry({ type: 'collaboration', event: { kind: 'report', attachments: [attachment()] } });
+  const readRow = read('/demo/screen.png');
+  const result = timelineImages([assignment, readRow, team, peer, report, team]);
+  assert.equal(result.length, 5, 'a repeated canonical row is not a second occurrence');
+  assert.deepEqual(result.map(fact => fact.key), [messageAttachments(assignment)[0].key, images(readRow)[0].key,
+    messageAttachments(team)[0].key, messageAttachments(peer)[0].key, messageAttachments(report)[0].key]);
+  assert.equal(new Set(result.map(fact => fact.key)).size, 5, 'message-local ids must not collide');
+  assert.equal(result[3].missing, true);
+  assert.equal(result[2].ref, team.body.event.attachments[0], 'native ids and mention ranges remain intact');
+});
+
+test('old events and context text add no invented image requests; documents stay out of the image rail', () => {
+  assert.deepEqual(timelineImages([
+    entry({ type: 'collaboration', event: { body: inline('![image](https://example.test/a.png)') } }),
+    entry({ type: 'summary', text: inline('/demo/screen.png') }),
+    entry({ type: 'user', attachments: [attachment({ kind: 'document' })] }),
+  ]), []);
+});
 
 test('activity images preserve occurrence order and exact target addresses', () => {
   const first = tool({ type: 'file_read', targets: [
