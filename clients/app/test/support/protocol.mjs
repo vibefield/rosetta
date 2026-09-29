@@ -4,11 +4,12 @@ export const EMPTY_META = { tasks: [], workflows: [], plans: [], artifacts: [] }
 export const row = (
   id,
   ordinal = 1,
-  body = { type: "agent", text: { type: "inline", text: id } },
+  body = { type: "agent", text: { type: "inline", text: id }, attachments: [], citations: [] },
 ) => ({
   timeline_id: id,
   session_id: "s1",
   ordinal,
+  group: { id: 'g1', kind: 'agent_cycle', derivation: 'native' },
   body,
   at: ordinal,
   model: null,

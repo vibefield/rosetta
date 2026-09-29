@@ -2,6 +2,7 @@ import fs from "node:fs";
 import ts from "typescript";
 import { CursorExpiredError } from "../../../ts/client.ts";
 import * as head from "../../renderer/src/lib/transcript/head-state.ts";
+import * as historyWindow from "../../renderer/src/lib/transcript/history-window.ts";
 
 // Run the real data hooks with deterministic React scheduling. No DOM or
 // network is needed to exercise effect cleanup and responses arriving late.
@@ -55,6 +56,7 @@ export function dataHooks(client) {
     "./rosetta": { client, desktopDaemonState: () => null, onDesktopDaemonState: () => () => {} },
     "./model": { getActivityGridStartTimestamp: () => 0, getViewerUtcOffsetMinutes: () => 0 },
     "./transcript/head-state": head,
+    "./transcript/history-window": historyWindow,
   };
   const source = fs.readFileSync(
     new URL("../../renderer/src/lib/hooks.ts", import.meta.url),

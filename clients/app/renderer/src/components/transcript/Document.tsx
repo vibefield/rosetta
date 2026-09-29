@@ -42,13 +42,15 @@ import { useTeamTimelines } from "../../lib/hooks";
 import { client } from "../../lib/rosetta";
 import { lastActive } from "../../lib/format";
 import { sessionLastActive } from "../../lib/session-activity";
+import { withinHistoryWindow } from "../../lib/transcript/history-window";
 import { EmptyState } from "../ui";
 import { Anchor } from "./Anchor";
 import { DayPill, Sitting } from "./DayPill";
 import { transcriptModel } from "./document-model";
 import type { TranscriptModel } from "./document-model";
 import { activityCuts, activityPlan, activityRows } from "./activity-plan";
-import type { ActivityItem, ReadingBlock } from "./activity-plan";
+import type { ActivityItem, ReadingBlock, ReadingSitting } from "./activity-plan";
+import { retainReadingIdentity } from "./reading-identity";
 import { ActivityGroup, ContextEvent, revealActivityTarget } from "./Activity";
 import { messageAttachments } from "../../lib/transcript/images";
 import { DisclosureState } from "./disclosure-state";
@@ -258,9 +260,10 @@ export function TranscriptDocument({
   );
   const teamIdSet = useMemo(() => new Set(teamIds), [teamIds]);
   const teamFeed = useTeamTimelines(teamIds);
+  const hasEarlier = !feed.snapshotReady || feed.earlier.kind !== "none";
   const chronology = useMemo(
-    () => teamChronology(feed.rows, teamFeed.rowsBySession),
-    [feed.rows, teamFeed.rowsBySession],
+    () => teamChronology(feed.rows, teamFeed.rowsBySession, { hasEarlier, ready: feed.snapshotReady }),
+    [feed.rows, teamFeed.rowsBySession, hasEarlier, feed.snapshotReady],
   );
   const displayedRows = chronology.rows;
   const cuts = useMemo(() => activityCuts(feed.rows, feed.watermark, displayedRows), [feed.rows, feed.watermark, displayedRows]);
@@ -294,9 +297,12 @@ export function TranscriptDocument({
       cuts,
     ],
   );
-  const reading = useMemo(() => activityPlan(model.plan, {
+  const previousReading = useRef<{ sessionId: string; reading: readonly ReadingSitting[] } | null>(null);
+  const reading = useMemo(() => retainReadingIdentity(
+    previousReading.current?.sessionId === session.id ? previousReading.current.reading : [], activityPlan(model.plan, {
     gaps: cuts.gaps, watermarkId: cuts.watermarkId, partial: !feed.snapshotReady || feed.earlier.kind !== "none",
-  }), [model.plan, cuts, feed.snapshotReady, feed.earlier.kind]);
+  })), [session.id, model.plan, cuts, feed.snapshotReady, feed.earlier.kind]);
+  useLayoutEffect(() => { previousReading.current = { sessionId: session.id, reading }; }, [session.id, reading]);
   const workflowAttempts = useMemo(() => workflowAttemptIndex(displayedRows), [displayedRows]);
   const teamMembers = useMemo(
     () =>
@@ -349,6 +355,7 @@ export function TranscriptDocument({
     onTimelineLayout?.({
       sessionId: session.id,
       rows: displayedRows,
+      observedRows: [...feed.rows, ...[...teamFeed.rowsBySession.values()].flat()],
       ready: feed.snapshotReady && (feed.rows[0]?.session_id ?? session.id) === session.id,
       readySessionIds: [session.id, ...(teamFeed.historyReady ? teamIds : [])],
       elementForRow: (row) => document.getElementById(messageDomId(row.session_id, row.timeline_id)),
@@ -357,7 +364,7 @@ export function TranscriptDocument({
         return document.getElementById(messageDomId(sessionByTimelineId.get(representative) ?? session.id, representative));
       },
     });
-  }, [onTimelineLayout, session.id, displayedRows, feed.snapshotReady, feed.rows, teamFeed.historyReady, teamIds, model.representatives, sessionByTimelineId]);
+  }, [onTimelineLayout, session.id, displayedRows, feed.snapshotReady, feed.rows, teamFeed.historyReady, teamFeed.rowsBySession, teamIds, model.representatives, sessionByTimelineId]);
   const teamFocus = focus !== null && teamIdSet.has(focus.sessionId) ? focus : null;
   const [teamHighlight, setTeamHighlight] = useState<string | null>(null);
   const teamFocusRequest = useRef<string | null>(null);
@@ -405,34 +412,30 @@ export function TranscriptDocument({
     const source = teamFeed.rowsBySession
       .get(teamFocus.sessionId)
       ?.find((row) => row.timeline_id === teamFocus.timelineId);
-    if (source !== undefined) {
+    if (source?.body.type === "collaboration" && source.body.event.channel === "coordinator" &&
+      source.body.event.kind === "assignment") {
       onFocusConsumed();
-      onReceipt(
-        source.body.type === "collaboration" && source.body.event.channel === "coordinator"
-          ? "That message is private team context, not shared team chronology"
-          : "That team-member row is private work, not a delivered boundary message",
-      );
+      onReceipt("That message is private team context, not shared team chronology");
       return;
     }
-
-    const requestKey = `${teamFocus.sessionId}\u0000${teamFocus.timelineId}`;
-    if (teamFocusRequest.current === requestKey) return;
-    teamFocusRequest.current = requestKey;
-    void teamFeed
-      .loadAnchor(teamFocus.sessionId, teamFocus.timelineId)
-      .then((loaded) => {
-        if (loaded) return;
-        onFocusConsumed();
-        onReceipt("That team message is no longer available");
-      })
-      .catch((error: unknown) => {
-        onFocusConsumed();
-        onReceipt(error instanceof Error ? error.message : "Could not load that team message");
-      });
+    // A known delivery outside the current parent window needs its surrounding
+    // conversation. Never draw a floating, apparently complete history island.
+    if (!feed.snapshotReady || !teamFeed.historyReady) return;
+    if (source !== undefined && feed.earlier.kind !== "none") {
+      if (feed.earlier.kind === "idle" || feed.earlier.kind === "held") feed.loadEarlier();
+      if (feed.earlier.kind === "failed" && teamFocusRequest.current !== teamFocus.timelineId) {
+        teamFocusRequest.current = teamFocus.timelineId;
+        onReceipt("Could not load the surrounding conversation. Retry loading earlier history.");
+      }
+      return;
+    }
+    onFocusConsumed();
+    onReceipt("That team message is no longer available");
   }, [
     teamFocus,
-    teamFeed.loadAnchor,
+    teamFeed.historyReady,
     teamFeed.rowsBySession,
+    feed,
     model,
     onFocusConsumed,
     onReceipt,
@@ -538,7 +541,15 @@ export function TranscriptDocument({
     workerChildren,
     workerLinks,
     indexedWorkflowChildren,
-  );
+  ).filter(child => feed.snapshotReady &&
+    (!hasEarlier || child.delegation?.parent_tool_native_id == null) &&
+    withinHistoryWindow(child.activity?.first_at ?? child.started_at, feed.rows, hasEarlier));
+  useEffect(() => {
+    if (focus === null || !hasEarlier || !feed.snapshotReady) return;
+    const child = workerChildren.find(child => sessionContains(child.id, focus.sessionId, index.byId));
+    if (child === undefined || workerLinks.anchorRowByChild.has(child.id) || floating.some(row => row.id === child.id)) return;
+    if (feed.earlier.kind === "idle" || feed.earlier.kind === "held") feed.loadEarlier();
+  }, [focus, hasEarlier, feed, workerChildren, workerLinks, floating, index.byId]);
   const [revealedWorker, setRevealedWorker] = useState<{
     readonly childId: string;
     readonly anchorTimelineId: string;
@@ -841,6 +852,8 @@ export function TranscriptDocument({
         const forceOpen = block.items.some(item => childIsFocused(item) ||
           activityRows(item).some(row => row.timeline_id === focusTimelineId));
         return <ActivityGroup items={block.items} rows={block.rows} partial={block.partial} forceOpen={forceOpen}
+          earlier={feed.earlier} onLoadEarlier={feed.loadEarlier}
+          teamLoading={!teamFeed.historyReady} teamError={teamFeed.historyError} onRetryTeam={teamFeed.retry}
           onOpenAttachment={onOpenAttachment} onReceipt={onReceipt}
           highlightedId={hit} alive={row => recentActivity && row.session_id === session.id &&
             feed.watermark !== null && row.ordinal > feed.watermark}>
@@ -870,8 +883,8 @@ export function TranscriptDocument({
           historyReady={teamFeed.historyReady}
         />
       )}
-      {reading.map(({ sitting, blocks }) => (
-        <Sitting key={sitting.key} sitting={sitting}>
+      {reading.map(({ sitting, blocks, renderKey }) => (
+        <Sitting key={renderKey ?? sitting.key} sitting={sitting}>
           {showPills && (
             <DayPill
               sitting={sitting}

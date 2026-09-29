@@ -12,6 +12,7 @@ import type { AttachmentFact, Segment } from "../../lib/transcript";
 import { timelineImages } from "../../lib/transcript/images";
 import { ActivityImagesContext, Attachments, useAttachmentActions } from "./Attachments";
 import { scrollRowTo } from "./scroll-to-row";
+import type { EarlierState } from "../../lib/transcript/head-state";
 import "../../styles/transcript-activity.css";
 
 export function revealActivityTarget(element: HTMLElement): void {
@@ -23,10 +24,16 @@ export function revealActivityTarget(element: HTMLElement): void {
   target?.focus({ preventScroll: true });
 }
 
-export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, alive, onOpenAttachment, onReceipt, children }: {
+export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, alive, onOpenAttachment, onReceipt,
+  earlier, onLoadEarlier, teamLoading, teamError, onRetryTeam, children }: {
   readonly items: readonly ActivityItem[];
   readonly rows: readonly TimelineEntry[];
   readonly partial: boolean;
+  readonly earlier: EarlierState;
+  readonly onLoadEarlier: () => void;
+  readonly teamLoading: boolean;
+  readonly teamError: string | null;
+  readonly onRetryTeam: () => void;
   readonly forceOpen: boolean;
   readonly highlightedId: string | null;
   readonly alive: (row: TimelineEntry) => boolean;
@@ -60,15 +67,19 @@ export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, 
   const text = summary.nouns.map(noun => [noun.text, noun.names.join(", "), noun.more > 0 ? `… ${noun.more} more` : ""].filter(Boolean).join(" ")).join(" · ");
   const range = summary.firstAt === null ? null : summary.lastAt === null || summary.firstAt === summary.lastAt
     ? clock(summary.firstAt) : `${clock(summary.firstAt)}–${clock(summary.lastAt)}`;
-  const label = [partial ? "Loaded activity" : null, text, summary.failed > 0 ? `${summary.failed} failed` : null,
+  const label = [partial ? "More activity to load" : null, teamLoading ? "Loading team activity" : null, text, summary.failed > 0 ? `${summary.failed} failed` : null,
     summary.interrupted > 0 ? `${summary.interrupted} interrupted` : null,
     summary.cancelled > 0 ? `${summary.cancelled} cancelled` : null, running ? "Running" : null, range].filter(Boolean).join(" · ");
   return <div className="tr-seg tr-activity" ref={root} data-partial={partial || undefined}>
     <button type="button" className="tr-line tr-fold tr-activity__head" aria-expanded={expanded}
-      aria-controls={listId} aria-label={label} title={label} onClick={() => setOverride(!expanded)}>
+      aria-controls={listId} aria-label={label} title={label} onClick={() => {
+        if (!expanded && partial) onLoadEarlier();
+        setOverride(!expanded);
+      }}>
       <span className="tr-line__g chev"><LineChevron /></span>
       <span className="tr-line__v">
-        {partial && <span>Loaded activity · </span>}
+        {partial && <span>More activity to load · </span>}
+        {teamLoading && <span>Loading team activity · </span>}
         {summary.nouns.map((noun, index) => <span key={noun.key}>
           {index > 0 && " · "}{noun.text}{noun.names.length > 0 && <> <span className="names">{noun.names.join(", ")}{noun.more > 0 ? ` … ${noun.more} more` : ""}</span></>}
         </span>)}
@@ -83,7 +94,19 @@ export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, 
     </button>
     <Attachments facts={images} onOpenAttachment={openImage} reveal={reveal} />
     <ActivityImagesContext.Provider value={openImage}>
-      <div id={listId} className="tr-activity__list" hidden={!expanded}>{children}</div>
+      <div id={listId} className="tr-activity__list" hidden={!expanded}>
+        {partial && <div className="tr-activity__loading" role="status">
+          {earlier.kind === "fetching" || earlier.kind === "revealing" ? "Loading earlier activity…" : <>
+            <span>{earlier.kind === "failed" ? "Could not load earlier activity." : "This activity continues in earlier history."}</span>
+            <button type="button" onClick={onLoadEarlier}>{earlier.kind === "failed" ? "Retry" : "Load more activity"}</button>
+          </>}
+        </div>}
+        {(teamLoading || teamError !== null) && <div className="tr-activity__loading" role="status">
+          <span>{teamError !== null ? "Could not load team messages." : "Loading team messages…"}</span>
+          {teamError !== null && <button type="button" onClick={onRetryTeam}>Retry</button>}
+        </div>}
+        {children}
+      </div>
     </ActivityImagesContext.Provider>
   </div>;
 }

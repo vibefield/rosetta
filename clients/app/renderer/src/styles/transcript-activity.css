@@ -14,6 +14,9 @@
 .tr-activity__running i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .tr-activity__list { margin: 3px 0 0 5px; padding: 2px 0 3px 14px; border-left: 1px solid var(--vf-hairline-strong); }
 .tr-activity__list[hidden] { display: none; }
+.tr-activity__loading { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 8px 0; color: var(--vf-text-tertiary); font-size: 12px; }
+.tr-activity__loading button { padding: 0; border: 0; background: none; color: var(--vf-text-secondary); font: inherit; text-decoration: underline; cursor: pointer; }
+.tr-activity__loading button:focus-visible { outline: 1.5px solid var(--vf-select); outline-offset: 3px; }
 .tr-activity-tools { margin: 0; min-width: 0; }
 .tr-activity__list .tr-line { margin-inline: 0; padding-inline: 0; min-width: 0; }
 .tr-activity__list > .tr-ledger, .tr-activity__list > .tr-seg,

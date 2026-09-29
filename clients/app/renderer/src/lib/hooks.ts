@@ -21,6 +21,7 @@ import { CursorExpiredError } from "@rosetta/protocol";
 import type { ProjectStats } from "./model";
 import { getActivityGridStartTimestamp, getViewerUtcOffsetMinutes } from "./model";
 import { client, desktopDaemonState, onDesktopDaemonState } from "./rosetta";
+import { conversationStart, readConversationPage } from "./transcript/history-window";
 import type {
   EarlierAction,
   EarlierContext,
@@ -294,6 +295,8 @@ export interface TimelineFeed {
 
 export function useTimeline(sessionId: string | null): TimelineFeed {
   const [tail, setTail] = useState<TimelineEntry[]>([]);
+  const [windowStart, setWindowStart] = useState<number | null>(null);
+  const [anchors, setAnchors] = useState<ReadonlySet<string>>(new Set());
   const subscription = useRef<SessionSubscription | null>(null);
   const [timelineMeta, setTimelineMeta] = useState<TimelineMeta | null>(null);
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
@@ -328,12 +331,21 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     setModel(next);
     // The head owns reveal intent and counts. Canonical values live only in
     // the subscription, which patches held pages and visible history together.
-    if (next.older !== previous.older && next.older.length > 0)
-      subscription.current?.reveal(next.older);
+    if (next.older !== previous.older && next.older.length > 0) {
+      const sub = subscription.current;
+      const combined = [...new Map([...next.older, ...(sub?.entries() ?? [])]
+        .map(row => [row.timeline_id, row])).values()].sort((a, b) => a.ordinal - b.ordinal);
+      const start = conversationStart(combined, next.cursor !== null);
+      // Live arrivals must never move the start forward and hide a visible run.
+      setWindowStart(previous => previous === null ? start : Math.min(previous, start ?? previous));
+      sub?.reveal(next.older);
+    }
   }, []);
 
   useEffect(() => {
     setTail([]);
+    setWindowStart(null);
+    setAnchors(new Set());
     setTimelineMeta(null);
     setWatermark(null);
     setStatus("connecting");
@@ -345,13 +357,18 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     const sub = client.subscribeSession(sessionId, {
       onReset: () => {
         setTail([]);
+        setWindowStart(null);
+        setAnchors(new Set());
         setTimelineMeta(null);
         setSnapshotReady(false);
         setWatermark(null);
         sawSnapshot.current = false;
         apply({ type: "reset" });
       },
-      onSnapshot: (page) => apply({ type: "snapshot", cursor: page.cursor }),
+      onSnapshot: (page) => {
+        setWindowStart(conversationStart(page.entries, page.cursor !== null));
+        apply({ type: "snapshot", cursor: page.cursor });
+      },
       onChange: (entries) => {
         setTail(entries);
         setSnapshotReady(true);
@@ -386,7 +403,11 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     const from = started.cursor;
     const sub = subscription.current;
     if (typeof from !== "string" || sub === null) return;
-    void sub.fetchPage(from, EARLIER_PAGE_SIZE).then(
+    void readConversationPage(async (cursor, limit) => {
+      if (subscription.current !== sub || modelRef.current.fetchSeq !== seq)
+        throw new DOMException("The session changed", "AbortError");
+      return sub.fetchPage(cursor, limit);
+    }, from, EARLIER_PAGE_SIZE).then(
       (page) => apply({ type: "page", seq, entries: page.entries, cursor: page.cursor }),
       (error: unknown) => {
         if (error instanceof CursorExpiredError) apply({ type: "expired", seq });
@@ -404,6 +425,7 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
   const loadAnchor = useCallback(async (timelineId: string): Promise<boolean> => {
     const sub = subscription.current;
     if (sub === null) return false;
+    setAnchors(previous => new Set([...previous, timelineId]));
     try {
       return await sub.loadEntry(timelineId);
     } catch (error) {
@@ -411,7 +433,8 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
       throw error;
     }
   }, []);
-  const rows = tail;
+  const rows = useMemo(() => windowStart === null ? tail : tail.filter(row =>
+    row.ordinal >= windowStart || anchors.has(row.timeline_id)), [tail, windowStart, anchors]);
 
   const earlier = useMemo(() => earlierState(model, ctx), [model, ctx]);
 
@@ -449,8 +472,8 @@ export interface TeamTimelineFeed {
   readonly responseRuntimesBySession: ReadonlyMap<string, readonly ResponseRuntime[]>;
   /** True only after every current member's complete boundary query succeeds. */
   readonly historyReady: boolean;
-  /** Confirm that the complete boundary history contains a search landing. */
-  readonly loadAnchor: (sessionId: string, timelineId: string) => Promise<boolean>;
+  readonly historyError: string | null;
+  readonly retry: () => void;
 }
 
 /** Team conversation is distributed across member transcripts, so one parent
@@ -463,7 +486,7 @@ export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFee
   const records = useRef(
     new Map<
       string,
-      { sub: CollaborationSubscription | null; history: CollaborationTimeline | null }
+      { sub: CollaborationSubscription | null; history: CollaborationTimeline | null; error: string | null }
     >(),
   );
   const [revision, setRevision] = useState(0);
@@ -480,6 +503,7 @@ export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFee
       const record = {
         sub: null as CollaborationSubscription | null,
         history: null as CollaborationTimeline | null,
+        error: null as string | null,
       };
       records.current.set(id, record);
       record.sub = client.subscribeCollaboration(id, {
@@ -491,7 +515,18 @@ export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFee
         onChange: (history) => {
           if (records.current.get(id) !== record) return;
           record.history = history;
+          record.error = null;
           setRevision((value) => value + 1);
+        },
+        onError: error => {
+          if (records.current.get(id) !== record) return;
+          record.error = error.message;
+          setRevision(value => value + 1);
+        },
+        onStatus: status => {
+          if (records.current.get(id) !== record || record.history !== null) return;
+          if (status === "closed") record.error = "Could not load team messages";
+          setRevision(value => value + 1);
         },
       });
     }
@@ -506,19 +541,23 @@ export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFee
     [],
   );
 
-  const loadAnchor = useCallback(
-    async (sessionId: string, timelineId: string) =>
-      records.current
-        .get(sessionId)
-        ?.history?.entries.some((row) => row.timeline_id === timelineId) ?? false,
-    [],
-  );
+  const retry = useCallback(() => {
+    for (const record of records.current.values()) {
+      if (record.history !== null && record.error === null) continue;
+      record.error = null;
+      record.sub?.restart();
+    }
+    setRevision(value => value + 1);
+  }, []);
   return useMemo(() => {
     const rowsBySession = new Map<string, readonly TimelineEntry[]>();
     const responseRuntimesBySession = new Map<string, readonly ResponseRuntime[]>();
     let historyReady = true;
+    let historyError: string | null = null;
     for (const id of ids) {
-      const history = records.current.get(id)?.history;
+      const record = records.current.get(id);
+      const history = record?.history;
+      historyError ??= record?.error ?? null;
       if (!history) {
         historyReady = false;
         continue;
@@ -526,8 +565,8 @@ export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFee
       rowsBySession.set(id, history.entries);
       responseRuntimesBySession.set(id, history.response_runtimes);
     }
-    return { rowsBySession, responseRuntimesBySession, historyReady, loadAnchor };
-  }, [ids, revision, loadAnchor]);
+    return { rowsBySession, responseRuntimesBySession, historyReady, historyError, retry };
+  }, [ids, revision, retry]);
 }
 
 export interface SearchFeed {

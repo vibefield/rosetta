@@ -8,6 +8,9 @@ import type { TailState } from "./tail-scroll.ts";
 export interface TimelineLayout {
   readonly sessionId: string;
   readonly rows: readonly TimelineEntry[];
+  /** Full observed boundary histories establish arrival baselines even while
+   * older entries remain outside the displayed parent window. */
+  readonly observedRows?: readonly TimelineEntry[];
   readonly ready: boolean;
   readonly readySessionIds: readonly string[];
   readonly elementForRow: (row: TimelineEntry) => HTMLElement | null;
@@ -57,7 +60,8 @@ export function useTranscriptTail(
         scroll.update(false, 0);
         return;
       }
-      const fresh = arrivals.update(next.rows);
+      const displayed = new Set(next.rows.map(row => row.timeline_id));
+      const fresh = arrivals.update(next.observedRows ?? next.rows).filter(row => displayed.has(row.timeline_id));
       for (const id of next.readySessionIds) arrivals.prime(id);
       scroll.update(true, fresh.length);
       if (fresh.length === 0 || preference.matches) return;

@@ -22,6 +22,8 @@ export type ReadingBlock =
   | { readonly kind: "watermark"; readonly key: string; readonly at: number | null };
 
 export interface ReadingSitting {
+  /** React identity is separate from the canonical day-navigation anchor. */
+  readonly renderKey?: string;
   readonly sitting: PlannedSitting["sitting"];
   readonly blocks: readonly ReadingBlock[];
 }
@@ -115,7 +117,7 @@ export function activityPlan(plan: readonly PlannedSitting[], options: {
         flush();
         blocks.push({ kind: "request", key: item.key, item, at: eventAt(rows[0]) });
       } else {
-        if (firstContent && options.partial) partial = true;
+        if ((firstContent || rows.some(row => options.gaps.has(row.timeline_id))) && options.partial) partial = true;
         items.push(item);
       }
       firstContent = false;

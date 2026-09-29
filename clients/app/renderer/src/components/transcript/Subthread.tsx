@@ -151,6 +151,13 @@ function EmbeddedSubthread({
       </button>
       {shown && (
       <div className="tr">
+        {!feed.snapshotReady && <p className="tr-quiet" role="status">Loading messages…</p>}
+        {feed.snapshotReady && feed.earlier.kind !== "none" && <div className="tr-activity__loading" role="status">
+          {feed.earlier.kind === "fetching" || feed.earlier.kind === "revealing" ? "Loading earlier messages…" : <>
+            <span>{feed.earlier.kind === "failed" ? "Could not load earlier messages." : "Earlier messages are not loaded."}</span>
+            <button type="button" onClick={feed.loadEarlier}>{feed.earlier.kind === "failed" ? "Retry" : "Load earlier messages"}</button>
+          </>}
+        </div>}
         <TranscriptDocument
           session={session}
           model={model}

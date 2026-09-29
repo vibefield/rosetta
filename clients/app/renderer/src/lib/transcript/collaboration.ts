@@ -14,6 +14,7 @@ import type {
 import type { LedgerLine } from "./ledger.ts";
 import { linkedChildSessionIds } from "./ledger.ts";
 import { canonicalText } from "./vocabulary.ts";
+import { withinHistoryWindow } from "./history-window.ts";
 
 export type RuntimeProfileBasis = "observed" | "varies" | "configured" | "unknown";
 
@@ -358,6 +359,7 @@ export function collaborationStamp(row: TimelineEntry): CollaborationStamp {
 export function teamChronology(
   parentRows: readonly TimelineEntry[],
   rowsBySession: ReadonlyMap<string, readonly TimelineEntry[]>,
+  coverage?: { readonly hasEarlier: boolean; readonly ready: boolean },
 ): TeamChronology {
   const seenTimelineIds = new Set(parentRows.map((row) => row.timeline_id));
   const duplicateRepresentatives = new Map<string, string>();
@@ -366,6 +368,8 @@ export function teamChronology(
   for (const rows of rowsBySession.values()) {
     for (const row of rows) {
       if (row.body.type !== "collaboration") continue;
+      if (coverage !== undefined && (!coverage.ready ||
+        !withinHistoryWindow(collaborationStamp(row).at, parentRows, coverage.hasEarlier))) continue;
       if (
         row.body.event.channel === "coordinator" &&
         row.body.event.kind === "assignment"

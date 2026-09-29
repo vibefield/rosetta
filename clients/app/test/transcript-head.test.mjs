@@ -382,11 +382,11 @@ test("the pull spends held weight and gathers unheld weight", () => {
   assert.equal(gathering.fill, "25%");
 });
 
-test("a pull that outran the fetch reads loading, with the page size", () => {
+test("a pull that outran the fetch does not promise a fixed raw-row page size", () => {
   const view = describeHead({ earlier: { kind: "revealing" }, above: 383, pull: 1 });
   assert.equal(view.state, "loading");
   assert.equal(view.lead, "loading");
-  assert.equal(view.figure, `${EARLIER_PAGE_SIZE} earlier`);
+  assert.equal(view.figure, "earlier");
   assert.equal(view.fill, null, "indeterminate and colourless");
 });
 

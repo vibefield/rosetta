@@ -100,6 +100,8 @@ test("team roster reconciliation retains existing streams and ignores removed me
         id,
         handlers,
         closed: false,
+        restarts: 0,
+        restart() { this.restarts += 1; handlers.onReset(); },
         close() {
           this.closed = true;
         },
@@ -123,10 +125,46 @@ test("team roster reconciliation retains existing streams and ignores removed me
   subscriptions[0].handlers.onChange(history("late"));
   assert.equal(hook.render().rowsBySession.has("a"), false);
   assert.equal(subscriptions.length, 3);
-  assert.equal(await hook.render().loadAnchor("c", "c"), true);
+  subscriptions[2].handlers.onReset();
+  subscriptions[2].handlers.onError({ message: "Offline" });
+  assert.equal(hook.render().historyError, "Offline");
+  assert.equal(hook.render().historyReady, false);
+  hook.render().retry();
+  assert.equal(subscriptions[1].restarts, 0, "healthy members are not restarted");
+  assert.equal(subscriptions[2].restarts, 1);
+  subscriptions[2].handlers.onChange(history("c"));
+  assert.equal(hook.render().historyError, null);
+  assert.equal(hook.render().historyReady, true);
   hook.close();
   assert.equal(
     subscriptions.every((sub) => sub.closed),
     true,
   );
+});
+
+test('chat boundaries retain cached prefixes for later reveal and exact anchors bypass the visible start', async t => {
+  const prefix = row('prefix', 99, { type: 'thinking', text: { type: 'inline', text: 'Before chat' } });
+  const h = harness(t, { fetchFn: async url => response(url.includes('/timeline/prefix')
+    ? { entry: prefix, watermark: 'generation-a' }
+    : { entries: [row('earlier-chat', 98)], cursor: null, watermark: 'generation-a' }) });
+  h.sub.close();
+  const hook = dataHooks(h.client)('useTimeline', 's1');
+  t.after(() => hook.close()); hook.render();
+  const socket = h.sockets[1]; socket.open();
+  socket.snapshot([prefix, row('chat', 100)]);
+  assert.deepEqual(hook.render().rows.map(row => row.timeline_id), ['chat']);
+  await hook.render().loadAnchor('prefix');
+  assert.deepEqual(hook.render().rows.map(row => row.timeline_id), ['prefix', 'chat']);
+  hook.render().loadEarlier(); await microtasks();
+  assert.deepEqual(hook.render().rows.map(row => row.timeline_id), ['earlier-chat', 'prefix', 'chat']);
+});
+
+test('a live primary reply cannot hide an already visible activity-only snapshot', t => {
+  const h = harness(t); h.sub.close();
+  const hook = dataHooks(h.client)('useTimeline', 's1');
+  t.after(() => hook.close()); hook.render();
+  const socket = h.sockets[1]; socket.open();
+  socket.snapshot([row('activity', 200, { type: 'thinking', text: { type: 'inline', text: 'Working' } })]);
+  socket.frame({ frame: 'mutation', stamp: { epoch: 1, seq: 11 }, mutation: { type: 'message', ...row('reply', 201) } });
+  assert.deepEqual(hook.render().rows.map(row => row.timeline_id), ['activity', 'reply']);
 });

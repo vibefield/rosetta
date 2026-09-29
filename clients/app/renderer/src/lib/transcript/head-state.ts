@@ -389,7 +389,7 @@ function figureOf(above: number | null): string {
 export function describeHead(input: HeadInput): HeadView {
   const { earlier, above } = input;
   const pull = Math.min(1, Math.max(0, input.pull));
-  const pageSize = input.pageSize ?? EARLIER_PAGE_SIZE;
+  const pageSize = input.pageSize;
   const finding = input.finding ?? null;
   const startLabel = input.startLabel ?? null;
 
@@ -432,7 +432,7 @@ export function describeHead(input: HeadInput): HeadView {
     return {
       state: "loading",
       lead: "loading",
-      figure: `${pageSize} earlier`,
+      figure: pageSize === undefined ? "earlier" : `${pageSize} earlier`,
       trail: "",
       retry: false,
       bar: true,

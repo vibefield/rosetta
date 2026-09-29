@@ -1528,6 +1528,24 @@ disclosure calls `GET /api/sessions/{id}/timeline/{timeline_id}/work`; the daemo
 resolves the source session, response, and inclusive bounds from that canonical
 report and returns only the proven range. Pending or missing evidence fails closed.
 
+The transcript renderer keeps one covered history window (2026-09-28). Complete
+team boundary subscriptions stay cached, but delivered events enter the document
+only inside loaded parent coverage, never before its beginning or across an exact
+anchor's unloaded gap. Undated shared events wait for complete history. Ordinary
+worker fallbacks use that same coverage; exact invocation ownership takes priority.
+Initial display starts at a primary chat boundary when one exists. Earlier reads
+seek six primary messages with a five-page/1,000-row bound, hold the section until
+reveal, and leave a clipped leading prefix in the subscription cache. Oversized
+activity-only sections explicitly offer loading/retry inside their fold. Searching
+for an older team delivery loads its surrounding parent history before landing.
+Sitting and activity React identities survive overlapping prepends while canonical
+anchors remain unchanged; image rails stay outside disclosures and retain their
+scroll position. Full observed team histories, including currently undisplayed
+rows, establish live-arrival baselines so paging cannot count old messages as new.
+This is renderer composition over existing canonical pages, with no new projection
+or protocol. Acceptance lives in the transcript history-window unit and Electron
+fixtures alongside generation/resync tests for the data hooks.
+
 Electron owns one managed daemon generation at a time. `serve --json` emits a
 versioned readiness event with its bound loopback origin. `serve --announce` additionally
 publishes `{schema: "rosetta-daemon/1", origin, pid, protocol_version, db, started_at}` as

@@ -129,6 +129,11 @@ async function run() {
     assert.deepEqual(await check(() => ({ top: document.querySelector('.tr-scroll').scrollTop, room: document.querySelector('.ah-room').getBoundingClientRect().top })), before);
 
     win.setSize(430, 900); await pause(200);
+    // macOS can deactivate the resized test window. Synthetic key events still
+    // arrive then, but DOM focus events (which reveal the target tile) do not.
+    app.focus({ steal: true });
+    win.focus(); win.webContents.focus();
+    await until(() => document.hasFocus(), 'Resized image fixture did not regain focus');
     await show('[data-timeline-id="gallery"]');
     await check(() => document.querySelector('[data-timeline-id="gallery"] .tr-att__tile').focus({ preventScroll: true }));
     const vertical = await check(() => document.querySelector('.tr-scroll').scrollTop);
