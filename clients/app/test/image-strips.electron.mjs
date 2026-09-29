@@ -19,7 +19,7 @@ async function until(fn, message) {
   for (let i = 0; i < 160; i++) { if (await check(fn)) return; await pause(25); }
   throw new Error(message);
 }
-const activity = '.tr-ledger:has([data-timeline-id="image-read"])';
+const activity = '.tr-activity:has([data-timeline-id="image-read"])';
 async function show(selector) {
   await check(selector => {
     const scroller = document.querySelector('.tr-scroll');
@@ -94,25 +94,27 @@ async function run() {
     assert.deepEqual(await check(selector => {
       const run = document.querySelector(selector);
       return { closed: run.querySelector('.tr-fold').getAttribute('aria-expanded'),
-        hidden: getComputedStyle(run.querySelector('.tr-ladder')).display,
-        count: run.querySelectorAll(':scope > .tr-attachments figure').length,
-        nested: run.querySelectorAll('.tr-ladder .tr-att').length };
+        hidden: getComputedStyle(run.querySelector('.tr-activity__list')).display,
+        count: run.querySelectorAll('.tr-activity-tools > .tr-attachments figure').length,
+        nested: run.querySelectorAll('.tr-detail .tr-att').length };
     }, activity), { closed: 'false', hidden: 'none', count: 6, nested: 0 });
-    await until(() => document.querySelector('.tr-ledger > .tr-attachments img')?.naturalWidth > 0, 'Folded image did not load');
-    const readsBefore = await check(async () => (await fetch('/test/image-reads')).json());
-    assert.equal(readsBefore['image-read:0'], undefined, 'Text target must not be read as image');
     await check(selector => {
       const run = document.querySelector(selector);
       window.stripBefore = run.querySelector('.tr-att');
       run.querySelector('.tr-fold').click();
     }, activity);
-    assert.equal(await check(selector => getComputedStyle(document.querySelector(selector + ' .tr-ladder')).display !== 'none', activity), true);
+    assert.equal(await check(selector => getComputedStyle(document.querySelector(selector + ' .tr-activity__list')).display !== 'none', activity), true);
+    await until(() => document.querySelector('.tr-activity-tools > .tr-attachments img')?.naturalWidth > 0, 'Revealed tool image did not load');
+    const readsBefore = await check(async () => (await fetch('/test/image-reads')).json());
+    assert.equal(readsBefore['image-read:0'], undefined, 'Text target must not be read as image');
     assert.equal(await check(selector => document.querySelector(selector + ' .tr-att') === window.stripBefore, activity), true);
     assert.equal(await check(() => document.querySelector('[data-timeline-id="image-read"]').getAttribute('aria-expanded')), 'false');
     await check(() => document.querySelector('[data-timeline-id="image-read"]').click());
     assert.equal(await check(selector => document.querySelector(selector + ' .tr-att') === window.stripBefore, activity), true);
     await check(selector => document.querySelector(selector + ' .tr-fold').click(), activity);
     await capture('folded');
+    assert.equal(await check(selector => document.querySelector(selector + ' .tr-att').getClientRects().length, activity), 0, 'tool images belong to the closed activity group');
+    await check(selector => document.querySelector(selector + ' .tr-fold').click(), activity);
 
     await check(selector => document.querySelector(selector + ' button.tr-att__tile').focus({ preventScroll: true }), activity);
     const before = await check(() => ({ top: document.querySelector('.tr-scroll').scrollTop, room: document.querySelector('.ah-room').getBoundingClientRect().top }));
@@ -137,10 +139,10 @@ async function run() {
     assert.equal(await check(() => document.documentElement.scrollWidth <= window.innerWidth), true);
     await capture('narrow');
     await show(activity);
-    await until(() => Boolean(document.querySelector('.tr-ledger .tr-att__retry')), 'Tool failure did not retain a retry slot');
-    await check(() => document.querySelector('.tr-ledger .tr-att__retry').click());
-    await until(() => !document.querySelector('.tr-ledger .tr-att__retry'), 'Tool retry did not recover');
-    await until(() => [...document.querySelectorAll('.tr-ledger > .tr-attachments img')].every(img => img.naturalWidth > 0), 'Tool retry bytes did not decode');
+    await until(() => Boolean(document.querySelector('.tr-activity-tools .tr-att__retry')), 'Tool failure did not retain a retry slot');
+    await check(() => document.querySelector('.tr-activity-tools .tr-att__retry').click());
+    await until(() => !document.querySelector('.tr-activity-tools .tr-att__retry'), 'Tool retry did not recover');
+    await until(() => [...document.querySelectorAll('.tr-activity-tools > .tr-attachments img')].every(img => img.naturalWidth > 0), 'Tool retry bytes did not decode');
 
     await show('[data-timeline-id="missing"]');
     await check(() => document.querySelector('[data-timeline-id="missing"] .tr-image-link').click());
@@ -160,6 +162,6 @@ async function run() {
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ result: 'passed', artifacts: temporary, checks: ['prompt marker click and keyboard open', 'prompt and reply placement', 'both fold levels', 'no duplicate thumbnails', 'same file bytes in viewer', 'focus restoration', 'horizontal keyboard scrolling', 'narrow layout', 'asset/file retry', 'missing-image links', 'nested full-message viewer'] }));
   } catch (error) { failed = true; console.error(error); console.error('Artifacts:', temporary); if (win) await capture('failure'); }
-  finally { clearTimeout(deadline); clearInterval(pulse); win?.destroy(); await server?.close(); app.exit(failed ? 1 : 0); }
+  finally { clearTimeout(deadline); clearInterval(pulse); win?.destroy(); await Promise.race([server?.close(), pause(1000)]); app.exit(failed ? 1 : 0); }
 }
 void run();

@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Transcript, Revisited</title>
-<meta name="description" content="Design proposal for the History room's message view: the prompt panel, the response head, and the activity ledger that replaces the work block.">
+<meta name="description" content="The History room's transcript design: primary conversation in view, with tools, team traffic, peer messages and session context folded into local activity groups.">
 <style>
 /* ═══ tokens — transcribed from clients/app/renderer/src/styles/tokens.css (vibe-field design-kit) ═══ */
 :root {
@@ -774,6 +774,88 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
   .im-controls { padding-inline: 10px; }
 }
 </style>
+<style id="activity-grouping-design">
+/* §04B · implemented 2026-09-28. Scoped, interactive design specimens. */
+#activity-grouping { scroll-margin-top: 24px; }
+#activity-grouping h2 { margin-top: 8px; }
+.af-intro { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 22px 0; padding: 14px 0; border-block: 1px solid var(--vf-hairline-strong); color: var(--vf-text-secondary); font-size: 12px; }
+.af-intro b { color: var(--vf-text-primary); font-weight: 500; }
+.af-intro span { display: flex; gap: 8px; align-items: baseline; }
+.af-intro em { font: normal 10px var(--vf-font-mono); color: var(--vf-text-tertiary); }
+.af-review { margin: 24px 0 12px; border: 1px solid var(--vf-hairline-strong); border-radius: 12px; background: var(--vf-sheet-surface); overflow: hidden; }
+.af-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--vf-hairline); }
+.af-controls button, .af-text-button { min-height: 30px; padding: 4px 9px; border: 0; border-radius: 6px; background: none; color: var(--vf-text-tertiary); font: 11.5px var(--vf-font-sans); cursor: pointer; }
+.af-controls button:hover, .af-text-button:hover { color: var(--vf-text-primary); background: var(--vf-fill); }
+.af-controls button:disabled { opacity: .45; cursor: default; }
+.af-mode { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--vf-hairline-strong); border-radius: 8px; }
+.af-mode button { min-height: 26px; }
+.af-controls button[aria-pressed="true"] { background: var(--vf-fill); color: var(--vf-text-primary); }
+.af-controls .af-width { margin-left: auto; }
+.af-review button:focus-visible, .af-group summary:focus-visible, .af-reader button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 3px; }
+.af-stage { max-width: 800px; margin: auto; container: activity-demo / inline-size; }
+.af-stage[data-narrow="true"] { max-width: 360px; }
+.af-stage > .tr { padding: 30px 28px; }
+.af-stage .tr-head { flex-wrap: wrap; height: auto; min-height: 22px; }
+.af-stage .tr-head .model { color: var(--vf-text-tertiary); }
+.af-stage .tr-turn + .tr-turn { margin-top: 28px; }
+.af-group { margin: 12px 0 16px; color: var(--vf-text-secondary); }
+.af-group > summary, .af-event > summary { list-style: none; cursor: pointer; border-radius: 5px; }
+.af-group > summary::-webkit-details-marker, .af-event > summary::-webkit-details-marker { display: none; }
+.af-group-head { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 3px 6px; margin-inline: -6px; color: var(--vf-text-tertiary); font-size: 12px; }
+.af-group-head:hover, .af-event > summary:hover { background: var(--vf-fill); color: var(--vf-text-secondary); }
+.af-chevron { display: inline-flex; flex: 0 0 12px; width: 12px; height: 12px; color: var(--vf-text-tertiary); transition: transform 160ms var(--vf-ease-island); }
+.af-chevron svg { width: 12px; height: 12px; }
+.af-group[open] > summary > .af-chevron, .af-event[open] > summary > .af-chevron { transform: rotate(90deg); }
+.af-group[open] > .af-group-head { color: var(--vf-text-secondary); }
+.af-summary-text { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.af-span { flex: none; font-size: 10px; font-variant-numeric: tabular-nums; color: var(--vf-text-faint); }
+.af-status { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.af-status[data-state="failed"] { color: var(--vf-red); }
+.af-status[data-state="running"] { color: var(--vf-green); }
+.af-status i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.af-events { margin: 3px 0 2px 5px; padding: 2px 0 3px 14px; border-left: 1px solid var(--vf-hairline-strong); }
+.af-event { margin: 1px 0; }
+.af-event > summary { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto 12px; gap: 8px; align-items: center; min-height: 35px; margin-inline: -5px; padding: 6px 5px; font-size: 12px; }
+.af-event-glyph { display: inline-flex; width: 14px; height: 14px; color: var(--member-color, var(--vf-text-tertiary)); }
+.af-event-glyph svg { width: 14px; height: 14px; }
+.af-event-label { min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 1px 7px; }
+.af-event-label strong { font-weight: 500; color: var(--vf-text-secondary); }
+.af-event-label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; color: var(--vf-text-tertiary); font-size: 11px; }
+.af-event time { color: var(--vf-text-faint); font: 10px var(--vf-font-mono); }
+.af-event-body { margin: 3px 20px 14px 22px; color: var(--vf-text-secondary); font-size: 13px; overflow-wrap: anywhere; }
+.af-event-body p + p { margin-top: 10px; }
+.af-byline { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-bottom: 9px; color: var(--vf-text-tertiary); font-size: 10.5px; }
+.af-preview { position: relative; max-height: 21.7em; overflow: hidden; }
+.af-preview::after { content: ""; position: absolute; inset: auto 0 0; height: 3em; background: linear-gradient(transparent, var(--vf-chrome-solid)); pointer-events: none; }
+.af-preview-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; padding-top: 5px; margin-top: 8px; border-top: 1px solid var(--vf-hairline-strong); font-size: 10.5px; color: var(--vf-text-tertiary); }
+.af-preview-foot button { margin-left: auto; color: var(--vf-text-secondary); }
+.af-event.is-landed > summary { background: color-mix(in srgb, var(--vf-select) 10%, transparent); outline: 1px solid var(--vf-select); outline-offset: 2px; }
+.af-note { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; padding: 12px 16px; border-top: 1px solid var(--vf-hairline); color: var(--vf-text-tertiary); font-size: 11.5px; }
+.af-note p { flex: 1; margin: 0; min-width: 200px; }
+.af-note button { padding: 0; }
+.af-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.af-single { max-width: 640px; margin: 18px 0; padding: 10px 20px; border: 1px solid var(--vf-hairline-strong); border-radius: 10px; background: var(--vf-sheet-surface); }
+.af-single .af-group { margin-block: 4px; }
+.af-reader pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 var(--vf-font-mono); }
+.af-reader .tr-prose { max-width: 68ch; margin: auto; }
+.af-reader .tr-prose h3 { margin-top: 22px; }
+.af-reader .im-viewer-tools { flex-wrap: wrap; }
+.af-reader-copy { margin-left: auto; }
+@container activity-demo (max-width: 480px) {
+  .af-stage > .tr { padding: 24px 16px; }
+  .af-span { display: none; }
+  .af-event > summary { grid-template-columns: 14px minmax(0, 1fr) 12px; }
+  .af-event > summary time { display: none; }
+  .af-event-body { margin-right: 0; }
+  .af-event-label small { white-space: normal; overflow-wrap: anywhere; }
+  .af-stage .tr-head .facts { display: none; }
+}
+@media (max-width: 600px) {
+  .af-review { margin-inline: -20px; }
+  .af-controls { padding-inline: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { .af-chevron { transition: none; } }
+</style>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
     <symbol id="g-read" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5.5L13 6v7.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z"/><path d="M9.5 2.5V6H13"/></symbol>
@@ -818,7 +900,8 @@ button.tr-mark:hover { color: var(--vf-text-tertiary); }
     <span><b>Parent</b> <code>protos/agent-history-proto/design-agent-history.md</code> §5 · <code>vibe-field/DESIGN.md</code></span>
     <span><b>Companion code</b> <code>clients/app/renderer/src/components/Transcript.tsx</code> · <code>lib/model.ts</code> · <code>styles/room.css</code></span>
     <span><b>Status</b> the original record is locked (§12); §04A is revised against the Claude delegated-work census—Agent workers, Agent Teams and Workflows—and its standing-doc delta is appended in §10</span>
-    <span><b>New proposal · 2026-09-09</b> <a href="#prompt-images">§06A · Prompt images — interactive design and normalization contract</a></span>
+    <span><b>Latest implementation · 2026-09-28</b> <a href="#activity-grouping">§04B · Conversation first — group all secondary activity</a></span>
+    <span><b>Proposal · 2026-09-09</b> <a href="#prompt-images">§06A · Prompt images — interactive design and normalization contract</a></span>
   </div>
 </header>
 
@@ -1166,6 +1249,7 @@ Tests: 2 failed, 11 passed · 1.83s</pre></div>
 
 <section class="rec">
   <h3>An Agent Team — conversation in time, provenance underneath</h3>
+  <p class="cap"><b>Reading this earlier specimen.</b> This shows the event anatomy and ownership rules. The proposed default in <a href="#activity-grouping">§04B</a> puts these events inside a closed local activity group; team traffic keeps its position in time.</p>
   <p>A proven burst of members for one native team becomes one roster event. Each stored colour maps to the organizational-accent palette; absent colour leaves the Claude Code mark neutral. The right edge summarizes only response evidence: one model/effort pair, <em>varies</em>, an explicitly configured model with unknown effort, or no runtime fact. Later joins, resumes and terminations keep their own times.</p>
   <p>Only one canonical delivered event enters shared chronology. For envelope-backed team traffic, only top-level envelopes speak; nested tags are copies. Sender request, routing result, inbox copy and recipient envelope can be four observations of one communication, so the full <code>message</code> body wins over its short <code>content</code> preview and renders once. There is no native <em>report</em> message kind: <em>Reported</em> is reserved for a message/result joined to an exact task-completion relation. Everything else remains addressed conversation, however report-like its prose sounds.</p>
 </section>
@@ -1403,6 +1487,177 @@ No task id or run id was created.</pre></div>
   <p>The renderer should not recover these semantics from prose. It needs a three-way relation discriminant; exact parent/call/child ids for Agent workers; team/member/session ids, display name and optional native colour for teammates; and an explicit <code>WorkflowRun → WorkflowAttempt[] → WorkflowPhase[] → WorkflowWorker[]</code> graph. An attempt keeps invocation time, operation, request/tool/task ids, its paired text/structured launch evidence, terminal callback, duration/usage metrics and run id, so a resumed snapshot cannot erase the costly first attempt. The run keeps canonical <code>workflowName</code> evidence, full script and path, args, default model, declared phases, replaceable current progress, exact terminal word, aggregate metrics, untimestamped logs, arbitrary JSON result/error and raw/source cursors. Every Workflow worker keeps stable id/key/index, non-identifying display label, snapshot state, cache/reuse flag, configured model/effort separately from observed response profiles, and provenance for both; normalization must preserve the agent request’s effort instead of asking the renderer to parse Workflow JavaScript. Journal observations and child transcript ids attach as cumulative provenance instead of masquerading as the current snapshot.</p>
   <p><em>Reported</em> is a projection, not a Claude message type. It additionally requires the exact task/tool/result relation and source response; an optional work disclosure requires exact start/end cursors in that member transcript. Without both boundaries, the report body can still fold but the work control is absent. Agent workers always reopen their one canonical child document; workflow worker rows reopen beneath their run, grouped by phase. Search indexes folded bodies, durable workflow results and loaded subthreads. At narrow widths objectives and runtime summaries wrap, low-priority phase descriptions disappear, and colour is never the only identity cue.</p>
 </section>
+
+<section class="rec" id="activity-grouping">
+  <span class="eyebrow">§04B · implemented 2026-09-28 · supersedes the exposed secondary messages in §03–§06</span>
+  <h2>Conversation first. Activity one step away.</h2>
+  <p class="lead">Keep the human’s prompts and the primary agent’s replies in view. Everything happening between them shares one quiet, closed activity group.</p>
+  <p>Long-message previews solve the height of a single message. They still leave every teammate, peer hand-back and machine notice competing with the conversation. Extend the tool run’s outer fold to <strong>all consecutive secondary events</strong>, including short messages and single-event runs.</p>
+  <p>Use one group at its actual position in the transcript. Tools, team messages and context can share it. A primary reply or human prompt closes it; the next activity starts a new group. Opening the group reveals an ordered list, with each message’s body one more press away.</p>
+</section>
+<div class="af-intro" aria-label="Disclosure levels">
+  <span><em>Rest</em> <b>Prompt · activity summary · reply</b></span>
+  <span><em>01</em> Events in recorded order</span>
+  <span><em>02</em> Message preview or tool detail</span>
+</div>
+
+<div class="af-review" id="activity-review">
+  <div class="spec__bar">Conversation first<span class="note">interactive proposal · illustrative content</span></div>
+  <div class="af-controls" aria-label="Prototype controls">
+    <div class="af-mode" role="group" aria-label="Activity visibility">
+      <button type="button" data-af-mode="folded" aria-pressed="true">Conversation</button>
+      <button type="button" data-af-mode="open" aria-pressed="false">Show activity</button>
+    </div>
+    <button type="button" id="af-find">Find peer report</button>
+    <button type="button" id="af-arrive">Receive peer message</button>
+    <button type="button" class="af-width" id="af-width" aria-pressed="false">Narrow column</button>
+  </div>
+  <div class="af-stage" id="af-stage" data-narrow="false"><div class="tr">
+    <div class="tr-turn">
+      <div class="tr-seg"><div class="tr-prompt"><p>Build an empty-pane launcher. Keep the terminal quick to open, and let me start a saved session from the same place.</p></div></div>
+      <div class="tr-resp">
+        <div class="tr-head"><span class="mark"><svg aria-hidden="true"><use href="#m-claude"/></svg></span>Claude Code <span class="model">claude-opus-5 · high effort</span><span class="facts">14:16</span></div>
+        <div class="tr-seg tr-prose"><p>I’ll map the pane layout and session launch path, then bring those findings into one design.</p></div>
+        <details class="af-group" id="af-launch">
+          <summary class="af-group-head"><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span><span class="af-summary-text">2 delegations · 1 assignment</span><span class="af-span">14:16–14:17</span></summary>
+          <div class="af-events">
+            <details class="af-event" data-count-kind="delegation">
+              <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-delegate"/></svg></span><span class="af-event-label"><strong>Delegated</strong><small>Explore the pane layout</small></span><time>14:16:12</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body"><div class="af-byline"><span>Agent worker · Explore</span><span>14:16:12</span></div><p>Find the pane frame, empty state and keyboard focus path. Return a map of the relevant components.</p></div>
+            </details>
+            <details class="af-event" data-count-kind="delegation">
+              <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-delegate"/></svg></span><span class="af-event-label"><strong>Delegated</strong><small>Trace saved-session launch</small></span><time>14:16:18</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body"><div class="af-byline"><span>Agent worker · Explore</span><span>14:16:18</span></div><p>Trace how a saved session becomes a live terminal. Check whether the empty-pane launcher can reuse that path.</p></div>
+            </details>
+            <details class="af-event" data-count-kind="assignment">
+              <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-team"/></svg></span><span class="af-event-label"><strong>Assignment</strong><small>Claude Code → @layout</small></span><time>14:17:02</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body"><div class="af-byline"><span>Claude Code → @layout</span><span>14:17:02</span></div><p>Review the launcher’s spacing and keyboard path while the two explorations run.</p></div>
+            </details>
+          </div>
+        </details>
+        <div class="tr-seg tr-prose"><p>The launcher can live in the existing empty pane. I’m checking the reports against the current keyboard behavior before changing it.</p></div>
+        <details class="af-group" id="af-recon">
+          <summary class="af-group-head"><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span><span class="af-summary-text">3 peer messages · 1 team message · 2 context</span><span class="af-span">14:17–14:22</span></summary>
+          <div class="af-events">
+            <details class="af-event" data-count-kind="peer">
+              <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-delegate"/></svg></span><span class="af-event-label"><strong>Peer message</strong><small>@abf76b20b0d2e10f2 → Claude Code</small></span><time>14:17:54</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body"><div class="af-byline"><span>Peer delivery · 14:17:54</span></div><p>The empty pane already owns the focus boundary. Keep the launcher inside that boundary so Escape can return to the pane.</p></div>
+            </details>
+            <details class="af-event" data-count-kind="team" data-member-color="blue">
+              <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#m-claude"/></svg></span><span class="af-event-label"><strong>Team message</strong><small>@layout → @team</small></span><time>14:18:03</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body"><div class="af-byline"><span>@layout → @team · broadcast</span><span>14:18:03</span></div><p>The search field should receive focus when the launcher opens. Keep the saved sessions directly below it.</p></div>
+            </details>
+            <details class="af-event" data-count-kind="peer">
+              <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-delegate"/></svg></span><span class="af-event-label"><strong>Peer message</strong><small>@aa2514a9c4b2e0ad7 → Claude Code</small></span><time>14:20:28</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body"><div class="af-byline"><span>Peer delivery · 14:20:28</span></div><p>The existing session launcher accepts the same project and session identifiers. No second launch path is needed.</p></div>
+            </details>
+            <details class="af-event" id="af-peer-report" data-count-kind="peer">
+              <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-delegate"/></svg></span><span class="af-event-label"><strong>Peer message</strong><small>@a5e214b27976636db → Claude Code</small></span><time>14:21:31</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body">
+                <div class="af-byline"><span>Peer delivery · 14:21:31</span><span>Subagent hand-back</span></div>
+                <div class="af-preview tr-prose" id="af-report-preview" aria-label="Opening of the peer message"></div>
+                <div class="af-preview-foot"><span>Preview · <span data-af-char-count></span> characters</span><button type="button" class="af-text-button" id="af-read" aria-haspopup="dialog">View full message ↗</button></div>
+              </div>
+            </details>
+            <details class="af-event" data-count-kind="context">
+              <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-doc"/></svg></span><span class="af-event-label"><strong>Context compacted</strong><small>Continuation summary</small></span><time>14:21:45</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body tr-prose"><div class="af-byline"><span>Agent-generated context · 14:21:45</span></div><p>Continue with the existing pane frame and session launcher. Preserve keyboard focus and keep the launcher’s state local to the pane.</p></div>
+            </details>
+            <details class="af-event" data-count-kind="context">
+              <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-bell"/></svg></span><span class="af-event-label"><strong>Session notice</strong><small>Review mode enabled</small></span><time>14:22:01</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body"><div class="af-byline"><span>Recorded notice · 14:22:01</span></div><p>Review mode enabled for the next response.</p></div>
+            </details>
+          </div>
+        </details>
+        <div class="tr-seg tr-prose"><p>The reports agree: reuse the pane’s focus handling and the existing session launcher. I’ll put search above the saved sessions and keep the default terminal action one keystroke away.</p></div>
+      </div>
+    </div>
+    <div class="tr-turn">
+      <div class="tr-seg"><div class="tr-prompt"><p>Yes, and check that Escape returns focus to the pane.</p></div></div>
+      <div class="tr-resp">
+        <div class="tr-head"><span class="mark"><svg aria-hidden="true"><use href="#m-claude"/></svg></span>Claude Code <span class="model">claude-opus-5 · high effort</span><span class="facts">14:24</span></div>
+        <div class="tr-seg tr-prose"><p>I’m checking the focus behavior now. The first test caught an Escape handler that closes the launcher without restoring focus.</p></div>
+        <details class="af-group" id="af-live">
+          <summary class="af-group-head"><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span><span class="af-summary-text">1 command · 1 peer message</span><span class="af-status" data-state="failed">1 failed</span><span class="af-status" data-state="running"><i aria-hidden="true"></i>Running</span></summary>
+          <div class="af-events" id="af-live-events">
+            <details class="af-event" data-count-kind="command">
+              <summary><span class="af-event-glyph" style="color:var(--vf-red)"><svg aria-hidden="true"><use href="#g-fail"/></svg></span><span class="af-event-label"><strong>Command failed</strong><small>pnpm test · pane focus</small></span><time>14:24:16</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body"><div class="af-byline"><span>Exit 1 · 14:24:16</span></div><pre class="tr-diag">FAIL PaneFrame › Escape restores pane focus
+Expected: pane element
+Received: document body</pre></div>
+            </details>
+            <details class="af-event" data-count-kind="peer">
+              <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-delegate"/></svg></span><span class="af-event-label"><strong>Peer message</strong><small>@layout → Claude Code</small></span><time>14:24:20</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+              <div class="af-event-body"><div class="af-byline"><span>Peer delivery · 14:24:20</span></div><p>I’m checking the focus target after the launcher unmounts.</p></div>
+            </details>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div></div>
+  <div class="af-note"><p id="af-note">Closed groups keep the main conversation readable. Open a summary, then a message. Failures and live state remain visible on the closed group.</p><button type="button" class="af-text-button" id="af-reset">Reset example</button></div>
+  <span class="af-sr" id="af-live-region" role="status" aria-live="polite"></span>
+</div>
+<p class="cap"><b>Try the peer hand-back at 14:21:31.</b> “Find peer report” opens only its group and message. “Receive peer message” updates the tail without opening it. The full-message reader keeps Rendered / Source modes and returns focus to its trigger.</p>
+
+<section class="rec">
+  <h3>A single short message gets the same fold</h3>
+  <p>No size threshold for the group. Even one brief coordinator follow-up belongs behind the same summary; the long-message preview remains a separate reading affordance inside.</p>
+</section>
+<div class="af-single">
+  <details class="af-group">
+    <summary class="af-group-head"><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span><span class="af-summary-text">1 coordinator follow-up</span><span class="af-span">14:23:02</span></summary>
+    <div class="af-events"><details class="af-event">
+      <summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-delegate"/></svg></span><span class="af-event-label"><strong>Coordinator follow-up</strong><small>Claude Code → Explore</small></span><time>14:23:02</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary>
+      <div class="af-event-body"><div class="af-byline"><span>Claude Code → Explore · 14:23:02</span></div><p>Also check the Escape key.</p></div>
+    </details></div>
+  </details>
+</div>
+
+<section class="rec">
+  <h3>What stays in the conversation</h3>
+  <p><strong>Primary is relative to the document being read.</strong> In a parent session, it is the human and the session’s main agent speaking to them. Inside an explicitly opened worker transcript, that worker’s replies are primary; incoming assignments, coordinator follow-ups and peer deliveries still fold. A lead’s message addressed to a teammate is secondary even though the lead sent it.</p>
+</section>
+<div class="tablebox"><table class="cmp">
+  <thead><tr><th>Content</th><th>Resting transcript</th><th>On disclosure</th></tr></thead>
+  <tbody>
+    <tr><td>Human prompt, attachment or user-entered command; primary-agent reply</td><td class="take">Existing prompt panel, image strip, command pill or bare reply. Long-message preview unchanged.</td><td>Existing message / attachment viewer.</td></tr>
+    <tr><td>Team messages, broadcasts, peer deliveries, assignments, coordinator follow-ups</td><td class="take">Counted in the nearest contiguous activity group.</td><td>Kind · sender → recipient · recorded time. Open to the complete short body or bounded long preview.</td></tr>
+    <tr><td>Task-linked reports, team membership and lifecycle; Agent and Workflow activity</td><td class="take">Same group, with failures or live state on its head.</td><td>Existing report, roster, worker or run disclosure. Proven work remains optional; ordinary messages never become reports because of their wording.</td></tr>
+    <tr><td>Tools, reasoning, task updates and machine command output</td><td class="take">Join that group in time order; no separate tool-only outer fold inside it.</td><td>Existing action rows and details. Consecutive tool coalescing may remain where it preserves event order.</td></tr>
+    <tr><td>Compaction, continuation/session summaries, recorded notices and unclassified machine events</td><td class="take">Context count in the group, including a group containing context only.</td><td>Label the kind and source. Preserve the full stored text; missing bodies say “No message body recorded.”</td></tr>
+    <tr><td>Pending question or permission addressed to the reader</td><td class="take">Keep the request and its controls visible. It ends the preceding activity group.</td><td>The resolved historical decision can fold with subsequent activity. A machine-to-machine question is ordinary secondary traffic.</td></tr>
+    <tr><td>Day / sitting labels, live watermark, missing-page or indexing gap</td><td class="take">Keep these document boundaries visible; never group across them.</td><td>Existing navigation and recovery actions. They are document chrome, not additional chat messages.</td></tr>
+  </tbody>
+</table></div>
+
+<section class="rec">
+  <h3>Rules for the outer group</h3>
+</section>
+<table class="laws">
+  <tr><td>G-1</td><td>Adjacency, after ownership.</td><td>Classify and deduplicate canonical events first, then group consecutive secondary events in rendered chronological order. A tool, team delivery and peer hand-back can share one group. Never collect by sender, team or message type across an intervening primary message.</td></tr>
+  <tr><td>G-2</td><td>One outer fold, two reading steps.</td><td>Every nonempty run closes by default, even a single short message. One press reveals event rows; another opens a message preview or existing tool detail. Reuse the existing tool-run wrapper rather than wrapping a second tool summary. The full-message viewer and proven work are optional deeper inspection; at depth three, navigate to the existing child document instead of adding another inset rail.</td></tr>
+  <tr><td>G-3</td><td>The head names what it contains.</td><td>Use factual category counts, with existing changed-file names first when present. Count canonical deliveries once; exclude transport copies, private child work and the primary prose. A peer hand-back stays a <em>peer message</em> unless an exact result relation says otherwise. Context includes summaries and notices. Time range is first-to-last recorded event, not summed duration.</td></tr>
+  <tr><td>G-4</td><td>Quiet, with exceptions in plain sight.</td><td>No card fill or member-colour stripe. Tertiary summary at rest, secondary ink on hover/focus, one hairline on opening. Failure count and live state sit outside the ellipsis and are always legible. Completed history never breathes; interrupted work keeps its actual state. On narrow columns, trim the optional time range first; the full summary remains the accessible name.</td></tr>
+  <tr><td>G-5</td><td>Stable while events arrive.</td><td>Append to the current secondary tail and update counts without opening it. A new primary message seals that run. Preserve its key, expanded rows and the reader’s scroll anchor through updates and paging. Show <em>loaded activity</em> where a run is cut by the loaded page; do not claim a whole-run count or bridge a known gap.</td></tr>
+  <tr><td>G-6</td><td>Search opens a path, not the page.</td><td>Index complete bodies. A search or anchor landing reveals only the owning group and matching event, then focuses and marks that event. A hit beyond a long preview gets a “View match in full message” action; never open a modal unasked. Escape closes the reader and returns focus without moving the transcript.</td></tr>
+  <tr><td>G-7</td><td>One activity preference.</td><td>The existing column activity toggle now covers all secondary groups. <em>Show activity</em> reveals their event lists while retaining individual body/detail states. <em>Conversation</em> closes the outer groups; reopening restores deliberate inner expansions. Session-scoped group state and row ids stay separate from the room-wide activity preference.</td></tr>
+</table>
+
+<section class="rec">
+  <h3>Implementation boundary</h3>
+  <p>This is a renderer grouping change over the canonical timeline. Keep §04A’s ownership, native correlation and single-delivery rules. Do not reclassify a machine prompt as a human turn just because its storage role is <code>user</code>; use the normalized collaboration origin.</p>
+  <p>Compose groups after team chronology is interleaved and before document rendering. Extend the existing activity-run presentation to accept tool runs, <code>TeamEvent</code>, machine <code>Prompt</code>, compaction and notices as ordered members. Preserve each event’s session/timeline anchor and keep primary <code>AuthoredMessage</code> rendering unchanged. The existing <code>MessagePreview</code> stays inside a message’s detail.</p>
+  <p>Validate mixed tool/team/peer order, a single message, a machine-only turn, long and missing bodies, native duplicate observations, report work ownership, live appends, paging boundaries and search into a folded body. Check keyboard disclosure, focus return, reduced motion, both themes and a 360px column.</p>
+  <p class="cap"><b>Implementation.</b> The app now composes these activity groups after canonical ownership and chronology, with independent event disclosures, the existing full-message reader, session-local expansion state and the room’s activity preference. Search opens its matching path; paging preserves disclosure state and scroll anchors. Worker nesting opens a full-width child transcript at depth three. The interactive controls here retain illustrative data; earlier specimens preserve the original design history. Regression coverage lives in <code>test/transcript-activity.test.mjs</code> and the production-renderer fixture run by <code>npm run test:activity-fold</code>.</p>
+</section>
+
+<dialog class="im-viewer af-reader" id="af-reader" aria-labelledby="af-reader-title" aria-describedby="af-reader-facts">
+  <header><div><h3 id="af-reader-title">Peer message from @a5e214b27976636db</h3><p id="af-reader-facts">14:21:31 · illustrative subagent hand-back</p></div><button type="button" class="im-close" id="af-reader-close" autofocus>Close ×</button></header>
+  <div class="im-viewer-tools" role="group" aria-label="Message view"><button type="button" data-af-reader-mode="rendered" aria-pressed="true">Rendered</button><button type="button" data-af-reader-mode="source" aria-pressed="false">Source</button><button type="button" class="af-reader-copy" id="af-reader-copy">Copy message</button></div>
+  <div class="im-viewer-content" id="af-reader-content" data-mode="text" tabindex="0"></div>
+  <span class="af-sr" id="af-reader-status" role="status"></span>
+</dialog>
 
 <section class="rec">
   <span class="eyebrow">§05</span>
@@ -2047,6 +2302,7 @@ Native adapter → shared media helper → existing projection assets → prompt
   <span class="eyebrow">§10</span>
   <h2>Deltas this would make to the standing docs</h2>
   <p>Governance says the doc moves first. <strong>No new colour tokens.</strong> One new geometry constant (the prompt radius) and one reused one (the ledger pitch is the tree row).</p>
+  <p><strong>Proposed amendment · 2026-09-28.</strong> <a href="#activity-grouping">§04B</a> extends the activity run to every consecutive secondary event. Team and peer deliveries, machine prompts, compaction and notices join tools behind one closed group; primary conversation and document boundaries split the run. This replaces the default exposure of those events in the earlier specimens, while retaining their ownership, detail and provenance rules.</p>
   <ol>
     <li><strong>DESIGN.md §8 — the transcript (amend the record's delta 3).</strong> The document has one container, the prompt (<code>--vf-fill</code>, radius 10, primary ink, content-hugging on a 68ch measure, no eyebrow). One head per response: mark · agent name · observed model and effort caption · span and tokens. Model and effort belong to that response, never the worker's permanent identity. Reply prose in primary ink. Hairlines between messages are gone; the turn's spacing (30px) is the separator.</li>
     <li><strong>DESIGN.md §8 — the work block becomes the activity ledger.</strong> Material dropped: no fill, no border; a 1px <code>--vf-hairline-strong</code> rail, lines at <code>--vf-tree-row-height</code>, glyph 14 in 16, verb column 72, object mono 11.5 with the directory on the tertiary ramp, result and time-of-day at the right in tabular figures. The sentence grammar and fold rule of §04, with shell in the looking class: consecutive commands fold, a failure breaks the fold. The failure rule kept. Reasoning is muted, clamped prose in the measure — never a box, never a rail line.</li>
@@ -2514,6 +2770,128 @@ Native adapter → shared media helper → existing projection assets → prompt
   document.getElementById('im-close').addEventListener('click', function () { dialog.close(); });
   dialog.addEventListener('close', function () { if (returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true }); });
   renderCase('single');
+})();
+</script>
+<script>
+/* §04B is a presentation prototype over illustrative canonical events. */
+(function () {
+  var review = document.getElementById('activity-review');
+  var groups = Array.from(review.querySelectorAll('.af-group'));
+  var modeButtons = Array.from(review.querySelectorAll('[data-af-mode]'));
+  var stage = document.getElementById('af-stage');
+  var note = document.getElementById('af-note');
+  var live = document.getElementById('af-live-region');
+  var defaultNote = note.textContent;
+  var reader = document.getElementById('af-reader');
+  var readerContent = document.getElementById('af-reader-content');
+  var readerTrigger = document.getElementById('af-read');
+  var landedTimer;
+  var report = [
+    { p: '[Subagent hand-back] The following is the final report from a delegated subagent. Recon report for the empty-pane launcher. The existing pane and session components already provide the two boundaries this feature needs.' },
+    { h: '1. Pane layout' },
+    { p: 'The pane frame owns the empty state and the element that receives keyboard focus. Place the launcher inside that frame, with the search field first and saved sessions below it. Keep the terminal action available before the user enters a query.' },
+    { p: 'The launcher should use the available pane width. A narrow pane still needs readable session titles and a reachable terminal action. Long project paths can truncate while the session title remains the primary label.' },
+    { h: '2. Session launch' },
+    { p: 'Reuse the existing session-launch request with the selected project and session identifiers. The launcher should hand off to the same path as the current session list, so starting a saved session keeps its established working directory and runtime configuration.' },
+    { p: 'Keep loading and failed-launch feedback beside the selected session. A slow request must not create a second terminal when Enter is pressed again. Once the session is attached, the terminal receives focus through the existing pane activation path.' },
+    { h: '3. Keyboard and focus' },
+    { list: ['Opening the launcher focuses its search field.', 'Arrow keys move through the filtered saved sessions; Enter starts the selected session.', 'Escape closes the launcher and returns focus to the pane that opened it.', 'An empty result keeps the search field and the default terminal action available.'] },
+    { p: 'Store the original focus target before the launcher mounts. Restore it after the overlay is removed, provided that the pane still exists. When a pane closes during a launch, use the current active pane instead of trying to focus a detached element.' },
+    { h: '4. State and ownership' },
+    { p: 'Keep the query, selected row and pending launch local to the pane. Opening a launcher in a second pane should not replace the first pane’s selection. The saved-session source remains shared, and only the transient interaction state belongs to the launcher.' },
+    { p: 'The empty-pane boundary can host this UI without introducing a separate application-level modal. Preserve the existing pane activation and keyboard routing so focus does not escape to an unrelated terminal.' },
+    { h: '5. Verification' },
+    { list: ['Open the launcher with the keyboard and start a saved session.', 'Cancel with Escape and verify the original pane receives focus.', 'Try an empty search result and a session whose project is unavailable.', 'Open two launchers in separate panes and verify their queries remain independent.', 'Check a narrow pane, a long session title and a pending launch.'] },
+    { p: 'End of report. The recommended implementation reuses the existing pane frame, saved-session source and launch request. The remaining work is the launcher view and its focus hand-off.' }
+  ];
+  function renderReport(target, blocks) {
+    var body = document.createElement('div'); body.className = 'tr-prose';
+    blocks.forEach(function (block) {
+      var element = document.createElement(block.h ? 'h3' : block.list ? 'ul' : 'p');
+      if (block.list) block.list.forEach(function (text) { var item = document.createElement('li'); item.textContent = text; element.appendChild(item); });
+      else element.textContent = block.h || block.p;
+      body.appendChild(element);
+    });
+    target.replaceChildren(body);
+  }
+  var markdown = report.map(function (block) {
+    return block.h ? '## ' + block.h : block.list ? block.list.map(function (text) { return '- ' + text; }).join('\n') : block.p;
+  }).join('\n\n');
+  renderReport(document.getElementById('af-report-preview'), report.slice(0, 6));
+  document.querySelectorAll('[data-af-char-count]').forEach(function (count) { count.textContent = markdown.length.toLocaleString(); });
+  var labels = { delegation: ['delegation', 'delegations'], assignment: ['assignment', 'assignments'], peer: ['peer message', 'peer messages'], team: ['team message', 'team messages'], context: ['context event', 'context events'], command: ['command', 'commands'] };
+  function summarize(group) {
+    var counts = new Map();
+    group.querySelectorAll(':scope > .af-events > .af-event').forEach(function (event) {
+      var kind = event.dataset.countKind; counts.set(kind, (counts.get(kind) || 0) + 1);
+    });
+    var text = Array.from(counts, function (entry) { return entry[1] + ' ' + labels[entry[0]][entry[1] === 1 ? 0 : 1]; }).join(' · ');
+    var head = group.querySelector(':scope > summary');
+    head.querySelector('.af-summary-text').textContent = text;
+    var facts = Array.from(head.querySelectorAll('.af-status, .af-span'), function (fact) { return fact.textContent; });
+    head.setAttribute('aria-label', text + (facts.length ? ' · ' + facts.join(' · ') : ''));
+    head.title = head.getAttribute('aria-label');
+  }
+  function syncMode() {
+    modeButtons.forEach(function (button) {
+      button.setAttribute('aria-pressed', String(groups.every(function (group) { return group.open === (button.dataset.afMode === 'open'); })));
+    });
+  }
+  function announce(message) { note.textContent = message; live.textContent = message; }
+  groups.forEach(function (group) { summarize(group); group.addEventListener('toggle', syncMode); });
+  modeButtons.forEach(function (button) {
+    button.addEventListener('click', function () {
+      groups.forEach(function (group) { group.open = button.dataset.afMode === 'open'; });
+      syncMode();
+      announce(button.dataset.afMode === 'open' ? 'Activity lists are visible. Each message body and tool detail keeps its own disclosure.' : defaultNote);
+    });
+  });
+  document.getElementById('af-width').addEventListener('click', function (event) {
+    var narrow = stage.dataset.narrow !== 'true'; stage.dataset.narrow = String(narrow);
+    event.currentTarget.setAttribute('aria-pressed', String(narrow));
+  });
+  document.getElementById('af-find').addEventListener('click', function () {
+    var match = document.getElementById('af-peer-report');
+    document.getElementById('af-recon').open = true; match.open = true;
+    match.classList.add('is-landed'); clearTimeout(landedTimer);
+    requestAnimationFrame(function () { match.scrollIntoView({ block: 'center' }); match.querySelector('summary').focus({ preventScroll: true }); });
+    landedTimer = setTimeout(function () { match.classList.remove('is-landed'); }, 2500);
+    announce('Found the peer hand-back at 14:21:31. Only its containing group and message were opened; the full-message reader remains closed.');
+  });
+  document.getElementById('af-arrive').addEventListener('click', function (event) {
+    var incoming = document.createElement('details'); incoming.className = 'af-event'; incoming.id = 'af-arrival'; incoming.dataset.countKind = 'peer';
+    incoming.innerHTML = '<summary><span class="af-event-glyph"><svg aria-hidden="true"><use href="#g-delegate"/></svg></span><span class="af-event-label"><strong>Peer message</strong><small>@layout → Claude Code</small></span><time>14:24:42</time><span class="af-chevron" aria-hidden="true"><svg><use href="#g-chev"/></svg></span></summary><div class="af-event-body"><div class="af-byline"><span>Peer delivery · 14:24:42</span></div><p>The focus target must be restored after the launcher unmounts. I found the existing pane activation helper for that hand-off.</p></div>';
+    document.getElementById('af-live-events').appendChild(incoming);
+    summarize(document.getElementById('af-live'));
+    event.currentTarget.disabled = true;
+    announce('A peer message arrived at 14:24:42. The tail count updated to 2 peer messages; existing folds stayed as you left them.');
+  });
+  document.getElementById('af-reset').addEventListener('click', function () {
+    clearTimeout(landedTimer); document.getElementById('af-peer-report').classList.remove('is-landed');
+    review.querySelectorAll('details').forEach(function (detail) { detail.open = false; });
+    var incoming = document.getElementById('af-arrival'); if (incoming) incoming.remove();
+    document.getElementById('af-arrive').disabled = false;
+    stage.dataset.narrow = 'false'; document.getElementById('af-width').setAttribute('aria-pressed', 'false');
+    groups.forEach(summarize); syncMode(); announce(defaultNote);
+  });
+  function setReaderMode(mode) {
+    reader.querySelectorAll('[data-af-reader-mode]').forEach(function (button) { button.setAttribute('aria-pressed', String(button.dataset.afReaderMode === mode)); });
+    if (mode === 'source') { var pre = document.createElement('pre'); pre.textContent = markdown; readerContent.replaceChildren(pre); }
+    else renderReport(readerContent, report);
+    readerContent.scrollTop = 0;
+  }
+  readerTrigger.addEventListener('click', function () {
+    setReaderMode('rendered'); document.getElementById('af-reader-status').textContent = '';
+    reader.showModal();
+  });
+  reader.querySelectorAll('[data-af-reader-mode]').forEach(function (button) { button.addEventListener('click', function () { setReaderMode(button.dataset.afReaderMode); }); });
+  document.getElementById('af-reader-close').addEventListener('click', function () { reader.close(); });
+  reader.addEventListener('close', function () { readerTrigger.focus({ preventScroll: true }); });
+  document.getElementById('af-reader-copy').addEventListener('click', async function () {
+    var status = document.getElementById('af-reader-status');
+    try { await navigator.clipboard.writeText(markdown); status.textContent = 'Full message copied.'; }
+    catch (_) { status.textContent = 'Clipboard unavailable. Select and copy the message in Source mode.'; setReaderMode('source'); }
+  });
 })();
 </script>
 </html>

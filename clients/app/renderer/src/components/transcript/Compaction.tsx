@@ -4,16 +4,19 @@ import type { CanonicalText } from "@rosetta/protocol";
 import { client } from "../../lib/rosetta";
 import { MessagePreview } from "./MessagePreview";
 import { LineChevron } from "./glyphs";
+import { useRowDisclosure } from "./disclosure-state";
 
 /** Loaded only on disclosure. Oversized summaries are content-addressed;
  * their preview must never be presented or copied as the complete recap. */
 function SummaryBody({
   canonical,
   messageKey,
+  matched,
   onReceipt,
 }: {
   readonly canonical: CanonicalText;
   readonly messageKey: string;
+  readonly matched: boolean;
   readonly onReceipt: (message: string) => void;
 }) {
   const [loaded, setLoaded] = useState<{ text: string | null; error: string | null } | null>(null);
@@ -55,6 +58,7 @@ function SummaryBody({
       {text !== null ? (
         <div className="tr-prose ah-syntax">
           <MessagePreview messageKey={messageKey} role="agent" title="Compaction summary"
+            matched={matched}
             text={text} onReceipt={onReceipt} />
         </div>
       ) : loaded?.error ? (
@@ -84,7 +88,7 @@ export function Compaction({
   readonly forceOpen: boolean;
   readonly onReceipt: (message: string) => void;
 }) {
-  const [open, setOpen] = useState(forceOpen || hit);
+  const [open, setOpen] = useRowDisclosure(domId, forceOpen || hit);
   useEffect(() => {
     if (forceOpen || hit) setOpen(true);
   }, [forceOpen, hit]);
@@ -109,6 +113,7 @@ export function Compaction({
           key={text.type === "member" ? text.asset.digest : "inline"}
           canonical={text}
           messageKey={domId}
+          matched={hit}
           onReceipt={onReceipt}
         />
       )}

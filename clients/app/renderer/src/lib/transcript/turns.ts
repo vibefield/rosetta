@@ -347,7 +347,8 @@ function opensTurn(row: TimelineEntry, options: DocumentOptions): boolean {
   ) {
     return false;
   }
-  return row.group.kind === "human_turn" || row.group.kind === "parent_invocation";
+  return row.body.type === "collaboration" &&
+    (row.group.kind === "human_turn" || row.group.kind === "parent_invocation");
 }
 
 function isAgentAuthored(row: TimelineEntry): boolean {
@@ -759,6 +760,7 @@ export function documentTurns(
     const promptRow = current.prompt;
     if (
       promptRow !== null &&
+      !options.cutBefore?.has(row.timeline_id) &&
       current.output === null &&
       current.body.length === 0 &&
       row.body.type === "notice" &&

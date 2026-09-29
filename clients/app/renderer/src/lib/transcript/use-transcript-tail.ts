@@ -11,6 +11,8 @@ export interface TimelineLayout {
   readonly ready: boolean;
   readonly readySessionIds: readonly string[];
   readonly elementForRow: (row: TimelineEntry) => HTMLElement | null;
+  /** Ownership/coalescing in the displayed chronology may differ from the source page. */
+  readonly elementForAnchor?: (timelineId: string) => HTMLElement | null;
 }
 
 const EMPTY: TailState = { away: false, unseen: 0 };

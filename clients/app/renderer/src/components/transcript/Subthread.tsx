@@ -1,15 +1,17 @@
 // §03 F — the delegate's child run, in place.
 //
-// A child session is part of the calling document, not a sibling to navigate
-// to: a proven `child_session_id` opens the subthread under its own ledger
-// line, the whole grammar one size down (13px) on the ledger's rail, headed by
-// the child's mark, name, role and range.
+// A proven `child_session_id` opens under its own ledger line, the grammar
+// one size down (13px), headed by the child's mark, name, role and range.
+// At depth three, open the child's document at the column's full measure.
 //
 // It stays LAZY. The line it hangs from is closed until pressed, so a parent
 // with nine delegations does not open nine websockets to draw nothing; the
 // component mounts when the line opens, and that is the subscription.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { SessionRow } from "@rosetta/protocol";
+import { activityCuts } from "./activity-plan";
+import { revealActivityTarget } from "./Activity";
+import type { TimelineLayout } from "../../lib/transcript/use-transcript-tail";
 import { clock } from "../../lib/format";
 import { AgentMark, agentLabel } from "../../lib/agents";
 import { useTimeline } from "../../lib/hooks";
@@ -18,6 +20,7 @@ import { TranscriptDocument } from "./Document";
 import { useTranscriptModel } from "./document-model";
 import type { ThreadFocus, ThreadIndex } from "./thread-index";
 import { messageDomId, sessionContains, subthreadTitle } from "./thread-index";
+import { ThreadNavigationContext } from "./thread-navigation";
 
 export interface SubthreadProps {
   readonly session: SessionRow;
@@ -35,7 +38,20 @@ export interface SubthreadProps {
   readonly homeDirectory: string | null;
 }
 
-export function Subthread({
+export function Subthread(props: SubthreadProps) {
+  const navigation = useContext(ThreadNavigationContext);
+  const detached = navigation.depth >= 3 && navigation.open !== null;
+  const onFocusPath = props.focus !== null && sessionContains(props.session.id, props.focus.sessionId, props.index.byId);
+  useEffect(() => {
+    if (detached && onFocusPath) navigation.open?.(props.session.id);
+  }, [detached, onFocusPath, navigation.open, props.session.id]);
+  if (detached) return <button type="button" className="tr-child-link" onClick={() => navigation.open?.(props.session.id)}>
+    Open child transcript <span>{subthreadTitle(props.session)} ↗</span>
+  </button>;
+  return <EmbeddedSubthread {...props} />;
+}
+
+function EmbeddedSubthread({
   session,
   anchored,
   duringBackfill,
@@ -56,9 +72,12 @@ export function Subthread({
   const [open, setOpen] = useState(anchored || onFocusPath);
   const shown = open || onFocusPath;
   const feed = useTimeline(shown ? session.id : null);
-  const model = useTranscriptModel(feed.rows, session, homeDirectory, Date.now());
+  const cuts = useMemo(() => activityCuts(feed.rows, feed.watermark), [feed.rows, feed.watermark]);
+  const model = useTranscriptModel(feed.rows, session, homeDirectory, Date.now(), { cutBefore: cuts.cutBefore });
   const [highlightedTimelineId, setHighlightedTimelineId] = useState<string | null>(null);
   const focusTries = useRef(0);
+  const displayedLayout = useRef<TimelineLayout | null>(null);
+  const onTimelineLayout = useCallback((layout: TimelineLayout) => { displayedLayout.current = layout; }, []);
   const targetTimelineId = focus?.sessionId === session.id ? focus.timelineId : null;
 
   useEffect(() => {
@@ -83,10 +102,11 @@ export function Subthread({
     }
     const drawnBy = model.representatives.get(targetTimelineId) ?? null;
     if (drawnBy !== null) {
-      const element = document.getElementById(messageDomId(session.id, drawnBy));
+      const element = displayedLayout.current?.elementForAnchor?.(targetTimelineId)
+        ?? document.getElementById(messageDomId(session.id, drawnBy));
       if (element) {
-        element.scrollIntoView({ block: "center" });
-        setHighlightedTimelineId(drawnBy);
+        revealActivityTarget(element);
+        setHighlightedTimelineId(element.dataset.timelineId ?? drawnBy);
         onFocusConsumed();
         window.setTimeout(() => setHighlightedTimelineId(null), 1500);
       }
@@ -146,6 +166,7 @@ export function Subthread({
           getRuntimeKind={getRuntimeKind}
           homeDirectory={homeDirectory}
           onPillPress={null}
+          onTimelineLayout={onTimelineLayout}
           nested
         />
       </div>

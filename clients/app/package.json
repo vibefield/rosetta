@@ -18,6 +18,7 @@
     "test:web-search": "electron test/web-search.electron.mjs",
     "test:image-strips": "electron test/image-strips.electron.mjs",
     "test:message-preview": "electron test/message-preview.electron.mjs",
+    "test:activity-fold": "electron test/activity-fold.electron.mjs",
     "test:worktree-actions": "electron test/worktree-actions.electron.mjs",
     "typecheck": "tsc --noEmit"
   },

@@ -25,6 +25,7 @@ import { desktopHost } from "../lib/desktop-host";
 import type { TimelineFeed } from "../lib/hooks";
 import { useHeadOfDocument } from "../lib/transcript/head-of-document";
 import { useTranscriptTail } from "../lib/transcript/use-transcript-tail";
+import type { TimelineLayout } from "../lib/transcript/use-transcript-tail";
 import { prefersReducedMotion } from "../lib/motion";
 import type { AttachmentFact, PathFact } from "../lib/transcript";
 import type { ProjectViewModel } from "../lib/model";
@@ -36,6 +37,7 @@ import { TranscriptDocument } from "./transcript/Document";
 import { useTranscriptModel } from "./transcript/document-model";
 import { useFoldPreference } from "./transcript/fold-preference";
 import { MessageViewerContext } from "./transcript/MessagePreview";
+import { ThreadNavigationContext } from "./transcript/thread-navigation";
 import { handleForMessage, messageFileSource } from "./transcript/message-file-source";
 import type { FullMessage } from "./transcript/message-file-source";
 import { attachmentStatus } from "./transcript/Attachments";
@@ -64,26 +66,10 @@ import {
   timelineMetaFileSource,
 } from "./transcript/timeline-meta-file-source";
 
-export type { ThreadFocus } from "./transcript/thread-index";
+import { scrollRowTo } from "./transcript/scroll-to-row";
+import { activityCuts } from "./transcript/activity-plan";
 
-/** Scroll `scroller` so `element` sits at `block`, touching no ancestor. */
-export function scrollRowTo(
-  scroller: HTMLElement,
-  element: HTMLElement,
-  block: "center" | "nearest",
-): void {
-  const frame = scroller.getBoundingClientRect();
-  const rect = element.getBoundingClientRect();
-  const top = rect.top - frame.top + scroller.scrollTop;
-  if (block === "center") {
-    scroller.scrollTop = top - Math.max(0, (scroller.clientHeight - rect.height) / 2);
-    return;
-  }
-  if (rect.top < frame.top) scroller.scrollTop = top;
-  else if (rect.bottom > frame.bottom) {
-    scroller.scrollTop = top - (scroller.clientHeight - rect.height);
-  }
-}
+export type { ThreadFocus } from "./transcript/thread-index";
 
 /** The receipt lands beneath a pinned day pill, never over it (§08).
  * Measured rather than guessed: the scroller starts 46px down (the head band),
@@ -129,6 +115,8 @@ export interface TranscriptColumnProps {
   /** The session's runtime, for the reply's mark and name (T-4). */
   readonly getRuntimeKind: (runtimeId: string) => string;
   readonly homeDirectory: string | null;
+  readonly onOpenThread?: (sessionId: string) => void;
+  readonly onBackToParent?: (() => void) | null;
 }
 
 export function TranscriptColumn({
@@ -145,7 +133,10 @@ export function TranscriptColumn({
   onDismissStepper,
   getRuntimeKind,
   homeDirectory,
+  onOpenThread,
+  onBackToParent,
 }: TranscriptColumnProps) {
+  const threadNavigation = useMemo(() => ({ depth: 0, open: onOpenThread ?? null }), [onOpenThread]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [highlightedTimelineId, setHighlightedTimelineId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ top: number; dayKey: string | null } | null>(null);
@@ -165,7 +156,8 @@ export function TranscriptColumn({
   const targetTimelineId = requestedTimelineId ?? metaFocus?.timelineId ?? null;
   const targetIsMeta = requestedTimelineId === null && metaFocus !== null;
 
-  const model = useTranscriptModel(feed.rows, session, homeDirectory, Date.now());
+  const cuts = useMemo(() => activityCuts(feed.rows, feed.watermark), [feed.rows, feed.watermark]);
+  const model = useTranscriptModel(feed.rows, session, homeDirectory, Date.now(), { cutBefore: cuts.cutBefore });
 
   // §08 — the head of the document: approach fetches and holds, the pull
   // reveals, and the landing keeps the reader exactly where they were.
@@ -179,6 +171,11 @@ export function TranscriptColumn({
     session !== null,
     focus !== null || metaFocus !== null,
   );
+  const displayedLayout = useRef<TimelineLayout | null>(null);
+  const onTimelineLayout = useCallback((layout: TimelineLayout) => {
+    displayedLayout.current = layout;
+    tail.onLayout(layout);
+  }, [tail.onLayout]);
 
   useEffect(() => {
     setHighlightedTimelineId(null);
@@ -324,15 +321,17 @@ export function TranscriptColumn({
     // element that CONTAINS the row rather than failing to find its own.
     const drawnBy = model.representatives.get(targetTimelineId) ?? null;
     if (drawnBy !== null) {
-      const element = document.getElementById(messageDomId(session.id, drawnBy));
+      const displayed = displayedLayout.current?.sessionId === session.id ? displayedLayout.current : null;
+      const element = displayed?.elementForAnchor?.(targetTimelineId)
+        ?? document.getElementById(messageDomId(session.id, drawnBy));
       const scroller = scrollRef.current;
       if (element && scroller) {
         tail.pause();
         // Scroll the transcript's own scroller, never `scrollIntoView`: that
         // walks every ancestor, and the room's overflow-hidden frame would
         // quietly scroll the search strip out of the window (seen 2026-09-09).
-        scrollRowTo(scroller, element, "center");
-        setHighlightedTimelineId(drawnBy);
+        if (element.getClientRects().length > 0) scrollRowTo(scroller, element, "center");
+        setHighlightedTimelineId(element.dataset.timelineId ?? drawnBy);
         if (targetIsMeta) {
           onReceipt(`Landed on the ${metaFocus.kind} message · ${metaFocus.label}`);
           setMetaFocus(null);
@@ -412,6 +411,7 @@ export function TranscriptColumn({
   };
 
   return (
+    <ThreadNavigationContext.Provider value={threadNavigation}>
     <MessageViewerContext.Provider value={openMessage}>
     <div
       className="ah-col ah-col--measure"
@@ -419,6 +419,8 @@ export function TranscriptColumn({
       data-fold={fold.folded ? "on" : "off"}
     >
       <header>
+        {onBackToParent && <button type="button" className="tr-parent-link" title="Back to parent transcript"
+          aria-label="Back to parent transcript" onClick={onBackToParent}>←</button>}
         {session === null ? (
           <div className="ah-colhead">
             <span className="ah-eyebrow">Transcript</span>
@@ -453,8 +455,8 @@ export function TranscriptColumn({
               aria-pressed={fold.folded}
               title={
                 fold.folded
-                  ? "Activity: folded — press to open every run"
-                  : "Activity: open — press to fold every run"
+                  ? "Activity: conversation — show activity"
+                  : "Activity: showing activity — return to conversation"
               }
               onClick={fold.toggle}
             >
@@ -506,7 +508,7 @@ export function TranscriptColumn({
                 onOpenPath={openReadPath}
                 getRuntimeKind={getRuntimeKind}
                 homeDirectory={homeDirectory}
-                onTimelineLayout={tail.onLayout}
+                onTimelineLayout={onTimelineLayout}
                 onPillPress={(element: HTMLElement, dayKey: string | null) => {
                   const frame = element.closest(".ah-col");
                   if (frame === null) return;
@@ -588,5 +590,6 @@ export function TranscriptColumn({
         openInBrowser={desktopHost()?.openInBrowser ?? null} />
     </div>
     </MessageViewerContext.Provider>
+    </ThreadNavigationContext.Provider>
   );
 }

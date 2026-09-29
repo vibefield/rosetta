@@ -325,7 +325,7 @@ async function run() {
     clearInterval(launchPulse);
     clearTimeout(deadline);
     win?.destroy();
-    await server?.close();
+    await Promise.race([server?.close(), pause(1000)]);
     app.exit(failed ? 1 : 0);
   }
 }

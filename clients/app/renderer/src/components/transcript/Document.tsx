@@ -1,7 +1,8 @@
 // The document — §03's anatomy, drawn.
 //
-// One prompt, one head, then the reply's segments in the order they happened.
-// The turns are wrapped in sittings (§07), because a sticky pill's containing
+// Primary speech stays visible; adjacent secondary events share one activity
+// fold (§04B), after ownership and team chronology. Blocks retain their
+// sittings (§07), because a sticky pill's containing
 // block is its parent and only a section per sitting makes the next pill push
 // the previous one OUT instead of stacking on it.
 //
@@ -9,7 +10,7 @@
 // the focus landing from a search hit, subthreads interleaved by timestamp for
 // a parent-only link and anchored under their own delegate line when the link
 // is proven, and the honest states for a session the daemon has not reached.
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import type { ParticipantColor, SessionRow, TimelineEntry } from "@rosetta/protocol";
 import type {
@@ -24,6 +25,7 @@ import {
   linkedChildSessionIds,
   participantPresentation,
   runtimeProfile,
+  runSummary,
   standaloneWorkerSessions,
   taskBoundedReportWork,
   teamMemberPresentations,
@@ -45,9 +47,13 @@ import { Anchor } from "./Anchor";
 import { DayPill, Sitting } from "./DayPill";
 import { transcriptModel } from "./document-model";
 import type { TranscriptModel } from "./document-model";
-import type { TurnPart } from "./document-plan";
+import { activityCuts, activityPlan, activityRows } from "./activity-plan";
+import type { ActivityItem, ReadingBlock } from "./activity-plan";
+import { ActivityGroup, ContextEvent, revealActivityTarget } from "./Activity";
+import { DisclosureState } from "./disclosure-state";
+import { ThreadNavigationContext } from "./thread-navigation";
 import { Ledger } from "./Ledger";
-import { GapMarker, Marker, SummaryNote, Watermark } from "./Marker";
+import { GapMarker, Marker, Watermark } from "./Marker";
 import { Compaction } from "./Compaction";
 import { Prompt } from "./Prompt";
 import { SegmentActs } from "./Prose";
@@ -237,6 +243,8 @@ export function TranscriptDocument({
   nested = false,
   onTimelineLayout,
 }: TranscriptDocumentProps) {
+  const navigation = useContext(ThreadNavigationContext);
+  const childNavigation = useMemo(() => ({ ...navigation, depth: navigation.depth + 1 }), [navigation]);
   const runtimeKind = getRuntimeKind(session.runtime_id);
   // Stream state describes indexing. Only newly arriving conversation rows
   // can receive an activity accent, and it expires with recorded activity.
@@ -254,6 +262,7 @@ export function TranscriptDocument({
     [feed.rows, teamFeed.rowsBySession],
   );
   const displayedRows = chronology.rows;
+  const cuts = useMemo(() => activityCuts(feed.rows, feed.watermark, displayedRows), [feed.rows, feed.watermark, displayedRows]);
   const model = useMemo(
     () => {
         const derived =
@@ -261,10 +270,12 @@ export function TranscriptDocument({
             ? baseModel
             : transcriptModel(displayedRows, session, homeDirectory, Date.now(), {
                 sharedCollaborationSessionIds: teamIdSet,
+                cutBefore: cuts.cutBefore,
               });
-        if (chronology.duplicateRepresentatives.size === 0) return derived;
+        if (chronology.duplicateRepresentatives.size === 0) return { ...derived, gaps: cuts.gaps };
         return {
           ...derived,
+          gaps: cuts.gaps,
           representatives: new Map([
             ...derived.representatives,
             ...chronology.duplicateRepresentatives,
@@ -279,8 +290,12 @@ export function TranscriptDocument({
       homeDirectory,
       teamIdSet,
       chronology.duplicateRepresentatives,
+      cuts,
     ],
   );
+  const reading = useMemo(() => activityPlan(model.plan, {
+    gaps: cuts.gaps, watermarkId: cuts.watermarkId, partial: !feed.snapshotReady || feed.earlier.kind !== "none",
+  }), [model.plan, cuts, feed.snapshotReady, feed.earlier.kind]);
   const workflowAttempts = useMemo(() => workflowAttemptIndex(displayedRows), [displayedRows]);
   const teamMembers = useMemo(
     () =>
@@ -325,7 +340,7 @@ export function TranscriptDocument({
   );
   const focusTimelineId =
     focus !== null && (focus.sessionId === session.id || teamIdSet.has(focus.sessionId))
-      ? focus.timelineId
+      ? (chronology.duplicateRepresentatives.get(focus.timelineId) ?? focus.timelineId)
       : null;
   const domIdOf = (timelineId: string) =>
     messageDomId(sessionByTimelineId.get(timelineId) ?? session.id, timelineId);
@@ -336,8 +351,12 @@ export function TranscriptDocument({
       ready: feed.snapshotReady && (feed.rows[0]?.session_id ?? session.id) === session.id,
       readySessionIds: [session.id, ...(teamFeed.historyReady ? teamIds : [])],
       elementForRow: (row) => document.getElementById(messageDomId(row.session_id, row.timeline_id)),
+      elementForAnchor: (timelineId) => {
+        const representative = model.representatives.get(timelineId) ?? timelineId;
+        return document.getElementById(messageDomId(sessionByTimelineId.get(representative) ?? session.id, representative));
+      },
     });
-  }, [onTimelineLayout, session.id, displayedRows, feed.snapshotReady, feed.rows, teamFeed.historyReady, teamIds]);
+  }, [onTimelineLayout, session.id, displayedRows, feed.snapshotReady, feed.rows, teamFeed.historyReady, teamIds, model.representatives, sessionByTimelineId]);
   const teamFocus = focus !== null && teamIdSet.has(focus.sessionId) ? focus : null;
   const [teamHighlight, setTeamHighlight] = useState<string | null>(null);
   const teamFocusRequest = useRef<string | null>(null);
@@ -351,7 +370,7 @@ export function TranscriptDocument({
       messageDomId(sessionByTimelineId.get(drawnBy) ?? session.id, drawnBy),
     );
     if (element === null) return;
-    element.scrollIntoView({ block: "center" });
+    revealActivityTarget(element);
     setTeamHighlight(drawnBy);
     onFocusConsumed();
     window.setTimeout(() => setTeamHighlight(null), 1500);
@@ -374,7 +393,7 @@ export function TranscriptDocument({
         messageDomId(sessionByTimelineId.get(drawnBy) ?? session.id, drawnBy),
       );
       if (element !== null) {
-        element.scrollIntoView({ block: "center" });
+        revealActivityTarget(element);
         setTeamHighlight(drawnBy);
         onFocusConsumed();
         window.setTimeout(() => setTeamHighlight(null), 1500);
@@ -535,9 +554,8 @@ export function TranscriptDocument({
   useEffect(() => {
     if (revealedWorker === null) return;
     const frame = window.requestAnimationFrame(() => {
-      document
-        .getElementById(messageDomId(session.id, revealedWorker.anchorTimelineId))
-        ?.scrollIntoView({ block: "center" });
+      const element = document.getElementById(messageDomId(session.id, revealedWorker.anchorTimelineId));
+      if (element !== null) revealActivityTarget(element);
     });
     return () => window.cancelAnimationFrame(frame);
   }, [revealedWorker, session.id]);
@@ -580,7 +598,7 @@ export function TranscriptDocument({
     };
   };
 
-  const renderSegment = (segment: Segment): ReactNode => {
+  const renderSegment = (segment: Segment, embedded = false): ReactNode => {
     const rowId = segment.kind === "ledger" ? segment.rows[0].timeline_id : segment.row.timeline_id;
     const hit = highlightedTimelineId === rowId;
     switch (segment.kind) {
@@ -588,10 +606,11 @@ export function TranscriptDocument({
         return (
           <Ledger
             key={segment.key}
+            embedded={embedded}
             members={segment.members}
             summary={segment.summary}
             anchor={
-              segment.summary.closedByDefault ? (
+              !embedded && segment.summary.closedByDefault ? (
                 <Anchor
                   at={segment.at}
                   sessionId={segment.rows[0].session_id}
@@ -646,6 +665,7 @@ export function TranscriptDocument({
           <ThoughtLine
             key={segment.key}
             text={segment.text}
+            embedded={embedded}
             spanMs={segment.spanMs}
             domId={domIdOf(rowId)}
             timelineId={rowId}
@@ -662,27 +682,13 @@ export function TranscriptDocument({
           />
         );
       case "marker":
-        return (
-          <Marker
-            key={segment.key}
-            text={segment.text}
-            tone={segment.tone}
-            domId={domIdOf(rowId)}
-            timelineId={rowId}
-            hit={hit}
-          />
-        );
+        if (segment.notice.type === "permission_requested") return <Marker key={segment.key}
+          text={segment.text} tone={segment.tone} domId={domIdOf(rowId)} timelineId={rowId} hit={hit} />;
+        return <ContextEvent key={segment.key} segment={segment} domId={domIdOf(rowId)} hit={hit}
+          forceOpen={focusTimelineId === rowId} onReceipt={onReceipt} />;
       case "summary":
-        return (
-          <SummaryNote
-            key={segment.key}
-            purpose={segment.purpose}
-            text={segment.text}
-            domId={domIdOf(rowId)}
-            timelineId={rowId}
-            hit={hit}
-          />
-        );
+        return <ContextEvent key={segment.key} segment={segment} domId={domIdOf(rowId)} hit={hit}
+          forceOpen={focusTimelineId === rowId} onReceipt={onReceipt} />;
       case "compaction":
         return (
           <Compaction
@@ -767,19 +773,6 @@ export function TranscriptDocument({
     }
   };
 
-  // D33's line: the first thing drawn that arrived after the reader did.
-  const ordinalOf = new Map(feed.rows.map((row) => [row.timeline_id, row.ordinal]));
-  const watermarkKey = (() => {
-    if (feed.watermark === null) return null;
-    for (const { parts } of model.plan) {
-      for (const part of parts) {
-        const ordinal = part.firstRowId === null ? undefined : ordinalOf.get(part.firstRowId);
-        if (ordinal !== undefined && ordinal > feed.watermark) return part.key;
-      }
-    }
-    return null;
-  })();
-
   const showPills = model.sittings.length > 1;
   let floatingAt = 0;
   const drainFloating = (until: number | null): ReactNode[] => {
@@ -794,48 +787,63 @@ export function TranscriptDocument({
     return out;
   };
 
-  const renderPart = (part: TurnPart) => {
-    const gapAt = part.firstRowId === null ? undefined : model.gaps.get(part.firstRowId);
-    return (
-      <Fragment key={part.key}>
-        {drainFloating(part.at)}
-        {gapAt !== undefined && (
-          <GapMarker
-            count={gapAt}
-            onPress={() =>
-              onReceipt(
-                `${gapAt} ${gapAt === 1 ? "message is" : "messages are"} in the session but not in this page`,
-              )
-            }
-          />
-        )}
-        {watermarkKey === part.key && <Watermark text="received since opening" />}
-        <div className="tr-turn" data-timeline-id={part.firstRowId ?? undefined}>
-          {part.prompts.length > 0 && (
-            <Prompt
-              prompts={part.prompts}
-              domIdOf={domIdOf}
-              landedTimelineId={highlightedTimelineId}
-              onReceipt={onReceipt}
-              onOpenAttachment={onOpenAttachment}
-            />
-          )}
-          {part.before.map(renderSegment)}
-          {(part.showHead || part.after.length > 0) && (
-            <div className="tr-resp">
-              {part.showHead && part.turn.head !== null && (
-                <ResponseHead
-                  head={part.turn.head}
-                  runtimeKind={runtimeKind}
-                  open={recentActivity && part.turn.head.endedAt === null}
-                />
-              )}
-              {part.after.map(renderSegment)}
-            </div>
-          )}
-        </div>
-      </Fragment>
-    );
+  const renderTools = (items: readonly Extract<ActivityItem, { kind: "tool" }>[], embedded: boolean) => {
+    const lines = items.map(item => item.line);
+    const rows = lines.flatMap(line => line.rows);
+    return renderSegment({ kind: "ledger", key: items[0].key, at: rows[0].at, rows, lines,
+      members: lines.map(line => ({ kind: "line", key: line.key, line })), summary: runSummary(lines) }, embedded);
+  };
+  const renderItem = (item: ActivityItem): ReactNode => {
+    if (item.kind === "tool") return renderTools([item], false);
+    if (item.kind !== "prompt") return renderSegment(item, true);
+    const row = item.prompt.row;
+    if (row.body.type === "collaboration") return renderSegment({ kind: "collaboration", key: item.key,
+      row, at: row.at, event: row.body.event }, true);
+    return <Prompt key={item.key} prompts={[item.prompt]} domIdOf={domIdOf}
+      landedTimelineId={highlightedTimelineId} focusTimelineId={focusTimelineId}
+      onReceipt={onReceipt} onOpenAttachment={onOpenAttachment} />;
+  };
+  const renderItems = (items: readonly ActivityItem[]) => {
+    const nodes: ReactNode[] = [];
+    let tools: Extract<ActivityItem, { kind: "tool" }>[] = [];
+    const flush = () => { if (tools.length > 0) nodes.push(renderTools(tools, true)); tools = []; };
+    for (const item of items) {
+      if (item.kind === "tool") tools.push(item);
+      else { flush(); nodes.push(renderItem(item)); }
+    }
+    flush();
+    return nodes;
+  };
+  const childIsFocused = (item: ActivityItem) => item.kind === "tool" &&
+    (workerLinks.childrenByRow.get(item.line.rows[0].timeline_id) ?? []).some(child =>
+      (focus !== null && sessionContains(child.id, focus.sessionId, index.byId)) || child.id === revealedWorker?.childId);
+  const renderBlock = (block: ReadingBlock): ReactNode => {
+    switch (block.kind) {
+      case "gap": return <GapMarker count={block.count} onPress={() => onReceipt(
+        `${block.count} ${block.count === 1 ? "message is" : "messages are"} in the session but not in this page`)} />;
+      case "watermark": return <Watermark text="received since opening" />;
+      case "prompt": return <div className="tr-turn tr-reading-prompt">
+        <Prompt prompts={block.prompts} domIdOf={domIdOf} landedTimelineId={highlightedTimelineId}
+          onReceipt={onReceipt} onOpenAttachment={onOpenAttachment} />
+      </div>;
+      case "reply": return <div className={block.head === null ? "tr-reading-reply" : "tr-resp tr-reading-reply"}>
+        {block.head !== null && <ResponseHead head={block.head} runtimeKind={runtimeKind}
+          open={recentActivity && block.head.endedAt === null} />}
+        {renderSegment(block.segment)}
+      </div>;
+      case "request": return renderItem(block.item);
+      case "activity": {
+        const hit = highlightedTimelineId !== null && block.rows.some(row => row.timeline_id === highlightedTimelineId)
+          ? highlightedTimelineId : null;
+        const forceOpen = block.items.some(item => childIsFocused(item) ||
+          activityRows(item).some(row => row.timeline_id === focusTimelineId));
+        return <ActivityGroup items={block.items} rows={block.rows} partial={block.partial} forceOpen={forceOpen}
+          highlightedId={hit} alive={row => recentActivity && row.session_id === session.id &&
+            feed.watermark !== null && row.ordinal > feed.watermark}>
+          {renderItems(block.items)}
+        </ActivityGroup>;
+      }
+    }
   };
 
   const partialParentHistory = !feed.snapshotReady || feed.earlier.kind !== "none";
@@ -847,7 +855,8 @@ export function TranscriptDocument({
     (teamMembers.size === 0 || (partialParentHistory && !hasSafeRosterLine));
   const empty = model.plan.length === 0 && floating.length === 0 && !showKnownTeam;
   return (
-    <>
+    <ThreadNavigationContext.Provider value={childNavigation}>
+    <DisclosureState key={session.id}>
       {head}
       {showKnownTeam && (
         <KnownTeamRoster
@@ -857,7 +866,7 @@ export function TranscriptDocument({
           historyReady={teamFeed.historyReady}
         />
       )}
-      {model.plan.map(({ sitting, parts }) => (
+      {reading.map(({ sitting, blocks }) => (
         <Sitting key={sitting.key} sitting={sitting}>
           {showPills && (
             <DayPill
@@ -865,7 +874,7 @@ export function TranscriptDocument({
               onPress={(event) => onPillPress?.(event.currentTarget, sitting.dayKey)}
             />
           )}
-          {parts.map(renderPart)}
+          {blocks.map(block => <Fragment key={block.key}>{drainFloating(block.at)}{renderBlock(block)}</Fragment>)}
         </Sitting>
       ))}
       {drainFloating(null)}
@@ -899,6 +908,7 @@ export function TranscriptDocument({
           {duringBackfill ? "indexing history" : "history incomplete"}
         </div>
       )}
-    </>
+    </DisclosureState>
+    </ThreadNavigationContext.Provider>
   );
 }

@@ -22,6 +22,8 @@ import type {
 import { canonicalText, firstLine, runtimeProfile, spanText } from "../../lib/transcript";
 import { MessagePreview } from "./MessagePreview";
 import { LineChevron } from "./glyphs";
+import { ActivityEvent } from "./Activity";
+import { useRowDisclosure } from "./disclosure-state";
 
 function address(name: string | null): string {
   if (name === null || name.trim() === "") return "teammate";
@@ -158,8 +160,8 @@ export function TeamInvocation({
   const first = members[0];
   const isRoster = first.operation === "start" || first.operation === "known";
   const forceOpen =
-    isRoster && members.some((member) => member.row.timeline_id === focusTimelineId);
-  const [open, setOpen] = useState(false);
+    isRoster && members.some((member) => member.row.timeline_id === focusTimelineId || member.row.timeline_id === highlightedTimelineId);
+  const [open, setOpen] = useRowDisclosure(domIdOf(first.row.timeline_id));
   useEffect(() => {
     if (forceOpen) setOpen(true);
   }, [forceOpen]);
@@ -427,12 +429,12 @@ function TeamReport({
   readonly onReceipt: (message: string) => void;
 }) {
   const body = eventBody(event);
-  const [open, setOpen] = useState(false);
-  const [workOpen, setWorkOpen] = useState(false);
+  const [open, setOpen] = useRowDisclosure(domId);
+  const [workOpen, setWorkOpen] = useRowDisclosure(`${domId}:work`);
   useEffect(() => {
-    if (forceOpen) setOpen(true);
-  }, [forceOpen]);
-  const pressable = body !== null;
+    if (forceOpen || hit) setOpen(true);
+  }, [forceOpen, hit, setOpen]);
+  const pressable = true;
   const expanded = pressable && (open || forceOpen);
   const route = eventRoute(event);
   const summary = event.summary ?? (body === null ? "result" : firstLine(body));
@@ -482,13 +484,14 @@ function TeamReport({
             </span>
             <span>one rendered delivery</span>
           </div>
-          {body !== null && (
+          {body !== null ? (
             <div className="tm-message__body tr-prose">
               <MessagePreview messageKey={domId} role="agent"
+                matched={hit}
                 title={`Team report from ${speaker(event.sender)}`}
                 text={body} recordedText={event.body} onReceipt={onReceipt} />
             </div>
-          )}
+          ) : <p className="tr-quiet">No message body recorded.</p>}
           {work !== null && (
             <div className="tm-message__foot">
               <button
@@ -567,29 +570,25 @@ export function TeamEvent({
   if (!matchesMessage(event)) {
     const failed = event.status === "failed";
     return (
-      <div
-        className={`tr-mark tm-lifecycle${failed ? " tr-mark--error" : ""}`}
-        id={domId}
-        data-timeline-id={timelineId}
-        data-hit={hit || undefined}
-      >
-        <TeamAvatar color={color} name={event.sender} />
-        <span>{lifecycleText(event)}</span>
+      <ActivityEvent domId={domId} timelineId={timelineId} label="Team update" summary={lifecycleText(event)}
+        at={at} hit={hit} forceOpen={forceOpen} failed={failed} glyph={<TeamAvatar color={color} name={event.sender} />}>
+        <p>{lifecycleText(event)}</p>
         <TeamTime at={at} basis={timeBasis} />
-      </div>
+        {eventBody(event) !== null && <MessagePreview messageKey={domId} role="agent" title="Team update"
+          matched={hit}
+          text={eventBody(event) ?? ""} recordedText={event.body} onReceipt={onReceipt} />}
+      </ActivityEvent>
     );
   }
 
   const body = eventBody(event);
   const route = eventRoute(event);
+  const label = event.kind === "assignment" ? "Assignment" : event.channel === "peer" ? "Peer message"
+    : event.channel === "coordinator" ? "Coordinator follow-up" : "Team message";
   return (
-    <article
-      className="tm-message"
-      id={domId}
-      data-timeline-id={timelineId}
-      data-member-color={color ?? undefined}
-      data-hit={hit || undefined}
-    >
+    <ActivityEvent domId={domId} timelineId={timelineId} label={label}
+      summary={`${speaker(event.sender)}${route === null ? "" : ` ${route}`}`}
+      at={at} hit={hit} forceOpen={forceOpen} glyph={<TeamAvatar color={color} name={event.sender} />}>
       <header className="tm-message__head">
         <span className="mark"><TeamAvatar color={color} name={event.sender} /></span>
         <span className="tm-message__who">{speaker(event.sender)}</span>
@@ -606,14 +605,15 @@ export function TeamEvent({
       {event.summary !== null && event.body !== null && (
         <p className="tm-message__subject">{event.summary}</p>
       )}
-      {body !== null && (
+      {body !== null ? (
         <div className="tm-message__body tr-prose">
           <MessagePreview messageKey={domId} role="agent"
-            title={`Team ${event.kind} from ${speaker(event.sender)}`}
+            matched={hit}
+            title={`${label} from ${speaker(event.sender)}`}
             text={body} recordedText={event.body} onReceipt={onReceipt} />
         </div>
-      )}
-    </article>
+      ) : <p className="tr-quiet">No message body recorded.</p>}
+    </ActivityEvent>
   );
 }
 

@@ -29,6 +29,8 @@ function load(): boolean {
 }
 
 let folded = load();
+let revision = 0;
+let state = { folded, revision };
 const listeners = new Set<() => void>();
 
 function subscribe(listener: () => void): () => void {
@@ -38,14 +40,15 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-function snapshot(): boolean {
-  return folded;
-}
+function snapshot() { return state; }
+const serverState = { folded: true, revision: 0 };
 
-export function useFoldPreference(): { folded: boolean; toggle: () => void } {
-  const value = useSyncExternalStore(subscribe, snapshot, () => true);
+export function useFoldPreference(): { folded: boolean; revision: number; toggle: () => void } {
+  const value = useSyncExternalStore(subscribe, snapshot, () => serverState);
   const toggle = useCallback(() => {
     folded = !folded;
+    revision += 1;
+    state = { folded, revision };
     try {
       localStorage.setItem(STORE_KEY, folded ? "on" : "off");
     } catch {
@@ -53,5 +56,5 @@ export function useFoldPreference(): { folded: boolean; toggle: () => void } {
     }
     for (const listener of listeners) listener();
   }, []);
-  return { folded: value, toggle };
+  return { ...value, toggle };
 }

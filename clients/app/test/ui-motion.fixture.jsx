@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 import { ProjectList } from "../renderer/src/components/projects/ProjectList";
 import { SessionList } from "../renderer/src/components/sessions/SessionList";
 import { TranscriptColumn } from "../renderer/src/components/Transcript";
+import { NO_SPEND } from "../renderer/src/lib/spend";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/room.css";
 import "../renderer/src/styles/transcript.css";
@@ -21,6 +22,9 @@ const projects = ["Rosetta", "Orchard", "Field Notes", "Compass", "Mille", "Dayl
     },
     tint: ["#6366f1", "#22c55e", "#06b6d4", "#f59e0b", "#ec4899", "#8b5cf6"][i],
     lifetimeTokens: 345000 - i * 37000,
+    lifetimeSpend: { ...NO_SPEND, costMicroUsd: 3450000 - i * 370000 },
+    spendLast30Days: NO_SPEND,
+    spendLast53Weeks: NO_SPEND,
     tokensLast30Days: 30000,
     recentTokenBuckets: Array.from({ length: 15 }, (_, n) => 100 + ((n * 17 + i * 13) % 43) * 30),
     dailyTokens: [],
@@ -226,7 +230,7 @@ function Fixture() {
           <ProjectList
             projects={projectRows}
             selectedProjectId="p0"
-            maximumLifetimeTokens={345000}
+            maximumLifetimeCost={3450000}
             homeDirectory="/Users/demo"
             currentTimestamp={now}
             ingestActive={false}

@@ -1,4 +1,4 @@
-import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FullMessage } from "./message-file-source";
 import { MESSAGE_PREVIEW_CHARACTERS, messageExcerpt } from "./message-preview";
 import { Prose } from "./Prose";
@@ -13,9 +13,12 @@ export function MessagePreview({
   role,
   title,
   recordedText,
+  matched = false,
   ...prose
-}: ProseProps & { readonly messageKey: string; readonly role: FullMessage["role"]; readonly title?: string; readonly recordedText?: FullMessage["recordedText"] }) {
+}: ProseProps & { readonly messageKey: string; readonly role: FullMessage["role"]; readonly title?: string; readonly recordedText?: FullMessage["recordedText"]; readonly matched?: boolean }) {
   const openMessage = useContext(MessageViewerContext);
+  const [matchedKey, setMatchedKey] = useState<string | null>(matched ? messageKey : null);
+  useEffect(() => { if (matched) setMatchedKey(messageKey); }, [matched, messageKey]);
   const { text } = prose;
   const member = recordedText?.type === "member" ? recordedText : null;
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -74,7 +77,7 @@ export function MessagePreview({
             aria-haspopup="dialog"
             onClick={() => openMessage({ key: messageKey, role, title, text, recordedText, attachments: prose.imageAttachments })}
           >
-            View full message
+            {matchedKey === messageKey ? "View match in full message" : "View full message"}
           </button>
         </div>
       )}

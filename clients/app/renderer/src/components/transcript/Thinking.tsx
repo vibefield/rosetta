@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { firstLine, spanText } from "../../lib/transcript";
 import { useFoldPreference } from "./fold-preference";
 import { LineChevron, ThoughtGlyph } from "./glyphs";
+import { useRowDisclosure } from "./disclosure-state";
 
 export interface ThinkingProps {
   readonly text: string;
@@ -71,25 +72,27 @@ export function ThoughtLine({
   hit,
   anchor,
   forceOpen = false,
+  embedded = false,
 }: ThinkingProps & {
   /** A landing inside this thought opens it, as a landing inside a line does:
    * the matched words must be on the page, not one press away. */
   readonly forceOpen?: boolean;
+  readonly embedded?: boolean;
 }) {
   // §05 — the room's activity act is the default, a press is an override,
   // and the next press of the act clears it — as the run's head does.
   const everyRunOpen = !useFoldPreference().folded;
-  const [override, setOverride] = useState<boolean | null>(null);
+  const [override, setOverride] = useRowDisclosure(domId, !embedded && everyRunOpen);
   const actRef = useRef(everyRunOpen);
   useEffect(() => {
     if (actRef.current === everyRunOpen) return;
     actRef.current = everyRunOpen;
-    setOverride(null);
-  }, [everyRunOpen]);
+    if (!embedded) setOverride(everyRunOpen);
+  }, [everyRunOpen, embedded, setOverride]);
   useEffect(() => {
     if (forceOpen || hit) setOverride(true);
   }, [forceOpen, hit]);
-  const isOpen = override ?? everyRunOpen;
+  const isOpen = override || forceOpen;
   const span = spanMs === null || spanMs < 1000 ? null : spanText(spanMs);
   // A thought may open with a blank line; the head names the first line
   // that says something.

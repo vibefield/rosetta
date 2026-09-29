@@ -110,6 +110,7 @@ async function run() {
     }), true);
 
     // Disclosed compaction context uses the same bounded preview and reader.
+    await check(() => document.querySelector('.tr-activity__head').click());
     await check(() => {
       document.querySelector('[data-timeline-id="long-summary"] > summary').click();
       document.querySelector('[data-timeline-id="short-summary"] > summary').click();
@@ -189,7 +190,7 @@ async function run() {
     clearInterval(pulse);
     clearTimeout(deadline);
     win?.destroy();
-    await server?.close();
+    await Promise.race([server?.close(), pause(1000)]);
     app.exit(failed ? 1 : 0);
   }
 }

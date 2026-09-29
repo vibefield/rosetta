@@ -62,7 +62,15 @@ interface Anchor {
  *  it would hold nothing still and land the reader at the top instead. */
 function visibleBox(element: HTMLElement): DOMRect | null {
   const box = element.getBoundingClientRect();
-  return box.height > 0 || box.width > 0 ? box : null;
+  if (box.height > 0 || box.width > 0) return box;
+  // A closed activity run is still the visible location of its events. After
+  // an earlier page joins it, anchor to that same run instead of the next chat.
+  const group = element.closest(".tr-activity__list[hidden]")?.parentElement;
+  if (group !== null && group !== undefined) {
+    const groupBox = group.getBoundingClientRect();
+    if (groupBox.height > 0) return groupBox;
+  }
+  return null;
 }
 
 /** Where the row with this id is drawn now, skipping any hidden twin: one

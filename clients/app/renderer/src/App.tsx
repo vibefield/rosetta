@@ -114,6 +114,7 @@ export default function App() {
   const [sort, setSort] = useState<ProjectSort>("recent");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [inspectedThread, setInspectedThread] = useState<{ rootId: string; id: string } | null>(null);
   const [focus, setFocus] = useState<ThreadFocus | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
 
@@ -219,10 +220,14 @@ export default function App() {
     }
   }, [projectSessions, sessionId]);
 
+  const viewedSessionId = inspectedThread?.rootId === sessionId ? inspectedThread.id : sessionId;
   const session = useMemo(
-    () => (meta?.sessions ?? []).find((s) => s.id === sessionId) ?? null,
-    [meta, sessionId],
+    () => (meta?.sessions ?? []).find((s) => s.id === viewedSessionId) ?? null,
+    [meta, viewedSessionId],
   );
+  const openThread = useCallback((id: string) => {
+    if (sessionId !== null) setInspectedThread({ rootId: sessionId, id });
+  }, [sessionId]);
   // Attention-directed ingestion: opening a not-yet-indexed session moves
   // its queued work to the front of the backfill queue. Under slicing the
   // common case is "streaming" — the starter landed and the completion
@@ -232,11 +237,11 @@ export default function App() {
   // keeps its order, and the ledger dedupes repeats.
   const sessionState = session?.stream_state ?? null;
   useEffect(() => {
-    if (sessionId === null || sessionState === null || sessionState === "indexed") return;
+    if (viewedSessionId === null || sessionState === null || sessionState === "indexed") return;
     if (ingest?.phase !== "backfilling") return;
-    client.boost(sessionId).catch(() => {});
-  }, [sessionId, sessionState, ingest?.phase]);
-  const feed = useTimeline(sessionId);
+    client.boost(viewedSessionId).catch(() => {});
+  }, [viewedSessionId, sessionState, ingest?.phase]);
+  const feed = useTimeline(viewedSessionId);
   const usage = useProjectUsage(projectId, canonicalReady === true);
 
   const projectRoot = useMemo(() => {
@@ -279,6 +284,7 @@ export default function App() {
     setSheetOpen(false);
     setProjectId(projectKey(rootSession));
     setSessionId(rootSession.id);
+    setInspectedThread(null);
     setFocus({ sessionId: hit.session_id, timelineId: hit.timeline_id });
     const result = searchResults === null ? null : sessionResultOf(searchResults, rootSession.id);
     const hits = result === null ? [hit] : hitsInReadingOrder(result.hits);
@@ -294,6 +300,7 @@ export default function App() {
         if (current === null || current.hits.length === 0) return current;
         const at = (current.at + delta + current.hits.length) % current.hits.length;
         const hit = current.hits[at];
+        setInspectedThread(null);
         setFocus({ sessionId: hit.session_id, timelineId: hit.timeline_id });
         return { ...current, at };
       });
@@ -423,6 +430,7 @@ export default function App() {
               onProjectSelect={(id) => {
                 setProjectId(id);
                 setSessionId(null);
+                setInspectedThread(null);
               }}
             />
             <SessionsColumn
@@ -439,7 +447,7 @@ export default function App() {
                 worktree.available && projectRoot !== null ? worktree.visible : null
               }
               onToggleWorktree={worktree.toggle}
-              onSessionSelect={(selectedSession) => setSessionId(selectedSession.id)}
+              onSessionSelect={(selectedSession) => { setSessionId(selectedSession.id); setInspectedThread(null); }}
             />
             {/* Always in the grid — a closed guest is a 0px track, and the
                 measure takes back whatever it gives up. */}
@@ -467,6 +475,8 @@ export default function App() {
               onDismissStepper={() => setStepper(null)}
               getRuntimeKind={kindOf}
               homeDirectory={home}
+              onOpenThread={openThread}
+              onBackToParent={session?.parent_session_id == null ? null : () => openThread(session.parent_session_id!)}
             />
           </div>
         )}

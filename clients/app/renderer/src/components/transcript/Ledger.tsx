@@ -41,6 +41,7 @@ import { Attachments } from "./Attachments";
 import { FaviconStack, Favicon } from "./Favicon";
 import { FailGlyph, FamilyGlyph, LineChevron } from "./glyphs";
 import { useFoldPreference } from "./fold-preference";
+import { useRowDisclosure } from "./disclosure-state";
 import { hasDetail, LineDetail } from "./LineDetail";
 import { Marker, SummaryNote } from "./Marker";
 import { TeamInvocation } from "./Team";
@@ -102,10 +103,10 @@ export function Line({
   onOpenLinkedChild,
   onOpenPath,
 }: LineProps) {
-  const [open, setOpen] = useState(line.openByDefault);
+  const [open, setOpen] = useRowDisclosure(domId, line.openByDefault);
   useEffect(() => {
-    if (forceOpen) setOpen(true);
-  }, [forceOpen]);
+    if (forceOpen || hit) setOpen(true);
+  }, [forceOpen, hit, setOpen]);
 
   const navigatesToChild = onOpenLinkedChild !== null;
   const pressable = navigatesToChild || hasChildren || hasDetail(line.detail, line.diagnostic);
@@ -225,6 +226,8 @@ export function Line({
 }
 
 export interface LedgerProps {
+  /** A §04B group owns the outer fold; these are its existing tool rows. */
+  readonly embedded?: boolean;
   /** The ladder in order: lines, and the thoughts, markers and summaries
    * that happened between them (R-1). */
   readonly members: readonly LedgerMember[];
@@ -269,6 +272,7 @@ function rowsOf(member: LedgerMember): readonly TimelineEntry[] {
 }
 
 export function Ledger({
+  embedded = false,
   members,
   summary,
   anchor,
@@ -321,7 +325,7 @@ export function Ledger({
   const domIdRef = useRef(domIdOf);
   domIdRef.current = domIdOf;
   useEffect(() => {
-    if (!highlightInside || highlightedTimelineId === null) return;
+    if (embedded || !highlightInside || highlightedTimelineId === null) return;
     setOverride(true);
     const frame = window.requestAnimationFrame(() => {
       document
@@ -329,7 +333,7 @@ export function Ledger({
         ?.scrollIntoView({ block: "center" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [highlightInside, highlightedTimelineId]);
+  }, [embedded, highlightInside, highlightedTimelineId]);
 
   const drawn: ReactNode[] = [];
   for (let index = 0; index < members.length; index += 1) {
@@ -423,7 +427,7 @@ export function Ledger({
   }
 
   // Activity gets a summary even for one line; speech has no outer fold.
-  const closed = summary.closedByDefault;
+  const closed = !embedded && summary.closedByDefault;
   // R-5: the green breath only in a live session below the watermark, and
   // then the head carries the line that is happening.
   const running = summary.running !== null && alive(summary.running) ? summary.running : null;
@@ -431,7 +435,7 @@ export function Ledger({
   const expanded = override ?? (everyRunOpen || focusInside);
   const toggle = () => setOverride(!expanded);
   return (
-    <div className={closed ? "tr-seg tr-ledger" : "tr-ledger"}>
+    <div className={embedded ? "tr-activity-tools" : closed ? "tr-seg tr-ledger" : "tr-ledger"}>
       {closed ? anchor : null}
       {closed ? <div
         className="tr-line tr-fold"

@@ -37,7 +37,13 @@ function buildRepresentatives(turns: readonly Turn[]): Map<string, string> {
     for (const row of rows) map.set(row.timeline_id, by);
   };
   for (const turn of turns) {
-    if (turn.prompt !== null) claim(turn.prompt.rows, turn.prompt.row.timeline_id);
+    if (turn.prompt !== null) {
+      claim(turn.prompt.rows, turn.prompt.row.timeline_id);
+      if (turn.prompt.commandOutputRow !== null && turn.prompt.setting === null) {
+        const id = turn.prompt.commandOutputRow.timeline_id;
+        map.set(id, id);
+      }
+    }
     for (const segment of turn.segments) {
       if (segment.kind === "compaction") {
         claim(segment.rows, segment.row.timeline_id);
@@ -82,11 +88,12 @@ export function transcriptModel(
   // Sittings first: a run never straddles a pill, so the turns are cut at
   // every sitting's first row (`cutBefore`) before they are folded.
   const list = sittings(rows, now);
+  const gaps = buildGaps(rows);
   const cutBefore = new Set(
-    list
+    [...(options.cutBefore ?? gaps.keys()), ...list
       .slice(1)
       .map((sitting) => sitting.rows[0]?.timeline_id)
-      .filter((id): id is string => id !== undefined),
+      .filter((id): id is string => id !== undefined)],
   );
   const turns = documentTurns(rows, {
     ...options,
@@ -99,7 +106,7 @@ export function transcriptModel(
     days: dayList(list),
     plan: documentPlan(turns, list),
     representatives: buildRepresentatives(turns),
-    gaps: buildGaps(rows),
+    gaps,
   };
 }
 
@@ -112,6 +119,7 @@ export function useTranscriptModel(
 ): TranscriptModel {
   const cwd = session?.cwd ?? null;
   const sharedKey = [...(options.sharedCollaborationSessionIds ?? [])].sort().join("\u0000");
+  const cutKey = [...(options.cutBefore ?? [])].sort().join("\u0000");
   return useMemo(() => {
     const sharedCollaborationSessionIds = new Set(
       sharedKey === "" ? [] : sharedKey.split("\u0000"),
@@ -123,5 +131,5 @@ export function useTranscriptModel(
     // `now` only names the day a stamp falls in; re-deriving the whole
     // document on every clock tick would be a memo that never hits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, cwd, homeDirectory, sharedKey]);
+  }, [rows, cwd, homeDirectory, sharedKey, cutKey]);
 }

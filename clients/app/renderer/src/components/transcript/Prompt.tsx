@@ -19,6 +19,8 @@ import { Anchor } from "./Anchor";
 import { AuthoredMessage } from "./AuthoredMessage";
 import { MessagePreview } from "./MessagePreview";
 import { SegmentActs } from "./Prose";
+import { ActivityEvent } from "./Activity";
+import { FamilyGlyph } from "./glyphs";
 
 export interface PromptPanelProps {
   readonly prompt: PromptModel;
@@ -58,6 +60,7 @@ export interface PromptProps {
   readonly prompts: readonly PromptModel[];
   readonly domIdOf: (timelineId: string) => string;
   readonly landedTimelineId: string | null;
+  readonly focusTimelineId?: string | null;
   readonly onReceipt: (message: string) => void;
   readonly onOpenAttachment: (fact: AttachmentFact) => void;
 }
@@ -71,34 +74,37 @@ function MachinePrompt({
   prompt,
   domId,
   onReceipt,
+  hit,
+  forceOpen,
 }: {
   readonly prompt: PromptModel;
   readonly domId: string;
   readonly onReceipt: (message: string) => void;
+  readonly hit: boolean;
+  readonly forceOpen: boolean;
 }) {
-  const machine = prompt.machine;
-  if (machine === null) return null;
-  const recordedText = prompt.row.body.type === "collaboration" ? prompt.row.body.event.body : null;
+  const machine = prompt.machine ?? { label: "Assignment", sender: null };
+  const recordedText = prompt.row.body.type === "collaboration" ? prompt.row.body.event.body
+    : prompt.row.body.type === "user" ? prompt.row.body.text : null;
   const facts = [
     machine.label,
     machine.sender === null ? null : `from ${senderLabel(machine.sender)}`,
     prompt.at === null ? null : clock(prompt.at),
   ].filter((fact): fact is string => fact !== null);
   return (
-    <div
-      className="tr-assignment"
-      id={domId}
-      data-timeline-id={prompt.row.timeline_id}
-    >
+    <ActivityEvent domId={domId} timelineId={prompt.row.timeline_id} label={machine.label}
+      summary={machine.sender === null ? undefined : `from ${senderLabel(machine.sender)}`}
+      at={prompt.at} hit={hit} forceOpen={forceOpen} glyph={<FamilyGlyph glyph="delegate" />}>
       <span className="tr-assignment__head">{facts.join(" · ")}</span>
       {prompt.text === null && recordedText?.type !== "member" ? (
         <span className="tr-quiet">no message body recorded</span>
       ) : (
         <MessagePreview messageKey={`${prompt.row.session_id}:${prompt.row.timeline_id}`} role="agent"
+          matched={hit}
           title={`${machine.label}${machine.sender === null ? "" : ` from ${senderLabel(machine.sender)}`}`}
           text={prompt.text ?? ""} recordedText={recordedText} onReceipt={onReceipt} />
       )}
-    </div>
+    </ActivityEvent>
   );
 }
 
@@ -129,6 +135,7 @@ export function Prompt({
   prompts,
   domIdOf,
   landedTimelineId,
+  focusTimelineId = null,
   onReceipt,
   onOpenAttachment,
 }: PromptProps) {
@@ -139,7 +146,7 @@ export function Prompt({
   // The anchor sits against the first thing in the segment, and a pill is
   // half a panel's height — so the offset follows what actually opens it.
   const allCommands = prompts.every((prompt) => prompt.isCommand && prompt.command !== null);
-  const allMachine = prompts.every((prompt) => prompt.machine !== null);
+  const allMachine = prompts.every((prompt) => prompt.machine !== null || prompt.fromParent);
   const text = prompts
     .map((prompt) => prompt.text)
     .filter((value): value is string => value !== null)
@@ -161,12 +168,14 @@ export function Prompt({
       {prompts.map((prompt) =>
         // §03 H — a prompt that is a local command wears a pill instead of a
         // panel, and its `command_output` rides beside it. One object.
-        prompt.machine !== null ? (
+        prompt.machine !== null || prompt.fromParent ? (
           <MachinePrompt
             key={prompt.key}
             prompt={prompt}
             domId={domIdOf(prompt.row.timeline_id)}
             onReceipt={onReceipt}
+            hit={landedTimelineId === prompt.row.timeline_id}
+            forceOpen={focusTimelineId === prompt.row.timeline_id}
           />
         ) : prompt.isCommand && prompt.command !== null ? (
           <CommandPrompt
