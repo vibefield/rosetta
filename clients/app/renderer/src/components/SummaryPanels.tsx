@@ -14,7 +14,7 @@ import {
   createModelUsageStreamgraphData,
 } from "../lib/chart-data";
 import { fmtTokens, tokenText } from "../lib/format";
-import { GitGlyph, StatsGlyph, TreeGlyph } from "../lib/icons";
+import { GitHubGlyph, StatsGlyph, TreeGlyph } from "../lib/icons";
 import type { ProjectViewModel } from "../lib/model";
 import { NO_SPEND, addSpend, coverage, fmtUsd, spendDescription, usdText } from "../lib/spend";
 import type { Spend } from "../lib/spend";
@@ -207,7 +207,7 @@ export function ProjectSummaryPanel({
                 )
               }
             >
-              <GitGlyph />
+              <GitHubGlyph />
             </button>
           )}
         </span>
