@@ -73,6 +73,11 @@ async function run() {
     await open();
     assert.equal(await check(() => document.querySelectorAll('.ah-activity [data-day]').length), 368);
     assert.equal(await check(() => document.querySelector('.ah-activity [aria-pressed="true"][data-day]').dataset.day), "2026-09-30");
+    const highlights = () => [...document.querySelectorAll('.ah-activity__highlights dd')].map(node => node.textContent);
+    assert.deepEqual(await check(highlights), ["11d", "18d", "4 PM", "opus-5-5"], "Detailed highlights match the compact card");
+    assert.match(await check(() => document.querySelector('.ah-meta__facts').textContent), /11d.*18d.*4 PM.*opus-5-5/);
+    assert.deepEqual(await check(() => [...document.querySelectorAll('.ah-activity__highlights small')].map(node => node.textContent)),
+      ["Consecutive days through today", "53-week history", "53 weeks · local time", "Last 30 days · by tokens"]);
     await shot("activity-dark-53-weeks.png");
 
     // Native hover inspection does not silently change the selected day.
@@ -90,6 +95,7 @@ async function run() {
 
     await click('[aria-label="Activity date range"] button:nth-child(1)');
     assert.equal(await check(() => document.querySelectorAll('.ah-activity [data-day]').length), 30);
+    assert.deepEqual(await check(highlights), ["11d", "18d", "4 PM", "opus-5-5"], "Project highlights retain their stated periods when the range changes");
     const cell = await check(() => { const rect = document.querySelector('.ah-activity [data-day]').getBoundingClientRect(); return { width: rect.width, height: rect.height }; });
     assert.ok(Math.abs(cell.width - cell.height) < 1, "Short ranges retain square calendar cells");
     await click('.ah-activity__jump');
@@ -131,16 +137,27 @@ async function run() {
     win.webContents.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, x: 8, y: 8 });
     await until(() => !document.querySelector('[role="dialog"]'), "Backdrop did not dismiss dialog");
 
+    await check(() => window.activityFixture.setMode('no-usage'));
+    await pause();
+    await open();
+    assert.deepEqual(await check(highlights), ["11d", "18d", "—", "—"], "Missing usage does not hide known streaks or invent a peak/model");
+    await check(() => window.activityFixture.setMode('ready'));
+    await pause();
+    assert.deepEqual(await check(highlights), ["11d", "18d", "4 PM", "opus-5-5"], "Highlights update when usage arrives");
+    await key("Escape");
+
     await check(() => window.activityFixture.setMode('zero'));
     await pause();
     await open();
     assert.equal(await check(() => document.querySelector('.ah-activity__stats dd').textContent), "0");
+    assert.deepEqual(await check(highlights), ["0d", "0d", "—", "—"]);
     assert.equal(await check(() => document.querySelector('.ah-activity__jump')), null);
     await key("Escape");
     await check(() => window.activityFixture.setMode('missing'));
     await pause();
     await open();
     assert.equal(await check(() => document.querySelector('.ah-activity__stats dd').textContent), "—");
+    assert.deepEqual(await check(highlights), ["—", "—", "—", "—"]);
     assert.match(await check(() => document.querySelector('.ah-activity__inspection').textContent), /No recorded days/);
     await click('[aria-label="Activity date range"] button:nth-child(1)');
     assert.match(await check(() => document.querySelector('.ah-activity__daily > p').textContent), /No recorded days/);

@@ -6,6 +6,7 @@ import { ColumnHeading, DialogShell, SegmentedControl } from "../ui";
 import { CloseGlyph, ExitFullscreenGlyph, FullscreenGlyph } from "../../lib/icons";
 import { createActivityDetails } from "../../lib/activity-details";
 import type { ActivityRange } from "../../lib/activity-details";
+import type { ActivityStats } from "../../lib/chart-data";
 import { tokenText } from "../../lib/format";
 import "../../styles/activity-chart.css";
 
@@ -28,10 +29,17 @@ export interface ActivityChartDialogProps {
   readonly color: string;
   readonly data: CalendarHeatmapData;
   readonly today: string;
+  /** The same full-history streaks and usage highlights as the compact card.
+   * These keep their stated periods when the calendar range changes. */
+  readonly activityStats: ActivityStats;
+  readonly peakHourLabel: string | null;
+  readonly primaryModelLabel: string | null;
   readonly onClose: () => void;
 }
 
-export function ActivityChartDialog({ name, color, data, today, onClose }: ActivityChartDialogProps) {
+export function ActivityChartDialog({
+  name, color, data, today, activityStats, peakHourLabel, primaryModelLabel, onClose,
+}: ActivityChartDialogProps) {
   const [range, setRange] = useState<ActivityRange>("53w");
   const [fullscreen, setFullscreen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -45,6 +53,9 @@ export function ActivityChartDialog({ name, color, data, today, onClose }: Activ
   const weekdayPeak = Math.max(1, ...details.weekdays.map((day) => day.average ?? 0));
   const dailyPeak = Math.max(0, ...details.days.map((day) => day.value ?? 0));
   const isShortRange = range !== "53w";
+  const hasRecordedActivity = data.weeks.some((week) =>
+    week.days.some((day) => day.id <= today && day.value !== null),
+  );
   const selectDay = (day: CalendarHeatmapCellData) => { setSelectedId(day.id); setPreview(null); };
 
   return (
@@ -72,6 +83,18 @@ export function ActivityChartDialog({ name, color, data, today, onClose }: Activ
           <SegmentedControl value={range} options={RANGE_OPTIONS} accessibleLabel="Activity date range"
             onValueChange={(value) => { setRange(value); setPreview(null); }} />
         </div>
+        <dl className="ah-activity__highlights" aria-label="Project activity highlights">
+          <div><dt>Current streak</dt>
+            <dd>{hasRecordedActivity ? `${activityStats.currentStreakLength}d` : "—"}</dd>
+            <small>Consecutive days through today</small></div>
+          <div><dt>Best streak</dt>
+            <dd>{hasRecordedActivity ? `${activityStats.longestStreakLength}d` : "—"}</dd>
+            <small>53-week history</small></div>
+          <div><dt>Peak hour</dt><dd>{peakHourLabel ?? "—"}</dd>
+            <small>53 weeks · local time</small></div>
+          <div><dt>Primary model</dt><dd className="ah-activity__model" title={primaryModelLabel ?? undefined}>
+            {primaryModelLabel ?? "—"}</dd><small>Last 30 days · by tokens</small></div>
+        </dl>
         <dl className="ah-activity__stats">
           <div><dt>Total tokens</dt><dd>{details.total === null ? "—" : tokenText(details.total)}</dd></div>
           <div><dt>Active days</dt><dd>{details.total === null ? "—" : details.activeDayCount}

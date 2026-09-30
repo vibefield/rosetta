@@ -326,6 +326,8 @@ export function ProjectSummaryPanel({
       )}
       {isActivityOpen && <ActivityChartDialog name={project.row.name} color={project.tint}
         data={heatmapData} today={getCalendarDayKey(currentTimestamp)}
+        activityStats={activityStats} peakHourLabel={peakHour === null ? null : formatHourLabel(peakHour)}
+        primaryModelLabel={primaryModelLabel}
         onClose={() => setIsActivityOpen(false)} />}
     </div>
   );
