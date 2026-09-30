@@ -296,6 +296,7 @@ pub(crate) fn meta_touch(op: &IngestOp) -> MetaTouch<'_> {
         | IngestOp::WorkflowRun { session_id, .. }
         | IngestOp::WorkflowJournal { session_id, .. } => MetaTouch::Session(session_id),
         IngestOp::SessionUsage(row) => MetaTouch::Session(&row.session_id),
+        IngestOp::SessionUsageTotals(row) => MetaTouch::Session(&row.session_id),
         IngestOp::ProjectionAsset { .. }
         | IngestOp::FileEdit(_)
         | IngestOp::Plan(_)

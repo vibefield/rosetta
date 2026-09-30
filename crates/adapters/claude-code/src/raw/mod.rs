@@ -4,6 +4,7 @@
 //! committed structure census (`Evidence::Observed`); do not add fields
 //! without that evidence.
 
+pub mod cost_state;
 pub mod subagent_meta;
 pub mod transcript;
 

@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 24;
+pub const SCHEMA_VERSION: i64 = 25;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -363,10 +363,31 @@ CREATE TABLE IF NOT EXISTS session_usage (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS session_usage_src ON session_usage(src_cursor);
 
+-- One selected cumulative total per session/model, never snapshot history.
+-- Separate from additive samples and provider-billed amounts.
+CREATE TABLE IF NOT EXISTS session_usage_total (
+  session_id TEXT NOT NULL REFERENCES session(id),
+  model TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  in_tokens INTEGER NOT NULL CHECK (in_tokens >= 0),
+  output_total INTEGER NOT NULL CHECK (output_total >= 0),
+  think_tokens INTEGER CHECK (think_tokens >= 0 AND think_tokens <= output_total),
+  cache_r_tokens INTEGER NOT NULL CHECK (cache_r_tokens >= 0),
+  cache_write_total INTEGER NOT NULL CHECK (cache_write_total >= 0),
+  web_searches INTEGER NOT NULL CHECK (web_searches >= 0),
+  estimated_pusd INTEGER CHECK (estimated_pusd >= 0),
+  src_cursor INTEGER REFERENCES ingest_cursor(id),
+  PRIMARY KEY (session_id, model)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_usage_total_src ON session_usage_total(src_cursor);
+
 CREATE TABLE IF NOT EXISTS usage_bucket (
   session_id      TEXT NOT NULL REFERENCES session(id),
   hour_ts         INTEGER NOT NULL,
   model           TEXT NOT NULL,
+  -- Reported rows hold only the positive difference from cumulative totals;
+  -- recorded rows remain independently reproducible from request facts.
+  source          TEXT NOT NULL DEFAULT 'recorded' CHECK (source IN ('recorded','reported')),
   in_tokens       INTEGER,
   out_tokens      INTEGER,
   cache_r_tokens  INTEGER,
@@ -374,9 +395,9 @@ CREATE TABLE IF NOT EXISTS usage_bucket (
   think_tokens    INTEGER,
   cache_w1h_tokens INTEGER,
   web_searches    INTEGER,
-  -- List-price-equivalent pico-USD of the records the catalog priced (NULL
-  -- when none), provider-billed pico-USD (NULL when none reported), and the
-  -- tokens of records it could not price. Coverage follows from these.
+  -- Estimated pico-USD: request list prices on recorded rows, the positive
+  -- reported adjustment on reported rows (NULL when unknown). Provider-billed
+  -- pico-USD stays separate. Unpriced tokens retain the coverage gaps.
   cost_pusd       INTEGER,
   billed_pusd     INTEGER,
   unpriced_tokens INTEGER NOT NULL DEFAULT 0,
@@ -386,7 +407,7 @@ CREATE TABLE IF NOT EXISTS usage_bucket (
   unrecorded_output INTEGER NOT NULL DEFAULT 0,
   message_count   INTEGER NOT NULL DEFAULT 0,
   tool_call_count INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (session_id, hour_ts, model)
+  PRIMARY KEY (session_id, hour_ts, model, source)
 ) WITHOUT ROWID;
 
 -- Aggregates attribute a whole session tree to its root; readiness of any

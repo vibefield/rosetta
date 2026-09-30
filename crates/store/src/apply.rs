@@ -784,6 +784,7 @@ fn cursor_has_projection(tx: &Transaction, cursor_id: i64) -> Result<bool, Store
                EXISTS(SELECT 1 FROM task          WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM plan          WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session_usage WHERE src_cursor = ?1 LIMIT 1) OR
+               EXISTS(SELECT 1 FROM session_usage_total WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM workflow_run WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM workflow_journal WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session       WHERE title_src_cursor = ?1 LIMIT 1)",
@@ -811,7 +812,8 @@ fn remove_cursor_projection(
     if maintenance.buckets {
         let old_samples = {
             let mut statement = tx.prepare_cached(
-                "SELECT session_id, ts, model FROM session_usage WHERE src_cursor = ?1",
+                "SELECT session_id, ts, model FROM session_usage WHERE src_cursor = ?1
+                 UNION ALL SELECT session_id, ts, model FROM session_usage_total WHERE src_cursor = ?1",
             )?;
             statement
                 .query_map(params![cursor_id], |row| {
@@ -839,6 +841,7 @@ fn remove_cursor_projection(
         "DELETE FROM task WHERE src_cursor = ?1",
         "DELETE FROM plan WHERE src_cursor = ?1",
         "DELETE FROM session_usage WHERE src_cursor = ?1",
+        "DELETE FROM session_usage_total WHERE src_cursor = ?1",
         "DELETE FROM workflow_journal WHERE src_cursor = ?1",
         "DELETE FROM workflow_run WHERE src_cursor = ?1",
     ] {
@@ -1385,6 +1388,18 @@ fn apply_op(
             }
             apply_session_usage(tx, row, src_cursor, stats, maintenance, dirty_buckets)?
         }
+        IngestOp::SessionUsageTotals(row) => {
+            for (ts, model) in crate::usage_totals::replace(tx, row, src_cursor)? {
+                mark_bucket(
+                    dirty_buckets,
+                    maintenance,
+                    &row.session_id,
+                    Some(ts),
+                    Some(&model),
+                );
+            }
+            stats.usage_applied += 1;
+        }
         IngestOp::FileEdit(row) => profile_other(stats, || apply_file_edit(tx, row, src_cursor))?,
         IngestOp::Plan(row) => profile_other(stats, || apply_plan(tx, row, src_cursor))?,
         IngestOp::Task(row) => profile_other(stats, || apply_task(tx, row, src_cursor))?,
@@ -1881,10 +1896,15 @@ fn fold_dirty_buckets(
     stats: &mut ApplyStats,
 ) -> Result<(), StoreError> {
     let started = Instant::now();
+    let sessions: BTreeSet<_> = dirty_buckets
+        .iter()
+        .map(|key| key.session_id.clone())
+        .collect();
     for key in dirty_buckets {
         rebuild_bucket(tx, &key.session_id, key.hour_ts, &key.model)?;
         stats.bucket_rebuilds += 1;
     }
+    crate::usage_totals::reconcile_sessions(tx, &sessions)?;
     stats.canonical_apply_nanos += elapsed_nanos(started);
     Ok(())
 }

@@ -61,6 +61,10 @@ const INVALID_JSON: &str = "<invalid-json>";
 /// Adapter-private per-file response-fold state.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ClaudeCodeState {
+    /// `cost-state` has no timestamp. Attribute its otherwise undated
+    /// correction to the latest preceding timestamp, including on resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    latest_timestamp: Option<Ms>,
     /// Native response ids are not necessarily contiguous in a transcript:
     /// branch reconstruction can repeat an older assistant record thousands
     /// of lines later. Keep the closed response block identity so checkpoint
@@ -568,6 +572,14 @@ pub fn ingest(ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutco
 }
 
 fn normalize(ctx: &mut NormalizeCtx, stream_id: &str, record: &KnownRecord) -> LineOutcome {
+    if let Some(at) = record_identity(record).1
+        && let Some(state) = ctx
+            .state
+            .as_deref_mut()
+            .and_then(|s| s.downcast_mut::<ClaudeCodeState>())
+    {
+        state.latest_timestamp = Some(state.latest_timestamp.map_or(at, |old| old.max(at)));
+    }
     let mut emit = Emit::new(ctx, stream_id);
     match record {
         KnownRecord::User(line) => user_line(&mut emit, line),
@@ -575,6 +587,32 @@ fn normalize(ctx: &mut NormalizeCtx, stream_id: &str, record: &KnownRecord) -> L
         KnownRecord::System(line) => system_line(&mut emit, line),
         KnownRecord::AiTitle(line) => ai_title_line(&mut emit, line),
         KnownRecord::CustomTitle(line) => custom_title_line(&mut emit, line),
+        KnownRecord::CostState(line) => {
+            // Copied history and child transcripts must never install another
+            // session's cumulative ledger on this session.
+            if stream_id == spec::TRANSCRIPT
+                && ids::session_id(&emit.ctx.runtime_id, &line.session_id) == emit.session_id
+            {
+                let ts = emit
+                    .ctx
+                    .state
+                    .as_deref()
+                    .and_then(|s| s.downcast_ref::<ClaudeCodeState>())
+                    .and_then(|s| s.latest_timestamp)
+                    .unwrap_or(line.start_time);
+                if let Some(totals) = crate::cost_state::totals(line, &emit.session_id, ts) {
+                    emit.ops.push(IngestOp::SessionUsageTotals(totals));
+                } else {
+                    emit.drift(
+                        "invalid_usage_total",
+                        "cost-state",
+                        vec!["modelUsage".into()],
+                        Some(ts),
+                        None,
+                    );
+                }
+            }
+        }
         // Session bookkeeping the canonical model has no row for: the resume
         // latch, the prompt queue, the last-prompt pointer, the mode marker.
         // None of them carries a uuid or a timestamp, so none could be placed
@@ -2151,6 +2189,7 @@ fn record_identity(record: &KnownRecord) -> (&'static str, Option<Ms>, Option<&s
         KnownRecord::QueueOperation(line) => ("queue-operation", rfc3339_ms(&line.timestamp), None),
         KnownRecord::LastPrompt(_) => ("last-prompt", None, None),
         KnownRecord::Mode(_) => ("mode", None, None),
+        KnownRecord::CostState(_) => ("cost-state", None, None),
     }
 }
 

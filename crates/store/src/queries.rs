@@ -30,7 +30,8 @@ pub struct HeatmapDay {
     pub spend: Spend,
 }
 
-/// What a token figure cost at list prices (ARCHITECTURE §4.1.3): integer
+/// Estimated cost (ARCHITECTURE §4.1.3): recorded requests at list prices,
+/// supplemented by higher reported session totals. Integer
 /// micro-USD rounded once from the exact pico-USD rollup sums, the
 /// provider-billed amount where agents record one, the tokens the price
 /// catalog could not price, and the records whose output was never recorded.
@@ -50,16 +51,21 @@ pub struct Spend {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     #[serde(default)]
     pub unrecorded_output: i64,
+    // Portion added by cumulative agent-reported totals. Subtract from
+    // cost_micro_usd for the recorded-request list estimate.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    #[serde(default)]
+    pub reported_cost_adjustment_micro_usd: i64,
 }
 
 /// The rollup sums behind a [`Spend`], in the order [`Spend::from_row`]
 /// reads them.
 pub(crate) const SPEND_SUMS: &str =
-    "SUM(b.cost_pusd), SUM(b.billed_pusd), SUM(b.unpriced_tokens), SUM(b.unrecorded_output)";
+    "SUM(b.cost_pusd), SUM(b.billed_pusd), SUM(b.unpriced_tokens), SUM(b.unrecorded_output),
+     SUM(CASE WHEN b.source = 'reported' THEN b.cost_pusd ELSE 0 END)";
 
 impl Spend {
-    /// Build from four SQL columns: SUM(cost_pusd), SUM(billed_pusd),
-    /// SUM(unpriced_tokens), SUM(unrecorded_output), starting at `first`.
+    /// Build from the five SQL columns in SPEND_SUMS, starting at `first`.
     fn from_row(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Self> {
         Ok(Self {
             cost_micro_usd: row
@@ -70,6 +76,9 @@ impl Spend {
                 .map(rosetta_pricing::pico_to_micro),
             unpriced_tokens: row.get::<_, Option<i64>>(first + 2)?.unwrap_or(0),
             unrecorded_output: row.get::<_, Option<i64>>(first + 3)?.unwrap_or(0),
+            reported_cost_adjustment_micro_usd: rosetta_pricing::pico_to_micro(
+                row.get::<_, Option<i64>>(first + 4)?.unwrap_or(0),
+            ),
         })
     }
 }
@@ -1470,7 +1479,8 @@ pub fn contribution_for_scope(
                         + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) AS tokens,
                     SUM(b.cost_pusd) AS cost_pusd, SUM(b.billed_pusd) AS billed_pusd,
                     SUM(b.unpriced_tokens) AS unpriced_tokens,
-                    SUM(b.unrecorded_output) AS unrecorded_output
+                    SUM(b.unrecorded_output) AS unrecorded_output,
+                    SUM(CASE WHEN b.source = 'reported' THEN b.cost_pusd ELSE 0 END) AS reported_adjustment
              FROM tree_sessions t JOIN usage_bucket b ON b.session_id = t.session_id
              GROUP BY t.rid
          ),
@@ -1492,7 +1502,7 @@ pub fn contribution_for_scope(
          )
          SELECT r.id, r.project_id, COALESCE(u.tokens, 0), COALESCE(c.commits, 0),
                 COALESCE(e.edits, 0), COALESCE(e.loc, 0), COALESCE(m.messages, 0),
-                u.cost_pusd, u.billed_pusd, u.unpriced_tokens, u.unrecorded_output
+                u.cost_pusd, u.billed_pusd, u.unpriced_tokens, u.unrecorded_output, u.reported_adjustment
          FROM roots r
          LEFT JOIN usage u ON u.rid = r.id
          LEFT JOIN commits c ON c.rid = r.id

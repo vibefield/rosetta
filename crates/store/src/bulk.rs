@@ -159,6 +159,7 @@ fn with_sort_budget<T>(
 pub(crate) fn refold_usage_buckets(tx: &Connection) -> Result<(), StoreError> {
     tx.execute("DELETE FROM usage_bucket", [])?;
     tx.execute(&crate::usage_sql::FOLD_ALL, params![HOUR_MS])?;
+    crate::usage_totals::reconcile_all(tx)?;
     tx.execute(
         "UPDATE projection_state SET pricing_version = ?1 WHERE singleton = 1",
         params![rosetta_pricing::pricing_version()],

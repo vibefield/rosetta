@@ -46,7 +46,7 @@ export function ProjectsColumn({
   // The daemon's per-project fold: each cooking card draws its own byte
   // meter from this, so progress reads at the row you actually care about.
   const backfills = useMemo(() => projectBackfills(ingest), [ingest]);
-  // "Spend" is list-price USD (§4.1.3); tokens only break ties, so wholly
+  // "Spend" is estimated USD (§4.1.3); tokens only break ties, so wholly
   // unpriced projects still order among themselves.
   const maximumLifetimeCost = useMemo(
     () => projects.reduce(

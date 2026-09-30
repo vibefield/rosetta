@@ -8,7 +8,7 @@
 //! required here only if every observed record carries it.
 //!
 //! Record types typed below: user, assistant, system, ai-title, custom-title,
-//! atis-latch, queue-operation, last-prompt, mode. The remaining canonical types
+//! atis-latch, queue-operation, last-prompt, mode, cost-state. The remaining canonical types
 //! (attachment, permission-mode, bridge-session, file-history-*) parse as
 //! `ParsedLine::UnknownType` (soft) until typed — the adapter treats a type the
 //! canonical declares as handled-but-unprojected, never as drift.
@@ -51,6 +51,7 @@ pub fn parse_line(line: &str) -> Result<ParsedLine, serde_json::Error> {
                 | "queue-operation"
                 | "last-prompt"
                 | "mode"
+                | "cost-state"
         )
     );
     if known {
@@ -84,6 +85,8 @@ pub enum KnownRecord {
     LastPrompt(LastPromptLine),
     #[serde(rename = "mode")]
     Mode(ModeLine),
+    #[serde(rename = "cost-state")]
+    CostState(super::cost_state::CostStateLine),
 }
 
 impl Drift for KnownRecord {
@@ -98,6 +101,7 @@ impl Drift for KnownRecord {
             KnownRecord::QueueOperation(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::LastPrompt(l) => note_unknown(&l.unknown, prefix, out),
             KnownRecord::Mode(l) => note_unknown(&l.unknown, prefix, out),
+            KnownRecord::CostState(l) => l.drift(prefix, out),
         }
     }
 }

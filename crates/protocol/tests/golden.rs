@@ -612,6 +612,7 @@ fn exemplars() -> serde_json::Value {
                     unpriced_tokens: 23,
 
                     unrecorded_output: 0,
+                    reported_cost_adjustment_micro_usd: 0,
                 },
             }],
         },
@@ -627,6 +628,7 @@ fn exemplars() -> serde_json::Value {
                         unpriced_tokens: 0,
 
                         unrecorded_output: 0,
+                    reported_cost_adjustment_micro_usd: 0,
                     },
                 },
                 ModelDay {
@@ -639,6 +641,7 @@ fn exemplars() -> serde_json::Value {
                         unpriced_tokens: 23,
 
                         unrecorded_output: 0,
+                    reported_cost_adjustment_micro_usd: 0,
                     },
                 },
             ],
@@ -684,6 +687,7 @@ fn exemplars() -> serde_json::Value {
                     unpriced_tokens: 0,
 
                     unrecorded_output: 0,
+                    reported_cost_adjustment_micro_usd: 0,
                 },
                 commits: 1,
                 edits: 2,

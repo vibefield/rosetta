@@ -9,6 +9,9 @@ pub mod ids;
 pub mod ops;
 pub mod rows;
 pub mod timeline;
+pub mod usage_totals;
+
+pub use usage_totals::{ModelUsageTotal, SessionUsageTotals};
 
 pub use assets::{ImageAsset, ProjectionAsset};
 pub use ops::IngestOp;

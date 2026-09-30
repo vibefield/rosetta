@@ -1,6 +1,6 @@
-// List-price spend (docs/ARCHITECTURE.md §4.1.3): what the recorded usage
-// would cost at the model creator's API list price. One basis for every
-// agent; a provider-billed amount is a separate, secondary figure; usage the
+// Estimated spend (docs/ARCHITECTURE.md §4.1.3): recorded requests at the
+// model creator's API list price, supplemented by higher reported session
+// totals. A provider-billed amount is a separate, secondary figure; usage the
 // price catalog cannot price is counted and shown, never read as $0.
 
 /** The wire's spend columns, flattened beside every aggregate `tokens`. */
@@ -9,10 +9,11 @@ export interface SpendFields {
   readonly billed_micro_usd: number | null;
   readonly unpriced_tokens: number;
   readonly unrecorded_output: number;
+  readonly reported_cost_adjustment_micro_usd?: number;
 }
 
 export interface Spend {
-  /** List-price micro-USD of the priced usage; null when nothing was priced. */
+  /** Estimated micro-USD, including reported adjustments; null when unpriced. */
   readonly costMicroUsd: number | null;
   /** Provider-billed micro-USD where the agent records one; null otherwise. */
   readonly billedMicroUsd: number | null;
@@ -22,6 +23,8 @@ export interface Spend {
    * (a streamed reply that never got its final usage record): the priced
    * figure is a lower bound. */
   readonly unrecordedOutput: number;
+  /** Additional estimate recovered from cumulative agent totals. */
+  readonly reportedCostAdjustmentMicroUsd: number;
 }
 
 export const NO_SPEND: Spend = {
@@ -29,6 +32,7 @@ export const NO_SPEND: Spend = {
   billedMicroUsd: null,
   unpricedTokens: 0,
   unrecordedOutput: 0,
+  reportedCostAdjustmentMicroUsd: 0,
 };
 
 export function spendOf(fields: SpendFields): Spend {
@@ -37,6 +41,7 @@ export function spendOf(fields: SpendFields): Spend {
     billedMicroUsd: fields.billed_micro_usd,
     unpricedTokens: fields.unpriced_tokens,
     unrecordedOutput: fields.unrecorded_output,
+    reportedCostAdjustmentMicroUsd: fields.reported_cost_adjustment_micro_usd ?? 0,
   };
 }
 
@@ -52,6 +57,7 @@ export function addSpend(left: Spend, right: Spend): Spend {
     billedMicroUsd: addNullable(left.billedMicroUsd, right.billedMicroUsd),
     unpricedTokens: left.unpricedTokens + right.unpricedTokens,
     unrecordedOutput: left.unrecordedOutput + right.unrecordedOutput,
+    reportedCostAdjustmentMicroUsd: left.reportedCostAdjustmentMicroUsd + right.reportedCostAdjustmentMicroUsd,
   };
 }
 
@@ -118,7 +124,13 @@ export function spendText(spend: Spend): string | null {
 export function spendDescription(spend: Spend, tokenText: (tokens: number) => string): string {
   const parts: string[] = [];
   if (spend.costMicroUsd !== null) {
-    parts.push(`${usdExact(spend.costMicroUsd)} at API list prices`);
+    if (spend.reportedCostAdjustmentMicroUsd > 0) {
+      parts.push(`${usdExact(spend.costMicroUsd)} estimated cost`);
+      parts.push(`${usdExact(spend.costMicroUsd - spend.reportedCostAdjustmentMicroUsd)} from recorded requests at API list prices`);
+      parts.push(`${usdExact(spend.reportedCostAdjustmentMicroUsd)} added from agent-reported session totals`);
+    } else {
+      parts.push(`${usdExact(spend.costMicroUsd)} at API list prices`);
+    }
   }
   if (spend.unpricedTokens > 0) {
     parts.push(

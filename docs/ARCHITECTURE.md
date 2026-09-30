@@ -1088,7 +1088,7 @@ text member rather than presenting the saved preview as the full message.
 
 ### 4.1.3 Usage accounting and list-price USD (2026-09-22)
 
-**Status (2026-09-24): in `main` at schema 24 / protocol v23.** James decided the four
+**Status (2026-09-30): schema 25 / protocol v24 adds reported session totals.** James decided the four
 product questions on 2026-09-22: exclusive buckets, the five new usage fields, a list-price
 headline, and genai-prices plus an overlay. On 2026-09-23 he set the basis: the figure is an
 estimate at each model's official per-token list price, as the provider publishes it and
@@ -1110,8 +1110,8 @@ The frozen before/after pair is under **Performance budget** below. Per-agent bu
 and their evidence, including rebuilds of the real ledger, are in
 [RESEARCH_PLAN.md §5.13](groundtruth/RESEARCH_PLAN.md#513-usage-accounting-audit-2026-09-22).
 The concrete DDL is in [`canonical-model.html`](canonical-model.html). This section owns the
-usage contract. The affected adapters' normalizer versions, projection schema 24, the price
-catalog, protocol v23 and the generated TypeScript types change together.
+usage contract. Claude Code normalizer 32, projection schema 25, protocol v24 and the
+generated TypeScript types change together; the price catalog is unchanged.
 
 **What a usage record is.** One usage record describes one model request as the agent
 recorded it. It rides on the response's timeline row, on a replacement `Usage` op for that
@@ -1121,8 +1121,9 @@ A timeline row that carries no usage makes no usage statement: re-emitting it (a
 record, or a Claude Code row whose usage travels as a `Usage` op behind it) keeps the usage
 columns it already has, and usage returns to unknown only through an all-`None` `Usage` op
 or the replacement generation that drops the row.
-Requests an agent never writes to disk, such as Claude Code's background title calls, are
-outside coverage. The product says "recorded requests", never "your bill".
+Requests without individual usage remain outside request-level coverage. A cumulative
+session total can recover their aggregate usage and estimated cost (below). The product
+reports an estimate, never "your bill".
 
 **Buckets are mutually exclusive.** Every token lands in exactly one bucket, so sums never
 double count and the existing `SUM` queries remain correct:
@@ -1157,8 +1158,9 @@ larger than its total is malformed: the adapter clamps the remainder at zero and
 - `billed_pico_usd`: the provider's own billed amount for this request, when the provider
   reports one. Examples: xAI `cost_in_usd_ticks`, Copilot nano-credits, an OpenRouter
   `usage.cost` passed through. Amounts an agent computes from its own price table
-  (OpenCode's `cost`, Pi's `cost`, Claude Code's cost state) are estimates, not billing,
-  and are never stored.
+  (OpenCode's `cost`, Pi's `cost`, Claude Code's cost state) are estimates, not billing.
+  Reported session estimates have their own explicit contract below; they never populate
+  `billed_pico_usd`.
 
 Every usage record also carries `scope` (`request | aggregate`): whether it is one request
 or a total the agent reports over several. Examples of totals are a Grok turn, a Copilot
@@ -1212,6 +1214,36 @@ Any aggregate's coverage follows from those columns. It is complete when `unpric
 partial when priced and unpriced records mix, and unavailable when `cost_pusd` is NULL with
 tokens present. The transcript's per-response cost is computed at read time from the stored
 facts, at tens of nanoseconds per row; it is never stored per message.
+
+**Reported cumulative totals (James's product decision, 2026-09-30).** Consume Claude Code's
+`cost-state` alongside the request facts and use the higher reported/calculated estimate
+per model over the session tree. `SessionUsageTotals` replaces the selected per-model
+totals in `session_usage_total`; repeated snapshots never become additive samples.
+This is the user-visible cumulative reading, not a journal of native snapshots. The
+adapter checks the native session identity, ignores copies in child transcripts, and
+emits facts without consulting prices. It uses the latest preceding transcript timestamp
+(checkpointed), or the native start time, for attribution because the snapshot is undated.
+
+The ordinary `usage_bucket` rows have `source = recorded` and still price each request
+independently. After those rows change, the store compares the selected totals with all
+requests in the session's subtree and writes only positive differences as `source = reported`
+rows on the reporting session. Nested totals reconcile from descendants toward ancestors.
+Model aliases resolve through the same catalog identity used for pricing. Cost takes the
+maximum per model; input, inclusive output, cache reads, combined cache writes, and search
+counts each take their maximum. Thinking fills only the missing inclusive output, never
+adds another copy of those tokens. Known 1-hour writes retain their TTL; additional writes
+with no TTL use the general cache-write bucket and are not independently re-priced.
+The original request facts and per-response costs remain untouched.
+
+Live updates (including later-arriving children), source replacement, cold folding and
+catalog re-pricing all rebuild the differences. Provenance retracts a replaced source's
+selected total. `reported_cost_adjustment_micro_usd` exposes the added estimate separately
+from list-price request cost and provider billing; the app describes both parts. Unknown
+prices and missing per-response output retain their coverage markers: a cumulative reading
+does not prove every response complete. A stale snapshot is a floor, not an increment to
+new requests, so the total may hold at that floor until request accounting exceeds it or
+a newer snapshot arrives. Corrections have coarse timestamp attribution; they cannot
+reconstruct when the missing requests occurred or their cache TTLs.
 
 **Money is an integer.** Inside Rosetta every amount is integer pico-USD (10⁻¹² USD; Langfuse
 stores the same unit, Helicone 10⁻⁹). Catalog rates are integer pico-USD per token, which is

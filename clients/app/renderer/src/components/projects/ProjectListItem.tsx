@@ -15,7 +15,7 @@ type ProjectListItemStyle = CSSProperties & {
   "--ingest-fill"?: string;
 };
 
-/** The row's "how much": list-price spend (§4.1.3). A partial figure is a
+/** The row's "how much": estimated spend (§4.1.3). A partial figure is a
  * lower bound and says so with `+`; usage with no list price at all reads
  * `n/p` rather than a claimed $0. */
 function SpendFigure({
@@ -45,7 +45,7 @@ function SpendFigure({
 
 export interface ProjectListItemProps {
   readonly project: ProjectViewModel;
-  /** Maximum lifetime list-price spend (micro-USD) across the complete
+  /** Maximum lifetime estimated spend (micro-USD) across the complete
    * project collection, not a filtered subset. */
   readonly maximumLifetimeCost: number;
   readonly isSelected: boolean;

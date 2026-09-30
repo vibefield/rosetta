@@ -185,6 +185,14 @@ fn typed_records() -> Vec<(&'static str, Value)> {
             "mode",
             json!({"type": "mode", "mode": "default", "sessionId": "s"}),
         ),
+        (
+            "cost-state",
+            json!({"type": "cost-state", "sessionId": "s", "totalCostUSD": 0,
+                "totalAPIDuration": 0, "totalAPIDurationWithoutRetries": 0,
+                "totalToolDuration": 0, "totalLinesAdded": 0, "totalLinesRemoved": 0,
+                "totalDuration": 0, "startTime": 0, "hasUnknownModelCost": false,
+                "modelUsage": {}}),
+        ),
     ]
 }
 

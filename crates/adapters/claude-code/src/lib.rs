@@ -14,6 +14,7 @@
 //!   need it; it belongs in `core`.
 
 pub mod adapter;
+mod cost_state;
 mod envelope;
 pub mod normalize;
 pub mod raw;

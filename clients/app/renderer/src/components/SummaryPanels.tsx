@@ -249,7 +249,7 @@ export function ProjectSummaryPanel({
                     unknown={isVeiled && project.tokensLast53Weeks === 0}
                   />
                 ),
-                label: "list price",
+                label: "estimated cost",
                 title: `${spendDescription(project.spendLast53Weeks, tokenText)} · 53 weeks`,
               },
             ]}
@@ -459,7 +459,7 @@ export function PortfolioSummaryPanel({
                     unknown={summariesPending && summary.tokenCount === 0}
                   />
                 ),
-                label: "list price",
+                label: "estimated cost",
                 title: `${spendDescription(summary.spend, tokenText)} · all time`,
               },
             ]}
@@ -467,7 +467,7 @@ export function PortfolioSummaryPanel({
           <div className="ah-chartcard">
             <Treemap
               data={summary.treemapData}
-              ariaLabel="Top projects by lifetime list-price spend, where area represents share among displayed projects"
+              ariaLabel="Top projects by lifetime estimated spend, where area represents share among displayed projects"
               emptyMessage="No priced project usage"
               showFooter={false}
               height={SUMMARY_CHART_CONTENT_HEIGHT}
@@ -476,7 +476,7 @@ export function PortfolioSummaryPanel({
               onItemSelect={(item) => onProjectSelect(item.id)}
               formatValue={usdText}
               getItemAccessibleLabel={(item, context) =>
-                `${item.label} · ${usdText(item.value)}${item.partial ? "+" : ""} at list prices${
+                `${item.label} · ${usdText(item.value)}${item.partial ? "+" : ""} estimated cost${
                   item.partial ? " (a lower bound)" : ""
                 } · ${(context.share * 100).toFixed(1)}% of displayed lifetime spend`
               }

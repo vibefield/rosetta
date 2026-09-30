@@ -13,4 +13,4 @@ model: string, tokens: number, cost_micro_usd: number | null, billed_micro_usd: 
  * Usage records with a recorded prompt but no recorded output: the
  * figure is a lower bound (ARCHITECTURE §4.1.3).
  */
-unrecorded_output: number, };
+unrecorded_output: number, reported_cost_adjustment_micro_usd: number, };

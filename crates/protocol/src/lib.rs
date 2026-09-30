@@ -37,7 +37,8 @@ pub use rosetta_store::timeline_meta::{
 /// 22 (2026-09-23): `TokenSnapshot.requests`, the request count of an aggregate.
 /// 23 (2026-09-24): `unrecorded_output` beside every spend figure, and the
 /// unpriced-model coverage report on `/api/pricing`.
-pub const PROTOCOL_VERSION: u32 = 23;
+/// 24 (2026-09-30): cumulative reported-cost adjustment beside aggregate spend.
+pub const PROTOCOL_VERSION: u32 = 24;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

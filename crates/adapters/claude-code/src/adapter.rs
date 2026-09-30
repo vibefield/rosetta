@@ -48,7 +48,8 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // 2026-09-28): they project nothing, so only drift facts changed, and
         // a replay cannot retract drift rows already recorded.
         // 31: exact single team/peer/coordinator deliveries retain authored media.
-        31
+        // 32: cumulative cost-state totals reconcile missing session-tree usage.
+        32
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

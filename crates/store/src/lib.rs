@@ -19,6 +19,7 @@ mod search_sync;
 pub mod timeline_meta;
 mod tool_codec;
 mod usage_sql;
+mod usage_totals;
 
 use std::collections::BTreeSet;
 use std::fmt;

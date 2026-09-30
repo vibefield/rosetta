@@ -90,6 +90,7 @@
         "loc": 30,
         "messages": 41,
         "project_id": "p1",
+        "reported_cost_adjustment_micro_usd": 0,
         "session_id": "s1",
         "tokens": 5,
         "unpriced_tokens": 0,
@@ -131,7 +132,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 23,
+      "protocol_version": 24,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -625,6 +626,7 @@
         "billed_micro_usd": null,
         "cost_micro_usd": 4210,
         "day": "2026-08-26",
+        "reported_cost_adjustment_micro_usd": 0,
         "tokens": 123,
         "unpriced_tokens": 23,
         "unrecorded_output": 0
@@ -995,7 +997,7 @@
       }
     ]
   },
-  "protocol_version": 23,
+  "protocol_version": 24,
   "runtimes": {
     "runtimes": [
       {
@@ -1203,7 +1205,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 23,
+    "protocol_version": 24,
     "schema_version": 16,
     "search": {
       "progress": null,
@@ -1472,6 +1474,7 @@
         "billed_micro_usd": null,
         "cost_micro_usd": null,
         "hour": 15,
+        "reported_cost_adjustment_micro_usd": 0,
         "tokens": 123,
         "unpriced_tokens": 0,
         "unrecorded_output": 0
@@ -1483,6 +1486,7 @@
         "cost_micro_usd": 4210,
         "day": "2026-08-26",
         "model": "claude-opus-5",
+        "reported_cost_adjustment_micro_usd": 0,
         "tokens": 100,
         "unpriced_tokens": 0,
         "unrecorded_output": 0
@@ -1492,6 +1496,7 @@
         "cost_micro_usd": null,
         "day": "2026-08-26",
         "model": "unknown",
+        "reported_cost_adjustment_micro_usd": 0,
         "tokens": 23,
         "unpriced_tokens": 23,
         "unrecorded_output": 0

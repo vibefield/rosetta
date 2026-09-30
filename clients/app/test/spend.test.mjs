@@ -33,6 +33,7 @@ describe("spend", () => {
       billedMicroUsd: 508_000_000,
       unpricedTokens: 50,
       unrecordedOutput: 3,
+      reportedCostAdjustmentMicroUsd: 0,
     });
     assert.deepEqual(addSpend(NO_SPEND, NO_SPEND), NO_SPEND);
   });
@@ -64,5 +65,15 @@ describe("spend", () => {
     assert.match(text, /2000 tokens with no list price/);
     assert.match(text, /\$508\.00 billed by the provider/);
     assert.doesNotMatch(text, /at API list prices/);
+  });
+
+  it("separates a reported estimate adjustment from list prices and billing", () => {
+    const spend = spendOf({ ...row(193_134_526, null, 0, 2), reported_cost_adjustment_micro_usd: 25_053_951 });
+    const text = spendDescription(spend, String);
+    assert.match(text, /\$193\.13 estimated cost/);
+    assert.match(text, /\$168\.08 from recorded requests at API list prices/);
+    assert.match(text, /\$25\.05 added from agent-reported session totals/);
+    assert.doesNotMatch(text, /billed by the provider/);
+    assert.equal(addSpend(NO_SPEND, spend).reportedCostAdjustmentMicroUsd, 25_053_951);
   });
 });

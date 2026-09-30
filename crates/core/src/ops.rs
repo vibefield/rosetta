@@ -66,6 +66,8 @@ pub enum IngestOp {
     /// Usage that the native agent reports only at session/task granularity.
     /// It is an additive canonical sample, not a synthetic response message.
     SessionUsage(SessionUsageRow),
+    /// Cumulative session-tree totals, reconciled against recorded requests.
+    SessionUsageTotals(crate::SessionUsageTotals),
     FileEdit(FileEditRow),
     Plan(PlanRow),
     Task(TaskRow),

@@ -341,7 +341,7 @@ pub(super) fn rebuild_bucket(
     let (values, contributors) = aggregate;
     if contributors == 0 {
         tx.prepare_cached(
-            "DELETE FROM usage_bucket WHERE session_id = ?1 AND hour_ts = ?2 AND model = ?3",
+            "DELETE FROM usage_bucket WHERE session_id = ?1 AND hour_ts = ?2 AND model = ?3 AND source = 'recorded'",
         )?
         .execute(params![session_id, hour_ts, model])?;
         return Ok(());
@@ -352,7 +352,7 @@ pub(super) fn rebuild_bucket(
             cache_w_tokens, think_tokens, cache_w1h_tokens, web_searches, cost_pusd,
             billed_pusd, unpriced_tokens, unrecorded_output, message_count, tool_call_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
-         ON CONFLICT(session_id, hour_ts, model) DO UPDATE SET
+         ON CONFLICT(session_id, hour_ts, model, source) DO UPDATE SET
            in_tokens = excluded.in_tokens, out_tokens = excluded.out_tokens,
            cache_r_tokens = excluded.cache_r_tokens,
            cache_w_tokens = excluded.cache_w_tokens,
