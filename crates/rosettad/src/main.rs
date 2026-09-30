@@ -7,6 +7,7 @@
 //!   rosettad ingest --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--audit-boundaries]
 //!   rosettad watch --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--ticks N]
 //!   rosettad serve --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] ...
+//!                  [--token-file FILE [--grant-key-file FILE]] [--allow-origin ORIGIN ...]
 //!   rosettad rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--enroll FILE]
 //!   rosettad ledger compact --db PATH [--ledger DIR] [--level N] [--long]
 //!   rosettad ledger verify --db PATH | --ledger DIR [--json]
@@ -50,6 +51,7 @@ use crate::enroll::{Enrollment, RuntimeTarget, resolve_targets};
 use crate::runtime_ledger::{LedgerRuntime, ledger_runtimes, open_runtime_ledger};
 
 mod announce;
+mod auth_files;
 mod bench;
 mod brutal;
 mod cold_progress;
@@ -110,7 +112,7 @@ fn main() -> ExitCode {
                 "  watch --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--ticks N] [--profile]"
             );
             eprintln!(
-                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--capture-workers N|0] [--capture-lookahead BYTES] [--cold-ledger-codec plain|zstd-frames:LEVEL] [--announce [--announce-dir DIR]]"
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--capture-workers N|0] [--capture-lookahead BYTES] [--cold-ledger-codec plain|zstd-frames:LEVEL] [--announce [--announce-dir DIR]] [--token-file FILE [--grant-key-file FILE]] [--allow-origin ORIGIN ...] [--debug-auth]"
             );
             eprintln!(
                 "  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--enroll FILE] [--profile]"
@@ -130,6 +132,21 @@ fn main() -> ExitCode {
             );
             eprintln!(
                 "   the file is authoritative: with it, consent is exactly enabled_kinds plus --agent/--all-agents, so dropping a kind REVOKES it)"
+            );
+            eprintln!(
+                "  (serve access, docs/AUTH.md: --token-file FILE holds the bearer (32+ visible ASCII chars; the file is trimmed) and then EVERY route and"
+            );
+            eprintln!(
+                "   WebSocket needs `Authorization: Bearer <token>`; an allowed Origin is never a credential. --grant-key-file FILE (32+ raw bytes, needs"
+            );
+            eprintln!(
+                "   --token-file) also accepts `Authorization: Rosetta-Grant <grant>` on the routes of the grant's one session. Both files must be"
+            );
+            eprintln!(
+                "   owner-only (chmod 600) and are read once at start. --allow-origin ORIGIN (repeatable) adds a browser origin (scheme://host[:port])"
+            );
+            eprintln!(
+                "   to the built-in loopback/app ones; --debug-auth logs each grant decision (client id and route) to stderr)"
             );
             return ExitCode::from(2);
         }
@@ -156,6 +173,16 @@ struct Flags {
     /// sibling apps can find an ephemeral port (see `announce.rs`).
     announce: bool,
     announce_dir: Option<PathBuf>,
+    /// serve only: the bearer every route then requires (docs/AUTH.md).
+    /// Owner-only file, read once at start.
+    token_file: Option<PathBuf>,
+    /// serve only: the HMAC key per-session grants are verified with.
+    /// Owner-only file, read once at start; needs `token_file`.
+    grant_key_file: Option<PathBuf>,
+    /// serve only: browser origins admitted beside the built-in ones.
+    allow_origins: Vec<String>,
+    /// serve only: one stderr line per grant decision (client id and route).
+    debug_auth: bool,
     ticks: Option<u64>,
     ledger: Option<PathBuf>,
     /// serve only: the localhost listen address.
@@ -267,6 +294,10 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         json: false,
         announce: false,
         announce_dir: None,
+        token_file: None,
+        grant_key_file: None,
+        allow_origins: Vec::new(),
+        debug_auth: false,
         ticks: None,
         ledger: None,
         addr: None,
@@ -457,6 +488,19 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             }
             "--announce-dir" => {
                 flags.announce_dir = Some(PathBuf::from(take_value(args, &mut at)?));
+            }
+            "--token-file" => {
+                flags.token_file = Some(PathBuf::from(take_value(args, &mut at)?));
+            }
+            "--grant-key-file" => {
+                flags.grant_key_file = Some(PathBuf::from(take_value(args, &mut at)?));
+            }
+            "--allow-origin" => {
+                flags.allow_origins.push(take_value(args, &mut at)?);
+            }
+            "--debug-auth" => {
+                flags.debug_auth = true;
+                at += 1;
             }
             "--ledger" => {
                 flags.ledger = Some(PathBuf::from(take_value(args, &mut at)?));

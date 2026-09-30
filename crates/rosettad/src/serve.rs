@@ -272,6 +272,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // The supervisor's file is validated before anything binds or reads: a
     // bad entry is a startup refusal the supervisor sees at once.
     let enrollment = load_enrollment(&flags)?;
+    // So are the access policy's secret files (docs/AUTH.md). Read once:
+    // the supervisor may delete them after the ready event.
+    let auth = Arc::new(crate::auth_files::load_policy(&flags)?);
     let enrolled_presentation = Arc::new(EnrolledRuntimes::new(
         enrollment
             .iter()
@@ -410,6 +413,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         .with_consent(consent.clone())
         .with_boost(boost.clone())
         .with_enrolled(enrolled_presentation)
+        .with_auth(auth.clone())
         .with_raw_commands(Arc::new(LedgerCommandReader {
             root: public_ledgers.clone(),
             adapters: crate::registry(),
@@ -453,13 +457,24 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         let mut ready = serde_json::json!({
             "event": "ready", "origin": format!("http://{local}"),
             "protocol_version": rosetta_server::PROTOCOL_VERSION,
+            // Which access modes are on — never the secrets themselves.
+            "auth": {
+                "bearer": auth.bearer_required(),
+                "grants": auth.grants_enabled(),
+                "origins": auth.extra_origins(),
+            },
         });
         if let Some(guard) = &_announcement {
             ready["announce"] = serde_json::Value::from(guard.path().display().to_string());
         }
         println!("{ready}");
     } else {
-        println!("serving http://{local} — {warmed} mirror rows warm (ctrl-c to stop)");
+        let access = match (auth.bearer_required(), auth.grants_enabled()) {
+            (false, _) => "open on its listener",
+            (true, false) => "bearer required",
+            (true, true) => "bearer required, grants accepted",
+        };
+        println!("serving http://{local} — {warmed} mirror rows warm, {access} (ctrl-c to stop)");
     }
 
     // Mid-backfill readers ride the metadata effects seam: every committed
