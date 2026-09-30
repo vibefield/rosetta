@@ -47,6 +47,10 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 time = { version = "0.3", features = ["parsing"] }
 zstd = { version = "0.13", default-features = false }
+# Daemon auth (RO-10 grants): HMAC-SHA256 over the digest 0.10 family the
+# WebSocket handshake's sha1 already brings in.
+hmac = "0.12"
+sha2 = "0.10"
 
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 webp = { version = "0.3.1", default-features = false }

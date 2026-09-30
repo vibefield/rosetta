@@ -13,8 +13,7 @@ use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as UrlPath, Query, State};
-use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use futures_util::stream::{SplitSink, SplitStream, StreamExt};
 
 use rosetta_protocol::{PROTOCOL_VERSION, ServerFrame, Stamp};
@@ -22,9 +21,7 @@ use rosetta_store::hot::{Mutation, Replay};
 use rosetta_store::{queries, timeline_meta};
 
 use crate::enrolled::EnrolledRuntimes;
-use crate::http::{
-    AppState, Failure, ProjectionReader, origin_allowed, read_timeline_page, with_read,
-};
+use crate::http::{AppState, Failure, ProjectionReader, read_timeline_page, with_read};
 use crate::hub::{Hub, HubItem, Subscription};
 
 /// Messages in the initial timeline snapshot; older history pages via REST.
@@ -77,19 +74,11 @@ async fn drain_until_close(mut receiver: SplitStream<WebSocket>) {
     }
 }
 
-/// Anti cross-site-WebSocket-hijacking: browsers do not apply CORS to WS,
-/// so this route layer enforces the same origin policy the REST layer uses,
-/// BEFORE upgrade extraction. Native clients send no Origin and pass.
-pub(crate) async fn require_local_origin(
-    request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Response {
-    if let Some(origin) = request.headers().get(header::ORIGIN)
-        && !origin_allowed(origin)
-    {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    next.run(request).await
+/// Select the credential marker a browser offers beside its credential entry
+/// (docs/AUTH.md). The upgrade routes' origin guard lives in `auth`, applied
+/// before upgrade extraction: browsers do not apply CORS to WebSockets.
+fn accept(upgrade: WebSocketUpgrade) -> WebSocketUpgrade {
+    upgrade.protocols([crate::auth::WS_PROTOCOL])
 }
 
 fn now_ms() -> i64 {
@@ -121,7 +110,7 @@ pub(crate) async fn session(
     Query(resume): Query<ResumeQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    upgrade.on_upgrade(move |socket| async move {
+    accept(upgrade).on_upgrade(move |socket| async move {
         let (sender, receiver) = socket.split();
         let mut sink = WsSink(sender);
         // Either side ending tears the connection down: a Close/error on the
@@ -135,7 +124,7 @@ pub(crate) async fn session(
 }
 
 pub(crate) async fn meta(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
-    upgrade.on_upgrade(move |socket| async move {
+    accept(upgrade).on_upgrade(move |socket| async move {
         let (sender, receiver) = socket.split();
         let mut sink = WsSink(sender);
         tokio::select! {
@@ -150,7 +139,7 @@ pub(crate) async fn collaboration(
     UrlPath(id): UrlPath<String>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    upgrade.on_upgrade(move |socket| async move {
+    accept(upgrade).on_upgrade(move |socket| async move {
         let (sender, receiver) = socket.split();
         let mut sink = WsSink(sender);
         tokio::select! {

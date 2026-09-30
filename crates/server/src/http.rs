@@ -73,6 +73,9 @@ pub struct AppState {
     /// This start's supervisor-enrolled runtimes: labels and provenance the
     /// mirror does not hold, applied to runtime rows on the way out.
     pub enrolled: Arc<crate::enrolled::EnrolledRuntimes>,
+    /// Who may call (docs/AUTH.md): open by default, as the daemon always
+    /// was; a bearer, grants and extra origins when the serve loop sets them.
+    pub auth: Arc<crate::auth::AuthPolicy>,
 }
 
 pub trait RawCommandReader: Send + Sync {
@@ -96,6 +99,7 @@ impl AppState {
             boost: None,
             raw_commands: None,
             enrolled: Arc::default(),
+            auth: Arc::default(),
         }
     }
 
@@ -113,6 +117,7 @@ impl AppState {
             boost: None,
             raw_commands: None,
             enrolled: Arc::default(),
+            auth: Arc::default(),
         }
     }
 
@@ -120,6 +125,12 @@ impl AppState {
     /// builds it from its enrollment file).
     pub fn with_enrolled(mut self, enrolled: Arc<crate::enrolled::EnrolledRuntimes>) -> Self {
         self.enrolled = enrolled;
+        self
+    }
+
+    /// Attach the access policy (the serve loop builds it from its flags).
+    pub fn with_auth(mut self, auth: Arc<crate::auth::AuthPolicy>) -> Self {
+        self.auth = auth;
         self
     }
 
@@ -236,6 +247,11 @@ fn open_shared_memory(uri: &str) -> rusqlite::Result<Connection> {
 }
 
 pub fn router(state: AppState) -> Router {
+    let auth = state.auth.clone();
+    // The Origin rule where browsers skip CORS (docs/AUTH.md): WebSocket
+    // upgrades, writes, and the route that reads a file from disk.
+    let origin_guard =
+        || axum::middleware::from_fn_with_state(auth.clone(), crate::auth::require_allowed_origin);
     Router::new()
         .route("/api/status", get(status))
         .route("/api/discoveries", get(discoveries))
@@ -244,13 +260,11 @@ pub fn router(state: AppState) -> Router {
         // origin is refused outright, preflight or not.
         .route(
             "/api/runtimes/enable",
-            axum::routing::post(enable)
-                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+            axum::routing::post(enable).route_layer(origin_guard()),
         )
         .route(
             "/api/ingest/boost",
-            axum::routing::post(boost)
-                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+            axum::routing::post(boost).route_layer(origin_guard()),
         )
         .route("/api/runtimes", get(runtimes))
         .route("/api/projects", get(projects))
@@ -280,8 +294,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/sessions/{id}/timeline/{timeline_id}/read/{target_index}",
-            get(read_file_target)
-                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+            get(read_file_target).route_layer(origin_guard()),
         )
         .route(
             "/api/sessions/{id}/plans/revisions/{revision}",
@@ -293,21 +306,22 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/assets/{name}", get(asset))
         .route("/api/search", get(search))
-        .route(
-            "/ws/meta",
-            get(crate::ws::meta)
-                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
-        )
+        .route("/ws/meta", get(crate::ws::meta).route_layer(origin_guard()))
         .route(
             "/ws/sessions/{id}",
-            get(crate::ws::session)
-                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+            get(crate::ws::session).route_layer(origin_guard()),
         )
         .route(
             "/ws/collaboration/{id}",
-            get(crate::ws::collaboration)
-                .route_layer(axum::middleware::from_fn(crate::ws::require_local_origin)),
+            get(crate::ws::collaboration).route_layer(origin_guard()),
         )
+        // The credential check covers every route above. It runs after
+        // routing (a grant's reach is decided by the matched template) and
+        // inside CORS, which answers preflights without it.
+        .layer(axum::middleware::from_fn_with_state(
+            auth.clone(),
+            crate::auth::authenticate,
+        ))
         .layer(axum::middleware::from_fn(
             |request: axum::extract::Request, next: axum::middleware::Next| async move {
                 let mut response = next.run(request).await;
@@ -319,47 +333,42 @@ pub fn router(state: AppState) -> Router {
                 response
             },
         ))
-        .layer(cors_layer())
+        .layer(cors_layer(&auth))
         .with_state(state)
 }
 
 /// Local-app CORS. The daemon serves personal transcript data on localhost,
 /// so a permissive `Any` origin would hand every website in the user's
-/// browser a read API — only local app origins (a dev server, the packaged
-/// Tauri/Electron shell) may cross origins. Non-browser clients send no
-/// Origin and are unaffected.
-fn cors_layer() -> tower_http::cors::CorsLayer {
-    use tower_http::cors::{AllowOrigin, CorsLayer};
-    CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(|origin, _| origin_allowed(origin)))
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
-        .allow_headers(tower_http::cors::Any)
-        .expose_headers([axum::http::HeaderName::from_static(
-            "x-rosetta-protocol-version",
-        )])
-}
-
-/// The origin policy, shared with the WebSocket upgrade guard: any port on a
-/// loopback host, plus the Tauri and Electron shells. A `null` origin (sandboxed
-/// iframes, some file:// contexts) is deliberately NOT allowed — any site
-/// can manufacture one.
-pub(crate) fn origin_allowed(origin: &axum::http::HeaderValue) -> bool {
-    let Ok(text) = origin.to_str() else {
-        return false;
-    };
-    if text == "tauri://localhost" || text == "rosetta://app" {
-        return true;
+/// browser a read API — only the Origin rule's origins (a dev server, the
+/// packaged Tauri/Electron shell, `--allow-origin`) may cross origins.
+/// Non-browser clients send no Origin and are unaffected.
+///
+/// With a bearer configured, a preflight must admit `Authorization`, which
+/// the `*` wildcard never covers, so requested headers are mirrored; the
+/// refusal's reason and challenge headers are exposed to the page. Without
+/// one, the headers are exactly what they always were.
+fn cors_layer(auth: &Arc<crate::auth::AuthPolicy>) -> tower_http::cors::CorsLayer {
+    use axum::http::HeaderName;
+    use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
+    let policy = auth.clone();
+    let layer = CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(move |origin, _| {
+            policy.origin_allowed(origin)
+        }))
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST]);
+    if auth.bearer_required() {
+        layer
+            .allow_headers(AllowHeaders::mirror_request())
+            .expose_headers([
+                HeaderName::from_static("x-rosetta-protocol-version"),
+                HeaderName::from_static(crate::auth::REASON_HEADER),
+                header::WWW_AUTHENTICATE,
+            ])
+    } else {
+        layer
+            .allow_headers(tower_http::cors::Any)
+            .expose_headers([HeaderName::from_static("x-rosetta-protocol-version")])
     }
-    let rest = match text.split_once("://") {
-        Some(("http" | "https", rest)) => rest,
-        _ => return false,
-    };
-    let host_port = rest.split('/').next().unwrap_or("");
-    let host = match host_port.rsplit_once(':') {
-        Some((name, port)) if !port.is_empty() && port.bytes().all(|c| c.is_ascii_digit()) => name,
-        _ => host_port,
-    };
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
 /// A typed failure that renders as `{code, message}` with the right status.

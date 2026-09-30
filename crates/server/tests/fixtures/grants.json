@@ -1,0 +1,142 @@
+{
+  "rule": "payload = RFC 8785 canonical JSON of {cid, exp, scope, sid, v}; grant = base64url(payload) '.' base64url(HMAC-SHA256(key, payload)), no padding; verification: MAC first, then the payload must equal its own canonical form, v == 1, non-empty sid and cid, 0 <= exp <= 2^53-1, exp > now (docs/AUTH.md)",
+  "generator": "stdlib Python (json, hmac, hashlib, base64) - independent of both implementations",
+  "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "now_ms": 1790000000000,
+  "valid": [
+    {
+      "name": "a read grant",
+      "claims": {
+        "v": 1,
+        "sid": "s1",
+        "cid": "fieldd/window-1",
+        "exp": 1790000060000,
+        "scope": [
+          "read"
+        ]
+      },
+      "payload": "{\"cid\":\"fieldd/window-1\",\"exp\":1790000060000,\"scope\":[\"read\"],\"sid\":\"s1\",\"v\":1}",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ.KhNxqADtPdBGQ6BLRua1sYTUpb6xXmxub2iYQ4mwjzQ"
+    },
+    {
+      "name": "escapes, controls and non-ASCII",
+      "claims": {
+        "v": 1,
+        "sid": "s\"1\\2\u0001\n\t\u007f/\u00e9\u2028\ud83d\ude00",
+        "cid": "phone:\u00fcber/\u0000x",
+        "exp": 1790000000001,
+        "scope": [
+          "read"
+        ]
+      },
+      "payload": "{\"cid\":\"phone:\u00fcber/\\u0000x\",\"exp\":1790000000001,\"scope\":[\"read\"],\"sid\":\"s\\\"1\\\\2\\u0001\\n\\t\u007f/\u00e9\u2028\ud83d\ude00\",\"v\":1}",
+      "grant": "eyJjaWQiOiJwaG9uZTrDvGJlci9cdTAwMDB4IiwiZXhwIjoxNzkwMDAwMDAwMDAxLCJzY29wZSI6WyJyZWFkIl0sInNpZCI6InNcIjFcXDJcdTAwMDFcblx0fy_DqeKAqPCfmIAiLCJ2IjoxfQ.o8KKExKTJNrv8LyNNYUS90fY46utRRqMRAIytVStLWw"
+    },
+    {
+      "name": "an unknown scope entry is carried",
+      "claims": {
+        "v": 1,
+        "sid": "s1",
+        "cid": "fieldd/window-1",
+        "exp": 1790003600000,
+        "scope": [
+          "read",
+          "x-later"
+        ]
+      },
+      "payload": "{\"cid\":\"fieldd/window-1\",\"exp\":1790003600000,\"scope\":[\"read\",\"x-later\"],\"sid\":\"s1\",\"v\":1}",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDM2MDAwMDAsInNjb3BlIjpbInJlYWQiLCJ4LWxhdGVyIl0sInNpZCI6InMxIiwidiI6MX0.T-VWY0MEgvnC-bddjLyUUD0WS0dNHQ6mFtE2tprPP8s"
+    },
+    {
+      "name": "the largest safe expiry",
+      "claims": {
+        "v": 1,
+        "sid": "s1",
+        "cid": "fieldd/window-1",
+        "exp": 9007199254740991,
+        "scope": [
+          "read"
+        ]
+      },
+      "payload": "{\"cid\":\"fieldd/window-1\",\"exp\":9007199254740991,\"scope\":[\"read\"],\"sid\":\"s1\",\"v\":1}",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjkwMDcxOTkyNTQ3NDA5OTEsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ.VapqD_q_8Dh7fgKKfWZ3v9QXDw6mLc9XFkeNDycogDA"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "expired a millisecond ago",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3ODk5OTk5OTk5OTksInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ.rq-6eDdW7YJZcjYQHRNGCtG4aRyNiAFycmvEM0t7p7g",
+      "reason": "expired"
+    },
+    {
+      "name": "expiry equal to now",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwMDAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ.wKvzrxYQAPoALLE6ILjzLz1-wnWWxV8XCmkxraDOTLI",
+      "reason": "expired"
+    },
+    {
+      "name": "minted under another key",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ._zk8yZHmP3A_KPBlcCulA_E8E58ovqM4PDz4Tdcatas",
+      "reason": "bad-signature"
+    },
+    {
+      "name": "claims changed under the original MAC",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczIiLCJ2IjoxfQ.KhNxqADtPdBGQ6BLRua1sYTUpb6xXmxub2iYQ4mwjzQ",
+      "reason": "bad-signature"
+    },
+    {
+      "name": "whitespace in the payload",
+      "grant": "eyJjaWQiOiAiZmllbGRkL3dpbmRvdy0xIiwgImV4cCI6IDE3OTAwMDAwNjAwMDAsICJzY29wZSI6IFsicmVhZCJdLCAic2lkIjogInMxIiwgInYiOiAxfQ._y0WyBXdcIK1bdKbCTOfjIW0eVyIWRhE8_mwM0iNFJk",
+      "reason": "malformed"
+    },
+    {
+      "name": "members out of order",
+      "grant": "eyJ2IjoxLCJzaWQiOiJzMSIsImNpZCI6ImZpZWxkZC93aW5kb3ctMSIsImV4cCI6MTc5MDAwMDA2MDAwMCwic2NvcGUiOlsicmVhZCJdfQ.TFzX8Ley7ckD4z_E9aRvkImZJUsFX3y97gtlK1vQAOg",
+      "reason": "malformed"
+    },
+    {
+      "name": "an unknown member",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsImlhdCI6MTc5MDAwMDAwMDAwMCwic2NvcGUiOlsicmVhZCJdLCJzaWQiOiJzMSIsInYiOjF9.Hrtz9lhQ0PqugCaHegmf4vJ6Prm5KWb3i9vQz8yW3CQ",
+      "reason": "malformed"
+    },
+    {
+      "name": "version 2",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoyfQ.cOQH-rtpGKKYELn4XEufd-N3rkkXp6-FeEeaQF7vbHM",
+      "reason": "malformed"
+    },
+    {
+      "name": "an empty session id",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiIiwidiI6MX0.KRZ1dpFxsOebLaWloMhLgSV7vHMdHZx1MNvS5f2RZDY",
+      "reason": "malformed"
+    },
+    {
+      "name": "an expiry past the safe-integer range",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjkwMDcxOTkyNTQ3NDA5OTIsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ.B2e_mXOoBWIeNcIWLrQ2BrQ9ngcvxTbWftT6mQCl6yc",
+      "reason": "malformed"
+    },
+    {
+      "name": "a fractional expiry",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAuNSwic2NvcGUiOlsicmVhZCJdLCJzaWQiOiJzMSIsInYiOjF9.syktapo_aa-Pwmy1wEsMK8j4tTWmimIQvsN2PMTHgbc",
+      "reason": "malformed"
+    },
+    {
+      "name": "a padded payload",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ==.KhNxqADtPdBGQ6BLRua1sYTUpb6xXmxub2iYQ4mwjzQ",
+      "reason": "malformed"
+    },
+    {
+      "name": "no MAC",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ",
+      "reason": "malformed"
+    },
+    {
+      "name": "a short MAC",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ.KhNxqADtPdBGQ6BLRua1sYTUpb6xXmxub2iYQ4m",
+      "reason": "malformed"
+    },
+    {
+      "name": "standard-alphabet base64",
+      "grant": "+eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ.KhNxqADtPdBGQ6BLRua1sYTUpb6xXmxub2iYQ4mwjzQ",
+      "reason": "malformed"
+    }
+  ]
+}

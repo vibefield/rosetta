@@ -7,7 +7,10 @@ edition.workspace = true
 tempfile.workspace = true
 rosetta-media = { path = "../media" }
 axum = { workspace = true }
+base64.workspace = true
 blake3.workspace = true
+hmac.workspace = true
+sha2.workspace = true
 futures-util = { workspace = true }
 tower-http = { workspace = true }
 rusqlite = { workspace = true }
@@ -23,4 +26,8 @@ rosetta-store = { path = "../store" }
 [dev-dependencies]
 image.workspace = true
 http-body-util = { workspace = true }
+# The access-control tests drive a real bound server with a raw HTTP/1.1
+# exchange and a real WebSocket client.
+tokio = { workspace = true, features = ["io-util"] }
+tokio-tungstenite = "0.29"
 tower = { workspace = true }
