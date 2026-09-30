@@ -1,0 +1,96 @@
+/* The small calendar is one launch target. The cursor repeats the app's
+   fullscreen corners, with contrasting strokes that stay visible in both themes. */
+.ah-chart-launcher { position: relative; }
+.ah-chart-launcher__button {
+  position: absolute; inset: 0; width: 100%; padding: 0;
+  border: 0; border-radius: 6px; background: transparent;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M12 6H6v6M20 6h6v6M12 26H6v-6M20 26h6v-6' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M12 6H6v6M20 6h6v6M12 26H6v-6M20 26h6v-6' fill='none' stroke='%23202020' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 16 16, zoom-in;
+}
+.ah-chart-launcher__button:disabled { cursor: default; }
+.ah-chart-launcher__button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 4px; }
+.ah-chart-launcher__hint {
+  position: absolute; top: -3px; right: 0; display: flex; align-items: center; gap: 4px;
+  padding: 3px 6px; border-radius: 5px; background: var(--vf-chrome-solid);
+  color: var(--vf-text-secondary); font-size: 9px; opacity: 0;
+  transition: opacity 160ms ease; pointer-events: none;
+}
+.ah-chart-launcher__hint svg { width: 11px; height: 11px; }
+.ah-chart-launcher__button:not(:disabled):hover .ah-chart-launcher__hint,
+.ah-chart-launcher__button:focus-visible .ah-chart-launcher__hint { opacity: 1; }
+@media (hover: none) { .ah-chart-launcher__button:not(:disabled) .ah-chart-launcher__hint { opacity: 1; } }
+
+.ah-activity { flex: 1; min-height: 0; overflow: auto; padding: 24px; color: var(--vf-text-primary); }
+.ah-activity__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+.ah-activity h2 { margin: 0 0 5px; font-size: 19px; font-weight: 550; letter-spacing: -0.02em; }
+.ah-activity__toolbar p { margin: 0; font-size: 12px; color: var(--vf-text-tertiary); }
+.ah-activity__toolbar .ah-seg { flex: none; }
+.ah-activity__toolbar .ah-seg button { font-size: 11px; padding: 6px 12px; }
+.ah-activity__stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 20px; }
+.ah-activity__stats > div { padding: 15px 16px; border-radius: 12px; background: var(--vf-fill); }
+.ah-activity__stats dt { font-size: 11px; color: var(--vf-text-tertiary); margin-bottom: 8px; }
+.ah-activity__stats dd { margin: 0; font-size: 25px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
+.ah-activity__stats small { font-size: 11px; color: var(--vf-text-tertiary); font-weight: 400; letter-spacing: 0; white-space: nowrap; }
+.ah-activity__panel { padding: 18px; border: 1px solid var(--vf-hairline); border-radius: 14px; min-width: 0; }
+.ah-activity__sectionhead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.ah-activity h3 { margin: 0; font-size: 12px; font-weight: 550; }
+.ah-activity__sectionhead p { margin: 0; font-size: 10px; color: var(--vf-text-tertiary); }
+.ah-activity__calendar-main[data-short-range] { display: grid; grid-template-columns: minmax(0, var(--activity-short-width)) minmax(0, 1fr); gap: 24px; }
+.ah-activity__calendar-scroll { overflow-x: auto; padding: 3px; margin: -3px; }
+.ah-activity__calendar-layout { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; min-width: 730px; }
+.ah-activity__weekdays { display: grid; grid-template-rows: repeat(7, 1fr); margin-top: 24px; margin-bottom: 27px; align-items: center; font-size: 10px; color: var(--vf-text-tertiary); }
+.ah-activity .ah-calendar-heatmap { width: min(100%, calc(var(--activity-weeks) * 25px - 3px)); }
+.ah-activity .ah-calendar-heatmap__axis { margin: 0 0 8px; height: 16px; }
+.ah-activity .ah-calendar-heatmap__axis span { font-size: 10px; color: var(--vf-text-tertiary); }
+.ah-activity .ah-calendar-heatmap__grid, .ah-activity .ah-calendar-heatmap__week { gap: 3px; }
+.ah-activity .ah-calendar-heatmap__cell { border: 0; padding: 0; border-radius: 3px; min-height: 11px; max-height: 22px; }
+.ah-activity .ah-calendar-heatmap__cell[aria-pressed="true"] { outline: 2px solid var(--vf-foreground); outline-offset: 1px; }
+.ah-activity .ah-calendar-heatmap__cell:hover,
+.ah-activity .ah-calendar-heatmap__cell:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; }
+.ah-activity .ah-calendar-heatmap__footer { margin-top: 12px; font-size: 10px; min-width: 290px; }
+.ah-activity .ah-calendar-heatmap__legend i { width: 10px; height: 10px; }
+.ah-activity__daily { min-width: 0; }
+.ah-activity__daily > p { display: flex; justify-content: space-between; margin: 0 0 9px; font-size: 10px; color: var(--vf-text-secondary); }
+.ah-activity__daily > p span { color: var(--vf-text-tertiary); }
+.ah-activity__daily-plot { height: 171px; display: flex; gap: 2px; border-bottom: 1px solid var(--vf-hairline); background: repeating-linear-gradient(to top, transparent 0, transparent calc(25% - 1px), var(--vf-hairline) calc(25% - 1px), var(--vf-hairline) 25%); }
+.ah-activity__daily-plot > * { flex: 1; min-width: 0; }
+.ah-activity__daily-plot button { display: flex; align-items: flex-end; padding: 0; border: 0; background: transparent; }
+.ah-activity__daily-plot i { display: block; width: 100%; background: var(--activity-color); border-radius: 2px 2px 0 0; opacity: .65; }
+.ah-activity__daily-plot button:hover i, .ah-activity__daily-plot button[aria-pressed="true"] i { opacity: 1; }
+.ah-activity__daily-plot button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; }
+.ah-activity__daily-axis { display: flex; justify-content: space-between; margin-top: 11px; font-size: 10px; color: var(--vf-text-tertiary); }
+.ah-activity__inspection { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 17px; margin-top: 16px; border-top: 1px solid var(--vf-hairline); min-height: 55px; }
+.ah-activity__inspection > div { display: grid; grid-template-columns: auto auto; align-items: baseline; gap: 5px 20px; }
+.ah-activity__inspection span { font-size: 11px; color: var(--vf-text-secondary); }
+.ah-activity__inspection strong { font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.ah-activity__inspection strong small { font-size: 11px; color: var(--vf-text-tertiary); font-weight: 400; }
+.ah-activity__inspection > div > span:last-child { grid-column: 1 / -1; color: var(--vf-text-tertiary); font-size: 10px; }
+.ah-activity__jump { padding: 7px 10px; border: 0; border-radius: 8px; background: var(--vf-fill); color: var(--vf-text-secondary); font: inherit; font-size: 11px; text-align: left; }
+.ah-activity__jump span { display: block; margin-top: 3px; font-size: 10px; color: var(--vf-text-tertiary); }
+.ah-activity__jump:hover { background: var(--vf-fill-hover); color: var(--vf-text-primary); }
+.ah-activity__breakdowns { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+.ah-activity__months { display: flex; gap: 8px; list-style: none; padding: 0; margin: 0; }
+.ah-activity__months li { flex: 1; min-width: 0; text-align: center; }
+.ah-activity__months span { display: block; font-size: 9px; color: var(--vf-text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ah-activity__month-track { display: flex; align-items: flex-end; height: 112px; margin: 8px 0; border-bottom: 1px solid var(--vf-hairline); }
+.ah-activity__month-track i { display: block; width: 100%; max-width: 40px; margin: 0 auto; border-radius: 3px 3px 0 0; background: var(--activity-color); opacity: .75; }
+.ah-activity__weekday-bars { display: flex; flex-direction: column; gap: 10px; list-style: none; padding: 0; margin: 0; }
+.ah-activity__weekday-bars li { display: grid; grid-template-columns: 27px minmax(0, 1fr) 46px; gap: 10px; align-items: center; font-size: 10px; color: var(--vf-text-tertiary); }
+.ah-activity__weekday-bars li > div { height: 8px; border-radius: 3px; background: var(--vf-fill); overflow: hidden; }
+.ah-activity__weekday-bars i { display: block; height: 100%; border-radius: 3px; background: var(--activity-color); opacity: .75; }
+.ah-activity__weekday-bars b { text-align: right; font-weight: 500; color: var(--vf-text-secondary); font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) {
+  .ah-activity { padding: 16px; }
+  .ah-activity__toolbar { flex-wrap: wrap; }
+  .ah-activity__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ah-activity__breakdowns { grid-template-columns: minmax(0, 1fr); }
+  .ah-activity__sectionhead { flex-wrap: wrap; gap: 5px; }
+  .ah-activity__inspection > div { grid-template-columns: minmax(0, 1fr); }
+  .ah-activity__inspection > div > span:last-child { grid-column: 1; }
+  .ah-activity__months { gap: 5px; overflow: auto; }
+  .ah-activity__months li { min-width: 30px; }
+}
+@media (max-width: 900px) {
+  .ah-activity__calendar-main[data-short-range] { grid-template-columns: minmax(0, 1fr); }
+  .ah-activity__daily-plot { height: 110px; }
+}
+@media (prefers-reduced-motion: reduce) { .ah-chart-launcher__hint { transition: none; } }

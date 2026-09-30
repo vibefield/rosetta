@@ -2,10 +2,10 @@
 // levels. The project panel heads column ②; the portfolio panel heads column
 // ①. Every chart derives from the same series as the ledger, so their figures
 // cannot disagree. When collapsed, each panel becomes its column header.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { UsageResponse } from "@rosetta/protocol";
-import { CalendarHeatmap, Streamgraph, Treemap } from "./charts";
+import { ActivityChartDialog, CalendarHeatmap, Streamgraph, Treemap } from "./charts";
 import type { TreemapData } from "./charts";
 import { ColumnHeading, SegmentedControl, Veil } from "./ui";
 import {
@@ -14,7 +14,8 @@ import {
   createModelUsageStreamgraphData,
 } from "../lib/chart-data";
 import { fmtTokens, tokenText } from "../lib/format";
-import { GitHubGlyph, StatsGlyph, TreeGlyph } from "../lib/icons";
+import { FullscreenGlyph, GitHubGlyph, StatsGlyph, TreeGlyph } from "../lib/icons";
+import { getCalendarDayKey } from "../lib/model";
 import type { ProjectViewModel } from "../lib/model";
 import { NO_SPEND, addSpend, coverage, fmtUsd, spendDescription, usdText } from "../lib/spend";
 import type { Spend } from "../lib/spend";
@@ -125,6 +126,8 @@ export function ProjectSummaryPanel({
   // their own requests finish, independently of transcript readiness.
   const isVeiled = ingestActive || !project.statsReady;
   const [isExpanded, setIsExpanded] = useState(true);
+  const [isActivityOpen, setIsActivityOpen] = useState(false);
+  useEffect(() => setIsActivityOpen(false), [project.row.id]);
   const [activeChart, setActiveChart] = useState<ProjectChart>(() =>
     new URLSearchParams(window.location.search).get("tab") === "models" ? "models" : "activity",
   );
@@ -271,16 +274,24 @@ export function ProjectSummaryPanel({
                 />
               ) : (
                 <>
-                  <CalendarHeatmap
-                    data={heatmapData}
-                    color={project.tint}
-                    ariaLabel={`Daily token activity for ${project.row.name} over 53 weeks`}
-                    summary={`${
-                      isVeiled && activityStats.activeDayCount === 0
-                        ? "—"
-                        : activityStats.activeDayCount
-                    } active days · 53 weeks`}
-                  />
+                  <div className="ah-chart-launcher">
+                    <CalendarHeatmap
+                      data={heatmapData}
+                      color={project.tint}
+                      ariaLabel={`Daily token activity for ${project.row.name} over 53 weeks`}
+                      summary={`${
+                        isVeiled && activityStats.activeDayCount === 0
+                          ? "—"
+                          : activityStats.activeDayCount
+                      } active days · 53 weeks`}
+                    />
+                    <button type="button" className="ah-chart-launcher__button"
+                      aria-label={`Expand activity chart for ${project.row.name}`}
+                      aria-haspopup="dialog" disabled={isVeiled}
+                      onClick={() => setIsActivityOpen(true)}>
+                      <span className="ah-chart-launcher__hint"><FullscreenGlyph /> Expand</span>
+                    </button>
+                  </div>
                   <p className="ah-meta__facts">
                     <b>
                       {isVeiled && activityStats.longestStreakLength === 0
@@ -313,6 +324,9 @@ export function ProjectSummaryPanel({
           </div>
         </div>
       )}
+      {isActivityOpen && <ActivityChartDialog name={project.row.name} color={project.tint}
+        data={heatmapData} today={getCalendarDayKey(currentTimestamp)}
+        onClose={() => setIsActivityOpen(false)} />}
     </div>
   );
 }
