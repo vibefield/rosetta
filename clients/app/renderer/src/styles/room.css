@@ -297,10 +297,11 @@
    one — which is the honest way round: the width follows the word, and no
    label is ever cut to keep a grid tidy. */
 .ah-stats { margin-bottom: 10px; display: grid; grid-template-columns: repeat(4, minmax(min-content, 1fr)); gap: 3px; }
-.ah-stat { min-width: 0; padding: 7px 4px 6px; border-radius: 9px; background: var(--vf-fill); }
+.ah-stat { min-width: 0; padding: 7px 3px 6px; border-radius: 9px; background: var(--vf-fill); }
 .ah-stat b {
   display: block; font-size: 15px; font-weight: 300; line-height: 1.05;
   letter-spacing: -0.015em; font-variant-numeric: tabular-nums; color: var(--vf-text-primary);
+  white-space: nowrap;
 }
 .ah-stat b small { font-size: 10px; color: var(--vf-text-faint); margin-left: 1px; font-weight: 400; }
 .ah-stat span {

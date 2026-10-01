@@ -1,27 +1,37 @@
 // Numbers and time, per the design record §4: three significant figures with
 // digits and unit in separate slots; every number that can change is tabular.
 
-export interface TokenParts {
+export interface CompactNumberParts {
   n: string;
   u: string;
 }
 
-export function fmtTokens(n: number): TokenParts {
-  let v: number;
-  let u: string;
-  if (n >= 1e9) {
-    v = n / 1e9;
-    u = "B";
-  } else if (n >= 1e6) {
-    v = n / 1e6;
-    u = "M";
-  } else if (n >= 1e3) {
-    v = n / 1e3;
-    u = "K";
-  } else {
-    return { n: String(n), u: "" };
+const COMPACT_UNITS = ["", "K", "M", "B", "T"] as const;
+
+/** Shared count/token/currency scale. Round before choosing precision and
+ * promote a rounded 1,000 into the next unit (999,500 → 1.00M). */
+export function fmtCompactNumber(value: number): CompactNumberParts {
+  if (!Number.isFinite(value)) return { n: "—", u: "" };
+  const magnitude = Math.abs(value);
+  if (magnitude < 999.5) return { n: String(value), u: "" };
+
+  // Round in the original unit so decimal ties such as 9,995 do not become
+  // 9.99K through the binary representation of a scaled 9.995.
+  const precision = 10 ** (Math.floor(Math.log10(magnitude)) - 2);
+  let scaled = Math.round(magnitude / precision) * precision;
+  let unit = 0;
+  while (scaled >= 1e3 && unit < COMPACT_UNITS.length - 1) {
+    scaled /= 1e3;
+    unit += 1;
   }
-  return { n: v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2), u };
+  const decimals = Math.max(0, 2 - Math.floor(Math.log10(scaled)));
+  return { n: (Math.sign(value) * scaled).toFixed(decimals), u: COMPACT_UNITS[unit] };
+}
+
+export type TokenParts = CompactNumberParts;
+
+export function fmtTokens(n: number): TokenParts {
+  return fmtCompactNumber(n);
 }
 
 export function tokenText(n: number): string {

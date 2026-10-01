@@ -3,22 +3,23 @@
 // ①. Every chart derives from the same series as the ledger, so their figures
 // cannot disagree. When collapsed, each panel becomes its column header.
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties } from "react";
 import type { UsageResponse } from "@rosetta/protocol";
 import { CalendarHeatmap, ProjectChartDialog, Streamgraph, Treemap } from "./charts";
 import type { ProjectChartView, TreemapData } from "./charts";
 import { ColumnHeading, SegmentedControl, Veil } from "./ui";
+import { SummaryMetrics } from "./SummaryMetrics";
 import {
   calculateActivityStats,
   createCalendarHeatmapData,
   createModelUsageStreamgraphData,
 } from "../lib/chart-data";
-import { fmtTokens, tokenText } from "../lib/format";
+import { tokenText } from "../lib/format";
 import { createModelColors } from "../lib/model-labels";
 import { FullscreenGlyph, GitHubGlyph, StatsGlyph, TreeGlyph } from "../lib/icons";
 import { getCalendarDayKey, getViewerUtcOffsetMinutes } from "../lib/model";
 import type { ProjectViewModel } from "../lib/model";
-import { NO_SPEND, addSpend, coverage, fmtUsd, spendDescription, usdText } from "../lib/spend";
+import { NO_SPEND, addSpend, coverage, usdText } from "../lib/spend";
 import type { Spend } from "../lib/spend";
 
 type TintStyle = CSSProperties & { "--tint": string };
@@ -30,59 +31,6 @@ const PROJECT_CHART_OPTIONS = [
   { value: "activity", label: "Overview" },
   { value: "models", label: "Models" },
 ] as const;
-
-/* ── four chips, not four cards ─────────────────────────────────────────── */
-
-function TokenSummaryValue({ value, unknown = false }: { value: number; unknown?: boolean }) {
-  if (unknown) return <b>—</b>;
-  const formattedValue = fmtTokens(value);
-  return (
-    <b>
-      {formattedValue.n}
-      <small>{formattedValue.u}</small>
-    </b>
-  );
-}
-
-/** List-price spend (§4.1.3): a partial figure is a lower bound marked `+`;
- * usage the catalog cannot price reads `n/p`, never $0. */
-function SpendSummaryValue({ spend, unknown = false }: { spend: Spend; unknown?: boolean }) {
-  if (unknown) return <b>—</b>;
-  const state = coverage(spend);
-  if (spend.costMicroUsd === null) return <b>{state === "unavailable" ? "n/p" : "—"}</b>;
-  const figure = fmtUsd(spend.costMicroUsd);
-  return (
-    <b>
-      {figure.n}
-      <small>{`${figure.u}${state === "partial" ? "+" : ""}`}</small>
-    </b>
-  );
-}
-
-/** A veiled figure that has not landed yet is a dash, never a claimed zero
- * (the design record's rule for every cooking slot). */
-function CountFigure({ value, veiled }: { readonly value: number; readonly veiled: boolean }) {
-  return <b>{veiled && value === 0 ? "—" : value.toLocaleString()}</b>;
-}
-
-interface SummaryStat {
-  label: string;
-  value: ReactNode;
-  title?: string;
-}
-
-function SummaryStats({ stats }: { stats: readonly SummaryStat[] }) {
-  return (
-    <div className="ah-stats">
-      {stats.map((stat) => (
-        <div className="ah-stat" key={stat.label} title={stat.title}>
-          {stat.value}
-          <span>{stat.label}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 /* ── project summary panel (column ②'s header) ──────────────────────────── */
 
@@ -226,35 +174,9 @@ export function ProjectSummaryPanel({
               progress={null}
             />
           )}
-          <SummaryStats
-            stats={[
-              { value: <b>{project.rootSessionCount}</b>, label: "sessions" },
-              {
-                value: <CountFigure value={project.lifetimeMessages} veiled={isVeiled} />,
-                label: "messages",
-              },
-              {
-                value: (
-                  <TokenSummaryValue
-                    value={project.tokensLast53Weeks}
-                    unknown={isVeiled && project.tokensLast53Weeks === 0}
-                  />
-                ),
-                label: "tokens",
-              },
-              {
-                // The day count stays in the calendar's caption below.
-                value: (
-                  <SpendSummaryValue
-                    spend={project.spendLast53Weeks}
-                    unknown={isVeiled && project.tokensLast53Weeks === 0}
-                  />
-                ),
-                label: "estimated cost",
-                title: `${spendDescription(project.spendLast53Weeks, tokenText)} · 53 weeks`,
-              },
-            ]}
-          />
+          <SummaryMetrics sessionCount={project.rootSessionCount} messageCount={project.lifetimeMessages}
+            tokenCount={project.tokensLast53Weeks} spend={project.spendLast53Weeks}
+            pending={isVeiled} period="53 weeks" />
           <div className="ah-chartcard">
             <SegmentedControl
               value={activeChart}
@@ -447,34 +369,9 @@ export function PortfolioSummaryPanel({
               progress={null}
             />
           )}
-          <SummaryStats
-            stats={[
-              { value: <b>{summary.sessionCount}</b>, label: "sessions" },
-              {
-                value: <CountFigure value={summary.messageCount} veiled={summariesPending} />,
-                label: "messages",
-              },
-              {
-                value: (
-                  <TokenSummaryValue
-                    value={summary.tokenCount}
-                    unknown={summariesPending && summary.tokenCount === 0}
-                  />
-                ),
-                label: "tokens",
-              },
-              {
-                value: (
-                  <SpendSummaryValue
-                    spend={summary.spend}
-                    unknown={summariesPending && summary.tokenCount === 0}
-                  />
-                ),
-                label: "estimated cost",
-                title: `${spendDescription(summary.spend, tokenText)} · all time`,
-              },
-            ]}
-          />
+          <SummaryMetrics sessionCount={summary.sessionCount} messageCount={summary.messageCount}
+            tokenCount={summary.tokenCount} spend={summary.spend}
+            pending={summariesPending} period="all time" />
           <div className="ah-chartcard">
             <Treemap
               data={summary.treemapData}

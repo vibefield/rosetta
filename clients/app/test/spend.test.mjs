@@ -60,6 +60,17 @@ describe("spend", () => {
     assert.equal(spendText(NO_SPEND), null);
   });
 
+  it("uses the shared precision and carries rounded dollars into the next unit", () => {
+    for (const [dollars, n, u] of [
+      [999.5, "$1.00", "K"], [9_995, "$10.0", "K"], [9_999, "$10.0", "K"],
+      [99_950, "$100", "K"], [99_999, "$100", "K"],
+      [999_499, "$999", "K"], [999_500, "$1.00", "M"],
+      [999_500_000, "$1.00", "B"], [999_500_000_000, "$1.00", "T"],
+    ]) assert.deepEqual(fmtUsd(dollars * 1e6), { n, u });
+    assert.equal(usdText(0), "$0.00");
+    assert.equal(usdText(12_340_000), "$12.34");
+  });
+
   it("describes billed amounts beside, never inside, the list price", () => {
     const text = spendDescription(spendOf(row(null, 508_000_000, 2_000)), (n) => `${n}`);
     assert.match(text, /2000 tokens with no list price/);

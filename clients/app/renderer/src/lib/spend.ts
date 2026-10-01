@@ -2,6 +2,8 @@
 // model creator's API list price, supplemented by higher reported session
 // totals. A provider-billed amount is a separate, secondary figure; usage the
 // price catalog cannot price is counted and shown, never read as $0.
+import { fmtCompactNumber } from "./format.ts";
+import type { CompactNumberParts } from "./format.ts";
 
 /** The wire's spend columns, flattened beside every aggregate `tokens`. */
 export interface SpendFields {
@@ -77,14 +79,13 @@ export function coverage(spend: Spend): Coverage {
   return spend.unpricedTokens > 0 || spend.unrecordedOutput > 0 ? "partial" : "complete";
 }
 
-/** The two-part figure (`$53.5` + `K`), in fmtTokens' shape. */
-export function fmtUsd(microUsd: number): { n: string; u: string } {
+/** Shared compact scale, with currency-specific cents for smaller amounts. */
+export function fmtUsd(microUsd: number): CompactNumberParts {
   const usd = microUsd / 1e6;
-  const scaled = (value: number) =>
-    value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
-  if (usd >= 1e9) return { n: `$${scaled(usd / 1e9)}`, u: "B" };
-  if (usd >= 1e6) return { n: `$${scaled(usd / 1e6)}`, u: "M" };
-  if (usd >= 1e3) return { n: `$${scaled(usd / 1e3)}`, u: "K" };
+  if (usd >= 999.5) {
+    const figure = fmtCompactNumber(usd);
+    return { n: `$${figure.n}`, u: figure.u };
+  }
   if (usd >= 100) return { n: `$${usd.toFixed(0)}`, u: "" };
   if (usd >= 0.01 || usd === 0) return { n: `$${usd.toFixed(2)}`, u: "" };
   return { n: "<$0.01", u: "" };
