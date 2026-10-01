@@ -4,6 +4,7 @@
 // earlier rows), obey Resync barriers, and reconnect with a resume stamp.
 // Consumers render; they never re-implement protocol semantics.
 
+import { utf8Base64UrlEncode } from "#base64url";
 import { OrderedCache } from "#ordered-cache";
 import { PROTOCOL_VERSION } from "./protocol-version.mjs";
 export { PROTOCOL_VERSION } from "./protocol-version.mjs";
@@ -44,6 +45,66 @@ import type { DayUsageResponse } from "./generated/DayUsageResponse";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
 
+/**
+ * How a client proves itself to a daemon started with `--token-file`
+ * (docs/AUTH.md). A bearer opens every route; a grant opens one session's
+ * recorded history until its `exp`. The client only carries a grant, as an
+ * opaque string: minting needs the key (`@rosetta/protocol/grants`).
+ */
+export type RosettaCredential =
+  | { readonly kind: "bearer"; readonly token: string }
+  | { readonly kind: "grant"; readonly grant: string };
+
+/** Why a daemon refused a request: the `x-rosetta-auth` header of its 401. */
+export type AuthRefusal =
+  | "missing"
+  | "bad-token"
+  | "malformed"
+  | "bad-signature"
+  | "expired"
+  | "wrong-session"
+  | "wrong-scope"
+  | "wrong-route"
+  | "grants-disabled";
+
+export const AUTH_REFUSALS: readonly AuthRefusal[] = [
+  "missing",
+  "bad-token",
+  "malformed",
+  "bad-signature",
+  "expired",
+  "wrong-session",
+  "wrong-scope",
+  "wrong-route",
+  "grants-disabled",
+];
+
+export const AUTH_REASON_HEADER = "x-rosetta-auth";
+
+/** The subprotocol a daemon selects for a credentialed WebSocket upgrade. */
+export const AUTH_WS_PROTOCOL = "rosetta";
+
+/** The `Authorization` value that presents `credential`. */
+export function authorizationHeader(credential: RosettaCredential): string {
+  return credential.kind === "bearer"
+    ? `Bearer ${credential.token}`
+    : `Rosetta-Grant ${credential.grant}`;
+}
+
+/**
+ * A browser's WebSocket cannot set `Authorization`, so the credential rides
+ * the subprotocol list beside the marker the daemon selects. The daemon
+ * never echoes the credential entry.
+ */
+export function webSocketProtocols(credential: RosettaCredential): string[] {
+  return [
+    AUTH_WS_PROTOCOL,
+    credential.kind === "bearer"
+      ? `rosetta.bearer.${utf8Base64UrlEncode(credential.token)}`
+      : `rosetta.grant.${credential.grant}`,
+  ];
+}
+
 export interface RosettaClientOptions {
   baseUrl?: string;
   /** Injectable for Node or test environments. */
@@ -51,6 +112,8 @@ export interface RosettaClientOptions {
   WebSocketImpl?: typeof WebSocket;
   requestTimeoutMs?: number;
   notificationIntervalMs?: number;
+  /** Presented on every request and upgrade; see {@link RosettaCredential}. */
+  credential?: RosettaCredential;
 }
 
 export class ApiRequestError extends Error {
@@ -71,6 +134,25 @@ export class CursorExpiredError extends ApiRequestError {
     super(410, "cursor_expired", message);
     this.name = "CursorExpiredError";
   }
+}
+
+/** A 401: the daemon wants a credential this client did not present, or
+ * refused the one it did. `reason` is null only from a daemon that named
+ * none. */
+export class UnauthorizedError extends ApiRequestError {
+  readonly reason: AuthRefusal | null;
+
+  constructor(reason: AuthRefusal | null, message: string) {
+    super(401, null, message);
+    this.name = "UnauthorizedError";
+    this.reason = reason;
+  }
+}
+
+function withAuthorization(init: HeadersInit | undefined, credential: RosettaCredential): Headers {
+  const headers = new Headers(init);
+  headers.set("authorization", authorizationHeader(credential));
+  return headers;
 }
 
 export type SubscriptionStatus = "connecting" | "syncing" | "live" | "resyncing" | "closed";
@@ -167,6 +249,7 @@ export class RosettaClient {
   private readonly notificationIntervalMs: number;
   private readonly fetchFn: typeof fetch;
   private readonly WebSocketImpl: typeof WebSocket;
+  private credential: RosettaCredential | null;
 
   constructor(options: RosettaClientOptions = {}) {
     this.origin = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
@@ -174,6 +257,18 @@ export class RosettaClient {
     this.WebSocketImpl = options.WebSocketImpl ?? WebSocket;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
     this.notificationIntervalMs = options.notificationIntervalMs ?? 16;
+    this.credential = options.credential ?? null;
+  }
+
+  /**
+   * Replace the credential (a refreshed grant, a rotated bearer), or drop
+   * it. Later requests and every later (re)connect present it. An open
+   * socket is left alone: the daemon checks a credential at the upgrade, so
+   * a grant that expires under a live subscription ends only with its
+   * socket, and the reconnect then needs a fresh one.
+   */
+  setCredential(credential: RosettaCredential | null): void {
+    this.credential = credential;
   }
 
   private async response(path: string, init?: RequestInit): Promise<Response> {
@@ -182,8 +277,11 @@ export class RosettaClient {
       this.connection.signal,
       ...(init?.signal ? [init.signal] : []),
     ]);
+    const headers =
+      this.credential === null ? init?.headers : withAuthorization(init?.headers, this.credential);
     const response = await this.fetchFn(`${this.baseUrl}${path}`, {
       ...init,
+      ...(headers === undefined ? {} : { headers }),
       signal,
       redirect: "error",
     });
@@ -194,6 +292,13 @@ export class RosettaClient {
         response.status,
         "incompatible_protocol",
         `Daemon protocol ${version ?? "unknown"} is incompatible with this app (expected ${PROTOCOL_VERSION}). Restart with the matching daemon.`,
+      );
+    }
+    if (response.status === 401) {
+      const reason = response.headers.get(AUTH_REASON_HEADER);
+      throw new UnauthorizedError(
+        AUTH_REFUSALS.find((refusal) => refusal === reason) ?? null,
+        `The daemon refused ${path} (${reason ?? "unauthorized"}).`,
       );
     }
     if (!response.ok) {
@@ -519,6 +624,7 @@ export class RosettaClient {
   private transport(path: string): SubscriptionTransport {
     return {
       url: () => `${this.baseUrl.replace(/^http/, "ws")}${path}`,
+      protocols: () => (this.credential === null ? undefined : webSocketProtocols(this.credential)),
       socket: this.WebSocketImpl,
       interval: this.notificationIntervalMs,
       onClose: (sub) => this.subscriptions.delete(sub),
@@ -557,6 +663,8 @@ export class RosettaClient {
 
 interface SubscriptionTransport {
   url: () => string;
+  /** The credential's subprotocol pair, read at every (re)connect. */
+  protocols: () => string[] | undefined;
   socket: typeof WebSocket;
   interval: number;
   onClose: (sub: BaseSubscription) => void;
@@ -587,7 +695,12 @@ abstract class BaseSubscription {
     this.setStatus("connecting");
     let socket: WebSocket;
     try {
-      socket = new this.transport.socket(`${this.transport.url()}${resume}`);
+      const url = `${this.transport.url()}${resume}`;
+      const protocols = this.transport.protocols();
+      socket =
+        protocols === undefined
+          ? new this.transport.socket(url)
+          : new this.transport.socket(url, protocols);
     } catch {
       this.retry();
       return;

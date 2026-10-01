@@ -25,7 +25,7 @@ announce the same version in `hello`. Mismatches fail with an actionable error.
 
 ## Package shape
 
-`exports` is exactly two entries, and they are the whole public surface:
+`exports` is exactly three entries, and they are the whole public surface:
 
 - `.` — the client plus the generated types. `client.ts` uses `fetch`,
   `WebSocket`, `AbortController`, and `URLSearchParams`, so a consumer of this
@@ -35,7 +35,36 @@ announce the same version in `hello`. Mismatches fail with an actionable error.
   imports it here instead of dragging the browser client into its typecheck.
   TypeScript resolves the adjacent `protocol-version.d.mts` for the `.mjs`
   under `moduleResolution` `Bundler` or `Node16`.
+- `./grants` — minting and verifying per-session grants (`canonicalize`,
+  `mintGrant`, `verifyGrant`, `parseGrantHeader`). Node-only: it signs with
+  `node:crypto`, so a browser bundle never imports it. `node-crypto.d.ts`
+  declares the two functions it uses, so `tsc -p clients/ts` needs no
+  `@types/node`.
 
-`imports["#ordered-cache"]` is internal to the package. Everything else is
-encapsulated by `exports`: there are no deep imports of `./client` or
-`./generated/*`, and adding one is a change to this file, not to a consumer.
+`imports["#ordered-cache"]` and `imports["#base64url"]` are internal to the
+package. Everything else is encapsulated by `exports`: there are no deep
+imports of `./client` or `./generated/*`, and adding one is a change to this
+file, not to a consumer.
+
+## Credentials
+
+A daemon started with `--token-file` answers 401 to any request without a
+credential (docs/AUTH.md). Pass one as `new RosettaClient({ credential })`,
+or swap it later with `setCredential`:
+
+- `{ kind: "bearer", token }` opens every route.
+- `{ kind: "grant", grant }` opens one session's recorded history until the
+  grant's `exp`. The daemon's supervisor mints it with
+  `@rosetta/protocol/grants`; the client carries it as an opaque string.
+
+REST requests send it as `Authorization`. WebSocket upgrades send it as the
+subprotocol pair `rosetta` + `rosetta.bearer.<base64url(token)>` or
+`rosetta.grant.<grant>`, because a browser's WebSocket cannot set headers;
+the daemon selects `rosetta`. A 401 throws `UnauthorizedError`, whose
+`reason` is the daemon's `x-rosetta-auth` header. An open socket is not
+re-checked, so a subscription outlives its grant's expiry until it
+reconnects.
+
+`npm test` in this directory runs `test/*.test.mjs` with Node's test runner;
+the grant tests read the shared vectors in
+`crates/server/tests/fixtures/grants.json`.

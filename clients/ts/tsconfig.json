@@ -11,5 +11,13 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true
   },
-  "include": ["index.ts", "client.ts", "ordered-cache.ts", "generated"]
+  "include": [
+    "index.ts",
+    "client.ts",
+    "ordered-cache.ts",
+    "base64url.ts",
+    "grants.ts",
+    "node-crypto.d.ts",
+    "generated"
+  ]
 }

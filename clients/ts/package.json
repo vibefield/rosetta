@@ -7,9 +7,14 @@
   "types": "./index.ts",
   "exports": {
     ".": "./index.ts",
-    "./protocol-version": "./protocol-version.mjs"
+    "./protocol-version": "./protocol-version.mjs",
+    "./grants": "./grants.ts"
   },
   "imports": {
+    "#base64url": "./base64url.ts",
     "#ordered-cache": "./ordered-cache.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
   }
 }
