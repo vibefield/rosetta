@@ -15,31 +15,30 @@ function calendar(start, count, value) {
 }
 
 describe("expanded activity figures", () => {
-  it("selects exactly 30/90 calendar days across DST and includes today", () => {
+  it("keeps the full available calendar history across DST and includes today", () => {
     const data = calendar("2026-01-04", 371, () => 1);
-    const short = createActivityDetails(data, "30d", "2026-03-20");
-    assert.equal(short.start, "2026-02-19");
-    assert.equal(short.days.length, 30);
-    assert.equal(short.total, 30);
-    assert.equal(short.days.at(-1).id, "2026-03-20");
-    assert.equal(createActivityDetails(data, "90d", "2026-06-20").days.length, 90);
-    assert.equal(createActivityDetails(data, "53w", "2027-01-09").days.length, 371);
-    assert.equal(short.calendar.weeks[0].label, "Feb");
-    assert.ok(short.calendar.weeks.flatMap(week => week.days).filter(day => day.id < short.start || day.id > short.end).every(day => day.value === null));
+    const result = createActivityDetails(data, "2026-03-20");
+    assert.equal(result.start, "2026-01-04");
+    assert.equal(result.days.length, 76);
+    assert.equal(result.total, 76);
+    assert.equal(result.days.at(-1).id, "2026-03-20");
+    assert.equal(createActivityDetails(data, "2027-01-09").days.length, 371);
+    assert.equal(result.calendar.weeks[0].label, "Jan");
+    assert.ok(result.calendar.weeks.flatMap(week => week.days).filter(day => day.id > result.end).every(day => day.value === null));
   });
 
   it("separates missing, future, invalid and recorded zero days", () => {
     const values = [0, null, NaN, -1, Infinity, 12, 1000];
-    const result = createActivityDetails(calendar("2026-09-20", 7, index => values[index]), "53w", "2026-09-25");
+    const result = createActivityDetails(calendar("2026-09-20", 7, index => values[index]), "2026-09-25");
     assert.equal(result.total, 12);
     assert.equal(result.recordedDayCount, 2);
     assert.equal(result.activeDayCount, 1);
     assert.equal(result.busiestDay.id, "2026-09-25");
 
-    const missing = createActivityDetails(calendar("2026-09-20", 7, () => null), "53w", "2026-09-26");
+    const missing = createActivityDetails(calendar("2026-09-20", 7, () => null), "2026-09-26");
     assert.equal(missing.total, null);
     assert.equal(missing.busiestDay, null);
-    const zero = createActivityDetails(calendar("2026-09-20", 7, () => 0), "53w", "2026-09-26");
+    const zero = createActivityDetails(calendar("2026-09-20", 7, () => 0), "2026-09-26");
     assert.equal(zero.total, 0);
     assert.equal(zero.recordedDayCount, 7);
     assert.equal(zero.busiestDay, null);
@@ -47,19 +46,19 @@ describe("expanded activity figures", () => {
 
   it("locates actual current and best runs to mark their calendar dates", () => {
     const result = createActivityDetails(calendar("2026-09-20", 11,
-      index => [0, 1, 2, 3, 0, null, 1, 2, 0, 1, 1][index]), "53w", "2026-09-30");
+      index => [0, 1, 2, 3, 0, null, 1, 2, 0, 1, 1][index]), "2026-09-30");
     assert.deepEqual(result.bestRun, { start: "2026-09-21", end: "2026-09-23", length: 3 });
     assert.deepEqual(result.currentRun, { start: "2026-09-29", end: "2026-09-30", length: 2 });
     assert.equal(result.runs.length, 3);
     assert.equal(createActivityDetails(calendar("2026-09-20", 11,
-      index => index === 10 ? 0 : 1), "53w", "2026-09-30").currentRun, null);
+      index => index === 10 ? 0 : 1), "2026-09-30").currentRun, null);
   });
 
-  it("limits streaks to the range and breaks them at unrecorded days or gaps", () => {
+  it("breaks streaks at unrecorded days or gaps", () => {
     const data = calendar("2026-09-20", 7, index => index === 3 ? null : 5);
-    const result = createActivityDetails(data, "53w", "2026-09-26");
+    const result = createActivityDetails(data, "2026-09-26");
     assert.equal(result.longestStreak, 3);
     const sparse = { weeks: [{ id: "2026-09-20", days: [data.weeks[0].days[0], data.weeks[0].days[2]] }] };
-    assert.equal(createActivityDetails(sparse, "53w", "2026-09-26").longestStreak, 1);
+    assert.equal(createActivityDetails(sparse, "2026-09-26").longestStreak, 1);
   });
 });

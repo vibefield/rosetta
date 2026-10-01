@@ -26,10 +26,8 @@
 .ah-activity__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .ah-activity h2 { margin: 0 0 3px; font-size: 15px; font-weight: 550; letter-spacing: -.02em; }
 .ah-activity__toolbar p, .ah-activity__dayhead p { margin: 0; font-size: 10px; line-height: 1.4; color: var(--vf-text-tertiary); }
-.ah-activity__calendar-controls { display: flex; align-items: center; gap: 8px; flex: none; }
-.ah-activity__toolbar .ah-seg { flex: none; }
-.ah-activity__toolbar .ah-seg button { height: 23px; font-size: 10px; padding: 0 9px; }
 .ah-activity__calendar-nav, .ah-daychart__modelnav { display: flex; align-items: center; gap: 4px; font-size: 9px; color: var(--vf-text-tertiary); }
+.ah-activity__calendar-nav { flex: none; }
 .ah-activity__calendar-nav button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: var(--vf-fill); color: var(--vf-text-secondary); font: inherit; font-size: 12px; }
 .ah-activity__calendar-nav button:disabled, .ah-daychart__modelnav button:disabled { opacity: .3; cursor: default; }
 .ah-activity__calendar-scroll { min-width: 0; }
@@ -108,7 +106,6 @@
 @media (max-width: 760px) {
   .ah-activity { padding: 12px; }
   .ah-activity__toolbar { flex-wrap: wrap; gap: 8px; }
-  .ah-activity__toolbar .ah-seg button { padding: 0 7px; }
   .ah-activity__runs { gap: 5px 12px; }
   .ah-activity__run small { display: none; }
   .ah-activity__jump { margin-left: 0; }

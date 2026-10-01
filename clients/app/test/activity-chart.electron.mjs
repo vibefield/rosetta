@@ -72,6 +72,7 @@ async function run() {
     assert.ok(Number(await check(() => getComputedStyle(document.querySelector('.ah-chart-launcher__hint')).opacity)) > .99);
     await open();
     assert.equal(await check(() => document.querySelectorAll('.ah-activity [data-day]').length), 368);
+    assert.equal(await check(() => document.querySelector('[aria-label="Activity date range"]')), null, "The full history has no date-range tabs");
     assert.equal(await check(() => document.querySelector('.ah-activity [aria-pressed="true"][data-day]').dataset.day), "2026-09-30");
     await until(() => document.querySelectorAll('[data-model-line]').length === 3, "Hourly lines did not load");
     assert.ok(await check(() => [...document.querySelectorAll('[data-model-line]')].every(node => node.getAttribute('d').includes('C'))), "Model lines use smooth cubic curves");
@@ -124,10 +125,8 @@ async function run() {
     await key("Home");
     assert.equal(await check(() => document.activeElement.dataset.day), "2025-09-28");
 
-    await click('[aria-label="Activity date range"] button:nth-child(1)');
-    assert.equal(await check(() => document.querySelectorAll('.ah-activity [data-day]').length), 30);
     const cell = await check(() => { const rect = document.querySelector('.ah-activity [data-day]').getBoundingClientRect(); return { width: rect.width, height: rect.height }; });
-    assert.ok(Math.abs(cell.width - cell.height) < 1, "Short ranges retain square calendar cells");
+    assert.ok(Math.abs(cell.width - cell.height) < 1, "The full history retains square calendar cells");
     await click('.ah-activity__jump');
     assert.match(await check(() => document.querySelector('#activity-day-title').textContent), /Sep 3, 2026/);
     await click('[data-day="2026-09-18"]');
@@ -154,17 +153,16 @@ async function run() {
     await click('[data-model-toggle="claude-opus-5-5"]');
     assert.equal(await check(() => document.querySelectorAll('[data-model-line]').length), 3);
     await click('[data-run-link="best"]');
-    assert.equal(await check(() => document.querySelectorAll('.ah-activity [data-day]').length), 368, "Jumping to an older run widens the calendar range");
+    assert.equal(await check(() => document.querySelectorAll('.ah-activity [data-day]').length), 368, "Older runs remain available in the full history");
     assert.match(await check(() => document.querySelector('#activity-day-title').textContent), /Jul 22, 2026/);
-    await click('[aria-label="Activity date range"] button:nth-child(1)');
     await click('[data-day="2026-09-18"]');
     await until(() => Boolean(document.querySelector('.ah-daychart')), "Hourly plot did not reload");
     await check(() => document.documentElement.classList.remove('dark'));
     await pause(500);
     await check(() => { document.querySelector('.ah-activity').scrollTop = 0; });
-    assert.ok(await check(() => document.querySelector('.ah-daychart__axis').getBoundingClientRect().bottom + 12 <= document.querySelector('.ah-activity').getBoundingClientRect().bottom), "The hourly time axis fits with a short calendar range");
-    assert.ok(await check(() => { const node = document.querySelector('.ah-activity'); return node.scrollHeight <= node.clientHeight + 1 && node.scrollWidth <= node.clientWidth + 1; }), "The 30-day dialog fits without scrollbars");
-    await shot("activity-light-30-days.png");
+    assert.ok(await check(() => document.querySelector('.ah-daychart__axis').getBoundingClientRect().bottom + 12 <= document.querySelector('.ah-activity').getBoundingClientRect().bottom), "The hourly time axis fits with the full history");
+    assert.ok(await check(() => { const node = document.querySelector('.ah-activity'); return node.scrollHeight <= node.clientHeight + 1 && node.scrollWidth <= node.clientWidth + 1; }), "The full-history dialog fits without scrollbars");
+    await shot("activity-light-history.png");
     await click('[aria-label="View full screen"]');
     assert.ok(await check(() => document.querySelector('[role="dialog"]').hasAttribute('data-fullscreen')));
     await key("Escape");
@@ -185,16 +183,13 @@ async function run() {
     await key("Tab", ["shift"]);
     assert.ok(await check(() => Boolean(document.activeElement.closest('[role="dialog"]'))), "Focus is trapped inside dialog");
     await until(() => Boolean(document.querySelector('.ah-daychart')), 'Hourly data did not load after keyboard launch');
-    await click('[aria-label="Activity date range"] button:nth-child(2)');
-    assert.equal(await check(() => document.querySelectorAll('.ah-activity [data-day]').length), 90);
+    assert.equal(await check(() => document.querySelectorAll('.ah-activity [data-day]').length), 368);
     win.setContentSize(620, 860);
     await check(() => document.documentElement.classList.add('dark'));
     await pause();
-    assert.ok(await check(() => { const body = document.querySelector('.ah-activity'); return body.scrollWidth <= body.clientWidth + 1; }), "Narrow layout contains horizontal calendar scrolling");
+    assert.ok(await check(() => { const body = document.querySelector('.ah-activity'); return body.scrollWidth <= body.clientWidth + 1; }), "Narrow calendar paging avoids horizontal scrolling");
     assert.ok(await check(() => { const node = document.querySelector('.ah-activity'); return node.scrollHeight <= node.clientHeight + 1 && node.scrollWidth <= node.clientWidth + 1; }), "The narrow dialog fits without scrollbars");
-    await shot("activity-narrow-90-days.png");
-    await click('[aria-label="Activity date range"] button:nth-child(3)');
-    await pause();
+    await shot("activity-narrow-history.png");
     assert.ok(await check(() => Boolean(document.querySelector('[aria-label="Earlier calendar weeks"]'))), "Narrow yearly calendar pages keep cells readable");
     const currentDay = await check(() => document.querySelector('#activity-day-title').textContent);
     const requestsBeforePage = await check(() => window.activityFixture.requests.length);
@@ -311,14 +306,13 @@ async function run() {
     await open();
     assert.match(await check(() => document.querySelector('#activity-day-title').textContent), /No recorded days/);
     assert.equal(await check(() => window.activityFixture.requests.length), beforeMissing, "Unavailable calendar days do not fetch fabricated usage");
-    await click('[aria-label="Activity date range"] button:nth-child(1)');
     await check(() => window.activityFixture.switchProject());
     await until(() => !document.querySelector('[role="dialog"]'), "Project switch retained the previous project's dialog");
     await check(() => window.activityFixture.setMode('pending'));
     await pause();
     assert.ok(await check(() => document.querySelector('.ah-chart-launcher__button').disabled));
     assert.deepEqual(errors, [], "Renderer errors");
-    console.log(JSON.stringify({ result: "PASS", screenshots, checks: ["fullscreen cursor", "pointer and keyboard launch", "hover does not fetch", "selected-day hourly models", "smooth curves and gradient glow", "dashed future guides without measured values", "stale response cancellation", "model isolation", "API error and retry", "range accuracy", "calendar navigation", "fullscreen and Escape", "focus trap and restoration", "backdrop dismissal", "light/dark/narrow layout", "no dialog scrollbars", "calendar page navigation", "zero and missing data", "project switch", "loading state"] }, null, 2));
+    console.log(JSON.stringify({ result: "PASS", screenshots, checks: ["fullscreen cursor", "pointer and keyboard launch", "hover does not fetch", "selected-day hourly models", "smooth curves and gradient glow", "dashed future guides without measured values", "stale response cancellation", "model isolation", "API error and retry", "full activity history without range tabs", "calendar navigation", "fullscreen and Escape", "focus trap and restoration", "backdrop dismissal", "light/dark/narrow layout", "no dialog scrollbars", "calendar page navigation", "zero and missing data", "project switch", "loading state"] }, null, 2));
   } catch (error) {
     failed = true;
     console.error(error);

@@ -3,19 +3,14 @@ import type { CSSProperties } from "react";
 import { CalendarHeatmap } from "./CalendarHeatmap";
 import { DayActivityChart } from "./DayActivityChart";
 import type { CalendarHeatmapCellData, CalendarHeatmapData } from "./types";
-import { ColumnHeading, DialogShell, SegmentedControl } from "../ui";
+import { ColumnHeading, DialogShell } from "../ui";
 import { CloseGlyph, ExitFullscreenGlyph, FullscreenGlyph } from "../../lib/icons";
 import { createActivityDetails } from "../../lib/activity-details";
-import type { ActivityRange, ActivityRun } from "../../lib/activity-details";
+import type { ActivityRun } from "../../lib/activity-details";
 import { useDayUsage } from "../../lib/use-day-usage";
 import { tokenText } from "../../lib/format";
 import "../../styles/activity-chart.css";
 
-const RANGE_OPTIONS = [
-  { value: "30d", label: "30 days" },
-  { value: "90d", label: "90 days" },
-  { value: "53w", label: "53 weeks" },
-] as const;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function dateLabel(key: string, weekday = false, year = false): string {
@@ -41,7 +36,6 @@ export interface ActivityChartDialogProps {
 export function ActivityChartDialog({
   projectId, name, color, data, today, offsetMinutes, currentTimestamp, modelColors, onClose,
 }: ActivityChartDialogProps) {
-  const [range, setRange] = useState<ActivityRange>("53w");
   const [fullscreen, setFullscreen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [preview, setPreview] = useState<CalendarHeatmapCellData | null>(null);
@@ -57,9 +51,8 @@ export function ActivityChartDialog({
     observer.observe(node);
     return () => observer.disconnect();
   }, [calendarElement]);
-  const details = useMemo(() => createActivityDetails(data, range, today), [data, range, today]);
-  const history = useMemo(() => createActivityDetails(data, "53w", today), [data, today]);
-  const currentIsBest = Boolean(history.currentRun && history.currentRun.start === history.bestRun?.start);
+  const details = useMemo(() => createActivityDetails(data, today), [data, today]);
+  const currentIsBest = Boolean(details.currentRun && details.currentRun.start === details.bestRun?.start);
   const availableDays = details.days.filter(day => day.value !== null);
   const selectedDay = availableDays.find(day => day.id === selectedId)
     ?? availableDays.filter(day => day.value! > 0).at(-1) ?? availableDays.at(-1) ?? null;
@@ -78,13 +71,12 @@ export function ActivityChartDialog({
   const hourlyTotal = modelRows.reduce((sum, row) => sum + row.tokens, 0);
   const selectDay = (day: CalendarHeatmapCellData) => { setSelectedId(day.id); setPreview(null); setCalendarPage(null); };
   const markers: Record<string, "current" | "best" | "both"> = {};
-  for (const day of history.days) {
-    const current = history.currentRun && day.id >= history.currentRun.start && day.id <= history.currentRun.end;
-    const best = history.bestRun && day.id >= history.bestRun.start && day.id <= history.bestRun.end;
+  for (const day of details.days) {
+    const current = details.currentRun && day.id >= details.currentRun.start && day.id <= details.currentRun.end;
+    const best = details.bestRun && day.id >= details.bestRun.start && day.id <= details.bestRun.end;
     if (current || best) markers[day.id] = current && best ? "both" : current ? "current" : "best";
   }
   const jumpToRun = (run: ActivityRun) => {
-    if (run.end < details.start) setRange("53w");
     setSelectedId(run.end); setPreview(null); setCalendarPage(null);
   };
 
@@ -108,20 +100,16 @@ export function ActivityChartDialog({
         <div className="ah-activity__toolbar">
           <div><h2 id="activity-calendar-title">Daily activity</h2>
             <p>{dateLabel(details.start, false, true)} – {dateLabel(details.end, false, true)} · {details.activeDayCount} active days</p></div>
-          <div className="ah-activity__calendar-controls">
-            <SegmentedControl value={range} options={RANGE_OPTIONS} accessibleLabel="Activity date range"
-              onValueChange={value => { setRange(value); setPreview(null); setCalendarPage(null); }} />
-            {pageCount > 1 && <div className="ah-activity__calendar-nav" aria-label="Calendar pages">
-              <button type="button" aria-label="Earlier calendar weeks" disabled={page === 0}
-                onClick={() => { setCalendarPage(page - 1); setPreview(null); }}>←</button>
-              <span>{page + 1}/{pageCount}</span>
-              <button type="button" aria-label="Later calendar weeks" disabled={page === pageCount - 1}
-                onClick={() => { setCalendarPage(page + 1); setPreview(null); }}>→</button>
-            </div>}
-          </div>
+          {pageCount > 1 && <div className="ah-activity__calendar-nav" aria-label="Calendar pages">
+            <button type="button" aria-label="Earlier calendar weeks" disabled={page === 0}
+              onClick={() => { setCalendarPage(page - 1); setPreview(null); }}>←</button>
+            <span>{page + 1}/{pageCount}</span>
+            <button type="button" aria-label="Later calendar weeks" disabled={page === pageCount - 1}
+              onClick={() => { setCalendarPage(page + 1); setPreview(null); }}>→</button>
+          </div>}
         </div>
         <div className="ah-activity__calendar-scroll" ref={setCalendarElement}>
-          <div className="ah-activity__calendar-layout" data-short-range={range !== "53w" ? "" : undefined} style={{
+          <div className="ah-activity__calendar-layout" style={{
             "--activity-weeks": visibleCalendar.weeks.length,
             "--activity-footer-width": `${Math.max(0, calendarLayoutWidth - 30)}px`,
             width: calendarLayoutWidth,
@@ -136,16 +124,16 @@ export function ActivityChartDialog({
           </div>
         </div>
         <div className="ah-activity__runs" aria-label="Activity runs in the 53-week history">
-          {history.currentRun && <button type="button" className="ah-activity__run" data-run-link="current"
-            title={`${dateLabel(history.currentRun.start, false, true)} – ${dateLabel(history.currentRun.end, false, true)}`}
-            onClick={() => jumpToRun(history.currentRun!)}><i data-kind={currentIsBest ? "both" : "current"} />
-            <span>{currentIsBest ? "Current & longest run" : "Current run"} <b>{history.currentRun.length} days</b></span>
-            <small>{dateLabel(history.currentRun.start)} – {dateLabel(history.currentRun.end)}</small></button>}
-          {history.bestRun && !currentIsBest && <button type="button" className="ah-activity__run" data-run-link="best"
-            title={`${dateLabel(history.bestRun.start, false, true)} – ${dateLabel(history.bestRun.end, false, true)}`}
-            onClick={() => jumpToRun(history.bestRun!)}><i data-kind="best" />
-            <span>Longest run <b>{history.bestRun.length} days</b></span>
-            <small>{dateLabel(history.bestRun.start)} – {dateLabel(history.bestRun.end)}</small></button>}
+          {details.currentRun && <button type="button" className="ah-activity__run" data-run-link="current"
+            title={`${dateLabel(details.currentRun.start, false, true)} – ${dateLabel(details.currentRun.end, false, true)}`}
+            onClick={() => jumpToRun(details.currentRun!)}><i data-kind={currentIsBest ? "both" : "current"} />
+            <span>{currentIsBest ? "Current & longest run" : "Current run"} <b>{details.currentRun.length} days</b></span>
+            <small>{dateLabel(details.currentRun.start)} – {dateLabel(details.currentRun.end)}</small></button>}
+          {details.bestRun && !currentIsBest && <button type="button" className="ah-activity__run" data-run-link="best"
+            title={`${dateLabel(details.bestRun.start, false, true)} – ${dateLabel(details.bestRun.end, false, true)}`}
+            onClick={() => jumpToRun(details.bestRun!)}><i data-kind="best" />
+            <span>Longest run <b>{details.bestRun.length} days</b></span>
+            <small>{dateLabel(details.bestRun.start)} – {dateLabel(details.bestRun.end)}</small></button>}
           {details.busiestDay && <button type="button" className="ah-activity__jump"
             onClick={() => selectDay(details.busiestDay!)}>Busiest day <span>{dateLabel(details.busiestDay.id)}</span></button>}
         </div>

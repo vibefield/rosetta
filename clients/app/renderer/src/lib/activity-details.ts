@@ -1,9 +1,5 @@
 import type { CalendarHeatmapCellData, CalendarHeatmapData } from "../components/charts/types";
 
-export type ActivityRange = "30d" | "90d" | "53w";
-
-const RANGE_DAYS: Record<ActivityRange, number> = { "30d": 30, "90d": 90, "53w": 371 };
-
 /** Calendar arithmetic in UTC on date keys, independent of DST and timezone. */
 function shiftDay(key: string, count: number): string {
   const date = new Date(`${key}T12:00:00Z`);
@@ -32,27 +28,23 @@ export interface ActivityDetails {
   readonly currentRun: ActivityRun | null;
 }
 
-/** Every expanded figure comes from the same daily cells as the small calendar.
+/** The full available history uses the same daily cells as the small calendar.
  * Missing/future days never become measured zeroes or average denominators. */
 export function createActivityDetails(
   data: CalendarHeatmapData,
-  range: ActivityRange,
   today: string,
 ): ActivityDetails {
-  const firstDay = data.weeks[0]?.days[0]?.id ?? today;
-  const cutoff = shiftDay(today, 1 - RANGE_DAYS[range]);
-  const start = firstDay > cutoff ? firstDay : cutoff;
+  const start = data.weeks[0]?.days[0]?.id ?? today;
   const inRange = (key: string) => key >= start && key <= today;
   let previousMonth = "";
   let lastLabelledWeek = -4;
-  const labelSpacing = range === "53w" ? 4 : 2;
   const calendar: CalendarHeatmapData = {
     weeks: data.weeks
       .filter((week) => week.days.some((day) => inRange(day.id)))
       .map((week, index) => {
         const first = week.days.find((day) => inRange(day.id))!;
         const month = first.id.slice(0, 7);
-        const label = month !== previousMonth && index - lastLabelledWeek >= labelSpacing
+        const label = month !== previousMonth && index - lastLabelledWeek >= 4
           ? new Date(`${first.id}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }) : undefined;
         if (label) lastLabelledWeek = index;
         previousMonth = month;
