@@ -1575,6 +1575,16 @@ in-process coupling enough to pay its build-matrix and lifecycle-coupling costs.
 Escape hatch for bulk analytics: the SQLite file is WAL-mode and read-only-openable by
 tools (sqlite-viewer style), explicitly documented as *unstable internal format*.
 
+**Access (2026-09-30).** The listener is open by default, as it always was. `serve
+--token-file` makes every route and WebSocket upgrade demand a bearer, and
+`--grant-key-file` adds per-session expiring grants: a supervisor-minted capability
+(HMAC-SHA256 over canonical JSON) for one session's recorded history, in place of the
+bearer. The browser Origin rule (loopback origins, the Tauri and Electron shells,
+`--allow-origin`) guards against web pages and is never a credential, since any other
+process can send any Origin. A browser's WebSocket carries the credential as a
+subprotocol pair, because it cannot set `Authorization`. The rule, the grant's canonical
+form and the threat model are in `docs/AUTH.md`.
+
 ### 5.2 The three services
 
 **Search (job 1):**
@@ -1754,7 +1764,8 @@ daemon state through the preload so the renderer reconnects when a new child
 binds another port. Quit waits for daemon exit. Explicit external daemons remain
 externally owned. Built renderers load from the registered `rosetta://app` origin,
 which shares the daemon's HTTP and WebSocket origin allowlist with development;
-opaque `null` origins remain disallowed.
+opaque `null` origins remain disallowed. `--allow-origin` extends the list; with a bearer
+configured, an allowed origin still presents the token (`docs/AUTH.md`).
 
 **Metrics (job 3):**
 `WS /v1/metrics?families=usage,lifecycle&agent=…` — live distilled feed. Hot path is
@@ -2378,6 +2389,7 @@ layer's design is frozen.
 | Image-member retention | keep immutable content-addressed members (no GC yet) | `.assets/` growth justifies a ledger-derived mark/sweep under the projection lock |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |
+| Daemon access control | DECIDED 2026-09-30: open on its listener by default (unchanged); `--token-file` bearer on every route and upgrade; per-session HMAC-SHA256 grants over RFC 8785 JSON with `--grant-key-file`; the Origin rule is the browser guard and never a credential (`docs/AUTH.md`) | a supervisor needs revocation, one grant for a session tree, or UDS lands |
 | Enrolled-set live mutation | the `--enroll` file is read once at start; the supervisor restarts the daemon when a persona is added or retired, or when a kind is checked or UN-checked — the restart re-derives consent from the file in both directions, including out of a pending cold generation (2026-09-12) | a restart per persona change costs the app a visible reconnect, or a persona is created faster than a restart settles |
 | Usage outside transcripts | requests an agent never records (Claude Code background title/summary calls) are out of coverage and labelled so (2026-09-22) | an agent records them somewhere Rosetta already captures |
 | Aggregate samples on tiered models | a counted aggregate is estimated as equal requests at its average prompt (2026-09-23); an uncounted one prices only when its prompt tokens cannot have crossed a tier start, otherwise it is unpriced (2026-09-22) | a producer starts reporting per-request usage, or an uncounted producer exposes a count |
