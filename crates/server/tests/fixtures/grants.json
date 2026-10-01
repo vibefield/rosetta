@@ -1,6 +1,6 @@
 {
   "rule": "payload = RFC 8785 canonical JSON of {cid, exp, scope, sid, v}; grant = base64url(payload) '.' base64url(HMAC-SHA256(key, payload)), no padding; verification: MAC first, then the payload must equal its own canonical form, v == 1, non-empty sid and cid, 0 <= exp <= 2^53-1, exp > now (docs/AUTH.md)",
-  "generator": "stdlib Python (json, hmac, hashlib, base64) - independent of both implementations",
+  "generator": "tools/auth/grant_vectors.py (stdlib Python: json, hmac, hashlib, base64), independent of both implementations",
   "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   "now_ms": 1790000000000,
   "valid": [
@@ -137,6 +137,22 @@
       "name": "standard-alphabet base64",
       "grant": "+eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ.KhNxqADtPdBGQ6BLRua1sYTUpb6xXmxub2iYQ4mwjzQ",
       "reason": "malformed"
+    },
+    {
+      "name": "the authentic MAC spelled with non-zero trailing bits",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiXSwic2lkIjoiczEiLCJ2IjoxfQ.KhNxqADtPdBGQ6BLRua1sYTUpb6xXmxub2iYQ4mwjzR",
+      "reason": "malformed"
     }
+  ],
+  "refusals": [
+    "missing",
+    "bad-token",
+    "malformed",
+    "bad-signature",
+    "expired",
+    "wrong-session",
+    "wrong-scope",
+    "wrong-route",
+    "grants-disabled"
   ]
 }

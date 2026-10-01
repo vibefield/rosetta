@@ -244,9 +244,11 @@ the same credential.
   on both carriers and throws `UnauthorizedError` with the reason.
   `@rosetta/protocol/grants` (Node-only) provides `canonicalize`,
   `mintGrant`, `verifyGrant` and `parseGrantHeader`, the same rule as §5.
-- **Vectors:** `crates/server/tests/fixtures/grants.json` was written by a
-  stdlib-Python generator, independent of both implementations. The Rust and
-  TypeScript suites both reproduce every valid vector byte for byte and
-  refuse every invalid one for its stated reason.
+- **Vectors:** `crates/server/tests/fixtures/grants.json` is written by
+  `tools/auth/grant_vectors.py`, a stdlib-Python generator independent of both
+  implementations (a rerun reproduces it byte for byte). The Rust and
+  TypeScript suites both reproduce every valid vector byte for byte, refuse
+  every invalid one for its stated reason, and list the §6 reasons exactly as
+  the fixture's `refusals`.
 - **Protocol version:** unchanged. Access control adds headers and opt-in
   modes; no route or frame shape moved.

@@ -2,6 +2,7 @@
 // subprotocol pair on WebSocket upgrades, a typed 401 — and, with no
 // credential, requests and sockets exactly as before.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
@@ -97,6 +98,13 @@ test("a grant rides the same carriers, and setCredential swaps or drops it", asy
   const meta = client.subscribeMeta({});
   assert.equal(opened.at(-1).args.length, 1);
   meta.close();
+});
+
+test("the refusal vocabulary is the shared fixture's", () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("../../../crates/server/tests/fixtures/grants.json", import.meta.url), "utf8"),
+  );
+  assert.deepEqual([...AUTH_REFUSALS], fixture.refusals);
 });
 
 test("a 401 is an UnauthorizedError naming the daemon's reason", async () => {

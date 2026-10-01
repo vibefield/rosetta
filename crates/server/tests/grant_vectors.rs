@@ -1,7 +1,9 @@
-//! The shared grant vectors (`tests/fixtures/grants.json`). A stdlib-Python
-//! generator wrote them, independent of this crate and of
-//! `clients/ts/grants.ts`; both implementations must reproduce every byte.
+//! The shared grant vectors (`tests/fixtures/grants.json`), written by
+//! `tools/auth/grant_vectors.py`, a stdlib-Python implementation independent
+//! of this crate and of `clients/ts/grants.ts`; both implementations must
+//! reproduce every byte, and both list the 401 reasons it pins.
 
+use rosetta_server::Refusal;
 use rosetta_server::grant::{self, GrantClaims, GrantError};
 use serde::Deserialize;
 
@@ -11,6 +13,7 @@ struct Fixture {
     now_ms: i64,
     valid: Vec<Valid>,
     invalid: Vec<Invalid>,
+    refusals: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +75,15 @@ fn every_valid_vector_is_reproduced_byte_for_byte() {
             vector.name
         );
     }
+}
+
+#[test]
+fn the_refusal_vocabulary_is_the_fixtures() {
+    let ours: Vec<&str> = Refusal::ALL
+        .iter()
+        .map(|refusal| refusal.as_str())
+        .collect();
+    assert_eq!(ours, fixture().refusals);
 }
 
 #[test]
