@@ -2,7 +2,7 @@ import type { IngestProgress, SessionRow, UsageResponse } from "@rosetta/protoco
 import { isCensusRunning, isIngestActive } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import { ProjectSummaryPanel } from "../SummaryPanels";
-import { ListSummaryHeader, ListToolbar } from "../ui";
+import { ListSummaryHeader } from "../ui";
 import { SessionList } from "./SessionList";
 import type { SessionFacts } from "./types";
 
@@ -59,7 +59,6 @@ export function SessionsColumn({
           onToggleWorktree={onToggleWorktree}
         />
       )}
-      <ListToolbar label="session threads" />
       {censusRunning && <p className="ah-ingest-note">More conversations will appear as discovery finishes.</p>}
       <div className="ah-veilhost">
         <SessionList

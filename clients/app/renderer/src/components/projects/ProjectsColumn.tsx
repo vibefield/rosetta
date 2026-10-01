@@ -80,7 +80,7 @@ export function ProjectsColumn({
         />
       )}
       <IngestStatus activity={activity} />
-      <ListToolbar label="lifetime tokens">
+      <ListToolbar>
         <SegmentedControl
           value={sort}
           options={PROJECT_SORT_OPTIONS}

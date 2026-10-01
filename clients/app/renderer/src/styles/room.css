@@ -174,12 +174,10 @@
   border: 1px solid var(--vf-hairline-strong); border-radius: 6px;
   color: var(--vf-text-faint); font-family: var(--vf-font-sans); font-size: 10px; line-height: 1.4;
 }
-.ah-colnote { margin: 0; padding: 8px 12px 2px; color: var(--vf-text-faint); font-size: 10px; font-variant-numeric: tabular-nums; }
 /* the rank control sits with the list it ranks, not in the header band: the
    band names what a column holds, and ordering is not part of the name. */
 .ah-listbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 3px; }
-.ah-listbar .ah-colnote { padding: 0; }
-.ah-sortseg { flex: none; }
+.ah-sortseg { flex: none; margin-left: auto; }
 .ah-seg.ah-sortseg button { height: 19px; padding: 0 8px; font-size: 9.5px; }
 
 /* ── the treemap ──────────────────────────────────────────────────────────
