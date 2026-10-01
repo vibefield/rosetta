@@ -11,6 +11,7 @@ export class TailScroll {
   private following = true;
   private ready = false;
   private landed = false;
+  private opening = false;
   private unseen = 0;
   private frame: number | null = null;
   private previousTime = 0;
@@ -92,7 +93,8 @@ export class TailScroll {
     this.emit();
   };
 
-  update(ready: boolean, arrivals: number): void {
+  update(ready: boolean, arrivals: number, opening = false): void {
+    this.opening = opening;
     this.ready = ready;
     if (!ready) {
       this.stop();
@@ -117,7 +119,7 @@ export class TailScroll {
       this.emit();
       return;
     }
-    if (this.reduced()) {
+    if (this.opening || this.reduced()) {
       this.stop();
       this.write(this.bottom());
       this.unseen = 0;

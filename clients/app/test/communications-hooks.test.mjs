@@ -3,6 +3,64 @@ import { test } from "node:test";
 import { dataHooks, microtasks } from "./support/hooks.mjs";
 import { deferred, fakeClock, harness, response, row } from "./support/protocol.mjs";
 
+test("session selection clears the previous snapshot before effects, including empty snapshots", t => {
+  const subscriptions = [];
+  const hook = dataHooks({ subscribeSession(id, handlers) {
+    const sub = { id, handlers, close() {}, entries: () => [] };
+    subscriptions.push(sub);
+    return sub;
+  } })("useTimeline", "first");
+  t.after(() => hook.close());
+  hook.render();
+  const old = subscriptions[0].handlers;
+  old.onSnapshot({ entries: [row("first")], cursor: null });
+  old.onChange([row("first")]);
+  old.onTimelineMetaChange({ tasks: [{ subject: "Previous work" }] });
+  old.onStatus("live");
+  hook.render();
+  const before = hook.renders.length;
+  hook.render("second");
+  const firstCommit = hook.renders[before];
+  assert.deepEqual(firstCommit.rows, []);
+  assert.equal(firstCommit.snapshotReady, false);
+  assert.equal(firstCommit.timelineMeta, null);
+  assert.equal(firstCommit.status, "connecting");
+  old.onChange([row("late")]);
+  old.onError({ code: "internal", message: "Late failure" });
+  assert.deepEqual(hook.render().rows, []);
+  assert.equal(hook.render().error, null);
+  subscriptions[1].handlers.onSnapshot({ entries: [], cursor: null });
+  subscriptions[1].handlers.onChange([]);
+  assert.equal(hook.render().snapshotReady, true);
+  const afterEmpty = hook.renders.length;
+  hook.render("first");
+  assert.equal(hook.renders[afterEmpty].snapshotReady, false, "empty snapshots also belong to one session");
+});
+
+test("initial failures can retry a closed connection; indexing is pending, never empty", t => {
+  const subscriptions = [];
+  const hook = dataHooks({ subscribeSession(id, handlers) {
+    const sub = { id, handlers, closed: false, close() { this.closed = true; }, entries: () => [] };
+    subscriptions.push(sub);
+    return sub;
+  } })("useTimeline", "first");
+  t.after(() => hook.close());
+  hook.render();
+  subscriptions[0].handlers.onError({ code: "not_ready", message: "Indexing" });
+  assert.equal(hook.render().error, null);
+  assert.equal(hook.render().snapshotReady, false);
+  subscriptions[0].handlers.onError({ code: "internal", message: "Unable to read messages" });
+  subscriptions[0].handlers.onStatus("closed");
+  assert.equal(hook.render().error, "Unable to read messages");
+  hook.render().retry();
+  assert.equal(hook.render().error, null);
+  assert.equal(subscriptions.length, 2);
+  assert.equal(subscriptions[0].closed, true);
+  subscriptions[1].handlers.onSnapshot({ entries: [], cursor: null });
+  subscriptions[1].handlers.onChange([]);
+  assert.equal(hook.render().snapshotReady, true);
+});
+
 test("search aborts superseded requests and ignores their late answers and failures", async (t) => {
   const clock = fakeClock(t);
   const requests = [];

@@ -1992,6 +1992,34 @@ Native adapter → shared media helper → existing projection assets → prompt
     <path d="M131 752h98" stroke="#77777f" stroke-width="5" stroke-linecap="round"/>
   </svg>
 </template>
+<link rel="stylesheet" href="../renderer/src/styles/transcript-loading.css">
+<section class="rec" id="session-opening">
+  <span class="eyebrow">§06B · implemented 2026-10-01 · session opening</span>
+  <h2>A steady arrival</h2>
+  <p class="lead">Selecting a session changes its title immediately. A quiet conversation silhouette holds the reading surface until the messages are ready in their final position.</p>
+  <p>The prompt, the reply and a folded activity line echo the document’s shape in neutral ink. Only the small indeterminate bar moves. No invented message counts, progress percentages or empty-conversation claims appear while loading.</p>
+</section>
+<div class="spec">
+  <div class="spec__bar">Opening a session · light and dark follow the room’s theme</div>
+  <div class="tr-stage" style="height:380px;flex:none">
+    <div class="tr-loading"><div class="tr-loading__body">
+      <div class="tr-loading__sketch" aria-hidden="true">
+        <div class="tr-loading__prompt"><i></i><i></i></div>
+        <div class="tr-loading__reply"><div class="tr-loading__byline"><b></b><i></i></div><i></i><i></i><i></i></div>
+        <div class="tr-loading__fold"><b>›</b><i></i></div>
+      </div>
+      <div class="tr-loading__status" role="status"><div class="tr-loading__meter" aria-hidden="true"><i></i></div><strong>Loading messages…</strong></div>
+    </div></div>
+  </div>
+</div>
+<table class="rules">
+  <tr><th>First reveal</th><td>The first authoritative snapshot and its initial team history arrive under the stationary cover. The real document measures its message previews and folds there, then lands at the latest message or requested search anchor before a short opacity reveal. No minimum loading duration; images keep their own placeholders and never delay reading.</td></tr>
+  <tr><th>Slow team history</th><td>The caption becomes <em>Loading team messages…</em>. <em>Read available messages</em> opens the primary conversation immediately; subsequent team progress and retries stay inline. A failed team read also releases the available conversation.</td></tr>
+  <tr><th>Switching and reconnecting</th><td>A session owns its opening state, messages and floating views. A previous session never appears under the new title. An ordinary reconnect or a new teammate does not cover a readable document again; a discarded projection snapshot must pass through opening anew.</td></tr>
+  <tr><th>Empty and failed</th><td>Only a delivered, empty snapshot can show the empty state. A failed initial read shows <em>Couldn’t load messages</em>, the error and <em>Try again</em>. Search landings retain their target, with an escape to available messages while waiting.</td></tr>
+  <tr><th>Access and motion</th><td>One polite loading status; decorative placeholders are hidden from assistive technology, and the measuring document is inert. Continuing or retrying returns keyboard focus to the reading surface. Reduced motion removes the bar animation and reveal transition.</td></tr>
+</table>
+
 <section class="rec">
   <span class="eyebrow">§07</span>
   <h2>Time — days and sittings</h2>

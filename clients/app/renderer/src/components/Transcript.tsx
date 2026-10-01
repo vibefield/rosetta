@@ -26,6 +26,7 @@ import type { TimelineFeed } from "../lib/hooks";
 import { useHeadOfDocument } from "../lib/transcript/head-of-document";
 import { useTranscriptTail } from "../lib/transcript/use-transcript-tail";
 import type { TimelineLayout } from "../lib/transcript/use-transcript-tail";
+import { useTranscriptOpening } from "../lib/transcript/use-transcript-opening";
 import { prefersReducedMotion } from "../lib/motion";
 import type { PathFact } from "../lib/transcript";
 import type { ProjectViewModel } from "../lib/model";
@@ -34,6 +35,7 @@ import { MatchStepper } from "./search";
 import { getSessionTitle } from "./sessions/session-display";
 import { DayMenu, markStuckPills } from "./transcript/DayPill";
 import { TranscriptDocument } from "./transcript/Document";
+import { TranscriptLoading } from "./transcript/TranscriptLoading";
 import { useTranscriptModel } from "./transcript/document-model";
 import { useFoldPreference } from "./transcript/fold-preference";
 import { MessageViewerContext } from "./transcript/MessagePreview";
@@ -118,7 +120,13 @@ export interface TranscriptColumnProps {
   readonly onBackToParent?: (() => void) | null;
 }
 
-export function TranscriptColumn({
+export function TranscriptColumn(props: TranscriptColumnProps) {
+  // Selection owns the document's disclosures, overlays and opening state.
+  // Reset them in the selection commit, before the previous session can paint.
+  return <SessionTranscript key={props.session?.id ?? "no-session"} {...props} />;
+}
+
+function SessionTranscript({
   session,
   duringBackfill,
   sessions,
@@ -137,6 +145,7 @@ export function TranscriptColumn({
 }: TranscriptColumnProps) {
   const threadNavigation = useMemo(() => ({ depth: 0, open: onOpenThread ?? null }), [onOpenThread]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const focusAfterOpening = useRef(false);
   const [highlightedTimelineId, setHighlightedTimelineId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ top: number; dayKey: string | null } | null>(null);
   const [viewerTarget, setViewerTarget] = useState<TranscriptViewerTarget | null>(null);
@@ -157,11 +166,18 @@ export function TranscriptColumn({
 
   const cuts = useMemo(() => activityCuts(feed.rows, feed.watermark), [feed.rows, feed.watermark]);
   const model = useTranscriptModel(feed.rows, session, homeDirectory, Date.now(), { cutBefore: cuts.cutBefore });
+  const opening = useTranscriptOpening(feed.snapshotReady, focus !== null || metaFocus !== null);
+  const loading = session !== null && opening.visible;
+  useEffect(() => {
+    if (loading || !focusAfterOpening.current) return;
+    focusAfterOpening.current = false;
+    scrollRef.current?.focus({ preventScroll: true });
+  }, [loading]);
 
   // §08 — the head of the document: approach fetches and holds, the pull
   // reveals, and the landing keeps the reader exactly where they were.
   const headOfDocument = useHeadOfDocument(scrollRef, feed, {
-    enabled: session !== null,
+    enabled: session !== null && !loading,
   });
 
   const tail = useTranscriptTail(
@@ -169,24 +185,21 @@ export function TranscriptColumn({
     session?.id ?? null,
     session !== null,
     focus !== null || metaFocus !== null,
+    loading,
   );
   const displayedLayout = useRef<TimelineLayout | null>(null);
   const onTimelineLayout = useCallback((layout: TimelineLayout) => {
     displayedLayout.current = layout;
     tail.onLayout(layout);
-  }, [tail.onLayout]);
+    opening.onLayout(layout);
+  }, [tail.onLayout, opening.onLayout, loading]);
 
-  useEffect(() => {
-    setHighlightedTimelineId(null);
-    setMenu(null);
+  useEffect(() => () => {
+    // A keyed session change unmounts this scope; invalidate any exact reads
+    // that could otherwise deliver a receipt after the reader has moved on.
     viewerRequest.current += 1;
     anchorRequest.current += 1;
-    setViewerTarget(null);
-    setImageGallery(null);
-    setMetaFocus(null);
-    focusTries.current = 0;
-    anchorTried.current = null;
-  }, [session?.id]);
+  }, []);
 
   const openAttachment: AttachmentOpener = (fact, row) => {
     viewerRequest.current += 1;
@@ -307,6 +320,7 @@ export function TranscriptColumn({
     if (
       targetTimelineId === null ||
       session === null ||
+      !feed.snapshotReady ||
       (feed.status !== "live" && feed.status !== "resyncing")
     ) {
       return;
@@ -423,7 +437,7 @@ export function TranscriptColumn({
           <ColumnHeading
             name={getSessionTitle(session)}
             tint={project?.tint ?? null}
-            count={feed.rows.length}
+            count={loading ? null : feed.rows.length}
             countTitle={`${feed.rows.length} messages loaded`}
           />
         )}
@@ -459,6 +473,8 @@ export function TranscriptColumn({
           )}
         </span>
       </header>
+      <div className="tr-stage" data-ready={!loading || undefined}>
+      <div className="tr-surface" inert={loading} aria-hidden={loading || undefined}>
       {session !== null && feed.timelineMeta !== null && (
         <TimelineMeta
           meta={feed.timelineMeta}
@@ -475,6 +491,7 @@ export function TranscriptColumn({
         tabIndex={0}
         role="region"
         aria-label="Session messages"
+        aria-busy={loading}
         onScroll={() => markStuckPills(scrollRef.current)}
       >
         {/* The top fade is the pinned pill's ground, and it must be the first
@@ -523,6 +540,22 @@ export function TranscriptColumn({
           </div>
         )}
       </div>
+      </div>
+      {loading && <TranscriptLoading
+        error={feed.snapshotReady ? null : feed.error ?? null}
+        waitingForTeam={opening.waitingForTeam}
+        seeking={focus !== null}
+        canContinue={feed.snapshotReady && (opening.waitingForTeam || focus !== null)}
+        indexing={duringBackfill && session.stream_state !== "indexed"}
+        onRetry={() => { focusAfterOpening.current = true; feed.retry(); }}
+        onContinue={() => {
+          focusAfterOpening.current = true;
+          if (focus !== null) onFocusConsumed();
+          tail.latest();
+          opening.continueReading();
+        }}
+      />}
+      </div>
       {menu !== null && (
         <DayMenu
           days={model.days}
@@ -537,10 +570,10 @@ export function TranscriptColumn({
         <button
           type="button"
           className="ah-newpill"
-          data-visible={tail.away || undefined}
+          data-visible={(!loading && tail.away) || undefined}
           data-unread={tail.unseen > 0 || undefined}
-          inert={!tail.away}
-          aria-hidden={!tail.away}
+          inert={loading || !tail.away}
+          aria-hidden={loading || !tail.away}
           aria-label={tail.unseen > 0
             ? `Scroll to latest · ${tail.unseen} new ${tail.unseen === 1 ? "message" : "messages"}`
             : "Scroll to latest message"}

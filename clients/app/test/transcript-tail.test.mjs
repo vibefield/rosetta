@@ -124,6 +124,35 @@ test("initial landing is immediate; appends and growing text follow smoothly", (
   assert.deepEqual(s.state, { away: false, unseen: 0 });
 });
 
+test("opening settles team rows and measured previews before reveal; live arrivals still ease", t => {
+  const s = surface(t);
+  s.controller.update(true, 0, true);
+  s.element.scrollHeight += 300;
+  s.controller.update(true, 0, true);
+  assert.equal(s.element.scrollTop, 1100);
+  s.element.scrollHeight -= 120; // long preview finishes clamping
+  s.controller.resize();
+  assert.equal(s.element.scrollTop, 980);
+  assert.equal(s.pending.size, 0, "opening layout never animates underneath the loader");
+  s.controller.update(true, 0, false);
+  s.element.scrollHeight += 200;
+  s.controller.update(true, 1);
+  assert.equal(s.element.scrollTop, 980, "normal live-follow resumes after reveal");
+  s.settle();
+  assert.equal(s.element.scrollTop, 1180);
+});
+
+test("opening never pulls a search landing to the foot", t => {
+  const s = surface(t);
+  s.controller.pause();
+  s.element.scrollTop = 200;
+  s.controller.update(true, 0, true);
+  s.element.scrollHeight += 300;
+  s.controller.resize();
+  assert.equal(s.element.scrollTop, 200);
+  assert.equal(s.pending.size, 0);
+});
+
 test("live-follow settles when the browser rounds scroll positions to device pixels", (t) => {
   const s = surface(t);
   let top = 0;

@@ -12,6 +12,9 @@ export interface TimelineLayout {
    * older entries remain outside the displayed parent window. */
   readonly observedRows?: readonly TimelineEntry[];
   readonly ready: boolean;
+  /** First covered chronology is complete, or failed with an inline retry.
+   * Later team roster changes must not hide an already readable document. */
+  readonly initialReady?: boolean;
   readonly readySessionIds: readonly string[];
   readonly elementForRow: (row: TimelineEntry) => HTMLElement | null;
   /** Ownership/coalescing in the displayed chronology may differ from the source page. */
@@ -25,11 +28,14 @@ export function useTranscriptTail(
   sessionId: string | null,
   enabled: boolean,
   seeking: boolean,
+  opening = false,
 ) {
   const [state, setState] = useState<TailState>(EMPTY);
   const controller = useRef<TailScroll | null>(null);
   const layout = useRef<TimelineLayout | null>(null);
   const accept = useRef<((layout: TimelineLayout) => void) | null>(null);
+  const openingRef = useRef(opening);
+  openingRef.current = opening;
 
   // The document owns the displayed chronology (including shared team
   // messages). Buffer its first child layout until the parent has mounted.
@@ -63,8 +69,8 @@ export function useTranscriptTail(
       const displayed = new Set(next.rows.map(row => row.timeline_id));
       const fresh = arrivals.update(next.observedRows ?? next.rows).filter(row => displayed.has(row.timeline_id));
       for (const id of next.readySessionIds) arrivals.prime(id);
-      scroll.update(true, fresh.length);
-      if (fresh.length === 0 || preference.matches) return;
+      scroll.update(true, fresh.length, openingRef.current);
+      if (openingRef.current || fresh.length === 0 || preference.matches) return;
 
       const viewport = element.getBoundingClientRect();
       const allowance = scroll.isFollowing ? element.clientHeight : 0;

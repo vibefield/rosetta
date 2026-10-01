@@ -261,6 +261,9 @@ export interface TimelineFeed {
    * status can arrive one frame earlier, so consumers must not infer an empty
    * transcript until this is true. */
   snapshotReady: boolean;
+  /** Initial read failures stay distinct from an authoritative empty snapshot. */
+  error: string | null;
+  retry: () => void;
   /** Complete task/workflow/plan/artifact index delivered beside the tail snapshot. */
   timelineMeta: TimelineMeta | null;
   status: SubscriptionStatus;
@@ -294,6 +297,9 @@ export interface TimelineFeed {
 }
 
 export function useTimeline(sessionId: string | null): TimelineFeed {
+  const [owner, setOwner] = useState(sessionId);
+  const [attempt, setAttempt] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const [tail, setTail] = useState<TimelineEntry[]>([]);
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const [anchors, setAnchors] = useState<ReadonlySet<string>>(new Set());
@@ -343,6 +349,8 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
   }, []);
 
   useEffect(() => {
+    setOwner(sessionId);
+    setError(null);
     setTail([]);
     setWindowStart(null);
     setAnchors(new Set());
@@ -354,43 +362,58 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     // A held page belongs to the session it was fetched for.
     apply({ type: "reset" });
     if (sessionId === null) return;
+    let active = true;
     const sub = client.subscribeSession(sessionId, {
       onReset: () => {
+        if (!active) return;
         setTail([]);
         setWindowStart(null);
         setAnchors(new Set());
         setTimelineMeta(null);
         setSnapshotReady(false);
         setWatermark(null);
+        setError(null);
         sawSnapshot.current = false;
         apply({ type: "reset" });
       },
       onSnapshot: (page) => {
+        if (!active) return;
         setWindowStart(conversationStart(page.entries, page.cursor !== null));
         apply({ type: "snapshot", cursor: page.cursor });
       },
       onChange: (entries) => {
+        if (!active) return;
         setTail(entries);
         setSnapshotReady(true);
+        setError(null);
         if (!sawSnapshot.current) {
           sawSnapshot.current = true;
           // Everything in the snapshot is the past; the line goes after it.
           setWatermark(entries.length ? Math.max(...entries.map((entry) => entry.ordinal)) : null);
         }
       },
-      onTimelineMetaChange: setTimelineMeta,
-      onStatus: setStatus,
+      onTimelineMetaChange: (meta) => { if (active) setTimelineMeta(meta); },
+      onStatus: (status) => {
+        if (!active) return;
+        setStatus(status);
+        if (status === "closed") setError(previous => previous ?? "The message connection closed.");
+      },
       onError: (error) => {
+        if (!active) return;
         if (error.code === "cursor_expired")
           apply({ type: "expired", seq: modelRef.current.fetchSeq });
+        else if (error.code !== "not_ready") setError(error.message);
       },
     });
     subscription.current = sub;
     return () => {
+      active = false;
       subscription.current = null;
       sub.close();
     };
-  }, [sessionId, apply]);
+  }, [sessionId, attempt, apply]);
+
+  const retry = useCallback(() => setAttempt(value => value + 1), []);
 
   /** One fetch of the page above, held rather than inserted. */
   const startFetch = useCallback(() => {
@@ -408,8 +431,12 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
         throw new DOMException("The session changed", "AbortError");
       return sub.fetchPage(cursor, limit);
     }, from, EARLIER_PAGE_SIZE).then(
-      (page) => apply({ type: "page", seq, entries: page.entries, cursor: page.cursor }),
+      (page) => {
+        if (subscription.current === sub)
+          apply({ type: "page", seq, entries: page.entries, cursor: page.cursor });
+      },
       (error: unknown) => {
+        if (subscription.current !== sub) return;
         if (error instanceof CursorExpiredError) apply({ type: "expired", seq });
         else apply({ type: "fail", seq, message: EARLIER_FAILED_MESSAGE });
       },
@@ -444,21 +471,27 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
   // stands alone"). The arithmetic waits here for the day a total lands.
   const earlierAbove = earlierAboveOf(null, rows.length);
 
+  // Effects replace the subscription after commit. Never render the old
+  // session's rows, metadata or readiness under the newly selected title.
+  const current = owner === sessionId;
+
   return {
-    rows,
-    snapshotReady,
-    timelineMeta,
-    status,
-    watermark,
-    earlier,
-    earlierNotice: model.notice,
-    earlierAbove,
-    landed: model.landing,
+    rows: current ? rows : [],
+    snapshotReady: current && snapshotReady,
+    error: current ? error : null,
+    retry,
+    timelineMeta: current ? timelineMeta : null,
+    status: current ? status : "connecting",
+    watermark: current ? watermark : null,
+    earlier: current ? earlier : { kind: "none" },
+    earlierNotice: current ? model.notice : null,
+    earlierAbove: current ? earlierAbove : null,
+    landed: current ? model.landing : null,
     holdEarlier: startFetch,
     revealEarlier,
     retryEarlier: startFetch,
     dismissEarlierNotice,
-    canLoadEarlier: earlier.kind !== "none",
+    canLoadEarlier: current && earlier.kind !== "none",
     loadEarlier,
     loadAnchor,
   };

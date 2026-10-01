@@ -1680,6 +1680,32 @@ This is renderer composition over existing canonical pages, with no new projecti
 or protocol. Acceptance lives in the transcript history-window unit and Electron
 fixtures alongside generation/resync tests for the data hooks.
 
+Opening a session (2026-10-01) keeps its title visible and covers the reading
+surface with a neutral conversation silhouette and an indeterminate meter. The
+real document stays mounted, measured and inert underneath. Its first authoritative
+snapshot and initial team boundary histories determine readiness; a failed team
+read releases available chat with an inline retry, and a slow team read offers
+“Read available messages.” Two render frames finish preview clamping, disclosure
+layout and scroll placement before an opacity reveal. Initial layout changes snap
+under the cover; ordinary live arrivals retain their existing smooth follow.
+Search opens at its requested anchor, with an explicit escape to available chat.
+There is no minimum loading time, invented progress, or wait for image downloads.
+
+The timeline hook scopes rows, metadata, readiness and errors to the selected
+session even in the render before subscription cleanup; late callbacks and earlier
+pages from a closed subscription cannot publish into its successor. The column is
+keyed by session, disposing its disclosures, pending viewers and scroll controller.
+Only an authoritative empty snapshot can claim emptiness. Initial failures expose
+retry through a fresh subscription (including a previously closed connection).
+Ordinary reconnects and later roster additions keep a readable document visible;
+a discarded authoritative snapshot re-enters opening. Loading is announced once,
+its placeholders are decorative, and hidden controls cannot receive focus. Reduced
+motion disables the meter and reveal animation. The design is recorded in
+[transcript record §06B](../clients/app/design/transcript-record.html#session-opening);
+`pnpm test:transcript-loading` runs delayed synthetic snapshots through production
+hooks and Electron layout, covering the first visible position, team readiness,
+retry, rapid switching, search, focus, themes and narrow columns.
+
 Electron owns one managed daemon generation at a time. `serve --json` emits a
 versioned readiness event with its bound loopback origin. `serve --announce` additionally
 publishes `{schema: "rosetta-daemon/1", origin, pid, protocol_version, db, started_at}` as

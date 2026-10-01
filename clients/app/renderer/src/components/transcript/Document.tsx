@@ -133,6 +133,8 @@ function staticTimelineFeed(rows: readonly TimelineEntry[]): TimelineFeed {
   return {
     rows: [...rows],
     snapshotReady: true,
+    error: null,
+    retry: nothing,
     timelineMeta: null,
     status: "live",
     watermark: null,
@@ -357,6 +359,7 @@ export function TranscriptDocument({
       rows: displayedRows,
       observedRows: [...feed.rows, ...[...teamFeed.rowsBySession.values()].flat()],
       ready: feed.snapshotReady && (feed.rows[0]?.session_id ?? session.id) === session.id,
+      initialReady: teamFeed.historyReady || teamFeed.historyError !== null,
       readySessionIds: [session.id, ...(teamFeed.historyReady ? teamIds : [])],
       elementForRow: (row) => document.getElementById(messageDomId(row.session_id, row.timeline_id)),
       elementForAnchor: (timelineId) => {
@@ -364,7 +367,7 @@ export function TranscriptDocument({
         return document.getElementById(messageDomId(sessionByTimelineId.get(representative) ?? session.id, representative));
       },
     });
-  }, [onTimelineLayout, session.id, displayedRows, feed.snapshotReady, feed.rows, teamFeed.historyReady, teamFeed.rowsBySession, teamIds, model.representatives, sessionByTimelineId]);
+  }, [onTimelineLayout, session.id, displayedRows, feed.snapshotReady, feed.rows, teamFeed.historyReady, teamFeed.historyError, teamFeed.rowsBySession, teamIds, model.representatives, sessionByTimelineId]);
   const teamFocus = focus !== null && teamIdSet.has(focus.sessionId) ? focus : null;
   const [teamHighlight, setTeamHighlight] = useState<string | null>(null);
   const teamFocusRequest = useRef<string | null>(null);
@@ -420,7 +423,14 @@ export function TranscriptDocument({
     }
     // A known delivery outside the current parent window needs its surrounding
     // conversation. Never draw a floating, apparently complete history island.
-    if (!feed.snapshotReady || !teamFeed.historyReady) return;
+    if (!feed.snapshotReady) return;
+    if (!teamFeed.historyReady) {
+      if (teamFeed.historyError !== null) {
+        onFocusConsumed();
+        onReceipt("Could not load that team message. Retry the team history in the conversation.");
+      }
+      return;
+    }
     if (source !== undefined && feed.earlier.kind !== "none") {
       if (feed.earlier.kind === "idle" || feed.earlier.kind === "held") feed.loadEarlier();
       if (feed.earlier.kind === "failed" && teamFocusRequest.current !== teamFocus.timelineId) {
@@ -434,6 +444,7 @@ export function TranscriptDocument({
   }, [
     teamFocus,
     teamFeed.historyReady,
+    teamFeed.historyError,
     teamFeed.rowsBySession,
     feed,
     model,
@@ -881,6 +892,8 @@ export function TranscriptDocument({
           rowsBySession={teamFeed.rowsBySession}
           responseRuntimesBySession={teamFeed.responseRuntimesBySession}
           historyReady={teamFeed.historyReady}
+          historyError={teamFeed.historyError}
+          onRetry={teamFeed.retry}
         />
       )}
       {reading.map(({ sitting, blocks, renderKey }) => (

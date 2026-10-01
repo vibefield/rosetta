@@ -74,6 +74,7 @@ export function dataHooks(client) {
     const slots = [];
     let args = initial;
     let result;
+    const renders = [];
     const runtime = {
       index: 0,
       dirty: true,
@@ -84,6 +85,7 @@ export function dataHooks(client) {
       },
     };
     return {
+      renders,
       render(...next) {
         if (next.length) args = next;
         let turns = 0;
@@ -93,6 +95,7 @@ export function dataHooks(client) {
           runtime.dirty = false;
           active = runtime;
           result = exports[name](...args);
+          renders.push(result);
           active = null;
           for (const effect of runtime.effects.splice(0)) effect();
         } while (runtime.dirty);

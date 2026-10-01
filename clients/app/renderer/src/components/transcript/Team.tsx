@@ -271,11 +271,15 @@ export function KnownTeamRoster({
   rowsBySession,
   responseRuntimesBySession,
   historyReady,
+  historyError,
+  onRetry,
 }: {
   readonly sessions: readonly SessionRow[];
   readonly rowsBySession: ReadonlyMap<string, readonly TimelineEntry[]>;
   readonly responseRuntimesBySession: ReadonlyMap<string, readonly ResponseRuntime[]>;
   readonly historyReady: boolean;
+  readonly historyError: string | null;
+  readonly onRetry: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const team = sessions.find((session) => session.delegation?.team != null)?.delegation?.team;
@@ -328,7 +332,9 @@ export function KnownTeamRoster({
             </div>
           ))}
           <div className="tm-note">
-            {historyReady
+            {historyError !== null ? <span className="tr-activity__loading" role="status">
+              Could not load team messages. <button type="button" onClick={onRetry}>Retry</button>
+            </span> : historyReady
               ? "Creation is above this page; no historical start time is inferred."
               : "Loading complete delivered-message history; private teammate work stays closed."}
           </div>
