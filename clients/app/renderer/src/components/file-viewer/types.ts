@@ -35,6 +35,9 @@ export interface FileHandle {
  * test. */
 export interface FileSource {
   read(handle: FileHandle, signal: AbortSignal): Promise<Uint8Array>;
+  /** Sized, browser-cacheable resources. The source owns address validation;
+   * a viewer never needs to copy full-image bytes to show a small thumbnail. */
+  image?(handle: FileHandle): ImageResource | null;
   /**
    * A unified diff of this handle, for a view whose payload is `"compare"`.
    *
@@ -44,6 +47,16 @@ export interface FileSource {
    * only ever asked for by a caller that built the handle.
    */
   compare?(handle: FileHandle, signal: AbortSignal): Promise<{ readonly unified: string }>;
+}
+
+export interface ImageResource {
+  readonly full: string;
+  readonly preview: string;
+  readonly rail: string;
+  readonly tile: string;
+  readonly tile2x: string;
+  readonly width?: number;
+  readonly height?: number;
 }
 
 /** A view's own switch, rendered as the room's one switch shape. */
@@ -94,6 +107,8 @@ export interface OpenFile {
   readonly text: string | null;
   /** The unified diff, for a `"compare"` view. */
   readonly unified: string | null;
+  readonly image?: ImageResource;
+  readonly imageAttempt?: number;
 }
 
 export interface ViewBodyProps {

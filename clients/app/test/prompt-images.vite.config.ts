@@ -14,10 +14,21 @@ export default mergeConfig(base, {
       if (request.url === "/test/image-reads") {
         response.setHeader("content-type", "application/json"); response.end(JSON.stringify(reads)); return;
       }
-      const target = /^\/api\/sessions\/s1\/timeline\/(image-read|image-artifact)\/read\/(\d+)$/.exec(request.url ?? "");
+      const url = new URL(request.url ?? "/", "http://fixture");
+      const variant = url.searchParams.get("image") ?? "original";
+      if (url.pathname.startsWith("/test/fixtures/prompt-images/") && variant !== "original") {
+        if (url.searchParams.get("fail") === "read") { response.statusCode = 503; response.end("Temporary fixture failure"); return; }
+        if (url.searchParams.get("fail") === "decode") { response.setHeader("content-type", "image/png"); response.end("invalid image"); return; }
+        if (url.searchParams.has("gallery-slow")) {
+          setTimeout(() => { response.setHeader("content-type", "image/png"); response.end(readFileSync(new URL("./fixtures/prompt-images/portrait.png", import.meta.url))); }, 450);
+          return;
+        }
+      }
+      const target = /^\/api\/sessions\/s1\/timeline\/(image-read|image-artifact)\/read\/(\d+)$/.exec(new URL(request.url ?? "/", "http://fixture").pathname);
       if (target) {
         const key = `${target[1]}:${target[2]}`;
         reads[key] = (reads[key] ?? 0) + 1;
+        reads[`${key}:${variant}`] = (reads[`${key}:${variant}`] ?? 0) + 1;
         if (target[1] === "image-read" && target[2] === "0") { response.statusCode = 400; response.end("Not an image"); return; }
         if (key === "image-read:3" && reads[key] === 1) { response.statusCode = 503; response.end("Temporary fixture failure"); return; }
         response.setHeader("content-type", "application/octet-stream");

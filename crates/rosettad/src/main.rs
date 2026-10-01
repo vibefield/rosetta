@@ -2174,6 +2174,18 @@ fn publish_private_projection(
         before_install()?;
         install_rebuilt_projection(db, temp.as_ref())?;
         let _installed = temp.keep();
+        // The old projection is no longer observable. Remove its unused PNG/JPEG
+        // copies now, never during preparation or before atomic installation.
+        let cleanup =
+            rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|error| error.to_string())
+                .and_then(|installed| {
+                    rosetta_store::assets::prune_unreferenced_images(&installed, db)
+                        .map_err(|error| error.to_string())
+                });
+        if let Err(error) = cleanup {
+            eprintln!("image cache cleanup deferred: {error}");
+        }
         Ok(())
     })
 }

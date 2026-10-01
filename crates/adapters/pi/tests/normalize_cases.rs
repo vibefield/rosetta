@@ -319,7 +319,7 @@ fn drift_distinguishes_unknown_types_from_known_parse_failures() {
 
 #[test]
 fn user_images_use_native_mime_type_and_preserve_missing_first_slot() {
-    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII=";
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
     let mut line = user("images", None, "");
     line["message"]["content"] = json!([
         {"type":"image","data":"broken","mimeType":"image/png"},

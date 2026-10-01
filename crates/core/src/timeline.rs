@@ -352,6 +352,7 @@ impl CanonicalText {
         let preview = utf8_prefix(&text, TEXT_PREVIEW_MAX_BYTES).to_owned();
         let asset = ProjectionAsset::text(text);
         let reference = AssetRef {
+            image_variants: None,
             url: asset
                 .url()
                 .expect("canonical text media type has a stable extension"),
@@ -435,6 +436,11 @@ pub struct AssetRef {
     pub media_type: String,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub byte_len: u64,
+    /// Sized images are independent immutable members; the full image is this
+    /// reference. Leaf renditions cannot contain another rendition collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub image_variants: Option<std::collections::BTreeMap<crate::assets::ImageVariant, AssetRef>>,
 }
 
 impl AssetRef {
@@ -468,6 +474,24 @@ impl AssetRef {
             return Err(CanonicalError::Invalid(
                 "projection asset URL does not match its digest and media type".into(),
             ));
+        }
+        if let Some(variants) = &self.image_variants {
+            if self.media_type != "image/webp" || variants.len() != 4 {
+                return Err(CanonicalError::Invalid(
+                    "invalid image rendition set".into(),
+                ));
+            }
+            for variant in crate::assets::ImageVariant::DERIVED {
+                let image = variants.get(&variant).ok_or_else(|| {
+                    CanonicalError::Invalid("incomplete image rendition set".into())
+                })?;
+                if image.media_type != "image/webp" || image.image_variants.is_some() {
+                    return Err(CanonicalError::Invalid(
+                        "invalid image rendition member".into(),
+                    ));
+                }
+                image.validate()?;
+            }
         }
         Ok(())
     }
@@ -2531,6 +2555,7 @@ fn externalize_document(document: &mut CanonicalDocument, assets: &mut Vec<Proje
     let asset = ProjectionAsset::new("application/vnd.rosetta.canonical-document+json", bytes)
         .expect("canonical document JSON is an allowlisted projection member");
     let reference = AssetRef {
+        image_variants: None,
         url: asset
             .url()
             .expect("canonical document media type has a stable extension"),
@@ -5039,6 +5064,7 @@ mod tests {
     fn attachment_references_must_match_their_content_addressed_member() {
         let asset = ProjectionAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap();
         let reference = AssetRef {
+            image_variants: None,
             url: asset.url().unwrap(),
             digest: asset.digest,
             media_type: asset.media_type,

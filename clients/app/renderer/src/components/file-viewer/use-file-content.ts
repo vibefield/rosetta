@@ -69,13 +69,30 @@ export function useFileContent(
   });
 
   useEffect(() => {
-    if (handle === null) return;
+    if (handle === null) {
+      setState({ handleKey: null, source, asDiff, asImage, value: READING });
+      return;
+    }
 
     const publish = (value: FileContent) => {
       setState({ handleKey: handle.key, source, asDiff, asImage, value });
     };
 
     const kind = asDiff ? diffKind(handle.name) : asImage ? imageKind(handle.name) : resolveKind(handle.name);
+
+    if (!asDiff && (asImage || kind.viewer.id === "image")) {
+      try {
+        const image = source.image?.(handle);
+        if (image) {
+          publish({ status: "ready", file: { handle, kind: imageKind("Image"),
+            bytes: new Uint8Array(0), text: null, unified: null, image, imageAttempt: attempt } });
+          return;
+        }
+      } catch (error) {
+        publish({ status: "failed", reason: describe(error) });
+        return;
+      }
+    }
 
     if (kind.viewer.payload === "compare") {
       if (source.compare === undefined) {

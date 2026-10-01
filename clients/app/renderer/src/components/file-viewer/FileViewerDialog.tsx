@@ -153,7 +153,7 @@ export function FileViewerDialog({
       onKeyDown={gallery?.onKeyDown}
     >
           <FileViewerHeader
-            handle={handle.size < 0 && content.status === "ready" ? { ...handle, size: content.file.bytes.byteLength } : handle}
+            handle={handle.size < 0 && content.status === "ready" && !content.file.image ? { ...handle, size: content.file.bytes.byteLength } : handle}
             kind={kind}
             tint={tint}
             homeDirectory={homeDirectory}

@@ -49,7 +49,8 @@ impl AgentAdapter for OpenCodeAdapter {
         // `tokens.total`, preview-build bands, provider-segment routes,
         // legacy message shapes, and the 2.x `session_message` reader
         // (2026-09-23 audit, OPENCODE-1/2/3/6/10).
-        9
+        // 10: image members are WebP with bounded display renditions.
+        10
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

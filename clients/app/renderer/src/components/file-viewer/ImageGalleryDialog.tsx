@@ -5,6 +5,7 @@ import type { FileViewerDialogProps } from "./FileViewerDialog";
 import type { FileHandle, FileSource } from "./types";
 import { createGallerySource } from "./gallery-source";
 import { useFileContent } from "./use-file-content";
+import { imageRequestUrl, useImageVisibility } from "./image-resource";
 import "../../styles/image-gallery.css";
 
 export interface GalleryImage {
@@ -18,32 +19,28 @@ function Thumbnail({ image, source, selected, index, revision, onSelect }: {
   image: GalleryImage; source: FileSource; selected: boolean; index: number; revision: number; onSelect: () => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
-  const [visible, setVisible] = useState(false);
+  const visible = useImageVisibility(ref, true);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    const observer = new IntersectionObserver(entries => {
-      if (entries.some(entry => entry.isIntersecting)) { setVisible(true); observer.disconnect(); }
-    }, { root: node.closest(".ah-image-gallery__rail"), rootMargin: "80px" });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
   const content = useFileContent(visible || selected ? image.handle : null, source, false, revision, true);
   useEffect(() => {
-    if (content.status !== "ready") return;
+    if (content.status !== "ready") { setUrl(null); return; }
+    if (content.file.image) {
+      setUrl(imageRequestUrl(content.file.image.rail, revision));
+      setFailed(false);
+      return;
+    }
     const objectUrl = URL.createObjectURL(new Blob([content.file.bytes as BlobPart], { type: content.file.kind.mime ?? "application/octet-stream" }));
     setUrl(objectUrl);
     setFailed(false);
     return () => URL.revokeObjectURL(objectUrl);
-  }, [content]);
+  }, [content, revision]);
   const label = `${image.label}${image.handle ? ` — ${image.handle.name}` : " — Image unavailable"}`;
   return <button ref={ref} className="ah-image-gallery__thumb" type="button"
     data-image-key={image.key} aria-label={`View ${label}`} title={label}
     disabled={image.handle === null} aria-current={selected ? "true" : undefined}
     tabIndex={selected ? 0 : -1} onClick={onSelect}>
-    {url && !failed ? <img src={url} alt="" onError={() => setFailed(true)} />
+    {(visible || selected) && url && !failed ? <img src={url} alt="" decoding="async" onError={() => setFailed(true)} />
       : <span aria-hidden="true">{image.handle === null ? "▧" : index + 1}</span>}
   </button>;
 }

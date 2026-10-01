@@ -1015,22 +1015,66 @@ code spans. A link to an unavailable slot focuses its explanation instead of ope
 another image. This has a named consumer: both the transcript and full-message viewer
 must open the same attachment from the same mention, including after a search landing.
 
-**Normalization and storage.** Each native adapter recognizes its own content blocks,
-transport delimiters, inline data encodings, and exact asset joins. A shared pure
-adapter-support helper accepts already-classified bytes/data URLs, validates encoding
-and supported media signatures, extracts dimensions from bounded headers when proven,
-and constructs `ProjectionAsset` plus metadata. It knows no vendor envelopes. Signature
-checks do not prove a complete image will decode; renderer decode errors remain a
-separate state. A malformed image preserves an unavailable slot with a bounded reason
-without discarding the prompt or exposing its bytes as prose. Native shape drift
-continues through each adapter's existing raw parser.
+**Normalization and storage (WebP pipeline, 2026-10-01).** Each native adapter
+recognizes its own content blocks, transport delimiters, inline data encodings, and
+exact asset joins. The shared adapter-support helper validates Base64/data URLs and
+MIME signatures, then calls the vendor-neutral, filesystem-free `rosetta-media` crate.
+Images are fully decoded, EXIF-oriented and, for RGB ICC profiles, converted to sRGB
+before resizing. Invalid data preserves an unavailable attachment slot. Copilot's
+exact asset joins validate the *native* MIME, byte count and digest before conversion;
+compressed-byte metadata never replaces that source proof.
 
-The helper never reads a local path or fetches a URL. Source-only references remain
-references; capture of external bytes would need a separate, explicitly ledgered
-capture design. The original recorded bytes are retained without resizing or
-re-encoding. Content addressing, durability-before-reference, replay and serving
-continue through the existing asset path (§6). No new cache, asset journal, thumbnail
-table, Base64 field in canonical JSON, or frontend native parser is introduced.
+One recipe serves photos and screenshots: the Rust `webp` binding to bundled libwebp,
+lossy quality 80, method 2, alpha quality 100, sharp YUV off, encoder threading off.
+The raw ledger keeps the original native Base64. The image projection stores only
+compressed WebP, including the full image: no duplicate original PNG/JPEG is kept.
+The full image preserves the complete frame and dimensions up to WebP's 16383-pixel
+edge limit; larger edges fit within that limit. No rendition is upscaled. SIMD
+Lanczos3 resizing with premultiplied alpha produces these display resources directly
+from the same decoded source pixels:
+
+| Resource | Maximum pixels | Geometry | Consumer |
+| --- | ---: | --- | --- |
+| Rail | 160 on the longest edge | contain | viewer's bottom strip |
+| Tile | 320 × 320 | centered cover | transcript row |
+| Tile2x | 640 × 640 | centered cover | transcript row above 2× device scale |
+| Preview | 1600 on the longest edge | contain | viewer Fit mode |
+| Full | 16383 on the longest edge | contain only when required | viewer 1:1 |
+
+Full and preview preserve GIF/APNG/animated WebP frame timing and loop count; tile
+resources are static first-frame posters. Limits are 32 MiB encoded input, 32 megapixels
+per frame, 64 megapixels across an animation and 256 frames. Oversized/unsupported
+inputs retain an unavailable slot; source data stays in the ledger. Two process-wide
+jobs bound decode/resize/encode concurrency; identical input bytes coalesce, with a
+32 MiB compressed-result LRU and no retained decoded pixel buffers.
+
+Each encoded member has its own BLAKE3 filename and truthful MIME/byte count. The full
+`AssetRef.image_variants` map contains four independently content-addressed leaf
+references. This avoids key collisions when different originals compress to the same
+full image but produce different thumbnails. The store materializes and syncs every
+member before publishing its references; identical member bytes deduplicate. No image
+table, original-byte cache, Base64 column or normalization journal is added.
+
+The helper never reads paths or fetches URLs. Source-only authored references remain
+references; recovering historical bytes requires separately ledgered capture. Exact
+canonical tool-file targets use the existing admitted read route with a finite
+`?image=rail|tile|tile2x|preview|full&v=1` recipe. Four blocking request lanes share the
+two-job codec pool. The mutable-file cache contains only WebPs, keyed by original
+content hash; file size/mtime/identity changes invalidate its bounded stat map.
+It is limited to 512 MiB/512 source versions, separate from canonical members. Browser
+ETag revalidation tracks current files. Browser-supported SVG/AVIF tool files retain
+a bounded direct-source fallback, with no original disk cache; SVG responses are
+sandboxed. Those uncommon source-only formats receive no generated thumbnails.
+
+Schema 26 / protocol 25 and the seven image-producing normalizer versions land
+together. Existing projections follow the established **explicit ledger rebuild**
+contract, not an in-place migration: stop the daemon and run
+`rosettad rebuild --db PATH` (include `--ledger DIR` if the archive uses a custom root),
+then restart. Use the same enrollment file for unstamped enrolled runtimes. The rebuild
+validates privately and atomically publishes before pruning unreferenced image members,
+including old PNG/JPEG copies. Cleanup follows workflow resources and references inside externalized canonical
+documents, and is deferred if those cannot be verified. A failed rebuild leaves the
+installed projection and its referenced images intact.
 
 The adapter removes transport text only when structural evidence identifies it;
 human-authored quotations of the same syntax survive. Human text blocks retain their
@@ -1044,9 +1088,9 @@ resources, and structured/external tool resources. One strip sits outside both a
 fold levels and keeps its DOM identity as the folds open. Stored assets use the usual
 asset route; exact canonical tool file targets use the existing bounded read endpoint,
 lazily when near the visible area. These previews describe the **current file**, and
-opening the viewer reuses the same in-memory bytes. Unavailable or remote-only
+the browser loads a sized WebP resource. Unavailable or remote-only
 references keep a placeholder. No arbitrary tool output or Markdown URL is parsed
-into an image request. This is renderer composition, with no protocol/schema change.
+into an image request.
 
 Opening an image snapshots its visible row into the shared file viewer (2026-10-01).
 For multi-image rows, a bottom thumbnail strip retains every occurrence in order,
@@ -1057,12 +1101,15 @@ Fit/1:1 and fullscreen state, while revealing only the selected thumbnail horizo
 Closing restores the original opener without moving the transcript. Exact image
 mentions use their owning row, including the outer activity row for folded team/peer
 messages; a full-message popup opens its own image row in a nested viewer.
-The gallery reuses loaded tool preview bytes, lazily reads nearby thumbnails, and
-shares in-flight reads with the main image through a 64 MiB bounded, dialog-owned
-byte cache. One consumer cancelling does not cancel a read another still needs;
-close cancels outstanding reads and releases the cache and blob URLs. Failed reads
-or decodes leave navigation available and offer Retry. Extensionless canonical image
-targets use format hints from their bytes when reached before their preview loads.
+Transcript and gallery images use direct HTTP URLs: 320/640-pixel row tiles,
+160-pixel gallery thumbnails, the 1600-pixel Fit preview, and full pixels only on 1:1.
+Content-addressed renditions use immutable browser caching. Nearby image elements
+mount through continuous intersection observation and unmount offscreen; fixed tile
+geometry and attachment occurrence identity remain stable. The renderer holds no
+full-image Uint8Array/Blob merely to draw these tiles. The generic worktree/byte-only
+viewer retains its 64 MiB dialog-owned fallback cache. Failures keep navigation and
+Retry available; closing releases the viewer and visible rail resources. File formats
+are not guessed from source filenames in the URL-backed viewer.
 
 This feature adds no OCR, invented captions, or image-content search. Existing
 authored prose and attachment filenames remain the search inputs; labels, source
@@ -1913,6 +1960,34 @@ This makes the optimization boundary explicit:
   bytes, and 100-cycle ranked-search results matched. The measured cost is about 5 MiB peak
   RSS across six open runtime writers; the 7.41 s whole-wall delta is not attributed because
   FTS alone varied by 6.406 s.
+- WebP projection and display renditions (`webp-image-pipeline-20261001-cpu`)
+  use one permission-read-only, SHA-256-checked synthetic source corpus: 20 Codex
+  sessions, 20 images (photo, UI, dark/light text, alpha, four variants each), and
+  the same eight-query suite. On Apple M1 Max / macOS 26.5.2, release builds, three
+  fresh ingests per side, baseline `18270fd` versus the final implementation,
+  median process CPU moved **0.205 → 2.134 s**: the intentional one-time image
+  preparation cost is about 96 ms extra per image in this sample. Median elapsed
+  ingest was **0.531 → 2.898 s** in that pair; an earlier final-build pair under
+  heavier system load took **0.986 → 14.114 s**, so elapsed time alone must not
+  be attributed to codec work. All runs are retained, including the earlier
+  **0.334 → 2.207 s** pair before the final cache-retention review.
+  Cache disk usage including every rendition moved **15,663,606 → 2,825,420 bytes
+  (-82.0%)**; a row of 20 tiles requests **285,070 bytes instead of 15,663,606
+  (-98.2%)**. Five alternating Electron 43.4.1 / Chromium 150 fetch+decode runs
+  (four concurrent loads, browser cache disabled) moved median row resource loading
+  **248.4 → 45.1 ms (5.5×)** and decoded pixels **27,097,600 → 2,048,000 (-92.4%)**.
+  The earlier identical-image Electron sample measured **238.3 → 29.1 ms (8.2×)**.
+  These isolate resource loading, not end-to-end scroll FPS; the PNG-heavy sample
+  is not a universal compression ratio. Every ingest retained counts 1 runtime /
+  1 project / 20 sessions / 40 messages and identical ordered search results
+  (SHA-256 `3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de`).
+  A schema-25 fixture ledger rebuilt to 26 with unchanged message IDs/text and
+  byte-identical read-only ledger files; obsolete originals were reclaimed.
+  Cleanup retains workflow-owned assets and images inside externalized documents,
+  and skips the JSON scan altogether for archives without image cache members.
+  [Retained evidence and reproduction commands](../tools/image-bench/results-2026-10-01.json)
+  include source/query/binary checksums, every run, machine/configuration, and
+  the local raw artifact directory. The scripts live beside that evidence.
 - Inline-image recognition is adapter-specific; content-addressing, durability, and serving
   are shared projection facilities. The retained `image-assets-2026-08-29` pair used the same
   checksummed, permission-read-only 88,498,056-byte Claude transcript on one macOS/aarch64

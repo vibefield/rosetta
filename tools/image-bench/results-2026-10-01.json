@@ -1,0 +1,698 @@
+{
+  "baseline_commit": "18270fd",
+  "scope": "20 frozen synthetic Codex sessions containing four variants each of one public photo and four synthetic UI/text/alpha PNGs; not a production-corpus estimate",
+  "ingest": {
+    "campaign": "webp-image-pipeline-20261001-cpu",
+    "machine": "macOS-26.5.2-arm64-arm-64bit",
+    "cpu": "Apple M1 Max",
+    "source_manifest_sha256": "9a80eb555b3fac11782827d3aa1a1cdfe8f35dae1bedf83b16208ed483b76f5e",
+    "query_sha256": "39946f08b1a8b8e230b8513858590b8f711970f93b135338d85ea704229f486a",
+    "configuration": {
+      "repeats": 3,
+      "command": "ingest --agent codex --profile --json",
+      "format": "lossy WebP Q80 method2 alpha100",
+      "sizes": [
+        160,
+        320,
+        640,
+        1600
+      ]
+    },
+    "sides": {
+      "before": {
+        "binary_sha256": "dcef15c702841fbd1d60bb484a78bd789fdeef9332caeae3374aebd2bb2333a9",
+        "runs": [
+          {
+            "seconds": 1.097113958094269,
+            "cpu_seconds": 0.20548199999999997,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 15663606,
+              "files": 20,
+              "images": 20,
+              "full_bytes": 15663606,
+              "rail_bytes": 15663606,
+              "tile_bytes": 15663606,
+              "tile2x_bytes": 15663606,
+              "preview_bytes": 15663606
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 0.48863625014200807,
+            "cpu_seconds": 0.18119399999999997,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 15663606,
+              "files": 20,
+              "images": 20,
+              "full_bytes": 15663606,
+              "rail_bytes": 15663606,
+              "tile_bytes": 15663606,
+              "tile2x_bytes": 15663606,
+              "preview_bytes": 15663606
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 0.5306655839085579,
+            "cpu_seconds": 0.2082090000000001,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 15663606,
+              "files": 20,
+              "images": 20,
+              "full_bytes": 15663606,
+              "rail_bytes": 15663606,
+              "tile_bytes": 15663606,
+              "tile2x_bytes": 15663606,
+              "preview_bytes": 15663606
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          }
+        ],
+        "median_seconds": 0.5306655839085579,
+        "median_cpu_seconds": 0.20548199999999997
+      },
+      "after": {
+        "binary_sha256": "b2aced6831fefc53dff0962fd2a50a006cf9da83930d21611953193733693945",
+        "runs": [
+          {
+            "seconds": 5.79790195915848,
+            "cpu_seconds": 2.391782,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 2825420,
+              "files": 62,
+              "images": 20,
+              "full_bytes": 1991234,
+              "rail_bytes": 80566,
+              "tile_bytes": 285070,
+              "tile2x_bytes": 826042,
+              "preview_bytes": 1991234
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 2.898382707964629,
+            "cpu_seconds": 2.071729999999999,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 2825420,
+              "files": 62,
+              "images": 20,
+              "full_bytes": 1991234,
+              "rail_bytes": 80566,
+              "tile_bytes": 285070,
+              "tile2x_bytes": 826042,
+              "preview_bytes": 1991234
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 2.8069928749464452,
+            "cpu_seconds": 2.1339310000000005,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 2825420,
+              "files": 62,
+              "images": 20,
+              "full_bytes": 1991234,
+              "rail_bytes": 80566,
+              "tile_bytes": 285070,
+              "tile2x_bytes": 826042,
+              "preview_bytes": 1991234
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          }
+        ],
+        "median_seconds": 2.898382707964629,
+        "median_cpu_seconds": 2.1339310000000005
+      }
+    },
+    "equal_counts_and_ranked_results": true
+  },
+  "electron": {
+    "electron": "43.4.1",
+    "chrome": "150.0.7871.224",
+    "description": "20 row images, four concurrent loads; before fetch+Blob original PNG, after direct WebP tile URL; cache disabled; includes local HTTP and decode",
+    "before": [
+      {
+        "totalMs": 379,
+        "p50Ms": 69.69999980926514,
+        "p95Ms": 123,
+        "decodedPixels": 27097600,
+        "bytes": 15663606
+      },
+      {
+        "totalMs": 194,
+        "p50Ms": 25,
+        "p95Ms": 122,
+        "decodedPixels": 27097600,
+        "bytes": 15663606
+      },
+      {
+        "totalMs": 248.40000009536743,
+        "p50Ms": 37.09999990463257,
+        "p95Ms": 116.59999990463257,
+        "decodedPixels": 27097600,
+        "bytes": 15663606
+      },
+      {
+        "totalMs": 195.90000009536743,
+        "p50Ms": 25,
+        "p95Ms": 100.2999997138977,
+        "decodedPixels": 27097600,
+        "bytes": 15663606
+      },
+      {
+        "totalMs": 248.80000019073486,
+        "p50Ms": 25.5,
+        "p95Ms": 141.30000019073486,
+        "decodedPixels": 27097600,
+        "bytes": 15663606
+      }
+    ],
+    "after": [
+      {
+        "totalMs": 45.09999990463257,
+        "p50Ms": 8.599999904632568,
+        "p95Ms": 15.200000286102295,
+        "decodedPixels": 2048000,
+        "bytes": 285070
+      },
+      {
+        "totalMs": 50.80000019073486,
+        "p50Ms": 9.800000190734863,
+        "p95Ms": 16.600000381469727,
+        "decodedPixels": 2048000,
+        "bytes": 285070
+      },
+      {
+        "totalMs": 26.300000190734863,
+        "p50Ms": 4.599999904632568,
+        "p95Ms": 7.699999809265137,
+        "decodedPixels": 2048000,
+        "bytes": 285070
+      },
+      {
+        "totalMs": 62,
+        "p50Ms": 4.900000095367432,
+        "p95Ms": 34.799999713897705,
+        "decodedPixels": 2048000,
+        "bytes": 285070
+      },
+      {
+        "totalMs": 31.5,
+        "p50Ms": 5.5,
+        "p95Ms": 8.699999809265137,
+        "decodedPixels": 2048000,
+        "bytes": 285070
+      }
+    ]
+  },
+  "upgrade": {
+    "schema_before": 25,
+    "schema_after": 26,
+    "seconds": 2.4176496253348887,
+    "message_ids_text_equal": true,
+    "messages": 40,
+    "ledger_sha256_unchanged": true,
+    "cache_files": 62,
+    "cache_bytes": 2825420,
+    "only_webp": true,
+    "ledger_sha256": {
+      "codex/.meta-head": "2779c2e8f334242ac8ea5ed30a05a64bfd64993e4fe0f7a3af0d4cafaefdca87",
+      "codex/.segments": "46c743f8ae1bcb9a3732a1fa66a0a0814e4cfe3b32c49a3f1bbe183f942cc4a4",
+      "codex/00000000.rledger": "b3e918cbcaaefbeebc7cf20c2d663c2bbc16ddd4ef3f5d624d367fa2adb278b3",
+      "codex/00000001.rledger": "924f9044fbbc635d4b84b1862e30f4d38c701aeb410860ee8c4c4b8ce81a3773",
+      "codex/runtime.json": "5d4b587ef1bf40b9d7563a9e68ac631e09afa3223b20bcb6ca397d161f7ddcdd"
+    }
+  },
+  "queries": [
+    "image",
+    "screenshot",
+    "color",
+    "error",
+    "\"stable search\"",
+    "photo",
+    "text-dark",
+    "alpha"
+  ],
+  "source_checksums": {
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-0-0.jsonl": "927eee11c084f2e8c2fe6edc6c0fd8be55826288a8631ec00d7091ab20c7f661",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-0-1.jsonl": "fcfb6f592d5ffac8bc007c33e83648968b7d29b2f61ec19c8b8964c7a585e2b5",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-0-2.jsonl": "c3a009a7d814631900c74b96f064dcd568b9130cdb14674adc58ec0526b7dcd8",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-0-3.jsonl": "b794b88d326b0f15f8b8bb1aa79107febdf32add4141c522ca0a5447773ecda7",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-1-0.jsonl": "2fc67d0af7df8662021cb1eaf4717555d84245f3768bebc47fdb9d2534db8f84",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-1-1.jsonl": "7c32970ffe1440ac3b5077c17b9113ceb46cbcb59ba478f5292ebb79c090a2ef",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-1-2.jsonl": "ae3773fddd0fb6848314682a5243f358a3cd9fffc37eb5259a164a2a174a690c",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-1-3.jsonl": "3324206ff22f639cf99c816dfb16758b4d46259977238b34b9d11ff8c45c42f9",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-2-0.jsonl": "7d7787c44785a477e3e6eee931e3534f548b0a627304d79b66bd4a9749f2c460",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-2-1.jsonl": "4ed9f8b60384d360bc7d577b9ddd3b016517fb08578538b815ec522eaf401ff5",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-2-2.jsonl": "29fd229c719b4cb85a50b5a71c493ee3032ac8ccd514f3d57974badc12037222",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-2-3.jsonl": "2e8f0a975b5381c45e6a416f87511f705dcd9ba4e86d4f0976a1d836ffa0d577",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-3-0.jsonl": "2470274674ed928e24c0123054f6dd9f514ac0a9a1f4415fa08f853fae778d3d",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-3-1.jsonl": "f70ba011566f4f7317082df5b991601c00deab837b759575e3b48597356a5ae4",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-3-2.jsonl": "c3b6cfa6cebd4bd41ecdb5500f2f3def467cf9f9920becfb8761d66ed7fde5fb",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-3-3.jsonl": "2fd4359978d5de74d9c3369a8b9eba52f912c29f523f571f0897632d15d25c24",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-4-0.jsonl": "9528fc1110e48bb4cb5af9974209b670e9bc193f1360898b75932942977b11a7",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-4-1.jsonl": "f6973c091dda97b1871ef4f47479b8da94d9246a8c4218b47e785d9264fdf674",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-4-2.jsonl": "e89edb93bb786cad2cf898ad0a16367607b3f6e6b68313fd4a0fc08638c65f3c",
+    "source-home/.codex/sessions/2026/10/01/rollout-image-pipeline-4-3.jsonl": "6369dfe286774fde896899180d7dea8d8532c678498cda71b406420fb4b7463a",
+    "queries.json": "39946f08b1a8b8e230b8513858590b8f711970f93b135338d85ea704229f486a"
+  },
+  "artifact_directory": "/private/tmp/rosetta-image-pipeline-20261001/webp-image-pipeline-20261001-cpu",
+  "reproduce": [
+    "python3 tools/image-bench/prepare.py WORK SOURCE_PNG_DIRECTORY (Pillow required; use a new WORK directory)",
+    "place release baseline and candidate rosettad binaries in WORK/bin/before and WORK/bin/after",
+    "python3 tools/image-bench/campaign.py WORK --id CAMPAIGN",
+    "cd clients/app; ./node_modules/.bin/electron ../../tools/image-bench/decode.electron.mjs WORK/CAMPAIGN"
+  ],
+  "validation": {
+    "workspace_rust_tests": 1318,
+    "final_focused_rust_tests": 283,
+    "app_unit_tests": 395,
+    "cargo_clippy_all_targets": "pass -D warnings",
+    "app_build": "pass",
+    "electron_gallery": "pass",
+    "electron_image_strips": "pass",
+    "final_cache_retention_tests": 4
+  },
+  "initial_ingest_before_final_gc_review": {
+    "campaign": "webp-image-pipeline-20261001",
+    "machine": "macOS-26.5.2-arm64-arm-64bit",
+    "cpu": "Apple M1 Max",
+    "source_manifest_sha256": "9a80eb555b3fac11782827d3aa1a1cdfe8f35dae1bedf83b16208ed483b76f5e",
+    "query_sha256": "39946f08b1a8b8e230b8513858590b8f711970f93b135338d85ea704229f486a",
+    "configuration": {
+      "repeats": 3,
+      "command": "ingest --agent codex --profile --json",
+      "format": "lossy WebP Q80 method2 alpha100",
+      "sizes": [
+        160,
+        320,
+        640,
+        1600
+      ]
+    },
+    "sides": {
+      "before": {
+        "binary_sha256": "dcef15c702841fbd1d60bb484a78bd789fdeef9332caeae3374aebd2bb2333a9",
+        "runs": [
+          {
+            "seconds": 0.35108804097399116,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 15663606,
+              "files": 20,
+              "images": 20,
+              "full_bytes": 15663606,
+              "rail_bytes": 15663606,
+              "tile_bytes": 15663606,
+              "tile2x_bytes": 15663606,
+              "preview_bytes": 15663606
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 0.26707516703754663,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 15663606,
+              "files": 20,
+              "images": 20,
+              "full_bytes": 15663606,
+              "rail_bytes": 15663606,
+              "tile_bytes": 15663606,
+              "tile2x_bytes": 15663606,
+              "preview_bytes": 15663606
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 0.33363520819693804,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 15663606,
+              "files": 20,
+              "images": 20,
+              "full_bytes": 15663606,
+              "rail_bytes": 15663606,
+              "tile_bytes": 15663606,
+              "tile2x_bytes": 15663606,
+              "preview_bytes": 15663606
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          }
+        ],
+        "median_seconds": 0.33363520819693804
+      },
+      "after": {
+        "binary_sha256": "bd6e835653669782936e676c98a71cb09ebc99dc590d4980d95ea43f0d45a9a4",
+        "runs": [
+          {
+            "seconds": 2.207398333121091,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 2825420,
+              "files": 62,
+              "images": 20,
+              "full_bytes": 1991234,
+              "rail_bytes": 80566,
+              "tile_bytes": 285070,
+              "tile2x_bytes": 826042,
+              "preview_bytes": 1991234
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 2.189755708910525,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 2825420,
+              "files": 62,
+              "images": 20,
+              "full_bytes": 1991234,
+              "rail_bytes": 80566,
+              "tile_bytes": 285070,
+              "tile2x_bytes": 826042,
+              "preview_bytes": 1991234
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 2.260023166425526,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 2825420,
+              "files": 62,
+              "images": 20,
+              "full_bytes": 1991234,
+              "rail_bytes": 80566,
+              "tile_bytes": 285070,
+              "tile2x_bytes": 826042,
+              "preview_bytes": 1991234
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          }
+        ],
+        "median_seconds": 2.207398333121091
+      }
+    },
+    "equal_counts_and_ranked_results": true
+  },
+  "initial_electron": {
+    "electron": "43.4.1",
+    "chrome": "150.0.7871.224",
+    "description": "20 row images, four concurrent loads; before fetch+Blob original PNG, after direct WebP tile URL; cache disabled; includes local HTTP and decode",
+    "before": [
+      {
+        "totalMs": 283.2000002861023,
+        "p50Ms": 33.19999980926514,
+        "p95Ms": 140.10000038146973,
+        "decodedPixels": 27097600,
+        "bytes": 15663606
+      },
+      {
+        "totalMs": 229.60000038146973,
+        "p50Ms": 29.300000190734863,
+        "p95Ms": 129,
+        "decodedPixels": 27097600,
+        "bytes": 15663606
+      },
+      {
+        "totalMs": 238.2999997138977,
+        "p50Ms": 23.09999990463257,
+        "p95Ms": 157.59999990463257,
+        "decodedPixels": 27097600,
+        "bytes": 15663606
+      },
+      {
+        "totalMs": 186.30000019073486,
+        "p50Ms": 21.40000009536743,
+        "p95Ms": 109.10000038146973,
+        "decodedPixels": 27097600,
+        "bytes": 15663606
+      },
+      {
+        "totalMs": 243.80000019073486,
+        "p50Ms": 29.800000190734863,
+        "p95Ms": 141.7999997138977,
+        "decodedPixels": 27097600,
+        "bytes": 15663606
+      }
+    ],
+    "after": [
+      {
+        "totalMs": 39.80000019073486,
+        "p50Ms": 7.399999618530273,
+        "p95Ms": 12.5,
+        "decodedPixels": 2048000,
+        "bytes": 285070
+      },
+      {
+        "totalMs": 29.09999990463257,
+        "p50Ms": 5.300000190734863,
+        "p95Ms": 9.099999904632568,
+        "decodedPixels": 2048000,
+        "bytes": 285070
+      },
+      {
+        "totalMs": 26.09999990463257,
+        "p50Ms": 4.799999713897705,
+        "p95Ms": 8,
+        "decodedPixels": 2048000,
+        "bytes": 285070
+      },
+      {
+        "totalMs": 28.300000190734863,
+        "p50Ms": 5.100000381469727,
+        "p95Ms": 8,
+        "decodedPixels": 2048000,
+        "bytes": 285070
+      },
+      {
+        "totalMs": 35.10000038146973,
+        "p50Ms": 6.100000381469727,
+        "p95Ms": 10,
+        "decodedPixels": 2048000,
+        "bytes": 285070
+      }
+    ]
+  },
+  "contended_final_ingest": {
+    "campaign": "webp-image-pipeline-20261001-final",
+    "machine": "macOS-26.5.2-arm64-arm-64bit",
+    "cpu": "Apple M1 Max",
+    "source_manifest_sha256": "9a80eb555b3fac11782827d3aa1a1cdfe8f35dae1bedf83b16208ed483b76f5e",
+    "query_sha256": "39946f08b1a8b8e230b8513858590b8f711970f93b135338d85ea704229f486a",
+    "configuration": {
+      "repeats": 3,
+      "command": "ingest --agent codex --profile --json",
+      "format": "lossy WebP Q80 method2 alpha100",
+      "sizes": [
+        160,
+        320,
+        640,
+        1600
+      ]
+    },
+    "sides": {
+      "before": {
+        "binary_sha256": "dcef15c702841fbd1d60bb484a78bd789fdeef9332caeae3374aebd2bb2333a9",
+        "runs": [
+          {
+            "seconds": 1.197415417060256,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 15663606,
+              "files": 20,
+              "images": 20,
+              "full_bytes": 15663606,
+              "rail_bytes": 15663606,
+              "tile_bytes": 15663606,
+              "tile2x_bytes": 15663606,
+              "preview_bytes": 15663606
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 0.7340123751200736,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 15663606,
+              "files": 20,
+              "images": 20,
+              "full_bytes": 15663606,
+              "rail_bytes": 15663606,
+              "tile_bytes": 15663606,
+              "tile2x_bytes": 15663606,
+              "preview_bytes": 15663606
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 0.9860817077569664,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 15663606,
+              "files": 20,
+              "images": 20,
+              "full_bytes": 15663606,
+              "rail_bytes": 15663606,
+              "tile_bytes": 15663606,
+              "tile2x_bytes": 15663606,
+              "preview_bytes": 15663606
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          }
+        ],
+        "median_seconds": 0.9860817077569664
+      },
+      "after": {
+        "binary_sha256": "b2aced6831fefc53dff0962fd2a50a006cf9da83930d21611953193733693945",
+        "runs": [
+          {
+            "seconds": 14.113622958771884,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 2825420,
+              "files": 62,
+              "images": 20,
+              "full_bytes": 1991234,
+              "rail_bytes": 80566,
+              "tile_bytes": 285070,
+              "tile2x_bytes": 826042,
+              "preview_bytes": 1991234
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 13.425160749815404,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 2825420,
+              "files": 62,
+              "images": 20,
+              "full_bytes": 1991234,
+              "rail_bytes": 80566,
+              "tile_bytes": 285070,
+              "tile2x_bytes": 826042,
+              "preview_bytes": 1991234
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          },
+          {
+            "seconds": 15.337041624821723,
+            "counts": {
+              "agent_runtime": 1,
+              "project": 1,
+              "session": 20,
+              "message": 40
+            },
+            "assets": {
+              "disk_bytes": 2825420,
+              "files": 62,
+              "images": 20,
+              "full_bytes": 1991234,
+              "rail_bytes": 80566,
+              "tile_bytes": 285070,
+              "tile2x_bytes": 826042,
+              "preview_bytes": 1991234
+            },
+            "ranked_sha256": "3413f05ecba4b47ed779190af023791f11695bd360fcd5256ad28ff2320712de"
+          }
+        ],
+        "median_seconds": 14.113622958771884
+      }
+    },
+    "equal_counts_and_ranked_results": true
+  },
+  "measurement_notes": "System load changed during final validation. CPU seconds quantify added preparation work; elapsed times and both Electron samples are retained without attributing scheduling delays to the codec. Image member bytes were identical in all campaigns. This is fetch+decode measurement, not scroll FPS."
+}

@@ -10,6 +10,7 @@ export { PROTOCOL_VERSION } from "./protocol-version.mjs";
 import type { TimelineEntryResponse } from "./generated/TimelineEntryResponse";
 import type { ResponseRuntime } from "./generated/ResponseRuntime";
 import type { ApiError } from "./generated/ApiError";
+import type { ImageVariant } from "./generated/ImageVariant";
 import type { AssetRef } from "./generated/AssetRef";
 import type { BoostResponse } from "./generated/BoostResponse";
 import type { ContributionResponse } from "./generated/ContributionResponse";
@@ -343,6 +344,29 @@ export class RosettaClient {
   /** Read the live file named by one canonical file-bearing target. The caller
    * supplies identities and an index, never a path; the daemon resolves the
    * exact path already stored on that timeline row. */
+  /** Direct image URLs let the browser share compressed and decoded resources.
+   * Recipes are finite, versioned and enforced by the daemon. */
+  imageAssetUrl(asset: AssetRef, variant: ImageVariant): string {
+    const base = new URL(`${this.baseUrl}/`);
+    const rendition = variant === "full" ? asset : asset.image_variants?.[variant];
+    const url = new URL((rendition ?? asset).url, base);
+    if (url.origin !== base.origin || !["http:", "https:"].includes(url.protocol)) {
+      throw new Error("the stored image has an unsupported address");
+    }
+    // Older projection fixtures have no rendition set. The versioned daemon
+    // route can prepare a legacy member without modifying its immutable URL.
+    if (!rendition) {
+      url.searchParams.set("image", variant);
+      url.searchParams.set("v", "1");
+    }
+    return url.toString();
+  }
+
+  imageFileTargetUrl(sessionId: string, timelineId: string, targetIndex: number, variant: ImageVariant): string {
+    if (!Number.isSafeInteger(targetIndex) || targetIndex < 0) throw new Error("invalid image target");
+    return `${this.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(timelineId)}/read/${targetIndex}?image=${variant}&v=1`;
+  }
+
   async readFileTarget(
     sessionId: string,
     timelineId: string,

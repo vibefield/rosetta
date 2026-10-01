@@ -142,7 +142,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 24,
+      "protocol_version": 25,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -320,14 +320,40 @@
             "byte_len": 42,
             "created_at": 3609000,
             "id": "asset:digest",
-            "media_type": "image/png",
-            "name": "preview.png",
+            "media_type": "image/webp",
+            "name": "preview.webp",
             "source": {
               "asset": {
-                "byte_len": 42,
-                "digest": "digest",
-                "media_type": "image/png",
-                "url": "/api/assets/digest.png"
+                "byte_len": 17,
+                "digest": "df4a1ed6652b68ad493b11705ed0563b79a7280170dff7ecfa6a8f1a0cce533b",
+                "image_variants": {
+                  "preview": {
+                    "byte_len": 14,
+                    "digest": "d6dec0e3c28916078439046c5b80cf7d3bffc2f6eee84e9b3a117e68f4287b5c",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/d6dec0e3c28916078439046c5b80cf7d3bffc2f6eee84e9b3a117e68f4287b5c.webp"
+                  },
+                  "rail": {
+                    "byte_len": 11,
+                    "digest": "d2811135c3f7f2920aa29b0c7894738b40904f7913492d10983ff4ba8a9b979e",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/d2811135c3f7f2920aa29b0c7894738b40904f7913492d10983ff4ba8a9b979e.webp"
+                  },
+                  "tile": {
+                    "byte_len": 11,
+                    "digest": "a7fb8dcb60c9f74c17b6d37582e8cfa2ef4d4e4352c6d5b2d57e496bff3e3d36",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/a7fb8dcb60c9f74c17b6d37582e8cfa2ef4d4e4352c6d5b2d57e496bff3e3d36.webp"
+                  },
+                  "tile2x": {
+                    "byte_len": 13,
+                    "digest": "9699e06d61df0b07f4506c8fb44f707a16e09cd8047ba7f00f3ced251734f7c4",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/9699e06d61df0b07f4506c8fb44f707a16e09cd8047ba7f00f3ced251734f7c4.webp"
+                  }
+                },
+                "media_type": "image/webp",
+                "url": "/api/assets/df4a1ed6652b68ad493b11705ed0563b79a7280170dff7ecfa6a8f1a0cce533b.webp"
               },
               "type": "asset"
             }
@@ -409,14 +435,40 @@
             "byte_len": 42,
             "created_at": 3609000,
             "id": "asset:digest",
-            "media_type": "image/png",
-            "name": "preview.png",
+            "media_type": "image/webp",
+            "name": "preview.webp",
             "source": {
               "asset": {
-                "byte_len": 42,
-                "digest": "digest",
-                "media_type": "image/png",
-                "url": "/api/assets/digest.png"
+                "byte_len": 17,
+                "digest": "df4a1ed6652b68ad493b11705ed0563b79a7280170dff7ecfa6a8f1a0cce533b",
+                "image_variants": {
+                  "preview": {
+                    "byte_len": 14,
+                    "digest": "d6dec0e3c28916078439046c5b80cf7d3bffc2f6eee84e9b3a117e68f4287b5c",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/d6dec0e3c28916078439046c5b80cf7d3bffc2f6eee84e9b3a117e68f4287b5c.webp"
+                  },
+                  "rail": {
+                    "byte_len": 11,
+                    "digest": "d2811135c3f7f2920aa29b0c7894738b40904f7913492d10983ff4ba8a9b979e",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/d2811135c3f7f2920aa29b0c7894738b40904f7913492d10983ff4ba8a9b979e.webp"
+                  },
+                  "tile": {
+                    "byte_len": 11,
+                    "digest": "a7fb8dcb60c9f74c17b6d37582e8cfa2ef4d4e4352c6d5b2d57e496bff3e3d36",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/a7fb8dcb60c9f74c17b6d37582e8cfa2ef4d4e4352c6d5b2d57e496bff3e3d36.webp"
+                  },
+                  "tile2x": {
+                    "byte_len": 13,
+                    "digest": "9699e06d61df0b07f4506c8fb44f707a16e09cd8047ba7f00f3ced251734f7c4",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/9699e06d61df0b07f4506c8fb44f707a16e09cd8047ba7f00f3ced251734f7c4.webp"
+                  }
+                },
+                "media_type": "image/webp",
+                "url": "/api/assets/df4a1ed6652b68ad493b11705ed0563b79a7280170dff7ecfa6a8f1a0cce533b.webp"
               },
               "type": "asset"
             }
@@ -1007,7 +1059,7 @@
       }
     ]
   },
-  "protocol_version": 24,
+  "protocol_version": 25,
   "runtimes": {
     "runtimes": [
       {
@@ -1215,7 +1267,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 24,
+    "protocol_version": 25,
     "schema_version": 16,
     "search": {
       "progress": null,

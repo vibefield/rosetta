@@ -45,7 +45,8 @@ impl AgentAdapter for CopilotAdapter {
         // (1-hour writes split, `-1m`/`-fast` model spellings), shutdown
         // intervals keep only unmetered usage and reset on required counters
         // alone, and float nano-AIU/premium counts no longer fail the line.
-        11
+        // 12: image members are WebP with bounded display renditions.
+        12
     }
 
     /// The store's per-call usage rows. `SELECT *` is compatibility

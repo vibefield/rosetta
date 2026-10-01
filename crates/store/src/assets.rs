@@ -5,6 +5,9 @@
 //! is durable before a live SQLite commit may expose its URL; private rebuilds
 //! defer file and directory barriers until their pre-publication gate.
 
+mod image_gc;
+pub use image_gc::prune_unreferenced_images;
+
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -121,11 +124,8 @@ impl AssetStore {
             stats.assets += 1;
             stats.bytes = stats
                 .bytes
-                .saturating_add(u64::try_from(asset.bytes.len()).unwrap_or(u64::MAX));
-            match self.materialize(asset, durable_now)? {
-                Materialized::Written => stats.files_written += 1,
-                Materialized::Reused => stats.files_reused += 1,
-            }
+                .saturating_add(u64::try_from(asset.materialized_byte_len()).unwrap_or(u64::MAX));
+            self.materialize(asset, durable_now, &mut stats)?;
         }
         stats.nanos = elapsed_nanos(started);
         Ok(stats)
@@ -135,19 +135,56 @@ impl AssetStore {
         &mut self,
         asset: &ProjectionAsset,
         durable_now: bool,
-    ) -> Result<Materialized, StoreError> {
+        stats: &mut AssetWriteStats,
+    ) -> Result<(), StoreError> {
         validate_asset(asset)?;
-        let Some(root) = self.root.clone() else {
-            // In-memory projections are test-only. Validate the canonical
-            // contract but deliberately have no filesystem materialization.
-            return Ok(Materialized::Reused);
-        };
+        let mut seen = BTreeSet::new();
+        for variant in &asset.image_variants {
+            if asset.media_type != "image/webp"
+                || variant.variant == rosetta_core::assets::ImageVariant::Full
+                || !seen.insert(variant.variant)
+                || !magic_matches("image/webp", &variant.bytes)
+            {
+                return Err(StoreError::AssetInvalid {
+                    message: "invalid image rendition bundle".into(),
+                });
+            }
+            let digest = blake3::hash(&variant.bytes).to_hex().to_string();
+            match self.materialize_member(
+                &format!("{digest}.webp"),
+                &variant.bytes,
+                &digest,
+                durable_now,
+            )? {
+                Materialized::Written => stats.files_written += 1,
+                Materialized::Reused => stats.files_reused += 1,
+            }
+        }
         let file_name = asset.file_name().ok_or_else(|| StoreError::AssetInvalid {
             message: format!(
                 "unsupported projection member media type {}",
                 asset.media_type
             ),
         })?;
+        match self.materialize_member(&file_name, &asset.bytes, &asset.digest, durable_now)? {
+            Materialized::Written => stats.files_written += 1,
+            Materialized::Reused => stats.files_reused += 1,
+        }
+        Ok(())
+    }
+
+    fn materialize_member(
+        &mut self,
+        file_name: &str,
+        bytes: &[u8],
+        digest: &str,
+        durable_now: bool,
+    ) -> Result<Materialized, StoreError> {
+        let Some(root) = self.root.clone() else {
+            // In-memory projections are test-only. Validate the canonical
+            // contract but deliberately have no filesystem materialization.
+            return Ok(Materialized::Reused);
+        };
 
         match fs::symlink_metadata(&root) {
             Ok(metadata) if metadata.is_dir() => {}
@@ -166,7 +203,7 @@ impl AssetStore {
         let destination = root.join(file_name);
         match fs::symlink_metadata(&destination) {
             Ok(_) => {
-                verify_existing(&destination, asset)?;
+                verify_existing(&destination, bytes.len(), digest)?;
                 return Ok(Materialized::Reused);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -176,14 +213,14 @@ impl AssetStore {
         let mut temporary = tempfile::Builder::new()
             .prefix(".rosetta-asset-")
             .tempfile_in(&root)?;
-        temporary.write_all(&asset.bytes)?;
+        temporary.write_all(bytes)?;
         if durable_now {
             temporary.as_file().sync_all()?;
         }
         match temporary.persist_noclobber(&destination) {
             Ok(_) => {}
             Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-                verify_existing(&destination, asset)?;
+                verify_existing(&destination, bytes.len(), digest)?;
                 return Ok(Materialized::Reused);
             }
             Err(error) => return Err(error.error.into()),
@@ -252,12 +289,19 @@ fn validate_asset(asset: &ProjectionAsset) -> Result<(), StoreError> {
             ),
         });
     }
+    asset
+        .reference()
+        .validate()
+        .map_err(|error| StoreError::AssetInvalid {
+            message: error.to_string(),
+        })?;
+
     Ok(())
 }
 
-fn verify_existing(path: &Path, asset: &ProjectionAsset) -> Result<(), StoreError> {
+fn verify_existing(path: &Path, len: usize, digest: &str) -> Result<(), StoreError> {
     let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() || metadata.len() != asset.bytes.len() as u64 {
+    if !metadata.file_type().is_file() || metadata.len() != len as u64 {
         return Err(StoreError::AssetInvalid {
             message: format!(
                 "projection asset {} is not the expected regular file",
@@ -266,7 +310,7 @@ fn verify_existing(path: &Path, asset: &ProjectionAsset) -> Result<(), StoreErro
         });
     }
     let existing = fs::read(path)?;
-    if blake3::hash(&existing).to_hex().as_str() != asset.digest {
+    if blake3::hash(&existing).to_hex().as_str() != digest {
         return Err(StoreError::AssetInvalid {
             message: format!(
                 "projection asset {} failed its content hash",

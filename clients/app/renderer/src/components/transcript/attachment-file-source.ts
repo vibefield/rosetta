@@ -9,6 +9,7 @@ import type { AttachmentFact } from "../../lib/transcript";
 import { client } from "../../lib/rosetta";
 import { resolveKind } from "../file-viewer";
 import type { FileHandle, FileSource } from "../file-viewer";
+import type { ImageResource } from "../file-viewer/types";
 
 const EXTENSION_BY_MEDIA_TYPE: ReadonlyMap<string, string> = new Map([
   ["image/png", "png"],
@@ -33,6 +34,18 @@ export function attachmentAssetUrl(fact: AttachmentFact): string | null {
   } catch {
     return null;
   }
+}
+
+export function attachmentImageResource(fact: AttachmentFact): ImageResource | null {
+  const source = fact.ref?.source;
+  const address = fact.readPath?.read;
+  const asset = source?.type === "asset" && attachmentAssetUrl(fact) !== null ? source.asset : null;
+  if (!address && !asset) return null;
+  const url = (variant: import("@rosetta/protocol").ImageVariant) => address
+    ? client.imageFileTargetUrl(address.sessionId, address.timelineId, address.targetIndex, variant)
+    : client.imageAssetUrl(asset!, variant);
+  return { full: url("full"), preview: url("preview"), rail: url("rail"), tile: url("tile"), tile2x: url("tile2x"),
+    width: fact.ref?.dimensions?.width, height: fact.ref?.dimensions?.height };
 }
 
 export function attachmentViewerName(fact: AttachmentFact): string {
@@ -68,6 +81,12 @@ export function canOpenAttachment(fact: AttachmentFact): boolean {
 
 /** Stable by construction: `useFileContent` treats source identity as a read. */
 export const attachmentFileSource: FileSource = {
+  image(handle) {
+    const asset = handle.ref as import("@rosetta/protocol").AssetRef;
+    if (!asset?.media_type.startsWith("image/")) return null;
+    return { full: client.imageAssetUrl(asset, "full"), preview: client.imageAssetUrl(asset, "preview"),
+      rail: client.imageAssetUrl(asset, "rail"), tile: client.imageAssetUrl(asset, "tile"), tile2x: client.imageAssetUrl(asset, "tile2x") };
+  },
   async read(handle: FileHandle, signal: AbortSignal): Promise<Uint8Array> {
     const asset = handle.ref as import("@rosetta/protocol").AssetRef;
     if (!asset || typeof asset.url !== "string") throw new Error("that attachment is no longer available");

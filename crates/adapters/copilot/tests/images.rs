@@ -7,7 +7,7 @@ use rosetta_core::{
 };
 use serde_json::{Value, json};
 const PNG: &str =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII=";
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
 fn ctx() -> NormalizeCtx {
     let mut ctx = NormalizeCtx::new("runtime", "session");
     ctx.agent_version = Some("1.0.80".into());
@@ -112,5 +112,43 @@ fn incorrect_byte_length_is_unavailable_and_never_materializes_a_member() {
         attachments
             .iter()
             .all(|a| matches!(a.source, AttachmentSource::Unavailable { .. }))
+    );
+}
+
+#[test]
+fn conflicting_native_assets_stay_invalid_even_when_their_encoded_pixels_match() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let mut context = ctx();
+    ingest(&mut context, "bytes", "session.binary_asset", binary());
+    // The decoder ignores trailing bytes, but native asset identity must not.
+    let mut bytes = STANDARD.decode(PNG).unwrap();
+    bytes.extend_from_slice(b"different native representation");
+    let mut other = binary();
+    other["data"] = json!(STANDARD.encode(&bytes));
+    other["byteLength"] = json!(bytes.len());
+    ingest(
+        &mut context,
+        "conflict",
+        "session.binary_asset",
+        other.clone(),
+    );
+    let checkpoint = CopilotAdapter
+        .checkpoint_state(context.state.as_deref())
+        .unwrap();
+    context.state = CopilotAdapter.restore_state(checkpoint.as_ref()).unwrap();
+    ingest(
+        &mut context,
+        "repeated-conflict",
+        "session.binary_asset",
+        other,
+    );
+    let ops = ingest(&mut context, "owner", "user.message", user());
+    let TimelineBody::User { attachments, .. } = &message(&ops).body else {
+        panic!("user")
+    };
+    assert!(
+        attachments
+            .iter()
+            .all(|attachment| matches!(attachment.source, AttachmentSource::Unavailable { .. }))
     );
 }

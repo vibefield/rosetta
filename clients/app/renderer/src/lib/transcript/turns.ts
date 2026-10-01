@@ -64,8 +64,6 @@ export interface AttachmentFact {
   readonly caption: string;
   /** Live file target, addressed through its canonical tool row. UI-only. */
   readonly readPath?: PathFact;
-  /** Thumbnail bytes reused by the viewer so a mutable file is read once. */
-  readonly readBytes?: Uint8Array;
 }
 
 function mediaShortName(mediaType: string | null, name: string | null): string | null {

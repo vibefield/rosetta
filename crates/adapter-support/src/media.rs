@@ -4,9 +4,8 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rosetta_core::ProjectionAsset;
 use rosetta_core::timeline::{
-    AssetRef, AttachmentKind, AttachmentRef, AttachmentSource,
-    AttachmentUnavailableReason as Missing, CORE_SCALAR_MAX_BYTES, Dimensions, ID_MAX_BYTES,
-    ResourceRef,
+    AttachmentKind, AttachmentRef, AttachmentSource, AttachmentUnavailableReason as Missing,
+    CORE_SCALAR_MAX_BYTES, ID_MAX_BYTES, ResourceRef,
 };
 
 pub type MaterializedAttachment = (AttachmentRef, Option<ProjectionAsset>);
@@ -44,6 +43,9 @@ pub fn from_base64(
         result.0.media_type = bounded(mime, ID_MAX_BYTES);
         return result;
     };
+    if mime.starts_with("image/") && data.len() > rosetta_media::MAX_INPUT_BYTES.div_ceil(3) * 4 {
+        return unavailable(id, kind, Missing::UnsupportedMedia);
+    }
     match STANDARD.decode(data) {
         Ok(bytes) => from_bytes(id, kind, mime, bytes),
         Err(_) => unavailable(id, kind, Missing::InvalidData),
@@ -66,14 +68,22 @@ pub fn from_bytes(
     if bytes.is_empty() || !magic_matches(mime, &bytes) {
         return unavailable(id, kind, Missing::InvalidData);
     }
-    let dimensions = image_dimensions(mime, &bytes);
-    let asset = ProjectionAsset::new(mime, bytes).expect("validated projection media type");
-    let reference = AssetRef {
-        url: asset.url().expect("validated projection media type"),
-        digest: asset.digest.clone(),
-        media_type: mime.into(),
-        byte_len: asset.bytes.len() as u64,
+    let (asset, dimensions) = if mime.starts_with("image/") {
+        match rosetta_media::prepare(&bytes) {
+            Ok(prepared) => (prepared.asset.clone(), Some(prepared.dimensions)),
+            Err(rosetta_media::MediaError::Unsupported | rosetta_media::MediaError::Limit) => {
+                return unavailable(id, kind, Missing::UnsupportedMedia);
+            }
+            Err(_) => return unavailable(id, kind, Missing::InvalidData),
+        }
+    } else {
+        (
+            ProjectionAsset::new(mime, bytes).expect("validated projection media type"),
+            None,
+        )
     };
+    let mime = asset.media_type.as_str();
+    let reference = asset.reference();
     let mut attachment = AttachmentRef::new(id, kind, AttachmentSource::Asset { asset: reference });
     attachment.media_type = Some(mime.into());
     attachment.byte_len = Some(asset.bytes.len() as u64);
@@ -148,89 +158,11 @@ fn magic_matches(mime: &str, bytes: &[u8]) -> bool {
     }
 }
 
-fn image_dimensions(mime: &str, b: &[u8]) -> Option<Dimensions> {
-    let be32 = |offset| {
-        Some(u32::from_be_bytes(
-            b.get(offset..offset + 4)?.try_into().ok()?,
-        ))
-    };
-    let le16 = |offset| {
-        Some(u32::from(u16::from_le_bytes(
-            b.get(offset..offset + 2)?.try_into().ok()?,
-        )))
-    };
-    let (width, height) = match mime {
-        "image/png" if b.get(12..16) == Some(b"IHDR") => (be32(16)?, be32(20)?),
-        "image/gif" => (le16(6)?, le16(8)?),
-        "image/webp" => {
-            let tag = b.get(12..16)?;
-            if tag == b"VP8X" {
-                let le24 = |o| {
-                    Some(u32::from_le_bytes([
-                        *b.get(o)?,
-                        *b.get(o + 1)?,
-                        *b.get(o + 2)?,
-                        0,
-                    ]))
-                };
-                (le24(24)? + 1, le24(27)? + 1)
-            } else if tag == b"VP8L" && b.get(20) == Some(&0x2f) {
-                let packed = u32::from_le_bytes(b.get(21..25)?.try_into().ok()?);
-                ((packed & 0x3fff) + 1, ((packed >> 14) & 0x3fff) + 1)
-            } else if tag == b"VP8 " && b.get(23..26) == Some(&[0x9d, 0x01, 0x2a]) {
-                (le16(26)? & 0x3fff, le16(28)? & 0x3fff)
-            } else {
-                return None;
-            }
-        }
-        "image/jpeg" => jpeg_dimensions(b)?,
-        _ => return None,
-    };
-    (width > 0 && height > 0).then_some(Dimensions { width, height })
-}
-
-fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    let b = &bytes[..bytes.len().min(64 * 1024)];
-    let mut offset = 2;
-    while offset + 4 <= b.len() {
-        if b[offset] != 0xff {
-            return None;
-        }
-        while b.get(offset) == Some(&0xff) {
-            offset += 1;
-        }
-        let marker = *b.get(offset)?;
-        offset += 1;
-        if matches!(marker, 0xd9 | 0xda) {
-            return None;
-        }
-        if matches!(marker, 0x01 | 0xd0..=0xd8) {
-            continue;
-        }
-        let size = usize::from(u16::from_be_bytes(
-            b.get(offset..offset + 2)?.try_into().ok()?,
-        ));
-        if size < 2 {
-            return None;
-        }
-        if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) && size >= 7 {
-            let height = u32::from(u16::from_be_bytes(
-                b.get(offset + 3..offset + 5)?.try_into().ok()?,
-            ));
-            let width = u32::from(u16::from_be_bytes(
-                b.get(offset + 5..offset + 7)?.try_into().ok()?,
-            ));
-            return Some((width, height));
-        }
-        offset = offset.checked_add(size)?;
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH3sAAAAASUVORK5CYII=";
+    use rosetta_core::timeline::Dimensions;
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
 
     #[test]
     fn bytes_deduplicate_but_occurrences_do_not() {
@@ -296,44 +228,5 @@ mod tests {
                 reason: Missing::InvalidData
             }
         ));
-    }
-
-    #[test]
-    fn bounded_header_dimensions_cover_the_image_allowlist() {
-        assert_eq!(
-            image_dimensions("image/gif", b"GIF89a\x20\x00\x10\x00"),
-            Some(Dimensions {
-                width: 32,
-                height: 16
-            })
-        );
-        let jpeg = b"\xff\xd8\xff\xc0\x00\x0b\x08\x00\x10\x00\x20\x01\x01\x11\x00";
-        assert_eq!(
-            image_dimensions("image/jpeg", jpeg),
-            Some(Dimensions {
-                width: 32,
-                height: 16
-            })
-        );
-        let mut webp =
-            b"RIFF\x00\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00\x00\x00\x00\x00\x1f\x00\x00\x0f\x00\x00"
-                .to_vec();
-        assert_eq!(
-            image_dimensions("image/webp", &webp),
-            Some(Dimensions {
-                width: 32,
-                height: 16
-            })
-        );
-        webp.truncate(24);
-        assert_eq!(image_dimensions("image/webp", &webp), None);
-        assert_eq!(
-            image_dimensions("image/jpeg", b"\xff\xd8\xff\xc0\x00"),
-            None
-        );
-        assert_eq!(
-            image_dimensions("image/gif", b"GIF89a\x00\x00\x00\x00"),
-            None
-        );
     }
 }

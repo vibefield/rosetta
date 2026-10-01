@@ -49,7 +49,8 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // a replay cannot retract drift rows already recorded.
         // 31: exact single team/peer/coordinator deliveries retain authored media.
         // 32: cumulative cost-state totals reconcile missing session-tree usage.
-        32
+        // 33: image members are WebP with bounded display renditions.
+        33
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

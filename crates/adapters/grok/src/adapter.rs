@@ -42,7 +42,8 @@ impl AgentAdapter for GrokAdapter {
         // 10: exclusive usage buckets, per-model turn usage, billed ticks,
         // aggregate scope, and usage for prompts without a row (§4.1.3).
         // 11: turns carry their `modelCalls` request count.
-        11
+        // 12: image members are WebP with bounded display renditions.
+        12
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

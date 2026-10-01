@@ -40,7 +40,8 @@ impl AgentAdapter for CodexAdapter {
         // start ordinal at end of file no longer drops a child's own usage,
         // guardian usage attributed to the parent, missed-emission deltas as
         // aggregates, missing tier key = unset (2026-09-23 audit).
-        17
+        // 18: image members are WebP with bounded display renditions.
+        18
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

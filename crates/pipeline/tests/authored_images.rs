@@ -88,6 +88,19 @@ fn exercise(header: &str, message: &str) -> Vec<(u64, Option<(u32, u32)>)> {
                 asset.byte_len,
                 "member exists before the published row is readable"
             );
+            assert_eq!(asset.media_type, "image/webp");
+            assert_eq!(&bytes[8..12], b"WEBP");
+            assert_eq!(asset.digest, blake3::hash(&bytes).to_hex().to_string());
+            for variant in asset.image_variants.as_ref().unwrap().values() {
+                let name = Path::new(&variant.url)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap();
+                let rendition = std::fs::read(assets::asset_root(&projection).join(name)).unwrap();
+                assert_eq!(&rendition[8..12], b"WEBP");
+                members.push((name.into(), rendition));
+            }
             facts.push((
                 asset.byte_len,
                 attachment.dimensions.map(|d| (d.width, d.height)),
@@ -140,15 +153,16 @@ fn exercise(header: &str, message: &str) -> Vec<(u64, Option<(u32, u32)>)> {
 #[test]
 fn authored_images_materialize_before_publication_and_rebuild_from_the_ledger_alone() {
     let header = json!({"timestamp":"2026-09-09T00:00:00Z","type":"session_meta","payload":{"id":"image-session","timestamp":"2026-09-09T00:00:00Z","cwd":"/fixture/project","originator":"codex_exec","cli_version":"0.150.1","source":"cli","model_provider":"openai"}});
-    let image = json!({"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII="});
+    let image = json!({"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="});
     let message = json!({"timestamp":"2026-09-09T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[
         {"type":"input_text","text":"<image name=[Image #1] path=\"/gone/screenshot.png\">"},image,
         {"type":"input_text","text":"</image>"},{"type":"input_text","text":"Review [Image #1]."}, image
     ]}});
-    assert_eq!(
-        exercise(&header.to_string(), &message.to_string()),
-        vec![(68, Some((1, 1))), (68, Some((1, 1)))]
-    );
+    let facts = exercise(&header.to_string(), &message.to_string());
+    assert_eq!(facts.len(), 2);
+    assert_eq!(facts[0], facts[1]);
+    assert_eq!(facts[0].1, Some((1, 1)));
+    assert!(facts[0].0 > 0);
 }
 
 /// Opt-in local corroboration. No private path/content is a committed fixture.

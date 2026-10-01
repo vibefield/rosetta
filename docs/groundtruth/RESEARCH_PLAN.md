@@ -709,6 +709,19 @@ the owning UI record is
 | [Hermes 0.20.5](../../groundtruth/hermes/groundtruth.json) | No authored-image field established by the captured pack reviewed here | No image attachments projected | Capture a pinned image-input scenario and inspect the writer's persistence path. Do not infer unsupported capability from a text-only corpus. |
 | [Antigravity 1.1.20](../../groundtruth/antigravity/groundtruth.json) | No authored-image field established by the captured pack reviewed here | No image attachments projected | Capture the input-media scenario for the enrolled CLI; keep IDE evidence separate. An image-generation tool name does not prove prompt-image persistence. |
 
+**Image projection recipe (2026-10-01).** The seven established image readers now
+share decoded, oriented, sRGB WebP materialization through libwebp (Q80, method 2),
+with independent 160/320/640/1600-pixel display members. The original native bytes
+remain in the raw ledger; the disposable projection stores compressed WebP only.
+This changes storage and rendering, not the native evidence matrix above. Normalizer
+versions advance together with schema 26/protocol 25; old projections rebuild from
+the ledger. Copilot's exact joins continue checking original source MIME/byte count
+and content identity, including across checkpoints; a lossy output hash is not proof
+that two native binary assets were identical. Real PNG fixtures replace header-only
+synthetic placeholders now that normalization performs a complete decode. The media
+suite covers alpha, orientation, ICC conversion, animated WebP timing/loops, bounded
+work and deterministic replay; native-capture gaps remain as listed above.
+
 **Claude numbered-image links.** The 2.1.267 native writer carries `imagePasteIds`
 through user-message construction and pairs its entries with top-level image blocks
 using an image-only counter. The binding is recorded in the `image-paste-bindings`

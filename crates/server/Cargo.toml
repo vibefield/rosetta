@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+tempfile.workspace = true
+rosetta-media = { path = "../media" }
 axum = { workspace = true }
 blake3.workspace = true
 futures-util = { workspace = true }
@@ -19,6 +21,6 @@ rosetta-search = { path = "../search" }
 rosetta-store = { path = "../store" }
 
 [dev-dependencies]
+image.workspace = true
 http-body-util = { workspace = true }
-tempfile = { workspace = true }
 tower = { workspace = true }

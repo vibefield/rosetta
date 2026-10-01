@@ -7,11 +7,11 @@
 
 use rosetta_core::TaskStatus;
 use rosetta_core::timeline::{
-    ArtifactKind, AssetRef, CanonicalText, CollaborationChannel, CollaborationEvent,
-    CollaborationEventKind, CollaborationStatus, CorrelationDerivation, GroupDerivation, GroupKind,
-    NativeToolRef, Notice, ParticipantColor, Provenance, ResponseGroup, ShellOutcome, StatusBasis,
-    TaskOp, TaskSnapshot, TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction,
-    ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact, WorkflowRunStatus,
+    ArtifactKind, CanonicalText, CollaborationChannel, CollaborationEvent, CollaborationEventKind,
+    CollaborationStatus, CorrelationDerivation, GroupDerivation, GroupKind, NativeToolRef, Notice,
+    ParticipantColor, Provenance, ResponseGroup, ShellOutcome, StatusBasis, TaskOp, TaskSnapshot,
+    TaskSnapshotItem, TimelineBody, TimelineEntry, TimelineGroup, ToolAction, ToolCorrelation,
+    ToolInteraction, ToolStatus, ToolStatusFact, WorkflowRunStatus,
 };
 use rosetta_protocol::{
     ApiError, BackfillState, BoostRequest, BoostResponse, CollaborationTimeline, CommandResponse,
@@ -350,17 +350,26 @@ fn timeline_meta() -> TimelineMeta {
             },
             TimelineMetaArtifact {
                 id: "asset:digest".into(),
-                name: "preview.png".into(),
+                name: "preview.webp".into(),
                 artifact_kind: ArtifactKind::Image,
                 created_at: Some(3_609_000),
                 byte_len: Some(42),
-                media_type: Some("image/png".into()),
+                media_type: Some("image/webp".into()),
                 source: TimelineMetaArtifactSource::Asset {
-                    asset: AssetRef {
-                        url: "/api/assets/digest.png".into(),
-                        digest: "digest".into(),
-                        media_type: "image/png".into(),
-                        byte_len: 42,
+                    asset: {
+                        let mut asset = rosetta_core::ProjectionAsset::new(
+                            "image/webp",
+                            b"golden full image".to_vec(),
+                        )
+                        .unwrap();
+                        asset.image_variants = rosetta_core::assets::ImageVariant::DERIVED
+                            .into_iter()
+                            .map(|variant| rosetta_core::assets::ImageVariantBytes {
+                                variant,
+                                bytes: format!("golden {}", variant.name()).into_bytes(),
+                            })
+                            .collect();
+                        asset.reference()
                     },
                 },
             },

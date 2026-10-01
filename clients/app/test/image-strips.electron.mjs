@@ -30,6 +30,11 @@ async function show(selector) {
   await pause(100);
 }
 async function close(remaining = 0) {
+  await pause(80); // Wait for the nested Radix dismiss layer to mount.
+  if (!await check(() => document.hasFocus())) {
+    app.focus({ steal: true }); win.focus(); win.webContents.focus();
+    await until(() => document.hasFocus(), 'Image fixture did not regain native focus');
+  }
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
   for (let i = 0; i < 100; i++) {
@@ -123,7 +128,11 @@ async function run() {
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
     await until(() => document.querySelector('.ah-image__frame img')?.naturalWidth > 0, 'Tool image viewer did not load');
     await capture('viewer');
-    assert.equal((await check(async () => (await fetch('/test/image-reads')).json()))['image-read:1'], readsBefore['image-read:1'], 'Viewer must reuse the selected thumbnail bytes');
+    const viewed = await check(async () => (await fetch('/test/image-reads')).json());
+    assert.ok(viewed['image-read:1:preview'] > 0, 'Viewer requests its display preview');
+    assert.equal(viewed['image-read:1:tile'], readsBefore['image-read:1:tile'], 'Opening retains the row thumbnail');
+    assert.equal(viewed['image-read:1:full'], undefined, 'Fit never requests full-size pixels');
+    assert.equal(viewed['image-read:1:original'], undefined, 'No original byte buffer is retained in the renderer');
     await close();
     assert.equal(await check(() => document.activeElement.classList.contains('tr-att__tile')), true);
     assert.deepEqual(await check(() => ({ top: document.querySelector('.tr-scroll').scrollTop, room: document.querySelector('.ah-room').getBoundingClientRect().top })), before);

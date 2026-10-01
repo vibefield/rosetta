@@ -1,33 +1,25 @@
-import { createContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AttachmentFact } from "../../lib/transcript";
 import { fmtBytes } from "../../lib/format";
-import { imageMediaTypeFromBytes } from "../../lib/image-media";
-import { client } from "../../lib/rosetta";
-import { attachmentAssetUrl, canOpenAttachment } from "./attachment-file-source";
+import { attachmentAssetUrl, attachmentImageResource, canOpenAttachment } from "./attachment-file-source";
+import { imageRequestUrl, useImageVisibility } from "../file-viewer/image-resource";
 import type { AttachmentOpener } from "./attachment-gallery";
 import "../../styles/attachments.css";
 
 /** Explicitly shared only by messages whose images are gathered in this run. */
 export const ActivityImagesContext = createContext<AttachmentOpener | null>(null);
 
-function previewKey(fact: AttachmentFact) {
-  return `${fact.key}:${attachmentAssetUrl(fact) ?? JSON.stringify(fact.readPath?.read)}`;
-}
-
 export function useAttachmentActions(onOpenAttachment: AttachmentOpener, onReceipt: (text: string) => void,
   facts: readonly AttachmentFact[]) {
   const [reveal, setReveal] = useState<{ key: string; request: number } | null>(null);
-  const previews = useRef(new Map<string, AttachmentFact>());
-  const onPreview = (fact: AttachmentFact) => { previews.current.set(previewKey(fact), fact); };
   const open: AttachmentOpener = (fact, row = facts) => {
-    if (canOpenAttachment(fact)) onOpenAttachment(fact.readBytes ? fact : previews.current.get(previewKey(fact)) ?? fact,
-      row.map(item => item.readBytes ? item : previews.current.get(previewKey(item)) ?? item));
+    if (canOpenAttachment(fact)) onOpenAttachment(fact, row);
     else {
       setReveal(old => ({ key: fact.key, request: (old?.request ?? 0) + 1 }));
       onReceipt(attachmentStatus(fact));
     }
   };
-  return { open, reveal, onPreview };
+  return { open, reveal };
 }
 
 export function attachmentStatus(fact: AttachmentFact): string {
@@ -44,77 +36,45 @@ export function attachmentStatus(fact: AttachmentFact): string {
   return "Image data was not recorded";
 }
 
-function Tile({ fact, index, onOpen, onPreview }: {
+function Tile({ fact, index, onOpen }: {
   readonly fact: AttachmentFact; readonly index: number;
   readonly onOpen: (fact: AttachmentFact) => void;
-  readonly onPreview: (fact: AttachmentFact) => void;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const [preview, setPreview] = useState<{ url: string; bytes: Uint8Array; mediaType: string | null } | null>(null);
   const figureRef = useRef<HTMLElement>(null);
   const openRef = useRef<HTMLButtonElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef(false);
-  const fail = () => {
-    restoreFocus.current = Boolean(figureRef.current?.contains(document.activeElement));
-    setFailed(true);
-  };
-  const address = fact.readPath?.read;
-  const mediaType = fact.mediaType;
-  const sessionId = address?.sessionId, timelineId = address?.timelineId, targetIndex = address?.targetIndex;
-  useEffect(() => {
-    if (preview) onPreview({ ...fact, mediaType: preview.mediaType, readBytes: preview.bytes });
-  }, [fact, preview, onPreview]);
-  useEffect(() => {
-    if (!sessionId || !timelineId || targetIndex === undefined || !figureRef.current) return;
-    const controller = new AbortController();
-    let objectUrl: string | null = null;
-    const observer = new IntersectionObserver(entries => {
-      if (!entries.some(entry => entry.isIntersecting)) return;
-      observer.disconnect();
-      void client.readFileTarget(sessionId, timelineId, targetIndex, controller.signal)
-        .then(bytes => {
-          if (controller.signal.aborted) return;
-          const type = mediaType ?? imageMediaTypeFromBytes(bytes);
-          objectUrl = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: type ?? "application/octet-stream" }));
-          restoreFocus.current = Boolean(figureRef.current?.contains(document.activeElement));
-          setPreview({ url: objectUrl, bytes, mediaType: type });
-        })
-        .catch(() => { if (!controller.signal.aborted) {
-          restoreFocus.current = Boolean(figureRef.current?.contains(document.activeElement));
-          setFailed(true);
-        } });
-    }, { rootMargin: "160px" });
-    observer.observe(figureRef.current);
-    return () => { controller.abort(); observer.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [sessionId, timelineId, targetIndex, mediaType, attempt]);
+  const visible = useImageVisibility(figureRef);
+  const resource = fact.kind === "image" ? attachmentImageResource(fact) : null;
+  const url = resource ? imageRequestUrl(window.devicePixelRatio > 2 ? resource.tile2x : resource.tile, attempt) : null;
+  const failed = url !== null && failedUrl === url;
   useLayoutEffect(() => {
     if (!restoreFocus.current) return;
-    const target = failed ? retryRef.current : openRef.current ?? figureRef.current?.querySelector<HTMLElement>(".tr-att__tile");
-    target?.focus({ preventScroll: true });
+    (failed ? retryRef.current : openRef.current)?.focus({ preventScroll: true });
     restoreFocus.current = false;
-  }, [attempt, failed, preview]);
-  const assetUrl = fact.kind === "image" ? attachmentAssetUrl(fact) : null;
-  const url = preview?.url ?? assetUrl;
-  const loading = Boolean(address) && url === null && !failed;
+  }, [attempt, failed]);
   const label = fact.ref?.label ?? `${fact.kind === "image" ? "Image" : "Attachment"} ${index + 1}`;
   const details = [label, fact.name, fact.caption, fact.byteLen === null ? null : fmtBytes(fact.byteLen)].filter(Boolean).join(" · ");
   return <figure ref={figureRef} data-attachment-id={fact.key} title={details}>
     {url === null || failed ? (
-      <div className={`tr-att__tile tr-att__tile--${loading ? "loading" : "missing"}`} tabIndex={-1} aria-label={details} aria-busy={loading}>
+      <div className="tr-att__tile tr-att__tile--missing" tabIndex={-1} aria-label={details}>
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
           <rect x="3" y="3" width="18" height="18" rx="4" /><circle cx="8" cy="8" r="1.5" />
           <path d="m3 17 5-5 4 4 3-3 6 6" />
         </svg>
-        <span>{loading ? "Loading image…" : failed ? "Could not load image" : fact.kind === "image" ? attachmentStatus(fact) : "Attachment preview unavailable"}</span>
-        {failed && <button type="button" ref={retryRef} className="tr-att__retry" onClick={() => { restoreFocus.current = true; setPreview(null); setAttempt(value => value + 1); setFailed(false); }}>Retry</button>}
+        <span>{failed ? "Could not load image" : fact.kind === "image" ? attachmentStatus(fact) : "Attachment preview unavailable"}</span>
+        {failed && <button type="button" ref={retryRef} className="tr-att__retry" onClick={() => {
+          restoreFocus.current = true; setAttempt(value => value + 1); setFailedUrl(null);
+        }}>Retry</button>}
       </div>
     ) : (
       <button type="button" ref={openRef} className="tr-att__tile" aria-label={`Open ${label}${fact.name ? ` — ${fact.name}` : ""}`}
-        aria-haspopup="dialog" onClick={() => onOpen(preview ? { ...fact, mediaType: preview.mediaType, readBytes: preview.bytes } : fact)}>
-        <img key={attempt} src={preview || attempt === 0 ? url : `${url}${url.includes("?") ? "&" : "?"}retry=${attempt}`}
-          alt={fact.name ?? label} loading="lazy" decoding="async" onError={fail} />
+        aria-haspopup="dialog" onClick={() => onOpen(fact)}>
+        {visible && <img key={url} src={url} alt={fact.name ?? label} decoding="async" onError={() => {
+          restoreFocus.current = Boolean(figureRef.current?.contains(document.activeElement)); setFailedUrl(url);
+        }} />}
       </button>
     )}
   </figure>;
@@ -128,19 +88,13 @@ function revealTile(rail: HTMLElement, tile: HTMLElement) {
   else if (target.right > bounds.right - 4) rail.scrollLeft += target.right - bounds.right + 4;
 }
 
-export function Attachments({ facts, onOpenAttachment, reveal, onPreview }: {
+export function Attachments({ facts, onOpenAttachment, reveal }: {
   readonly facts: readonly AttachmentFact[];
   readonly reveal?: { readonly key: string; readonly request: number } | null;
   readonly onOpenAttachment: AttachmentOpener;
-  readonly onPreview?: (fact: AttachmentFact) => void;
 }) {
   const id = useId();
   const gallery = useRef<HTMLDivElement>(null);
-  const previews = useRef(new Map<string, AttachmentFact>());
-  const rememberPreview = (fact: AttachmentFact) => {
-    previews.current.set(previewKey(fact), fact);
-    onPreview?.(fact);
-  };
   const handledReveal = useRef<typeof reveal>(undefined);
   const [edges, setEdges] = useState({ before: false, after: false });
   useLayoutEffect(() => {
@@ -193,8 +147,7 @@ export function Attachments({ facts, onOpenAttachment, reveal, onPreview }: {
       tiles[next]?.focus({ preventScroll: true });
     }}>
       {facts.map((fact, index) => <Tile key={`${fact.key}:${attachmentAssetUrl(fact) ?? fact.readPath?.label ?? "reference"}`} fact={fact} index={index}
-        onPreview={rememberPreview} onOpen={selected => onOpenAttachment(selected,
-          facts.map(item => item.key === selected.key ? selected : previews.current.get(previewKey(item)) ?? item))} />)}
+        onOpen={selected => onOpenAttachment(selected, facts)} />)}
     </div>
     {(edges.before || edges.after) && <button className="tr-att__nav tr-att__nav--previous" type="button" aria-label="Previous images" aria-disabled={!edges.before} data-edge={!edges.before || undefined} aria-controls={id} onClick={() => page(-1)}>‹</button>}
     {(edges.before || edges.after) && <button className="tr-att__nav tr-att__nav--next" type="button" aria-label="Next images" aria-disabled={!edges.after} data-edge={!edges.after || undefined} aria-controls={id} onClick={() => page(1)}>›</button>}

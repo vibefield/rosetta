@@ -1063,6 +1063,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 
 .ah-image { position: relative; flex: 1; min-height: 0; display: flex; }
 .ah-image__frame { display: flex; align-items: center; justify-content: center; padding: 18px; }
+.ah-image__loading { position: absolute; inset: 50% 0 auto; text-align: center; color: var(--vf-text-tertiary); pointer-events: none; }
 .ah-image img { display: block; border-radius: 4px; }
 .ah-image[data-mode="fit"] img { max-width: 100%; max-height: 100%; object-fit: contain; }
 /* At 1:1 a picture larger than the frame is scrolled from its top-left, the

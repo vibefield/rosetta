@@ -37,6 +37,8 @@ use rosetta_store::{assets, queries, timeline_meta};
 
 use crate::hub::Hub;
 
+mod images;
+
 const DEFAULT_LIST_LIMIT: i64 = 100;
 const DEFAULT_SEARCH_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 1_000;
@@ -50,6 +52,7 @@ pub struct AppState {
     /// Stable projection location for content-addressed assets and the
     /// detached search sidecar.
     pub db: Arc<PathBuf>,
+    images: Arc<images::ImageCache>,
     /// Canonical read target. A fresh daemon initially points this at its
     /// named in-memory cold projection, then atomically switches to `db`
     /// after the validated durable copy is installed.
@@ -85,6 +88,7 @@ impl AppState {
         Self {
             hub,
             projection: Arc::new(ProjectionReader::file(db.clone())),
+            images: Arc::new(images::ImageCache::new(&db)),
             db: Arc::new(db),
             search,
             health: None,
@@ -101,6 +105,7 @@ impl AppState {
         Self {
             hub,
             projection: Arc::new(ProjectionReader::file(db.clone())),
+            images: Arc::new(images::ImageCache::new(&db)),
             db: Arc::new(db),
             search,
             health: None,
@@ -465,9 +470,31 @@ fn require_canonical_aggregates(projection: &ProjectionReader) -> Result<(), Fai
 async fn asset(
     State(state): State<AppState>,
     UrlPath(name): UrlPath<String>,
+    Query(query): Query<images::ImageQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, Failure> {
     let media_type =
         asset_media_type(&name).ok_or_else(|| Failure::not_found("no such projection asset"))?;
+    if query.image.is_some() {
+        if !media_type.starts_with("image/") {
+            return Err(Failure::bad_request("this asset is not an image"));
+        }
+        let variant = query.variant()?;
+        let cache = state.images.clone();
+        let permit = cache
+            .workers
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| Failure::internal("image worker closed"))?;
+        let response = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            cache.asset(&name, variant, query.retry.is_some_and(|v| v > 0))
+        })
+        .await
+        .map_err(|_| Failure::internal("image worker failed"))??;
+        return Ok(images::conditional(response, &headers));
+    }
     let db = state.db.clone();
     let expected_digest = name[..64].to_owned();
     let path_name = name.clone();
@@ -590,6 +617,8 @@ async fn read_timeline_plan(
 async fn read_file_target(
     State(state): State<AppState>,
     UrlPath((session_id, timeline_id, target_index)): UrlPath<(String, String, usize)>,
+    Query(query): Query<images::ImageQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, Failure> {
     // The path is looked up from the canonical row. There is intentionally no
     // path query parameter: the browser can ask for target 0, but it cannot
@@ -620,6 +649,24 @@ async fn read_file_target(
             cwd.join(recorded)
         }
     };
+
+    if query.image.is_some() {
+        let variant = query.variant()?;
+        let cache = state.images.clone();
+        let permit = cache
+            .workers
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| Failure::internal("image worker closed"))?;
+        let response = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            cache.file(&path, variant, query.retry.is_some_and(|v| v > 0))
+        })
+        .await
+        .map_err(|_| Failure::internal("image worker failed"))??;
+        return Ok(images::conditional(response, &headers));
+    }
 
     let bytes = tokio::task::spawn_blocking(move || {
         use std::io::Read;

@@ -35,7 +35,8 @@ impl AgentAdapter for PiAdapter {
         // 9: `usage` entries (cache warming) as samples, compaction request
         // counts, summaries on the latest model, never-reported usage as
         // unreported, provider-segment routes (2026-09-23 audit PI-1/2/6/8/9/10).
-        9
+        // 10: image members are WebP with bounded display renditions.
+        10
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

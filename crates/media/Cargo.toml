@@ -1,0 +1,12 @@
+[package]
+name = "rosetta-media"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rosetta-core = { path = "../core" }
+image.workspace = true
+webp.workspace = true
+fast_image_resize.workspace = true
+blake3.workspace = true
+moxcms.workspace = true

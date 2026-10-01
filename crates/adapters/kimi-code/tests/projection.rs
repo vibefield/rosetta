@@ -689,7 +689,7 @@ fn undeclared_content_parts_are_soft_drift() {
 
 #[test]
 fn authored_image_data_url_materializes_but_tool_output_does_not() {
-    let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII=";
+    let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
     let mut ctx = synthetic_context();
     let record = json!({"type":"context.append_message","message":{"role":"user","origin":{"kind":"user"},"id":"image","toolCalls":[],"content":[{"type":"image_url","imageUrl":{"url":png}}]},"time":1});
     let result = KimiCodeAdapter.ingest_line(&mut ctx, "wire", record.to_string().as_bytes());

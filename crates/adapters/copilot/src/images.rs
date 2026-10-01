@@ -1,5 +1,6 @@
 //! Exact session-scoped binary_asset joins. No filesystem or URL recovery.
 use crate::raw::events::BinaryAsset;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use rosetta_adapter_support::{adapter::NormalizeCtx, media};
 use rosetta_core::{
     IngestOp,
@@ -12,9 +13,49 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Images {
-    assets: BTreeMap<String, AttachmentRef>,
+    assets: BTreeMap<String, Recorded>,
     owners: BTreeMap<String, Owner>,
 }
+// Source metadata belongs to the exact native join, never to the encoded
+// AssetRef. Only the selected source's bounded proof survives a checkpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Recorded {
+    attachment: AttachmentRef,
+    mime: String,
+    byte_len: u64,
+    digest: String,
+}
+
+fn recorded(id: &str, mime: &str, data: &str) -> (Recorded, Option<rosetta_core::ProjectionAsset>) {
+    let decoded = if data.len() <= 32 * 1024 * 1024 / 3 * 4 + 4 {
+        STANDARD.decode(data).ok()
+    } else {
+        None
+    };
+    let byte_len = decoded.as_ref().map_or(0, |bytes| bytes.len() as u64);
+    let digest = decoded.as_ref().map_or_else(String::new, |bytes| {
+        blake3::hash(bytes).to_hex().to_string()
+    });
+    let (attachment, asset) = if let Some(bytes) = decoded {
+        media::from_bytes(id, AttachmentKind::Image, mime, bytes)
+    } else {
+        media::unavailable(
+            id,
+            AttachmentKind::Image,
+            AttachmentUnavailableReason::InvalidData,
+        )
+    };
+    (
+        Recorded {
+            attachment,
+            mime: media::canonical_media_type(mime).unwrap_or("").into(),
+            byte_len,
+            digest,
+        },
+        asset,
+    )
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Owner {
     row: MessageRow,
@@ -52,7 +93,10 @@ impl Images {
                     AttachmentUnavailableReason::Omitted,
                 )
             } else if let Some(data) = value["data"].as_str() {
-                media::from_base64(&id, AttachmentKind::Image, mime, data)
+                let (source, asset) = recorded(&id, mime, data);
+                let mut attachment = source.attachment.clone();
+                check_metadata(&mut attachment, &source, mime, declared_len);
+                (attachment, asset)
             } else if let Some(asset_id) = value["assetId"].as_str().filter(|id| !id.is_empty()) {
                 links.push(Link {
                     slot: row.attachments.len(),
@@ -61,13 +105,20 @@ impl Images {
                     byte_len: declared_len,
                 });
                 (
-                    self.assets.get(asset_id).cloned().unwrap_or_else(|| {
-                        AttachmentRef::unavailable(
-                            &id,
-                            AttachmentKind::Image,
-                            AttachmentUnavailableReason::NotRecorded,
-                        )
-                    }),
+                    self.assets
+                        .get(asset_id)
+                        .map(|source| {
+                            let mut attachment = source.attachment.clone();
+                            check_metadata(&mut attachment, source, mime, declared_len);
+                            attachment
+                        })
+                        .unwrap_or_else(|| {
+                            AttachmentRef::unavailable(
+                                &id,
+                                AttachmentKind::Image,
+                                AttachmentUnavailableReason::NotRecorded,
+                            )
+                        }),
                     None,
                 )
             } else if let Some(path) = value["path"].as_str().filter(|path| {
@@ -94,7 +145,7 @@ impl Images {
                 )
             };
             attachment.id = id;
-            check_metadata(&mut attachment, mime, declared_len);
+
             if !matches!(attachment.source, AttachmentSource::Asset { .. }) {
                 asset = None;
             }
@@ -132,23 +183,23 @@ impl Images {
         {
             return;
         }
-        let (mut attachment, mut asset) = if is_image {
-            media::from_base64(
-                "binary",
-                AttachmentKind::Image,
-                &source.mime_type,
-                &source.data,
-            )
-        } else {
-            media::unavailable(
-                "binary",
-                AttachmentKind::Image,
-                AttachmentUnavailableReason::InvalidData,
-            )
-        };
-        check_metadata(&mut attachment, &source.mime_type, Some(source.byte_length));
+        let (mut source_image, mut asset) = recorded("binary", &source.mime_type, &source.data);
+        let mut attachment = source_image.attachment.clone();
+        check_metadata(
+            &mut attachment,
+            &source_image,
+            &source.mime_type,
+            Some(source.byte_length),
+        );
         if let Some(previous) = self.assets.get(&source.asset_id)
-            && previous.source != attachment.source
+            && (matches!(
+                previous.attachment.source,
+                AttachmentSource::Unavailable {
+                    reason: AttachmentUnavailableReason::InvalidData
+                }
+            ) || previous.digest != source_image.digest
+                || previous.mime != source_image.mime
+                || previous.byte_len != source_image.byte_len)
         {
             attachment = AttachmentRef::unavailable(
                 "binary",
@@ -160,8 +211,9 @@ impl Images {
             asset = None;
         }
         ops.extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
+        source_image.attachment = attachment.clone();
         self.assets
-            .insert(source.asset_id.clone(), attachment.clone());
+            .insert(source.asset_id.clone(), source_image.clone());
         for owner in self.owners.values_mut() {
             let mut changed = false;
             for link in owner
@@ -173,7 +225,7 @@ impl Images {
                 let mut resolved = attachment.clone();
                 resolved.id.clone_from(&old.id);
                 resolved.name.clone_from(&old.name);
-                check_metadata(&mut resolved, &link.mime, link.byte_len);
+                check_metadata(&mut resolved, &source_image, &link.mime, link.byte_len);
                 changed |= *old != resolved;
                 owner.row.attachments[link.slot] = resolved;
             }
@@ -187,10 +239,10 @@ impl Images {
     }
 }
 
-fn check_metadata(attachment: &mut AttachmentRef, mime: &str, len: Option<u64>) {
-    if let AttachmentSource::Asset { asset } = &attachment.source
-        && (media::canonical_media_type(mime).is_none_or(|mime| mime != asset.media_type)
-            || len.is_some_and(|len| len != asset.byte_len))
+fn check_metadata(attachment: &mut AttachmentRef, source: &Recorded, mime: &str, len: Option<u64>) {
+    if let AttachmentSource::Asset { .. } = &attachment.source
+        && (media::canonical_media_type(mime).is_none_or(|mime| mime != source.mime)
+            || len.is_some_and(|len| len != source.byte_len))
     {
         *attachment = AttachmentRef::unavailable(
             &attachment.id,

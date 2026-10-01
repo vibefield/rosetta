@@ -35,7 +35,8 @@ impl AgentAdapter for KimiCodeAdapter {
         // 13: a step's first visible row owns its request and the remainder
         // flushes at step.end; fork copies drop usage; negative inputOther
         // clamps; compaction samples name the request model (§4.1.3).
-        13
+        // 14: image members are WebP with bounded display renditions.
+        14
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

@@ -1996,3 +1996,6 @@ async fn status_reports_daemon_health_only_when_a_loop_feeds_it() {
     assert_eq!(daemon["hub"]["subscribers"], 0);
     assert!(daemon["uptime_ms"].is_number());
 }
+
+#[path = "http/image_pipeline.rs"]
+mod image_pipeline;

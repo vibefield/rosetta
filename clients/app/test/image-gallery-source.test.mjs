@@ -5,6 +5,16 @@ import { createGallerySource } from '../renderer/src/components/file-viewer/gall
 const handle = key => ({ key, name: 'image.png', path: null, size: 4 });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
+test('HTTP image resources pass through the gallery without reading byte buffers', () => {
+  let reads = 0;
+  const urls = { full: '/full.webp', preview: '/preview.webp', rail: '/rail.webp', tile: '/tile.webp', tile2x: '/tile2x.webp' };
+  const source = { image: () => urls, read: async () => { reads++; return new Uint8Array(0); } };
+  const gallery = createGallerySource(source);
+  assert.equal(gallery.source.image(handle('one')), urls);
+  assert.equal(reads, 0);
+  gallery.dispose();
+});
+
 test('thumbnail and main image share one read, even when the main image moves on', async () => {
   const loaded = deferred();
   const calls = [];

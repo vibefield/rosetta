@@ -27,7 +27,7 @@ fn chunks_share_one_user_message_and_images_do_not_consume_text_slots() {
     ingest(&mut ctx, json!({"type":"text","text":"before"}), false);
     let checkpoint = GrokAdapter.checkpoint_state(ctx.state.as_deref()).unwrap();
     ctx.state = GrokAdapter.restore_state(checkpoint.as_ref()).unwrap();
-    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII=";
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
     ingest(
         &mut ctx,
         json!({"type":"image","data":png,"mimeType":"image/png"}),

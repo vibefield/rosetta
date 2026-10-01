@@ -2315,7 +2315,7 @@ fn a_turn_with_text_and_a_result_keeps_both() {
 fn valid_authored_image_becomes_a_typed_content_addressed_attachment() {
     let (ops, _) = run(&[user(
         json!([{"type": "image", "source": {
-            "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpib2R5"
+            "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
         }}]),
         json!({}),
     )]);
@@ -2342,7 +2342,7 @@ fn a_stored_image_keeps_claudes_numbered_reference_in_the_authored_text() {
                 "text": "let me show you a draft [Image #1], then refine the outline"
             },
             {"type": "image", "source": {
-                "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpib2R5"
+                "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
             }}
         ]),
         json!({"imagePasteIds": [1]}),
@@ -2960,7 +2960,7 @@ fn image_paste_ids_bind_nonsequential_labels_across_mixed_blocks() {
             {"type":"image","source":{"type":"base64","media_type":"image/png","data":"invalid"}},
             {"type":"document","source":{"type":"text","data":"notes"}},
             {"type":"text","text":"Inspect [Image #12] again; [Image #1] is not attached."},
-            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgpib2R5"}}
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="}}
         ]),
         json!({"imagePasteIds":[7,12]}),
     )]);
@@ -3065,7 +3065,7 @@ fn collaboration_deliveries_retain_images_and_bind_the_delivered_body() {
             &[user(
                 json!([
                     {"type": "text", "text": content},
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpib2R5"}}
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="}}
                 ]),
                 extra,
             )],
@@ -3128,7 +3128,7 @@ fn ambiguous_sibling_delivery_images_are_preserved_without_copying() {
     let (ops, _) = run(&[user(
         json!([
             {"type": "text", "text": "<teammate-message teammate_id=\"a\">A</teammate-message><teammate-message teammate_id=\"b\">B</teammate-message>"},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpib2R5"}}
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="}}
         ]),
         json!({}),
     )]);

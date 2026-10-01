@@ -16,6 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use rosetta_core::assets::ImageVariant;
 pub use rosetta_core::rows::{
     Ms, ProjectRow, RuntimeProvenance, RuntimeRow, SessionActivity, SessionRole, SessionRow,
     StreamState, TokenSnapshot,
@@ -38,7 +39,8 @@ pub use rosetta_store::timeline_meta::{
 /// 23 (2026-09-24): `unrecorded_output` beside every spend figure, and the
 /// unpriced-model coverage report on `/api/pricing`.
 /// 24 (2026-09-30): cumulative reported-cost adjustment beside aggregate spend.
-pub const PROTOCOL_VERSION: u32 = 24;
+/// 25 (2026-10-01): WebP image renditions on asset and canonical file-read URLs.
+pub const PROTOCOL_VERSION: u32 = 25;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

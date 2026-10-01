@@ -126,7 +126,11 @@ async function run() {
     const beforeScroll = await check(() => document.querySelector('.tr-scroll').scrollTop);
     await click(activity + ' > .tr-attachments button.tr-att__tile'); await image(960);
     assert.deepEqual(await check(() => [...document.querySelectorAll('.ah-image-gallery__thumb')].map(node => node.dataset.imageKey)), rowKeys, 'Folded tool/team/peer images share precisely their outer row');
-    assert.equal((await check(async () => (await fetch('/test/image-reads')).json()))['image-read:1'], before['image-read:1'], 'The selected tool image reuses its preview bytes');
+    const viewed = await check(async () => (await fetch('/test/image-reads')).json());
+    assert.ok(viewed['image-read:1:preview'] > 0, 'Fit requests a display preview');
+    assert.equal(viewed['image-read:1:full'], undefined, 'Fit does not request full-size pixels');
+    assert.equal(viewed['image-read:1:original'], undefined, 'The renderer does not buffer original bytes');
+    assert.equal(viewed['image-read:1:tile'], before['image-read:1:tile'], 'Opening does not reload the row tile');
     await click('[data-image-key="s1:image-peer:attachment:1"]'); await image(960);
     await key('Right'); await image(320);
     assert.equal(await check(selected), 's1:image-report:attachment:1', 'Arrows skip an unavailable peer slot without changing its identity');
@@ -165,12 +169,12 @@ async function run() {
     await check(() => window.imageFixture.setFailViewer(false));
     await click('.ah-fileview__retry'); await image(320);
     await click(thumbs, 4);
-    await until(() => document.querySelector('.ah-fileview__state b')?.textContent.includes('not an image'), 'Decode failure did not keep the viewer usable');
+    await until(() => document.querySelector('.ah-fileview__state b')?.textContent.includes('Could not load'), 'Decode failure did not keep the viewer usable');
     await check(() => window.imageFixture.setBadDecode(false));
     await click('.ah-fileview__retry'); await image(960);
     await click(thumbs, 5); await image(320);
     assert.equal(await check(() => document.querySelector('.ah-fileview__title strong').textContent), 'capture');
-    assert.equal(await check(() => document.querySelector('.ah-fileview__kind').textContent), 'PNG', 'Extensionless image navigation uses the recorded bytes');
+    assert.equal(await check(() => document.querySelector('.ah-fileview__kind').textContent), 'Image', 'URL image navigation does not guess a format from the recorded filename');
     await check(() => window.imageFixture.clearSession());
     await until(() => !document.querySelector('[role="dialog"]'), 'Session change retained its gallery');
     // The living design record demonstrates the same row-scoped navigation.

@@ -48,7 +48,7 @@ fn images_and_text_replace_the_same_prompt_without_changing_other_messages() {
         "other-text",
         json!({"type":"text","text":"different prompt"}),
     );
-    let image = json!({"type":"file","mime":"image/png","filename":"test.png","url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII="});
+    let image = json!({"type":"file","mime":"image/png","filename":"test.png","url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="});
     ingest(&mut ctx, "owner", "image-one", image.clone());
     ingest(&mut ctx, "owner", "image-two", image);
     let last = ingest(

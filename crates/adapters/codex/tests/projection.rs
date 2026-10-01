@@ -1206,7 +1206,7 @@ fn only_assistant_rows_carry_a_model() {
 
 // Writer-derived ContentItem cases (0.150.1), not native capture fixtures.
 const IMAGE_PNG: &str =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII=";
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
 
 #[test]
 fn image_triplets_preserve_occurrences_strip_only_paired_wrappers_and_bind_exact_spans() {

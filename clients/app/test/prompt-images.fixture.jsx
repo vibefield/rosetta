@@ -43,6 +43,13 @@ client.readAsset = async (asset, signal) => {
   if (asset.url.includes('gallery-decode') && window.imageFixture.badDecode) return new TextEncoder().encode('not a valid image');
   return readAsset(asset, signal);
 };
+const imageAssetUrl = client.imageAssetUrl.bind(client);
+client.imageAssetUrl = (asset, variant) => {
+  const url = new URL(imageAssetUrl(asset, variant));
+  if (asset.url.includes('gallery-retry') && window.imageFixture.failViewer) url.searchParams.set('fail', 'read');
+  if (asset.url.includes('gallery-decode') && window.imageFixture.badDecode) url.searchParams.set('fail', 'decode');
+  return url.toString();
+};
 let ordinal = 0;
 function message(text, id, attachments) {
   ordinal += 1;

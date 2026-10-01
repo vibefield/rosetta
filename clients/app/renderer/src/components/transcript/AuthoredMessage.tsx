@@ -33,6 +33,6 @@ export function AuthoredMessage({ text, recordedText, attachments, messageKey, r
   return <>
     {renderText ? renderText(content) : content}
     <Attachments facts={shared ? attachments.filter(fact => fact.kind !== "image") : attachments}
-      onOpenAttachment={open} onPreview={actions.onPreview} reveal={actions.reveal} />
+      onOpenAttachment={open} reveal={actions.reveal} />
   </>;
 }

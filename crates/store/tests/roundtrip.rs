@@ -1147,6 +1147,7 @@ fn collaboration_message_codec_round_trips_address_and_member_body() {
         AttachmentKind::Image,
         rosetta_core::timeline::AttachmentSource::Asset {
             asset: rosetta_core::timeline::AssetRef {
+                image_variants: None,
                 url: image_asset.url().unwrap(),
                 digest: image_asset.digest.clone(),
                 media_type: image_asset.media_type.clone(),

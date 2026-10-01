@@ -58,7 +58,7 @@ export function createGallerySource(source: FileSource, limit = 64 * 1024 * 1024
     });
   };
   return {
-    source: { read } satisfies FileSource,
+    source: { read, image: source.image?.bind(source) } satisfies FileSource,
     invalidate: (key: string) => forget(key),
     dispose: () => {
       for (const request of pending.values()) request.controller.abort();

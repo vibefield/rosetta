@@ -103,3 +103,5 @@ export type * from "./generated/WorkflowWorker";
 export type * from "./generated/WorkflowWorkerState";
 export type * from "./generated/serde_json/JsonValue";
 export * from "./client";
+
+export type { ImageVariant } from "./generated/ImageVariant";
