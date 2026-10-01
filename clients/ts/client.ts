@@ -39,6 +39,7 @@ import type { TimelineMetaPlanSource } from "./generated/TimelineMetaPlanSource"
 import type { ToolInteraction } from "./generated/ToolInteraction";
 import type { PricingResponse } from "./generated/PricingResponse";
 import type { UsageResponse } from "./generated/UsageResponse";
+import type { DayUsageResponse } from "./generated/DayUsageResponse";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
 
@@ -444,6 +445,21 @@ export class RosettaClient {
       `/api/projects/${encodeURIComponent(projectId)}/usage${queryString({
         since_ms: options.sinceMs,
         offset_minutes: options.offsetMinutes,
+      })}`,
+      withSignal(signal),
+    );
+  }
+
+  /** Hourly model tokens for one date, using the heatmap's timezone offset. */
+  dayUsage(
+    projectId: string,
+    day: string,
+    offsetMinutes = 0,
+    signal?: AbortSignal,
+  ): Promise<DayUsageResponse> {
+    return this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/usage/day${queryString({
+        day, offset_minutes: offsetMinutes,
       })}`,
       withSignal(signal),
     );

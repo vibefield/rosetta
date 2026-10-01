@@ -19,6 +19,7 @@ export interface CalendarHeatmapProps {
   readonly selectedDayId?: string;
   readonly onDaySelect?: (day: CalendarHeatmapCellData) => void;
   readonly onDayPreview?: (day: CalendarHeatmapCellData | null) => void;
+  readonly dayMarkers?: Readonly<Record<string, "current" | "best" | "both">>;
 }
 
 function getIntensityLevel(value: number, peak: number): number {
@@ -41,6 +42,7 @@ export function CalendarHeatmap({
   selectedDayId,
   onDaySelect,
   onDayPreview,
+  dayMarkers,
 }: CalendarHeatmapProps) {
   const availableDays = useMemo(
     () => data.weeks.flatMap((week) => week.days).filter((day) => day.value !== null),
@@ -100,6 +102,7 @@ export function CalendarHeatmap({
                     className="ah-calendar-heatmap__cell"
                     key={day.id}
                     data-day={day.id}
+                    data-run={dayMarkers?.[day.id]}
                     data-empty={day.value === 0 ? "" : undefined}
                     style={{ "--heatmap-intensity": intensity } as HeatmapCellStyle}
                     aria-label={day.label}

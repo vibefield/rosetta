@@ -14,8 +14,9 @@ import {
   createModelUsageStreamgraphData,
 } from "../lib/chart-data";
 import { fmtTokens, tokenText } from "../lib/format";
+import { createModelColors } from "../lib/model-labels";
 import { FullscreenGlyph, GitHubGlyph, StatsGlyph, TreeGlyph } from "../lib/icons";
-import { getCalendarDayKey } from "../lib/model";
+import { getCalendarDayKey, getViewerUtcOffsetMinutes } from "../lib/model";
 import type { ProjectViewModel } from "../lib/model";
 import { NO_SPEND, addSpend, coverage, fmtUsd, spendDescription, usdText } from "../lib/spend";
 import type { Spend } from "../lib/spend";
@@ -153,6 +154,7 @@ export function ProjectSummaryPanel({
         ).hour
       : null;
   const primaryModelLabel = modelUsageData.series[0]?.label ?? null;
+  const modelColors = useMemo(() => createModelColors(usage?.models.map(row => row.model) ?? []), [usage]);
   // The repo act opens a REMOTE. A git_repo that is a local path is a fact
   // about discovery, not an address anyone can visit — no button for it.
   const repositoryUrl =
@@ -324,10 +326,10 @@ export function ProjectSummaryPanel({
           </div>
         </div>
       )}
-      {isActivityOpen && <ActivityChartDialog name={project.row.name} color={project.tint}
+      {isActivityOpen && <ActivityChartDialog projectId={project.row.id} name={project.row.name} color={project.tint}
         data={heatmapData} today={getCalendarDayKey(currentTimestamp)}
-        activityStats={activityStats} peakHourLabel={peakHour === null ? null : formatHourLabel(peakHour)}
-        primaryModelLabel={primaryModelLabel}
+        offsetMinutes={getViewerUtcOffsetMinutes()} currentTimestamp={currentTimestamp}
+        modelColors={modelColors}
         onClose={() => setIsActivityOpen(false)} />}
     </div>
   );

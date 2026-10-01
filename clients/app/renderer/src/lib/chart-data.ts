@@ -4,6 +4,7 @@ import type {
   StreamgraphData,
   StreamgraphSeriesData,
 } from "../components/charts";
+import { createModelColors, formatModelLabel } from "./model-labels";
 import { ACTIVITY_HEATMAP_WEEK_COUNT, getCalendarDayKey } from "./model";
 
 const DAY_IN_MS = 86_400_000;
@@ -142,19 +143,6 @@ export function calculateActivityStats(
   return { activeDayCount, currentStreakLength, longestStreakLength };
 }
 
-function modelColor(modelId: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < modelId.length; index += 1) {
-    hash ^= modelId.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `var(--vf-accent-${((hash >>> 0) % 8) + 1})`;
-}
-
-function formatModelLabel(modelId: string): string {
-  return modelId.startsWith("claude-") ? modelId.slice("claude-".length) : modelId;
-}
-
 function createStreamgraphDomain(currentTimestamp: number): StreamgraphData["domain"] {
   const visibleTickIndices = new Set([0, 10, 20, STREAMGRAPH_DAY_COUNT - 1]);
   return Array.from({ length: STREAMGRAPH_DAY_COUNT }, (_, dayIndex) => {
@@ -179,6 +167,7 @@ export function createModelUsageStreamgraphData(
   const domain = createStreamgraphDomain(currentTimestamp);
   const visibleDays = new Set(domain.map((point) => point.id));
   const tokensByModelAndDay = new Map<string, Map<string, number>>();
+  const modelColors = createModelColors(usage.models.map(row => row.model));
 
   for (const row of usage.models) {
     if (!visibleDays.has(row.day) || !Number.isFinite(row.tokens) || row.tokens <= 0) continue;
@@ -194,7 +183,7 @@ export function createModelUsageStreamgraphData(
       return {
         id: modelId,
         label: formatModelLabel(modelId),
-        color: modelColor(modelId),
+        color: modelColors[modelId],
         values,
         total: values.reduce((sum, value) => sum + value, 0),
       };

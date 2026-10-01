@@ -140,6 +140,15 @@ pub struct HourTotal {
     pub spend: Spend,
 }
 
+/// One model's tokens in an hour of the caller-selected calendar day.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ModelHour {
+    pub hour: i64,
+    pub model: String,
+    pub tokens: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ContributionRow {
@@ -1401,6 +1410,38 @@ pub fn model_days_in_timezone_for_scope(
         out.push(row?);
     }
     Ok(out)
+}
+
+/// A selected day's hourly model breakdown, using the heatmap's exact scope,
+/// token buckets and timezone arithmetic. Absent hours have no recorded usage.
+pub fn model_hours_for_day_in_timezone_for_scope(
+    conn: &Connection,
+    project_id: Option<&str>,
+    day: &str,
+    offset_minutes: i32,
+) -> Result<Vec<ModelHour>, StoreError> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "WITH {SCOPE_SESSIONS}
+         SELECT CAST(strftime('%H', (b.hour_ts + ?3 * 60000) / 1000, 'unixepoch') AS INTEGER) AS hour,
+                b.model,
+                SUM(COALESCE(b.in_tokens,0) + COALESCE(b.out_tokens,0)
+                    + COALESCE(b.cache_r_tokens,0) + COALESCE(b.cache_w_tokens,0)
+                    + COALESCE(b.cache_w1h_tokens,0) + COALESCE(b.think_tokens,0)) AS tokens
+         FROM usage_bucket b
+         JOIN scope t ON t.session_id = b.session_id
+         WHERE b.hour_ts >= unixepoch(?2) * 1000 - ?3 * 60000
+           AND b.hour_ts < (unixepoch(?2) + 86400) * 1000 - ?3 * 60000
+         GROUP BY hour, b.model ORDER BY hour, b.model"
+    ))?;
+    let rows = stmt.query_map(params![project_id, day, offset_minutes], |row| {
+        Ok(ModelHour {
+            hour: row.get(0)?,
+            model: row.get(1)?,
+            tokens: row.get(2)?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
 }
 
 /// Tokens by hour of day (0–23) over the window — which hours a project's

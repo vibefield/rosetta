@@ -85,6 +85,8 @@ export type * from "./generated/StatusBasis";
 export type * from "./generated/ToolStatus";
 export type * from "./generated/UsageCost";
 export type * from "./generated/UsageResponse";
+export type * from "./generated/DayUsageResponse";
+export type * from "./generated/ModelHour";
 export type * from "./generated/UsageScope";
 export type * from "./generated/PricingResponse";
 export type * from "./generated/PricingSource";

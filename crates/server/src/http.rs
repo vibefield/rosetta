@@ -23,8 +23,8 @@ use serde_json::json;
 
 use rosetta_protocol::{
     ApiError, BoostRequest, BoostResponse, CollaborationTimeline, CommandResponse,
-    ContributionResponse, DiscoveriesResponse, EnableRequest, EnableResponse, ErrorCode,
-    HeatmapResponse, PROTOCOL_VERSION, PricingResponse, PricingSource, ProjectsResponse,
+    ContributionResponse, DayUsageResponse, DiscoveriesResponse, EnableRequest, EnableResponse,
+    ErrorCode, HeatmapResponse, PROTOCOL_VERSION, PricingResponse, PricingSource, ProjectsResponse,
     RuntimesResponse, SearchRequest, SearchResponse, SessionResponse, SessionsResponse,
     StatusResponse, TimelineCursor, TimelineEntryResponse, TimelinePage, UnpricedModel,
     UsageResponse,
@@ -251,6 +251,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects", get(projects))
         .route("/api/projects/{id}/heatmap", get(heatmap))
         .route("/api/projects/{id}/usage", get(usage))
+        .route("/api/projects/{id}/usage/day", get(day_usage))
         .route("/api/projects/{id}/contribution", get(contribution))
         .route("/api/pricing", get(pricing))
         .route("/api/sessions", get(sessions))
@@ -1158,6 +1159,45 @@ async fn usage(
             queries::hour_profile_in_timezone_for_scope(conn, project_id, since_ms, offset_minutes)
                 .map_err(store_err)?;
         Ok(UsageResponse { models, hours })
+    })
+    .await?;
+    Ok(Json(response))
+}
+
+#[derive(serde::Deserialize)]
+struct DayUsageQuery {
+    day: String,
+    offset_minutes: Option<i32>,
+}
+
+async fn day_usage(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Query(query): Query<DayUsageQuery>,
+) -> Result<Json<DayUsageResponse>, Failure> {
+    require_canonical_aggregates(&state.projection)?;
+    let response = with_read(state.projection.clone(), move |conn| {
+        let offset = query.offset_minutes.unwrap_or(0);
+        let normalized: Option<String> = conn
+            .query_row("SELECT date(?1, '+0 days')", [&query.day], |row| row.get(0))
+            .map_err(|error| store_err(error.into()))?;
+        if query.day.len() != 10
+            || normalized.as_deref() != Some(query.day.as_str())
+            || !(-840..=840).contains(&offset)
+        {
+            return Err(Failure::bad_request(
+                "Expected a YYYY-MM-DD date and an offset between -840 and 840 minutes",
+            ));
+        }
+        let project_id = (id != UNASSIGNED_PROJECT_ID).then_some(id.as_str());
+        let models = queries::model_hours_for_day_in_timezone_for_scope(
+            conn, project_id, &query.day, offset,
+        )
+        .map_err(store_err)?;
+        Ok(DayUsageResponse {
+            day: query.day,
+            models,
+        })
     })
     .await?;
     Ok(Json(response))

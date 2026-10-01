@@ -1,12 +1,13 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { CalendarHeatmap } from "./CalendarHeatmap";
+import { DayActivityChart } from "./DayActivityChart";
 import type { CalendarHeatmapCellData, CalendarHeatmapData } from "./types";
 import { ColumnHeading, DialogShell, SegmentedControl } from "../ui";
 import { CloseGlyph, ExitFullscreenGlyph, FullscreenGlyph } from "../../lib/icons";
 import { createActivityDetails } from "../../lib/activity-details";
-import type { ActivityRange } from "../../lib/activity-details";
-import type { ActivityStats } from "../../lib/chart-data";
+import type { ActivityRange, ActivityRun } from "../../lib/activity-details";
+import { useDayUsage } from "../../lib/use-day-usage";
 import { tokenText } from "../../lib/format";
 import "../../styles/activity-chart.css";
 
@@ -17,163 +18,164 @@ const RANGE_OPTIONS = [
 ] as const;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-function dateLabel(key: string, weekday = false): string {
+function dateLabel(key: string, weekday = false, year = false): string {
   return new Date(`${key}T12:00:00`).toLocaleDateString("en-US", {
-    ...(weekday ? { weekday: "long" as const } : {}),
-    month: "short", day: "numeric", year: "numeric",
+    ...(weekday ? { weekday: "short" as const } : {}),
+    ...(weekday || year ? { year: "numeric" as const } : {}),
+    month: "short", day: "numeric",
   });
 }
 
 export interface ActivityChartDialogProps {
+  readonly projectId: string;
   readonly name: string;
   readonly color: string;
   readonly data: CalendarHeatmapData;
   readonly today: string;
-  /** The same full-history streaks and usage highlights as the compact card.
-   * These keep their stated periods when the calendar range changes. */
-  readonly activityStats: ActivityStats;
-  readonly peakHourLabel: string | null;
-  readonly primaryModelLabel: string | null;
+  readonly offsetMinutes: number;
+  readonly currentTimestamp: number;
+  readonly modelColors: Readonly<Record<string, string>>;
   readonly onClose: () => void;
 }
 
 export function ActivityChartDialog({
-  name, color, data, today, activityStats, peakHourLabel, primaryModelLabel, onClose,
+  projectId, name, color, data, today, offsetMinutes, currentTimestamp, modelColors, onClose,
 }: ActivityChartDialogProps) {
   const [range, setRange] = useState<ActivityRange>("53w");
   const [fullscreen, setFullscreen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [preview, setPreview] = useState<CalendarHeatmapCellData | null>(null);
+  const [calendarElement, setCalendarElement] = useState<HTMLDivElement | null>(null);
+  const [calendarWidth, setCalendarWidth] = useState(1000);
+  const [calendarPage, setCalendarPage] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const node = calendarElement;
+    if (!node) return;
+    const measure = () => setCalendarWidth(node.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [calendarElement]);
   const details = useMemo(() => createActivityDetails(data, range, today), [data, range, today]);
-  const selectedDay = details.days.find((day) => day.id === selectedId && day.value !== null)
-    ?? details.days.filter((day) => day.value !== null).at(-1) ?? null;
-  const inspectedDay = details.days.find((day) => day.id === preview?.id && day.value !== null)
-    ?? selectedDay;
-  const monthlyPeak = Math.max(1, ...details.months.map((month) => month.total));
-  const weekdayPeak = Math.max(1, ...details.weekdays.map((day) => day.average ?? 0));
-  const dailyPeak = Math.max(0, ...details.days.map((day) => day.value ?? 0));
-  const isShortRange = range !== "53w";
-  const hasRecordedActivity = data.weeks.some((week) =>
-    week.days.some((day) => day.id <= today && day.value !== null),
-  );
-  const selectDay = (day: CalendarHeatmapCellData) => { setSelectedId(day.id); setPreview(null); };
+  const history = useMemo(() => createActivityDetails(data, "53w", today), [data, today]);
+  const currentIsBest = Boolean(history.currentRun && history.currentRun.start === history.bestRun?.start);
+  const availableDays = details.days.filter(day => day.value !== null);
+  const selectedDay = availableDays.find(day => day.id === selectedId)
+    ?? availableDays.filter(day => day.value! > 0).at(-1) ?? availableDays.at(-1) ?? null;
+  const selectedIndex = availableDays.findIndex(day => day.id === selectedDay?.id);
+  // Page weeks only when the window cannot keep the day targets readable.
+  // Day selection and the previous/next-day actions follow their calendar page.
+  const maxWeeks = Math.max(1, Math.floor((calendarWidth - 30) / 16));
+  const pageCount = Math.max(1, Math.ceil(details.calendar.weeks.length / maxWeeks));
+  const weeksPerPage = Math.max(1, Math.ceil(details.calendar.weeks.length / pageCount));
+  const selectedWeek = details.calendar.weeks.findIndex(week => week.days.some(day => day.id === selectedDay?.id));
+  const page = Math.min(pageCount - 1, calendarPage ?? Math.floor(Math.max(0, selectedWeek) / weeksPerPage));
+  const visibleCalendar = { weeks: details.calendar.weeks.slice(page * weeksPerPage, (page + 1) * weeksPerPage) };
+  const calendarLayoutWidth = Math.min(calendarWidth, Math.max(300, visibleCalendar.weeks.length * 16 + 30));
+  const usage = useDayUsage(projectId, selectedDay?.id ?? null, offsetMinutes);
+  const modelRows = usage.data?.models ?? [];
+  const hourlyTotal = modelRows.reduce((sum, row) => sum + row.tokens, 0);
+  const selectDay = (day: CalendarHeatmapCellData) => { setSelectedId(day.id); setPreview(null); setCalendarPage(null); };
+  const markers: Record<string, "current" | "best" | "both"> = {};
+  for (const day of history.days) {
+    const current = history.currentRun && day.id >= history.currentRun.start && day.id <= history.currentRun.end;
+    const best = history.bestRun && day.id >= history.bestRun.start && day.id <= history.bestRun.end;
+    if (current || best) markers[day.id] = current && best ? "both" : current ? "current" : "best";
+  }
+  const jumpToRun = (run: ActivityRun) => {
+    if (run.end < details.start) setRange("53w");
+    setSelectedId(run.end); setPreview(null); setCalendarPage(null);
+  };
 
-  return (
-    <DialogShell title={`${name} activity`} onClose={onClose} fullscreen={fullscreen}
-      onExitFullscreen={() => setFullscreen(false)}>
-      <header className="ah-fileview__head">
-        <div className="ah-fileview__title">
-          <ColumnHeading name={name} tint={color} />
-          <span className="ah-fileview__kind">Activity</span>
-        </div>
-        <div className="ah-fileview__acts">
-          <button className="ah-iconbtn" type="button" aria-pressed={fullscreen}
-            title={fullscreen ? "Exit full screen (Esc)" : "View full screen"}
-            aria-label={fullscreen ? "Exit full screen" : "View full screen"}
-            onClick={() => setFullscreen((current) => !current)}>
-            {fullscreen ? <ExitFullscreenGlyph /> : <FullscreenGlyph />}
-          </button>
-          <button className="ah-iconbtn" type="button" title="Close (Esc)"
-            aria-label="Close activity chart" onClick={onClose}><CloseGlyph /></button>
-        </div>
-      </header>
-      <div className="ah-activity" style={{ "--activity-color": color } as CSSProperties}>
+  return <DialogShell title={`${name} activity`} onClose={onClose} fullscreen={fullscreen}
+    onExitFullscreen={() => setFullscreen(false)}>
+    <header className="ah-fileview__head">
+      <div className="ah-fileview__title"><ColumnHeading name={name} tint={color} />
+        <span className="ah-fileview__kind">Activity</span></div>
+      <div className="ah-fileview__acts">
+        <button className="ah-iconbtn" type="button" aria-pressed={fullscreen}
+          title={fullscreen ? "Exit full screen (Esc)" : "View full screen"}
+          aria-label={fullscreen ? "Exit full screen" : "View full screen"}
+          onClick={() => setFullscreen(current => !current)}>
+          {fullscreen ? <ExitFullscreenGlyph /> : <FullscreenGlyph />}</button>
+        <button className="ah-iconbtn" type="button" title="Close (Esc)"
+          aria-label="Close activity chart" onClick={onClose}><CloseGlyph /></button>
+      </div>
+    </header>
+    <div className="ah-activity" style={{ "--activity-color": color } as CSSProperties}>
+      <section className="ah-activity__calendar" aria-labelledby="activity-calendar-title">
         <div className="ah-activity__toolbar">
-          <div><h2>Activity over time</h2><p>{dateLabel(details.start)} – {dateLabel(details.end)}</p></div>
-          <SegmentedControl value={range} options={RANGE_OPTIONS} accessibleLabel="Activity date range"
-            onValueChange={(value) => { setRange(value); setPreview(null); }} />
-        </div>
-        <dl className="ah-activity__highlights" aria-label="Project activity highlights">
-          <div><dt>Current streak</dt>
-            <dd>{hasRecordedActivity ? `${activityStats.currentStreakLength}d` : "—"}</dd>
-            <small>Consecutive days through today</small></div>
-          <div><dt>Best streak</dt>
-            <dd>{hasRecordedActivity ? `${activityStats.longestStreakLength}d` : "—"}</dd>
-            <small>53-week history</small></div>
-          <div><dt>Peak hour</dt><dd>{peakHourLabel ?? "—"}</dd>
-            <small>53 weeks · local time</small></div>
-          <div><dt>Primary model</dt><dd className="ah-activity__model" title={primaryModelLabel ?? undefined}>
-            {primaryModelLabel ?? "—"}</dd><small>Last 30 days · by tokens</small></div>
-        </dl>
-        <dl className="ah-activity__stats">
-          <div><dt>Total tokens</dt><dd>{details.total === null ? "—" : tokenText(details.total)}</dd></div>
-          <div><dt>Active days</dt><dd>{details.total === null ? "—" : details.activeDayCount}
-            <small> / {details.recordedDayCount} recorded</small></dd></div>
-          <div><dt>Best streak in range</dt><dd>{details.total === null ? "—" : `${details.longestStreak}d`}</dd></div>
-          <div><dt>Average / recorded day</dt><dd>{details.total === null ? "—"
-            : tokenText(Math.round(details.total / details.recordedDayCount))}</dd></div>
-        </dl>
-        <section className="ah-activity__calendar ah-activity__panel" aria-labelledby="activity-calendar-title">
-          <div className="ah-activity__sectionhead"><h3 id="activity-calendar-title">Daily tokens</h3>
-            <p>Hover to inspect · click to select · arrow keys to move</p></div>
-          <div className="ah-activity__calendar-main" data-short-range={isShortRange ? "" : undefined}
-            style={{ "--activity-short-width": `${Math.max(330, details.calendar.weeks.length * 25 + 36)}px` } as CSSProperties}>
-            <div className="ah-activity__calendar-scroll">
-              <div className="ah-activity__calendar-layout" style={{
-                "--activity-weeks": details.calendar.weeks.length,
-                minWidth: Math.min(730, Math.max(330, details.calendar.weeks.length * 15)),
-              } as CSSProperties}>
-                <div className="ah-activity__weekdays" aria-hidden="true">{WEEKDAYS.map((day) => <span key={day}>{day}</span>)}</div>
-                <CalendarHeatmap data={details.calendar} color={color}
-                  ariaLabel={`Daily token activity for ${name}. Use arrow keys to navigate days.`}
-                  summary={`${details.recordedDayCount} recorded days`}
-                  selectedDayId={selectedDay?.id} onDaySelect={selectDay} onDayPreview={setPreview} />
-              </div>
-            </div>
-            {isShortRange && <div className="ah-activity__daily">
-              <p>Daily totals <span>{details.total === null ? "No recorded days" : `${tokenText(dailyPeak)} peak`}</span></p>
-              <div className="ah-activity__daily-plot" role="group" aria-label="Daily token totals"
-                onMouseLeave={() => setPreview(null)}>
-                {details.days.map((day) => day.value === null ? <span key={day.id} /> :
-                  <button key={day.id} type="button" tabIndex={-1} aria-label={day.label}
-                    aria-pressed={selectedDay?.id === day.id} data-trend-day={day.id}
-                    onClick={() => selectDay(day)} onMouseEnter={() => setPreview(day)}
-                    onFocus={() => setPreview(day)} onBlur={() => setPreview(null)}>
-                    <i style={{ height: `${dailyPeak > 0 ? day.value / dailyPeak * 100 : 0}%` }} />
-                  </button>)}
-              </div>
-              <div className="ah-activity__daily-axis"><span>{dateLabel(details.start)}</span><span>{dateLabel(details.end)}</span></div>
+          <div><h2 id="activity-calendar-title">Daily activity</h2>
+            <p>{dateLabel(details.start, false, true)} – {dateLabel(details.end, false, true)} · {details.activeDayCount} active days</p></div>
+          <div className="ah-activity__calendar-controls">
+            <SegmentedControl value={range} options={RANGE_OPTIONS} accessibleLabel="Activity date range"
+              onValueChange={value => { setRange(value); setPreview(null); setCalendarPage(null); }} />
+            {pageCount > 1 && <div className="ah-activity__calendar-nav" aria-label="Calendar pages">
+              <button type="button" aria-label="Earlier calendar weeks" disabled={page === 0}
+                onClick={() => { setCalendarPage(page - 1); setPreview(null); }}>←</button>
+              <span>{page + 1}/{pageCount}</span>
+              <button type="button" aria-label="Later calendar weeks" disabled={page === pageCount - 1}
+                onClick={() => { setCalendarPage(page + 1); setPreview(null); }}>→</button>
             </div>}
           </div>
-          <div className="ah-activity__inspection">
-            <div>{inspectedDay ? <><span>{dateLabel(inspectedDay.id, true)}</span>
-              <strong>{inspectedDay.value!.toLocaleString()} <small>tokens</small></strong>
-              <span>{details.total ? `${(inspectedDay.value! / details.total * 100).toFixed(1)}% of this range`
-                : "No recorded token activity on this day"}</span></>
-              : <span>No recorded days in this range</span>}</div>
-            {details.busiestDay && <button type="button" className="ah-activity__jump"
-              onClick={() => selectDay(details.busiestDay!)}>Busiest day <span>{dateLabel(details.busiestDay.id)}</span></button>}
-          </div>
-        </section>
-        <div className="ah-activity__breakdowns">
-          <section className="ah-activity__panel" aria-labelledby="activity-months-title">
-            <div className="ah-activity__sectionhead"><h3 id="activity-months-title">Monthly totals</h3>
-              <p>Within the selected range</p></div>
-            <ol className="ah-activity__months">
-              {details.months.map((month) => {
-                const label = new Date(`${month.id}-01T12:00:00`).toLocaleDateString("en-US", { month: "short", year: "2-digit" });
-                return <li key={month.id} title={`${label}: ${month.recordedDays ? `${month.total.toLocaleString()} tokens` : "not recorded"}`}>
-                  <span>{month.recordedDays ? tokenText(month.total) : "—"}</span>
-                  <div className="ah-activity__month-track" aria-hidden="true"><i style={{ height: `${month.total / monthlyPeak * 100}%` }} /></div>
-                  <span>{label}</span>
-                </li>;
-              })}
-            </ol>
-          </section>
-          <section className="ah-activity__panel" aria-labelledby="activity-weekdays-title">
-            <div className="ah-activity__sectionhead"><h3 id="activity-weekdays-title">By weekday</h3>
-              <p>Average tokens / recorded day</p></div>
-            <ol className="ah-activity__weekday-bars">
-              {details.weekdays.map((day) => <li key={day.day}
-                title={`${WEEKDAYS[day.day]}: ${day.recordedDays} recorded days`}>
-                <span>{WEEKDAYS[day.day]}</span>
-                <div aria-hidden="true"><i style={{ width: `${(day.average ?? 0) / weekdayPeak * 100}%` }} /></div>
-                <b>{day.average === null ? "—" : tokenText(Math.round(day.average))}</b>
-              </li>)}
-            </ol>
-          </section>
         </div>
-      </div>
-    </DialogShell>
-  );
+        <div className="ah-activity__calendar-scroll" ref={setCalendarElement}>
+          <div className="ah-activity__calendar-layout" data-short-range={range !== "53w" ? "" : undefined} style={{
+            "--activity-weeks": visibleCalendar.weeks.length,
+            "--activity-footer-width": `${Math.max(0, calendarLayoutWidth - 30)}px`,
+            width: calendarLayoutWidth,
+          } as CSSProperties}>
+            <div className="ah-activity__weekdays" aria-hidden="true">{WEEKDAYS.map(day => <span key={day}>{day}</span>)}</div>
+            <CalendarHeatmap data={visibleCalendar} color={color}
+              ariaLabel={`Daily token activity for ${name}. Use arrow keys to navigate days.`}
+              summary={preview ? `${dateLabel(preview.id)} · ${tokenText(preview.value!)} tokens`
+                : "Select a day"}
+              selectedDayId={selectedDay?.id} onDaySelect={selectDay} onDayPreview={setPreview}
+              dayMarkers={markers} />
+          </div>
+        </div>
+        <div className="ah-activity__runs" aria-label="Activity runs in the 53-week history">
+          {history.currentRun && <button type="button" className="ah-activity__run" data-run-link="current"
+            title={`${dateLabel(history.currentRun.start, false, true)} – ${dateLabel(history.currentRun.end, false, true)}`}
+            onClick={() => jumpToRun(history.currentRun!)}><i data-kind={currentIsBest ? "both" : "current"} />
+            <span>{currentIsBest ? "Current & longest run" : "Current run"} <b>{history.currentRun.length} days</b></span>
+            <small>{dateLabel(history.currentRun.start)} – {dateLabel(history.currentRun.end)}</small></button>}
+          {history.bestRun && !currentIsBest && <button type="button" className="ah-activity__run" data-run-link="best"
+            title={`${dateLabel(history.bestRun.start, false, true)} – ${dateLabel(history.bestRun.end, false, true)}`}
+            onClick={() => jumpToRun(history.bestRun!)}><i data-kind="best" />
+            <span>Longest run <b>{history.bestRun.length} days</b></span>
+            <small>{dateLabel(history.bestRun.start)} – {dateLabel(history.bestRun.end)}</small></button>}
+          {details.busiestDay && <button type="button" className="ah-activity__jump"
+            onClick={() => selectDay(details.busiestDay!)}>Busiest day <span>{dateLabel(details.busiestDay.id)}</span></button>}
+        </div>
+      </section>
+      <section className="ah-activity__day" aria-labelledby="activity-day-title" aria-busy={Boolean(selectedDay && usage.status === "loading")}>
+        <div className="ah-activity__dayhead">
+          <div>
+            <h2 id="activity-day-title">{selectedDay ? dateLabel(selectedDay.id, true) : "No recorded days"}</h2>
+            <p>{selectedDay ? `${tokenText(usage.status === "ready" && hourlyTotal > 0 ? hourlyTotal : selectedDay.value!)} tokens · hourly activity by model · local time`
+              : "Activity will appear here when usage is recorded."}</p></div>
+          <div className="ah-activity__daynav">
+            <button type="button" aria-label="Previous recorded day" disabled={selectedIndex <= 0}
+              onClick={() => selectDay(availableDays[selectedIndex - 1])}>←</button>
+            <button type="button" aria-label="Next recorded day" disabled={selectedIndex < 0 || selectedIndex >= availableDays.length - 1}
+              onClick={() => selectDay(availableDays[selectedIndex + 1])}>→</button>
+          </div>
+        </div>
+        {!selectedDay ? <div className="ah-activity__empty">Choose a recorded day in the calendar to explore it.</div>
+          : usage.status === "loading" ? <div className="ah-activity__empty" role="status">Loading hourly activity…</div>
+          : usage.status === "error" ? <div className="ah-activity__empty" role="status">
+            <strong>Hourly activity couldn’t be loaded</strong><span>Try loading this day again.</span>
+            <button type="button" onClick={usage.retry}>Retry</button></div>
+          : hourlyTotal === 0 ? <div className="ah-activity__empty">
+            <strong>{selectedDay.value === 0 ? "No token activity on this day" : "Hourly breakdown unavailable"}</strong>
+            <span>{selectedDay.value === 0 ? "Choose another day to see when and which models were used."
+              : "The calendar has a daily total, but no hourly usage was returned for this day."}</span></div>
+          : <><DayActivityChart key={selectedDay.id} rows={modelRows} modelColors={modelColors}
+            lastHour={selectedDay.id === today ? new Date(currentTimestamp).getHours() : 23} />
+            {hourlyTotal !== selectedDay.value && <p className="ah-activity__updated">Usage has changed since the calendar was loaded.</p>}</>}
+      </section>
+    </div>
+  </DialogShell>;
 }

@@ -35,9 +35,7 @@ describe("expanded activity figures", () => {
     assert.equal(result.recordedDayCount, 2);
     assert.equal(result.activeDayCount, 1);
     assert.equal(result.busiestDay.id, "2026-09-25");
-    assert.equal(result.weekdays[0].average, 0);
-    assert.equal(result.weekdays[1].average, null);
-    assert.equal(result.weekdays[5].average, 12);
+
     const missing = createActivityDetails(calendar("2026-09-20", 7, () => null), "53w", "2026-09-26");
     assert.equal(missing.total, null);
     assert.equal(missing.busiestDay, null);
@@ -47,13 +45,14 @@ describe("expanded activity figures", () => {
     assert.equal(zero.busiestDay, null);
   });
 
-  it("reconciles month and weekday totals and divides only by recorded days", () => {
-    const result = createActivityDetails(calendar("2026-08-23", 42, index => index === 7 ? null : index), "30d", "2026-09-30");
-    assert.equal(result.months.reduce((sum, month) => sum + month.total, 0), result.total);
-    assert.equal(result.weekdays.reduce((sum, day) => sum + (day.average ?? 0) * day.recordedDays, 0), result.total);
-    assert.equal(result.months.reduce((sum, month) => sum + month.recordedDays, 0), result.recordedDayCount);
-    assert.equal(result.busiestDay.id, "2026-09-30");
-    assert.equal(result.months.length, 1);
+  it("locates actual current and best runs to mark their calendar dates", () => {
+    const result = createActivityDetails(calendar("2026-09-20", 11,
+      index => [0, 1, 2, 3, 0, null, 1, 2, 0, 1, 1][index]), "53w", "2026-09-30");
+    assert.deepEqual(result.bestRun, { start: "2026-09-21", end: "2026-09-23", length: 3 });
+    assert.deepEqual(result.currentRun, { start: "2026-09-29", end: "2026-09-30", length: 2 });
+    assert.equal(result.runs.length, 3);
+    assert.equal(createActivityDetails(calendar("2026-09-20", 11,
+      index => index === 10 ? 0 : 1), "53w", "2026-09-30").currentRun, null);
   });
 
   it("limits streaks to the range and breaks them at unrecorded days or gaps", () => {

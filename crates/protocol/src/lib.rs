@@ -24,7 +24,7 @@ pub use rosetta_core::{TimelineBody, TimelineEntry, UsageCost};
 pub use rosetta_search::{SearchHit, SearchReadiness, SearchState};
 pub use rosetta_store::hot::{Mutation, Stamp};
 pub use rosetta_store::queries::{
-    ContributionRow, HeatmapDay, HourTotal, ModelDay, ResponseRuntime, Spend,
+    ContributionRow, HeatmapDay, HourTotal, ModelDay, ModelHour, ResponseRuntime, Spend,
 };
 pub use rosetta_store::timeline_meta::{
     TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
@@ -487,6 +487,14 @@ pub struct PricingSource {
 pub struct UsageResponse {
     pub models: Vec<ModelDay>,
     pub hours: Vec<HourTotal>,
+}
+
+/// Hourly model usage for one calendar day at the request's timezone offset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct DayUsageResponse {
+    pub day: String,
+    pub models: Vec<ModelHour>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

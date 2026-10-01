@@ -25,7 +25,9 @@ use rosetta_protocol::{
     TimelineMetaArtifactSource, TimelineMetaPlan, TimelineMetaPlanSource, TimelineMetaTask,
     TimelineMetaWorkflow, TimelinePage, TokenSnapshot, UsageResponse,
 };
-use rosetta_protocol::{PricingResponse, PricingSource, Spend, UnpricedModel, UsageCost};
+use rosetta_protocol::{
+    DayUsageResponse, ModelHour, PricingResponse, PricingSource, Spend, UnpricedModel, UsageCost,
+};
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
 
@@ -650,6 +652,10 @@ fn exemplars() -> serde_json::Value {
                 tokens: 123,
                 spend: Spend::default(),
             }],
+        },
+        "day_usage": DayUsageResponse {
+            day: "2026-09-30".into(),
+            models: vec![ModelHour { hour: 16, model: "claude-opus-5-5".into(), tokens: 123 }],
         },
         "ingest_phases": [
             IngestPhase::Discovering,

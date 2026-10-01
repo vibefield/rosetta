@@ -867,6 +867,125 @@ async fn unassigned_project_scope_reports_projectless_session_figures() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(usage["models"][0]["tokens"], 18);
     assert_eq!(usage["hours"][0]["tokens"], 18);
+    let (status, day) = h
+        .get(&format!("/api/projects/{scope}/usage/day?day=1970-01-01"))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(day["models"][0]["tokens"], 18);
+}
+
+#[tokio::test]
+async fn selected_day_usage_reconciles_hours_models_scope_and_timezone() {
+    let mut h = harness();
+    h.add_child_of_s1("child");
+    let make = |id: &str, hour: i64, model: &str, tokens: TokenSnapshot| {
+        let mut row = message(id, MessageKind::Agent, "hourly usage");
+        row.ts = Some(hour * 3_600_000);
+        row.model = Some(model.into());
+        row.usage = Some(tokens);
+        row
+    };
+    h.append(vec![
+        make(
+            "before",
+            0,
+            "model-a",
+            TokenSnapshot {
+                input: Some(100),
+                ..Default::default()
+            },
+        ),
+        make(
+            "first",
+            1,
+            "model-a",
+            TokenSnapshot {
+                input: Some(1),
+                output: Some(2),
+                cache_read: Some(3),
+                cache_write: Some(4),
+                cache_write_1h: Some(5),
+                thinking: Some(6),
+                ..Default::default()
+            },
+        ),
+        make(
+            "last",
+            24,
+            "model-a",
+            TokenSnapshot {
+                input: Some(9),
+                ..Default::default()
+            },
+        ),
+        make(
+            "after",
+            25,
+            "model-a",
+            TokenSnapshot {
+                input: Some(200),
+                ..Default::default()
+            },
+        ),
+    ]);
+    let mut child = make(
+        "delegated",
+        24,
+        "model-b",
+        TokenSnapshot {
+            input: Some(7),
+            ..Default::default()
+        },
+    );
+    child.session_id = "child".into();
+    h.append_unscoped(vec![child]);
+    let (status, day) = h
+        .get("/api/projects/p1/usage/day?day=1970-01-01&offset_minutes=-60")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        day,
+        serde_json::json!({"day": "1970-01-01", "models": [
+            {"hour": 0, "model": "model-a", "tokens": 21},
+            {"hour": 23, "model": "model-a", "tokens": 9},
+            {"hour": 23, "model": "model-b", "tokens": 7}
+        ]})
+    );
+    let (_, heatmap) = h.get("/api/projects/p1/heatmap?offset_minutes=-60").await;
+    let daily_total = heatmap["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["day"] == "1970-01-01")
+        .unwrap()["tokens"]
+        .as_i64()
+        .unwrap();
+    assert_eq!(
+        daily_total,
+        day["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["tokens"].as_i64().unwrap())
+            .sum::<i64>()
+    );
+    let (_, other) = h.get("/api/projects/other/usage/day?day=1970-01-01").await;
+    assert_eq!(other["models"], serde_json::json!([]));
+    let (_, shifted) = h
+        .get("/api/projects/p1/usage/day?day=1970-01-01&offset_minutes=330")
+        .await;
+    assert_eq!(shifted["models"][0]["hour"], 5);
+    assert_eq!(shifted["models"][1]["hour"], 6);
+    for query in [
+        "day=2026-02-30",
+        "day=2026-13-01",
+        "day=nonsense",
+        "day=1970-01-01&offset_minutes=841",
+    ] {
+        let (status, error) = h.get(&format!("/api/projects/p1/usage/day?{query}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "bad_request");
+    }
 }
 
 #[tokio::test]
@@ -1081,6 +1200,7 @@ async fn cold_ram_projection_serves_canonical_timeline_before_disk_publish() {
     for endpoint in [
         "/api/projects/p1/heatmap",
         "/api/projects/p1/usage",
+        "/api/projects/p1/usage/day?day=1970-01-01",
         "/api/projects/p1/contribution",
     ] {
         let response = app

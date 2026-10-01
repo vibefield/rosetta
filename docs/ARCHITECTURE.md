@@ -1552,6 +1552,21 @@ streams the complete topology so descendant timelines can be embedded recursivel
 `GET /api/sessions/{id}/timeline/{timeline_id}` resolves one exact canonical landing row;
 scoped plan and file routes resolve bytes only after an explicit open action.
 
+The expanded project activity calendar (2026-09-30) selects a recorded day, then
+reads `GET /api/projects/{id}/usage/day?day=YYYY-MM-DD&offset_minutes=N` for its
+24-hour model lines. This additive route uses the heatmap's session-tree scope,
+timezone offset, and six token buckets; hourly models sum back to that day's
+heatmap total. It reads existing `usage_bucket` rows without changing ingestion
+or the projection schema. Cumulative session adjustments retain their recorded
+hour rather than inventing a distribution through the day. Calendar hover only
+previews a date; selection fetches the detail, cancelling superseded requests.
+Streaks are marked on calendar dates; model shares and peak hours are drawn in
+the selected-day chart instead of duplicating the compact summary's metric cards.
+Hourly curves pass through their samples with bounded cubic tangents, so the
+gradient fills and line glow do not introduce extra peaks or negative values.
+For today's unrecorded hours, faint dashed guides continue the current level
+without a fill or numeric value; the readout labels them as awaiting usage.
+
 `WS /ws/collaboration/{id}` carries a complete collaboration-boundary snapshot,
 content-free response model/effort observations, then filtered live changes. It
 does not send private transcript windows or timeline metadata. Team roster

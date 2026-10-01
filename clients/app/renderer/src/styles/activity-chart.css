@@ -19,87 +19,107 @@
 .ah-chart-launcher__button:focus-visible .ah-chart-launcher__hint { opacity: 1; }
 @media (hover: none) { .ah-chart-launcher__button:not(:disabled) .ah-chart-launcher__hint { opacity: 1; } }
 
-.ah-activity { flex: 1; min-height: 0; overflow: auto; padding: 24px; color: var(--vf-text-primary); }
-.ah-activity__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
-.ah-activity h2 { margin: 0 0 5px; font-size: 19px; font-weight: 550; letter-spacing: -0.02em; }
-.ah-activity__toolbar p { margin: 0; font-size: 12px; color: var(--vf-text-tertiary); }
+/* The calendar is a compact date picker; the hourly plot uses the remaining
+   dialog height. Overflow remains available as a fallback, never as clipping. */
+.ah-activity { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 14px 16px; color: var(--vf-text-primary); }
+.ah-activity__calendar { flex: none; min-width: 0; }
+.ah-activity__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.ah-activity h2 { margin: 0 0 3px; font-size: 15px; font-weight: 550; letter-spacing: -.02em; }
+.ah-activity__toolbar p, .ah-activity__dayhead p { margin: 0; font-size: 10px; line-height: 1.4; color: var(--vf-text-tertiary); }
+.ah-activity__calendar-controls { display: flex; align-items: center; gap: 8px; flex: none; }
 .ah-activity__toolbar .ah-seg { flex: none; }
-.ah-activity__toolbar .ah-seg button { font-size: 11px; padding: 6px 12px; }
-.ah-activity__highlights { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 20px; padding: 14px 0; border: 1px solid var(--vf-hairline); border-radius: 12px; }
-.ah-activity__highlights > div { min-width: 0; padding: 0 16px; }
-.ah-activity__highlights > div + div { border-left: 1px solid var(--vf-hairline); }
-.ah-activity__highlights dt { margin-bottom: 7px; font-size: 11px; color: var(--vf-text-tertiary); }
-.ah-activity__highlights dd { margin: 0 0 6px; font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; line-height: 1.3; white-space: nowrap; }
-.ah-activity__highlights dd.ah-activity__model { font-size: 18px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; }
-.ah-activity__highlights small { display: block; font-size: 10px; line-height: 1.4; color: var(--vf-text-tertiary); }
-.ah-activity__stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 20px; }
-.ah-activity__stats > div { padding: 15px 16px; border-radius: 12px; background: var(--vf-fill); }
-.ah-activity__stats dt { font-size: 11px; color: var(--vf-text-tertiary); margin-bottom: 8px; }
-.ah-activity__stats dd { margin: 0; font-size: 25px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
-.ah-activity__stats small { font-size: 11px; color: var(--vf-text-tertiary); font-weight: 400; letter-spacing: 0; white-space: nowrap; }
-.ah-activity__panel { padding: 18px; border: 1px solid var(--vf-hairline); border-radius: 14px; min-width: 0; }
-.ah-activity__sectionhead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.ah-activity h3 { margin: 0; font-size: 12px; font-weight: 550; }
-.ah-activity__sectionhead p { margin: 0; font-size: 10px; color: var(--vf-text-tertiary); }
-.ah-activity__calendar-main[data-short-range] { display: grid; grid-template-columns: minmax(0, var(--activity-short-width)) minmax(0, 1fr); gap: 24px; }
-.ah-activity__calendar-scroll { overflow-x: auto; padding: 3px; margin: -3px; }
-.ah-activity__calendar-layout { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; min-width: 730px; }
-.ah-activity__weekdays { display: grid; grid-template-rows: repeat(7, 1fr); margin-top: 24px; margin-bottom: 27px; align-items: center; font-size: 10px; color: var(--vf-text-tertiary); }
-.ah-activity .ah-calendar-heatmap { width: min(100%, calc(var(--activity-weeks) * 25px - 3px)); }
-.ah-activity .ah-calendar-heatmap__axis { margin: 0 0 8px; height: 16px; }
-.ah-activity .ah-calendar-heatmap__axis span { font-size: 10px; color: var(--vf-text-tertiary); }
-.ah-activity .ah-calendar-heatmap__grid, .ah-activity .ah-calendar-heatmap__week { gap: 3px; }
-.ah-activity .ah-calendar-heatmap__cell { border: 0; padding: 0; border-radius: 3px; min-height: 11px; max-height: 22px; }
+.ah-activity__toolbar .ah-seg button { height: 23px; font-size: 10px; padding: 0 9px; }
+.ah-activity__calendar-nav, .ah-daychart__modelnav { display: flex; align-items: center; gap: 4px; font-size: 9px; color: var(--vf-text-tertiary); }
+.ah-activity__calendar-nav button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: var(--vf-fill); color: var(--vf-text-secondary); font: inherit; font-size: 12px; }
+.ah-activity__calendar-nav button:disabled, .ah-daychart__modelnav button:disabled { opacity: .3; cursor: default; }
+.ah-activity__calendar-scroll { min-width: 0; }
+.ah-activity__calendar-layout { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 6px; max-width: 100%; margin: 0 auto; }
+.ah-activity__weekdays { display: grid; grid-template-rows: repeat(7, 1fr); margin-top: 19px; margin-bottom: 21px; align-items: center; font-size: 9px; color: var(--vf-text-tertiary); }
+.ah-activity .ah-calendar-heatmap { width: min(100%, calc(var(--activity-weeks) * 16px - 2px)); }
+.ah-activity .ah-calendar-heatmap__axis { margin: 0 0 5px; height: 14px; }
+.ah-activity .ah-calendar-heatmap__axis span { font-size: 9px; color: var(--vf-text-tertiary); }
+.ah-activity .ah-calendar-heatmap__grid, .ah-activity .ah-calendar-heatmap__week { gap: 2px; }
+.ah-activity .ah-calendar-heatmap__cell { position: relative; border: 0; padding: 0; border-radius: 2px; min-height: 0; max-height: 14px; }
+.ah-activity .ah-calendar-heatmap__cell[data-run]::after { content: ''; position: absolute; left: 1px; right: 1px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--vf-accent-6); }
+.ah-activity .ah-calendar-heatmap__cell[data-run="best"]::after { background: var(--vf-accent-3); }
+.ah-activity .ah-calendar-heatmap__cell[data-run="both"]::after { background: linear-gradient(90deg, var(--vf-accent-6) 50%, var(--vf-accent-3) 50%); }
 .ah-activity .ah-calendar-heatmap__cell[aria-pressed="true"] { outline: 2px solid var(--vf-foreground); outline-offset: 1px; }
-.ah-activity .ah-calendar-heatmap__cell:hover,
-.ah-activity .ah-calendar-heatmap__cell:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; }
-.ah-activity .ah-calendar-heatmap__footer { margin-top: 12px; font-size: 10px; min-width: 290px; }
-.ah-activity .ah-calendar-heatmap__legend i { width: 10px; height: 10px; }
-.ah-activity__daily { min-width: 0; }
-.ah-activity__daily > p { display: flex; justify-content: space-between; margin: 0 0 9px; font-size: 10px; color: var(--vf-text-secondary); }
-.ah-activity__daily > p span { color: var(--vf-text-tertiary); }
-.ah-activity__daily-plot { height: 171px; display: flex; gap: 2px; border-bottom: 1px solid var(--vf-hairline); background: repeating-linear-gradient(to top, transparent 0, transparent calc(25% - 1px), var(--vf-hairline) calc(25% - 1px), var(--vf-hairline) 25%); }
-.ah-activity__daily-plot > * { flex: 1; min-width: 0; }
-.ah-activity__daily-plot button { display: flex; align-items: flex-end; padding: 0; border: 0; background: transparent; }
-.ah-activity__daily-plot i { display: block; width: 100%; background: var(--activity-color); border-radius: 2px 2px 0 0; opacity: .65; }
-.ah-activity__daily-plot button:hover i, .ah-activity__daily-plot button[aria-pressed="true"] i { opacity: 1; }
-.ah-activity__daily-plot button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; }
-.ah-activity__daily-axis { display: flex; justify-content: space-between; margin-top: 11px; font-size: 10px; color: var(--vf-text-tertiary); }
-.ah-activity__inspection { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 17px; margin-top: 16px; border-top: 1px solid var(--vf-hairline); min-height: 55px; }
-.ah-activity__inspection > div { display: grid; grid-template-columns: auto auto; align-items: baseline; gap: 5px 20px; }
-.ah-activity__inspection span { font-size: 11px; color: var(--vf-text-secondary); }
-.ah-activity__inspection strong { font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.ah-activity__inspection strong small { font-size: 11px; color: var(--vf-text-tertiary); font-weight: 400; }
-.ah-activity__inspection > div > span:last-child { grid-column: 1 / -1; color: var(--vf-text-tertiary); font-size: 10px; }
-.ah-activity__jump { padding: 7px 10px; border: 0; border-radius: 8px; background: var(--vf-fill); color: var(--vf-text-secondary); font: inherit; font-size: 11px; text-align: left; }
-.ah-activity__jump span { display: block; margin-top: 3px; font-size: 10px; color: var(--vf-text-tertiary); }
-.ah-activity__jump:hover { background: var(--vf-fill-hover); color: var(--vf-text-primary); }
-.ah-activity__breakdowns { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
-.ah-activity__months { display: flex; gap: 8px; list-style: none; padding: 0; margin: 0; }
-.ah-activity__months li { flex: 1; min-width: 0; text-align: center; }
-.ah-activity__months span { display: block; font-size: 9px; color: var(--vf-text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.ah-activity__month-track { display: flex; align-items: flex-end; height: 112px; margin: 8px 0; border-bottom: 1px solid var(--vf-hairline); }
-.ah-activity__month-track i { display: block; width: 100%; max-width: 40px; margin: 0 auto; border-radius: 3px 3px 0 0; background: var(--activity-color); opacity: .75; }
-.ah-activity__weekday-bars { display: flex; flex-direction: column; gap: 10px; list-style: none; padding: 0; margin: 0; }
-.ah-activity__weekday-bars li { display: grid; grid-template-columns: 27px minmax(0, 1fr) 46px; gap: 10px; align-items: center; font-size: 10px; color: var(--vf-text-tertiary); }
-.ah-activity__weekday-bars li > div { height: 8px; border-radius: 3px; background: var(--vf-fill); overflow: hidden; }
-.ah-activity__weekday-bars i { display: block; height: 100%; border-radius: 3px; background: var(--activity-color); opacity: .75; }
-.ah-activity__weekday-bars b { text-align: right; font-weight: 500; color: var(--vf-text-secondary); font-variant-numeric: tabular-nums; }
+.ah-activity .ah-calendar-heatmap__cell:hover, .ah-activity .ah-calendar-heatmap__cell:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; }
+.ah-activity .ah-calendar-heatmap__footer { width: var(--activity-footer-width); min-width: 0; margin-top: 8px; font-size: 9px; min-height: 13px; }
+.ah-activity .ah-calendar-heatmap__legend { gap: 3px; }
+.ah-activity .ah-calendar-heatmap__legend i { width: 8px; height: 8px; }
+.ah-activity__runs { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 18px; margin-top: 8px; min-height: 24px; }
+.ah-activity__run { display: grid; grid-template-columns: 11px auto auto; align-items: center; gap: 5px; padding: 3px 0; border: 0; background: transparent; color: var(--vf-text-secondary); font: inherit; font-size: 10px; text-align: left; }
+.ah-activity__run > i { width: 9px; height: 3px; border-radius: 2px; background: var(--vf-accent-6); }
+.ah-activity__run > i[data-kind="best"] { background: var(--vf-accent-3); }
+.ah-activity__run > i[data-kind="both"] { background: linear-gradient(90deg, var(--vf-accent-6) 50%, var(--vf-accent-3) 50%); }
+.ah-activity__run b { font-weight: 500; margin-left: 3px; }
+.ah-activity__run small { font-size: 9px; color: var(--vf-text-tertiary); }
+.ah-activity__run:hover span { text-decoration: underline; }
+.ah-activity__jump { margin-left: auto; display: flex; gap: 6px; padding: 5px 8px; border: 0; border-radius: 6px; background: var(--vf-fill); color: var(--vf-text-secondary); font: inherit; font-size: 10px; text-align: left; }
+.ah-activity__jump span { color: var(--vf-text-tertiary); }
+.ah-activity__day { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--vf-hairline); }
+.ah-activity__dayhead { flex: none; display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 8px; }
+.ah-activity__daynav { display: flex; gap: 5px; flex: none; }
+.ah-activity__daynav button, .ah-activity__empty button { border: 0; border-radius: 6px; background: var(--vf-fill); color: var(--vf-text-secondary); padding: 5px 8px; font: inherit; font-size: 12px; }
+.ah-activity__daynav button:disabled { opacity: .3; cursor: default; }
+.ah-activity__empty { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; color: var(--vf-text-tertiary); font-size: 11px; text-align: center; }
+.ah-activity__empty strong { font-weight: 500; color: var(--vf-text-secondary); }
+.ah-activity__updated { flex: none; margin: 4px 0 0; font-size: 9px; color: var(--vf-text-tertiary); }
+.ah-daychart { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ah-daychart__readout { flex: none; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin-bottom: 8px; min-height: 14px; font-size: 10px; }
+.ah-daychart__readout strong { font-weight: 500; }
+.ah-daychart__readout span { color: var(--vf-text-tertiary); }
+.ah-daychart__body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) clamp(146px, 20vw, 210px); grid-template-rows: minmax(0, 1fr); gap: 16px; }
+.ah-daychart__graph { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 20px 12px 21px 38px; position: relative; }
+.ah-daychart__unit { position: absolute; top: 0; left: 0; font-size: 9px; color: var(--vf-text-tertiary); cursor: help; }
+.ah-daychart__plot { flex: 1; position: relative; min-height: 80px; }
+.ah-daychart__gridline { position: absolute; left: 0; right: 0; border-top: 1px solid var(--vf-hairline); }
+.ah-daychart__gridline > span { position: absolute; right: calc(100% + 8px); transform: translateY(-50%); font-size: 9px; color: var(--vf-text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ah-daychart__plot svg { position: relative; display: block; width: 100%; height: 100%; overflow: visible; cursor: crosshair; }
+.ah-daychart__area { opacity: .65; pointer-events: none; }
+.ah-daychart__glow { opacity: .2; filter: blur(3px); pointer-events: none; }
+.dark .ah-daychart__area { opacity: 1; }
+.dark .ah-daychart__glow { opacity: .4; }
+.ah-daychart__line, .ah-daychart__glow, .ah-daychart__pending { stroke-linecap: round; stroke-linejoin: round; }
+.ah-daychart__pending { stroke-dasharray: 3 6; opacity: .4; }
+.ah-daychart__point { position: absolute; width: 8px; height: 8px; box-sizing: border-box; border: 2px solid var(--model-color); border-radius: 50%; background: var(--vf-chrome-solid); box-shadow: 0 0 8px color-mix(in srgb, var(--model-color) 45%, transparent); transform: translate(-50%, -50%); pointer-events: none; }
+.ah-daychart__peak { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--vf-text-faint); opacity: .5; }
+.ah-daychart__crosshair { stroke: var(--vf-text-tertiary); stroke-width: 1; stroke-dasharray: 4 4; }
+.ah-daychart__axis { position: relative; margin-top: 10px; font-size: 9px; color: var(--vf-text-tertiary); }
+.ah-daychart__axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.ah-daychart__future { position: absolute; top: 0; right: 0; bottom: 0; background: linear-gradient(90deg, transparent, var(--vf-fill)); pointer-events: none; }
+.ah-daychart__future-label { position: absolute; top: -20px; right: 0; max-width: calc(100% - 12px); text-align: right; font-size: 9px; color: var(--vf-text-tertiary); pointer-events: none; }
+.ah-daychart__legendhead { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 9px; line-height: 14px; color: var(--vf-text-tertiary); }
+.ah-daychart__models { min-width: 0; min-height: 0; }
+.ah-daychart__models > button { display: grid; grid-template-columns: minmax(0, 1fr) 36px; grid-template-rows: 13px 3px; gap: 4px 8px; width: 100%; padding: 4px 0; border: 0; background: transparent; color: var(--vf-text-secondary); font: inherit; font-size: 10px; text-align: left; }
+.ah-daychart__models > button[aria-pressed="false"] { opacity: .4; }
+.ah-daychart__modelname { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.ah-daychart__modelname > i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--model-color); }
+.ah-daychart__modelname > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ah-daychart__models b, .ah-daychart__models small { font-weight: 400; text-align: right; font-variant-numeric: tabular-nums; }
+.ah-daychart__models small { font-size: 8px; line-height: 3px; color: var(--vf-text-tertiary); }
+.ah-daychart__share { height: 3px; margin-left: 11px; background: var(--vf-fill); border-radius: 2px; align-self: center; overflow: hidden; }
+.ah-daychart__share > i { display: block; height: 100%; background: var(--model-color); border-radius: inherit; }
+.ah-daychart__modelnav { justify-content: flex-end; height: 22px; margin-top: 4px; }
+.ah-daychart__modelnav button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: var(--vf-fill); color: var(--vf-text-secondary); font: inherit; font-size: 12px; }
+.ah-activity button:focus-visible, .ah-daychart__plot svg:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 3px; }
+.ah-activity__jump:hover, .ah-activity__calendar-nav button:not(:disabled):hover, .ah-daychart__modelnav button:not(:disabled):hover, .ah-activity__daynav button:not(:disabled):hover, .ah-activity__empty button:hover { background: var(--vf-fill-hover); }
 @media (max-width: 760px) {
-  .ah-activity { padding: 16px; }
-  .ah-activity__toolbar { flex-wrap: wrap; }
-  .ah-activity__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ah-activity__highlights { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 0; }
-  .ah-activity__highlights > div:nth-child(odd) { border-left: 0; }
-  .ah-activity__breakdowns { grid-template-columns: minmax(0, 1fr); }
-  .ah-activity__sectionhead { flex-wrap: wrap; gap: 5px; }
-  .ah-activity__inspection > div { grid-template-columns: minmax(0, 1fr); }
-  .ah-activity__inspection > div > span:last-child { grid-column: 1; }
-  .ah-activity__months { gap: 5px; overflow: auto; }
-  .ah-activity__months li { min-width: 30px; }
+  .ah-activity { padding: 12px; }
+  .ah-activity__toolbar { flex-wrap: wrap; gap: 8px; }
+  .ah-activity__toolbar .ah-seg button { padding: 0 7px; }
+  .ah-activity__runs { gap: 5px 12px; }
+  .ah-activity__run small { display: none; }
+  .ah-activity__jump { margin-left: 0; }
+  .ah-activity__dayhead h2 { font-size: 14px; }
+  .ah-daychart__body { gap: 12px; }
 }
-@media (max-width: 900px) {
-  .ah-activity__calendar-main[data-short-range] { grid-template-columns: minmax(0, 1fr); }
-  .ah-activity__daily-plot { height: 110px; }
+@media (max-width: 500px) {
+  .ah-daychart__body { grid-template-columns: minmax(0, 1fr) 126px; gap: 8px; }
+  .ah-daychart__graph { padding-left: 32px; padding-right: 10px; }
+  .ah-daychart__legendhead { font-size: 8px; gap: 4px; }
+  .ah-daychart__models > button { font-size: 9px; gap: 4px; grid-template-columns: minmax(0, 1fr) 30px; }
+  .ah-daychart__axis span:nth-child(2), .ah-daychart__axis span:nth-child(4) { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .ah-chart-launcher__hint { transition: none; } }
