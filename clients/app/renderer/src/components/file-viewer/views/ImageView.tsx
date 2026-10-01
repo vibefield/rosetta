@@ -17,7 +17,7 @@ interface Natural {
   readonly height: number;
 }
 
-export function ImageView({ file, mode }: ViewBodyProps) {
+export function ImageView({ file, mode, onRetry }: ViewBodyProps) {
   const [natural, setNatural] = useState<Natural | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -35,9 +35,10 @@ export function ImageView({ file, mode }: ViewBodyProps) {
       <div className="ah-fileview__state">
         <b>This is not an image the window can draw</b>
         <span>
-          The bytes are there — {file.handle.size.toLocaleString()} of them — but the decoder
+          The bytes are there — {file.bytes.byteLength.toLocaleString()} of them — but the decoder
           refused them. A wrong extension is the usual reason.
         </span>
+        {onRetry && <button className="ah-fileview__retry" type="button" onClick={onRetry}>Retry</button>}
       </div>
     );
   }

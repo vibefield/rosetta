@@ -10,7 +10,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { useRef } from "react";
-import type { ReactNode } from "react";
+import type { KeyboardEventHandler, ReactNode } from "react";
 
 export interface DialogShellProps {
   /** The accessible name. Rendered for screen readers only — the visible
@@ -25,6 +25,7 @@ export interface DialogShellProps {
   /** In fullscreen, the first Escape restores the dialog instead of closing
    * it. */
   readonly onExitFullscreen?: () => void;
+  readonly onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
   readonly children: ReactNode;
 }
 
@@ -34,6 +35,7 @@ export function DialogShell({
   wide = false,
   fullscreen = false,
   onExitFullscreen,
+  onKeyDown,
   children,
 }: DialogShellProps) {
   // These controlled dialogs have no Radix Trigger. Remember the actual
@@ -50,6 +52,7 @@ export function DialogShell({
           data-wide={wide ? "" : undefined}
           data-fullscreen={fullscreen ? "" : undefined}
           aria-describedby={undefined}
+          onKeyDown={onKeyDown}
           // Radix focuses the first tabbable child, which lights a focus ring
           // on a control nobody pressed. The dialog itself takes focus
           // instead — Escape and the focus trap still work, and Tab still

@@ -1048,6 +1048,22 @@ opening the viewer reuses the same in-memory bytes. Unavailable or remote-only
 references keep a placeholder. No arbitrary tool output or Markdown URL is parsed
 into an image request. This is renderer composition, with no protocol/schema change.
 
+Opening an image snapshots its visible row into the shared file viewer (2026-10-01).
+For multi-image rows, a bottom thumbnail strip retains every occurrence in order,
+including disabled unavailable slots; repeated asset bytes do not merge identities.
+Previous/next buttons and Left/Right keys skip unavailable slots and stop at the row
+ends; Home/End select the first/last available image. Switching preserves the modal,
+Fit/1:1 and fullscreen state, while revealing only the selected thumbnail horizontally.
+Closing restores the original opener without moving the transcript. Exact image
+mentions use their owning row, including the outer activity row for folded team/peer
+messages; a full-message popup opens its own image row in a nested viewer.
+The gallery reuses loaded tool preview bytes, lazily reads nearby thumbnails, and
+shares in-flight reads with the main image through a 64 MiB bounded, dialog-owned
+byte cache. One consumer cancelling does not cancel a read another still needs;
+close cancels outstanding reads and releases the cache and blob URLs. Failed reads
+or decodes leave navigation available and offer Retry. Extensionless canonical image
+targets use format hints from their bytes when reached before their preview loads.
+
 This feature adds no OCR, invented captions, or image-content search. Existing
 authored prose and attachment filenames remain the search inputs; labels, source
 wrappers, encoded bytes, and temporary-path transport are not injected into prose.

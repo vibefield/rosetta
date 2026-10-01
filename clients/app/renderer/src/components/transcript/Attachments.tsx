@@ -4,21 +4,30 @@ import { fmtBytes } from "../../lib/format";
 import { imageMediaTypeFromBytes } from "../../lib/image-media";
 import { client } from "../../lib/rosetta";
 import { attachmentAssetUrl, canOpenAttachment } from "./attachment-file-source";
+import type { AttachmentOpener } from "./attachment-gallery";
 import "../../styles/attachments.css";
 
 /** Explicitly shared only by messages whose images are gathered in this run. */
-export const ActivityImagesContext = createContext<((fact: AttachmentFact) => void) | null>(null);
+export const ActivityImagesContext = createContext<AttachmentOpener | null>(null);
 
-export function useAttachmentActions(onOpenAttachment: (fact: AttachmentFact) => void, onReceipt: (text: string) => void) {
+function previewKey(fact: AttachmentFact) {
+  return `${fact.key}:${attachmentAssetUrl(fact) ?? JSON.stringify(fact.readPath?.read)}`;
+}
+
+export function useAttachmentActions(onOpenAttachment: AttachmentOpener, onReceipt: (text: string) => void,
+  facts: readonly AttachmentFact[]) {
   const [reveal, setReveal] = useState<{ key: string; request: number } | null>(null);
-  const open = (fact: AttachmentFact) => {
-    if (canOpenAttachment(fact)) onOpenAttachment(fact);
+  const previews = useRef(new Map<string, AttachmentFact>());
+  const onPreview = (fact: AttachmentFact) => { previews.current.set(previewKey(fact), fact); };
+  const open: AttachmentOpener = (fact, row = facts) => {
+    if (canOpenAttachment(fact)) onOpenAttachment(fact.readBytes ? fact : previews.current.get(previewKey(fact)) ?? fact,
+      row.map(item => item.readBytes ? item : previews.current.get(previewKey(item)) ?? item));
     else {
       setReveal(old => ({ key: fact.key, request: (old?.request ?? 0) + 1 }));
       onReceipt(attachmentStatus(fact));
     }
   };
-  return { open, reveal };
+  return { open, reveal, onPreview };
 }
 
 export function attachmentStatus(fact: AttachmentFact): string {
@@ -35,9 +44,10 @@ export function attachmentStatus(fact: AttachmentFact): string {
   return "Image data was not recorded";
 }
 
-function Tile({ fact, index, onOpen }: {
+function Tile({ fact, index, onOpen, onPreview }: {
   readonly fact: AttachmentFact; readonly index: number;
   readonly onOpen: (fact: AttachmentFact) => void;
+  readonly onPreview: (fact: AttachmentFact) => void;
 }) {
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -53,6 +63,9 @@ function Tile({ fact, index, onOpen }: {
   const address = fact.readPath?.read;
   const mediaType = fact.mediaType;
   const sessionId = address?.sessionId, timelineId = address?.timelineId, targetIndex = address?.targetIndex;
+  useEffect(() => {
+    if (preview) onPreview({ ...fact, mediaType: preview.mediaType, readBytes: preview.bytes });
+  }, [fact, preview, onPreview]);
   useEffect(() => {
     if (!sessionId || !timelineId || targetIndex === undefined || !figureRef.current) return;
     const controller = new AbortController();
@@ -115,13 +128,19 @@ function revealTile(rail: HTMLElement, tile: HTMLElement) {
   else if (target.right > bounds.right - 4) rail.scrollLeft += target.right - bounds.right + 4;
 }
 
-export function Attachments({ facts, onOpenAttachment, reveal }: {
+export function Attachments({ facts, onOpenAttachment, reveal, onPreview }: {
   readonly facts: readonly AttachmentFact[];
   readonly reveal?: { readonly key: string; readonly request: number } | null;
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenAttachment: AttachmentOpener;
+  readonly onPreview?: (fact: AttachmentFact) => void;
 }) {
   const id = useId();
   const gallery = useRef<HTMLDivElement>(null);
+  const previews = useRef(new Map<string, AttachmentFact>());
+  const rememberPreview = (fact: AttachmentFact) => {
+    previews.current.set(previewKey(fact), fact);
+    onPreview?.(fact);
+  };
   const handledReveal = useRef<typeof reveal>(undefined);
   const [edges, setEdges] = useState({ before: false, after: false });
   useLayoutEffect(() => {
@@ -173,7 +192,9 @@ export function Attachments({ facts, onOpenAttachment, reveal }: {
       const next = event.key === "Home" ? 0 : event.key === "End" ? tiles.length - 1 : Math.max(0, Math.min(tiles.length - 1, index + (event.key === "ArrowRight" ? 1 : -1)));
       tiles[next]?.focus({ preventScroll: true });
     }}>
-      {facts.map((fact, index) => <Tile key={`${fact.key}:${attachmentAssetUrl(fact) ?? fact.readPath?.label ?? "reference"}`} fact={fact} index={index} onOpen={onOpenAttachment} />)}
+      {facts.map((fact, index) => <Tile key={`${fact.key}:${attachmentAssetUrl(fact) ?? fact.readPath?.label ?? "reference"}`} fact={fact} index={index}
+        onPreview={rememberPreview} onOpen={selected => onOpenAttachment(selected,
+          facts.map(item => item.key === selected.key ? selected : previews.current.get(previewKey(item)) ?? item))} />)}
     </div>
     {(edges.before || edges.after) && <button className="tr-att__nav tr-att__nav--previous" type="button" aria-label="Previous images" aria-disabled={!edges.before} data-edge={!edges.before || undefined} aria-controls={id} onClick={() => page(-1)}>‹</button>}
     {(edges.before || edges.after) && <button className="tr-att__nav tr-att__nav--next" type="button" aria-label="Next images" aria-disabled={!edges.after} data-edge={!edges.after || undefined} aria-controls={id} onClick={() => page(1)}>›</button>}

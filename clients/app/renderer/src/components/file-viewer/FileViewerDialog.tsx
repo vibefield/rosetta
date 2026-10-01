@@ -13,8 +13,9 @@
 // dependency of this app and had no user; this is its user.
 
 import { useEffect, useState } from "react";
+import type { KeyboardEventHandler, ReactNode } from "react";
 import { DialogShell } from "../ui";
-import { diffKind, resolveKind } from "./registry";
+import { diffKind, imageKind, resolveKind } from "./registry";
 import { useFileContent } from "./use-file-content";
 import { FileViewerHeader } from "./FileViewerHeader";
 import type { HeaderAction } from "./FileViewerHeader";
@@ -42,6 +43,14 @@ export interface FileViewerDialogProps {
    * kinds off a name, and a name cannot say which of the two acts is being
    * served. */
   readonly asDiff?: boolean;
+  readonly gallery?: {
+    readonly key: string;
+    readonly footer: ReactNode;
+    readonly previous: (() => void) | null;
+    readonly next: (() => void) | null;
+    readonly onKeyDown: KeyboardEventHandler<HTMLDivElement>;
+    readonly onRetry: () => void;
+  };
 }
 
 export function FileViewerDialog({
@@ -54,15 +63,18 @@ export function FileViewerDialog({
   openInBrowser,
   asDiff = false,
   renderMarkdown,
+  gallery,
 }: FileViewerDialogProps) {
-  const content = useFileContent(handle, source, asDiff);
+  const [attempt, setAttempt] = useState(0);
+  const content = useFileContent(handle, source, asDiff, attempt, Boolean(gallery));
+  const retry = () => { gallery?.onRetry(); setAttempt(value => value + 1); };
 
   // The reader's choice of mode, kept only while it names a mode the current
   // view actually has — so opening a `.md` after an image does not land on a
   // switch position that no longer exists.
   const [chosen, setChosen] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
-  const fileKey = handle?.key ?? null;
+  const fileKey = gallery?.key ?? handle?.key ?? null;
   useEffect(() => {
     setChosen(null);
     setFullscreen(false);
@@ -79,7 +91,7 @@ export function FileViewerDialog({
       ? content.file.kind
       : asDiff
         ? diffKind(handle.name)
-        : resolveKind(handle.name);
+        : gallery ? imageKind(handle.name) : resolveKind(handle.name);
   const modes = kind.viewer.modes ?? [];
   const mode = chosen !== null && modes.some((m) => m.id === chosen) ? chosen : (modes[0]?.id ?? "");
 
@@ -138,9 +150,10 @@ export function FileViewerDialog({
       onClose={onClose}
       fullscreen={fullscreen}
       onExitFullscreen={() => setFullscreen(false)}
+      onKeyDown={gallery?.onKeyDown}
     >
           <FileViewerHeader
-            handle={handle}
+            handle={handle.size < 0 && content.status === "ready" ? { ...handle, size: content.file.bytes.byteLength } : handle}
             kind={kind}
             tint={tint}
             homeDirectory={homeDirectory}
@@ -153,16 +166,16 @@ export function FileViewerDialog({
             onClose={onClose}
           />
 
-          <div className="ah-fileview__body" key={handle.key}>
+          <div className="ah-fileview__body" data-gallery={gallery?.footer ? "" : undefined}>
             {content.status === "ready" ? (
-              <Body file={content.file} mode={mode} renderMarkdown={renderMarkdown} />
+              <Body key={`${handle.key}:${attempt}`} file={content.file} mode={mode} renderMarkdown={renderMarkdown} onRetry={gallery ? retry : undefined} />
             ) : content.status === "reading" ? (
               // Styled to appear only if the read is slow enough to be worth
               // mentioning; a local file that lands in three milliseconds
               // never flashes this.
               <div className="ah-fileview__state" data-waiting>
-                <b>Reading</b>
-                <span>{fmtBytes(handle.size)} from the worktree engine.</span>
+                <b>{gallery ? "Loading image…" : "Reading"}</b>
+                {!gallery && <span>{fmtBytes(handle.size)} from the worktree engine.</span>}
               </div>
             ) : content.status === "empty" ? (
               <div className="ah-fileview__state">
@@ -173,7 +186,7 @@ export function FileViewerDialog({
               <div className="ah-fileview__state">
                 <b>Too large to open here</b>
                 <span>
-                  {fmtBytes(handle.size)}, against a {fmtBytes(content.limit)} limit for a{" "}
+                  {handle.size < 0 ? "The image exceeds" : `${fmtBytes(handle.size)}, against`} a {fmtBytes(content.limit)} limit for a{" "}
                   {kind.label} file. The limit is here so the window stays answerable.
                 </span>
               </div>
@@ -181,9 +194,19 @@ export function FileViewerDialog({
               <div className="ah-fileview__state">
                 <b>Could not read this file</b>
                 <span>{content.reason}</span>
+                {gallery && <button className="ah-fileview__retry" type="button" onClick={retry}>Retry</button>}
               </div>
             )}
+            {gallery?.footer && <>
+              <button type="button" className="ah-image-gallery__step ah-image-gallery__step--previous"
+                aria-label="Previous image" title="Previous image (←)" aria-disabled={gallery.previous === null}
+                onClick={() => gallery.previous?.()}>‹</button>
+              <button type="button" className="ah-image-gallery__step ah-image-gallery__step--next"
+                aria-label="Next image" title="Next image (→)" aria-disabled={gallery.next === null}
+                onClick={() => gallery.next?.()}>›</button>
+            </>}
           </div>
+          {gallery?.footer}
     </DialogShell>
   );
 }

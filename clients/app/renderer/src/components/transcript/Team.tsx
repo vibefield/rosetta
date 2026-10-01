@@ -421,7 +421,7 @@ function TeamReport({
 }: {
   readonly event: CollaborationEvent;
   readonly attachments: readonly AttachmentFact[];
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact, row?: readonly AttachmentFact[]) => void;
   readonly at: number | null;
   readonly timeBasis: CollaborationTimeBasis;
   readonly domId: string;
@@ -522,7 +522,7 @@ function TeamReport({
 export interface TeamEventProps {
   readonly event: CollaborationEvent;
   readonly attachments: readonly AttachmentFact[];
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact, row?: readonly AttachmentFact[]) => void;
   readonly at: number | null;
   readonly timeBasis: CollaborationTimeBasis;
   readonly domId: string;

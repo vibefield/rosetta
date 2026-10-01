@@ -37,7 +37,7 @@ export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, 
   readonly forceOpen: boolean;
   readonly highlightedId: string | null;
   readonly alive: (row: TimelineEntry) => boolean;
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact, row?: readonly AttachmentFact[]) => void;
   readonly onReceipt: (text: string) => void;
   readonly children: ReactNode;
 }) {
@@ -62,7 +62,7 @@ export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, 
   }, [expanded, highlightedId]);
   const summary = useMemo(() => summarizeActivity(items), [items]);
   const images = useMemo(() => timelineImages(rows), [rows]);
-  const { open: openImage, reveal } = useAttachmentActions(onOpenAttachment, onReceipt);
+  const { open: openImage, reveal, onPreview } = useAttachmentActions(onOpenAttachment, onReceipt, images);
   const running = summary.runningRows.some(alive);
   const text = summary.nouns.map(noun => [noun.text, noun.names.join(", "), noun.more > 0 ? `… ${noun.more} more` : ""].filter(Boolean).join(" ")).join(" · ");
   const range = summary.firstAt === null ? null : summary.lastAt === null || summary.firstAt === summary.lastAt
@@ -92,7 +92,7 @@ export function ActivityGroup({ items, rows, partial, forceOpen, highlightedId, 
         {range !== null && <span className="t">{range}</span>}
       </span>
     </button>
-    <Attachments facts={images} onOpenAttachment={openImage} reveal={reveal} />
+    <Attachments facts={images} onOpenAttachment={openImage} onPreview={onPreview} reveal={reveal} />
     <ActivityImagesContext.Provider value={openImage}>
       <div id={listId} className="tr-activity__list" hidden={!expanded}>
         {partial && <div className="tr-activity__loading" role="status">

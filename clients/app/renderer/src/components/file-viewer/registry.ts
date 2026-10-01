@@ -13,6 +13,7 @@ import { DiffView } from "./views/DiffView";
 import { ImageView, IMAGE_MODES } from "./views/ImageView";
 import { MarkdownView, MARKDOWN_MODES } from "./views/MarkdownView";
 import { SvgView, SVG_MODES } from "./views/SvgView";
+import { imageMediaTypeFromBytes } from "../../lib/image-media";
 
 const KB = 1024;
 const MB = 1024 * KB;
@@ -172,6 +173,16 @@ export function resolveKind(name: string): FileKind {
     return { viewer: HTML, label: language.label, language, mime: "text/html" };
   }
   return { viewer: CODE, label: language.label, language, mime: null };
+}
+
+/** Only for a source-proven image slot; extensionless tool captures need the
+ * same format hint whether opened from a loaded tile or reached with Next. */
+export function imageKind(name: string, bytes?: Uint8Array): FileKind {
+  const kind = resolveKind(name);
+  if (kind.viewer.id === "image" || kind.viewer.id === "svg") return kind;
+  const mime = bytes ? imageMediaTypeFromBytes(bytes) : null;
+  if (mime === "image/svg+xml") return resolveKind("image.svg");
+  return { viewer: IMAGE, label: mime?.split("/")[1].toUpperCase() ?? "Image", language: null, mime };
 }
 
 /**

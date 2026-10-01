@@ -32,6 +32,17 @@ const markerRanges = (text, marker) => {
     ranges.push({ start: [...text.slice(0, at)].length, end: [...text.slice(0, at + marker.length)].length });
   return ranges;
 };
+const galleryImages = Array.from({ length: 6 }, (_, index) => image(String(index + 1), index % 2 ? "portrait.png" : "landscape.png"));
+galleryImages[2].source = galleryImages[0].source; // Repeated bytes retain distinct occurrence slots.
+const assetReads = [];
+const readAsset = client.readAsset.bind(client);
+client.readAsset = async (asset, signal) => {
+  assetReads.push({ url: asset.url, signal });
+  if (asset.url.includes('gallery-slow')) await new Promise(resolve => setTimeout(resolve, 450));
+  if (asset.url.includes('gallery-retry') && window.imageFixture.failViewer) throw new Error('Temporary image read failure');
+  if (asset.url.includes('gallery-decode') && window.imageFixture.badDecode) return new TextEncoder().encode('not a valid image');
+  return readAsset(asset, signal);
+};
 let ordinal = 0;
 function message(text, id, attachments) {
   ordinal += 1;
@@ -65,7 +76,7 @@ function activity() {
     entry({ type: "user", text: inline("Inspect [Image #1]."), attachments: [image("1", "landscape.png", [{ start: 8, end: 18 }])] }, { timeline_id: "image-assignment" }),
     delivery("image-coordinator", "coordinator", "message", "Use [Image #1].", [image("1", "portrait.png", [{ start: 4, end: 14 }])]),
     delivery("image-peer-only", "peer", "message", null, [image("1", "landscape.png")]),
-    entry({ type: "agent", text: inline("The revised screens keep the reading area quiet. Here is the final comparison."), attachments: [image("reply-image", "landscape.png")], citations: [] }, { timeline_id: "image-reply" }),
+    entry({ type: "agent", text: inline("The revised screens keep the reading area quiet. Here is the final comparison."), attachments: [image("reply-image", "landscape.png"), image("reply-image-2", "portrait.png")], citations: [] }, { timeline_id: "image-reply" }),
   ];
   return rows.map(row => ({ ...row, ordinal: ++ordinal, at: now + ordinal * 1000,
     group: { id: "image-activity", kind: row.timeline_id === "image-assignment" ? "parent_invocation" : "agent_cycle", derivation: "native" } }));
@@ -75,7 +86,7 @@ const long = "Please review [Image #1].\n\n" + "## Review notes\n\nKeep the imag
   + "Full message end. Compare [Image #1] again.\n\n`[Image #1]` is code, and [Image #1](https://example.com) is an ordinary link.";
 const initial = [
   message(single, "single", [image("1", "landscape.png", markerRanges(single, "[Image #1]"))]),
-  message("Six views of the same screen.", "gallery", Array.from({ length: 6 }, (_, i) => image(String(i + 1), i % 2 ? "portrait.png" : "landscape.png"))),
+  message("Six views of the same screen.", "gallery", galleryImages),
   ...activity(),
   message(null, "image-only", [image("1", "portrait.png")]),
   message("[Image #1] is missing; [Image #4] was recorded.", "missing", [
@@ -83,7 +94,7 @@ const initial = [
     image("4", "landscape.png", [{ start: 23, end: 33 }]),
   ]),
   message("This image needs one retry to load.", "failed", [image("1", "retry.png")]),
-  message(long, "long", [image("1", "portrait.png", markerRanges(long, "[Image #1]"))]),
+  message(long, "long", [image("1", "portrait.png", markerRanges(long, "[Image #1]")), image("2", "landscape.png")]),
 ];
 const member = message(memberText, "member", [image("1", "portrait.png", markerRanges(memberText, "[Image #1]"))]);
 member.body.text = { type: "member", preview: memberText.slice(0, 220), byte_len: new TextEncoder().encode(memberText).length,
@@ -94,8 +105,17 @@ function Fixture() {
   const [rows, setRows] = useState(initial);
   const [focus, setFocus] = useState(null);
   const [currentSession, setSession] = useState(session);
+  const [failViewer, setFailViewer] = useState(true);
+  const [badDecode, setBadDecode] = useState(true);
   window.imageFixture = {
-    long, rows, clearSession: () => setSession(null),
+    long, rows, assetReads, failViewer, setFailViewer, badDecode, setBadDecode, clearSession: () => setSession(null),
+    setGalleryStress: () => setRows(old => old.map(row => row.timeline_id !== 'gallery' ? row : {
+      ...row, body: { ...row.body, attachments: galleryImages.map((item, index) => index === 1 || index === 3 || index === 4
+        ? { ...item, source: { type: 'asset', asset: { ...item.source.asset,
+          url: item.source.asset.url + (index === 1 ? '&gallery-slow' : index === 3 ? '&gallery-retry' : '&gallery-decode') } } }
+        : index === 5 ? { ...item, name: 'capture', media_type: null,
+          source: { type: 'asset', asset: { ...item.source.asset, media_type: 'application/octet-stream' } } } : item) },
+    })),
     repair: () => setRows(old => old.map(row => row.timeline_id === "failed"
       ? { ...row, body: { ...row.body, attachments: [image("1", "landscape.png")] } } : row)),
   };

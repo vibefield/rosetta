@@ -109,7 +109,7 @@ export interface TranscriptDocumentProps {
   readonly highlightedTimelineId: string | null;
   readonly onFocusConsumed: () => void;
   readonly onReceipt: (text: string) => void;
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact, row?: readonly AttachmentFact[]) => void;
   readonly onOpenPath: (path: PathFact) => void;
   readonly getRuntimeKind: (runtimeId: string) => string;
   readonly homeDirectory: string | null;
@@ -174,7 +174,7 @@ function ReportWorkDocument({
   readonly endedAt: number | null;
   readonly index: ThreadIndex;
   readonly onReceipt: (text: string) => void;
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact, row?: readonly AttachmentFact[]) => void;
   readonly onOpenPath: (path: PathFact) => void;
   readonly getRuntimeKind: (runtimeId: string) => string;
   readonly homeDirectory: string | null;

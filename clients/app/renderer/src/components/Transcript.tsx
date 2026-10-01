@@ -27,7 +27,7 @@ import { useHeadOfDocument } from "../lib/transcript/head-of-document";
 import { useTranscriptTail } from "../lib/transcript/use-transcript-tail";
 import type { TimelineLayout } from "../lib/transcript/use-transcript-tail";
 import { prefersReducedMotion } from "../lib/motion";
-import type { AttachmentFact, PathFact } from "../lib/transcript";
+import type { PathFact } from "../lib/transcript";
 import type { ProjectViewModel } from "../lib/model";
 import type { DayEntry } from "../lib/transcript";
 import { MatchStepper } from "./search";
@@ -50,12 +50,11 @@ import { buildThreadIndex, messageDomId } from "./transcript/thread-index";
 import type { ThreadFocus } from "./transcript/thread-index";
 import { ColumnHeading, EmptyState } from "./ui";
 import { FileViewerDialog } from "./file-viewer";
+import { ImageGalleryDialog } from "./file-viewer/ImageGalleryDialog";
 import type { FileHandle, FileSource } from "./file-viewer";
-import {
-  attachmentFileSource,
-  handleForAttachment,
-  attachmentViewerName,
-} from "./transcript/attachment-file-source";
+import { attachmentFileSource, canOpenAttachment } from "./transcript/attachment-file-source";
+import { attachmentGallery, attachmentGallerySource } from "./transcript/attachment-gallery";
+import type { AttachmentOpener } from "./transcript/attachment-gallery";
 import {
   handleForReadPath,
   transcriptReadFileSource,
@@ -141,7 +140,7 @@ export function TranscriptColumn({
   const [highlightedTimelineId, setHighlightedTimelineId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ top: number; dayKey: string | null } | null>(null);
   const [viewerTarget, setViewerTarget] = useState<TranscriptViewerTarget | null>(null);
-  const [nestedImage, setNestedImage] = useState<FileHandle | null>(null);
+  const [imageGallery, setImageGallery] = useState<ReturnType<typeof attachmentGallery> | null>(null);
   const [metaFocus, setMetaFocus] = useState<TimelineMetaFocus | null>(null);
   const viewerRequest = useRef(0);
   const anchorRequest = useRef(0);
@@ -183,25 +182,20 @@ export function TranscriptColumn({
     viewerRequest.current += 1;
     anchorRequest.current += 1;
     setViewerTarget(null);
-    setNestedImage(null);
+    setImageGallery(null);
     setMetaFocus(null);
     focusTries.current = 0;
     anchorTried.current = null;
   }, [session?.id]);
 
-  const openAttachment = (fact: AttachmentFact) => {
-    if (fact.readPath) {
-      openReadPath(fact.readPath, fact.readBytes, attachmentViewerName(fact));
-      return;
-    }
+  const openAttachment: AttachmentOpener = (fact, row) => {
     viewerRequest.current += 1;
-    const handle = handleForAttachment(fact);
-    if (handle === null) {
+    if (!canOpenAttachment(fact)) {
       onReceipt(attachmentStatus(fact));
       return;
     }
-    if (viewerTarget?.message !== undefined) setNestedImage(handle);
-    else setViewerTarget({ handle, source: attachmentFileSource });
+    if (viewerTarget?.message === undefined) setViewerTarget(null);
+    setImageGallery(attachmentGallery(fact, row));
   };
 
   const openMessage = useCallback((message: FullMessage) => {
@@ -580,14 +574,15 @@ export function TranscriptColumn({
         onClose={() => {
           viewerRequest.current += 1;
           setViewerTarget(null);
+          setImageGallery(null);
         }}
         onReceipt={onReceipt}
         openInBrowser={desktopHost()?.openInBrowser ?? null}
       />
-      <FileViewerDialog handle={nestedImage} source={attachmentFileSource}
+      {imageGallery && <ImageGalleryDialog {...imageGallery} source={attachmentGallerySource}
         tint={project?.tint ?? null} homeDirectory={homeDirectory}
-        onClose={() => setNestedImage(null)} onReceipt={onReceipt}
-        openInBrowser={desktopHost()?.openInBrowser ?? null} />
+        onClose={() => setImageGallery(null)} onReceipt={onReceipt}
+        openInBrowser={desktopHost()?.openInBrowser ?? null} />}
     </div>
     </MessageViewerContext.Provider>
     </ThreadNavigationContext.Provider>

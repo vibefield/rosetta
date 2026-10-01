@@ -19,8 +19,8 @@ export interface FileHandle {
    * the path line and path-only acts; it never costs them the
    * file, because reading goes through the source, not the path. */
   readonly path: string | null;
-  /** Bytes on disk, known from the tree BEFORE any read — which is how the
-   * viewer can refuse a file that is too large without opening it. */
+  /** Known byte length; a negative value means the source has not supplied
+   * a size yet. Reads also check their actual length before rendering. */
   readonly size: number;
   /**
    * Whatever the source needs to find the file again — an entry id, a
@@ -97,6 +97,7 @@ export interface OpenFile {
 }
 
 export interface ViewBodyProps {
+  readonly onRetry?: () => void;
   /** Optional rich Markdown presentation supplied by the content owner. */
   readonly renderMarkdown?: (text: string) => ReactNode;
   readonly file: OpenFile;

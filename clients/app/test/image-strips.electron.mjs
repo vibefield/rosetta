@@ -123,7 +123,7 @@ async function run() {
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
     await until(() => document.querySelector('.ah-image__frame img')?.naturalWidth > 0, 'Tool image viewer did not load');
     await capture('viewer');
-    assert.deepEqual(await check(async () => (await fetch('/test/image-reads')).json()), readsBefore, 'Viewer must reuse thumbnail bytes');
+    assert.equal((await check(async () => (await fetch('/test/image-reads')).json()))['image-read:1'], readsBefore['image-read:1'], 'Viewer must reuse the selected thumbnail bytes');
     await close();
     assert.equal(await check(() => document.activeElement.classList.contains('tr-att__tile')), true);
     assert.deepEqual(await check(() => ({ top: document.querySelector('.tr-scroll').scrollTop, room: document.querySelector('.ah-room').getBoundingClientRect().top })), before);

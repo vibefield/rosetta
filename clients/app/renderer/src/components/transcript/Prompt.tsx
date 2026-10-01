@@ -27,7 +27,7 @@ export interface PromptPanelProps {
   readonly domId: string;
   readonly landed: boolean;
   readonly onReceipt: (message: string) => void;
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact, row?: readonly AttachmentFact[]) => void;
 }
 
 /** The panel alone, so a cluster can stack several inside one segment. */
@@ -62,7 +62,7 @@ export interface PromptProps {
   readonly landedTimelineId: string | null;
   readonly focusTimelineId?: string | null;
   readonly onReceipt: (message: string) => void;
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact, row?: readonly AttachmentFact[]) => void;
 }
 
 function senderLabel(sender: string): string {
@@ -81,7 +81,7 @@ function MachinePrompt({
   readonly prompt: PromptModel;
   readonly domId: string;
   readonly onReceipt: (message: string) => void;
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact, row?: readonly AttachmentFact[]) => void;
   readonly hit: boolean;
   readonly forceOpen: boolean;
 }) {

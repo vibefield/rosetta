@@ -6,7 +6,7 @@
 // loading it has already done the damage by the time it can report it.
 
 import { useEffect, useState } from "react";
-import { BINARY_KIND, diffKind, looksBinary, resolveKind } from "./registry";
+import { BINARY_KIND, diffKind, imageKind, looksBinary, resolveKind } from "./registry";
 import type { FileHandle, FileSource, OpenFile } from "./types";
 
 export type FileContent =
@@ -22,6 +22,7 @@ interface FileContentState {
   readonly handleKey: string | null;
   readonly source: FileSource | null;
   readonly asDiff: boolean;
+  readonly asImage: boolean;
   readonly value: FileContent;
 }
 
@@ -56,11 +57,14 @@ export function useFileContent(
   /** Set when the caller is opening a CHANGE rather than a file — the one
    * decision the registry cannot make from a name. */
   asDiff = false,
+  attempt = 0,
+  asImage = false,
 ): FileContent {
   const [state, setState] = useState<FileContentState>({
     handleKey: null,
     source: null,
     asDiff: false,
+    asImage: false,
     value: READING,
   });
 
@@ -68,10 +72,10 @@ export function useFileContent(
     if (handle === null) return;
 
     const publish = (value: FileContent) => {
-      setState({ handleKey: handle.key, source, asDiff, value });
+      setState({ handleKey: handle.key, source, asDiff, asImage, value });
     };
 
-    const kind = asDiff ? diffKind(handle.name) : resolveKind(handle.name);
+    const kind = asDiff ? diffKind(handle.name) : asImage ? imageKind(handle.name) : resolveKind(handle.name);
 
     if (kind.viewer.payload === "compare") {
       if (source.compare === undefined) {
@@ -117,7 +121,11 @@ export function useFileContent(
         // the one place a file's kind is decided by what is in it, and it can
         // only ever downgrade — a hex dump claims less, never more.
         const binary = kind.viewer.payload === "text" && looksBinary(bytes);
-        const resolved = binary ? BINARY_KIND : kind;
+        const resolved = asImage ? imageKind(handle.name, bytes) : binary ? BINARY_KIND : kind;
+        if (bytes.byteLength > resolved.viewer.maxBytes) {
+          publish({ status: "too-large", limit: resolved.viewer.maxBytes });
+          return;
+        }
 
         publish({
           status: "ready",
@@ -136,13 +144,14 @@ export function useFileContent(
     })();
 
     return () => controller.abort();
-  }, [handle, source, asDiff]);
+  }, [handle, source, asDiff, attempt, asImage]);
 
   // Effects change after render. Without an identity check, the first frame
   // after switching files carries the previous file's state — harmlessly
   // visible before, but unacceptable once an action can export those bytes.
   return state.handleKey === (handle?.key ?? null) &&
     state.source === source &&
+    state.asImage === asImage &&
     state.asDiff === asDiff
     ? state.value
     : READING;

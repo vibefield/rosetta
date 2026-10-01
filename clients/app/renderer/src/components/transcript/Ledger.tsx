@@ -253,7 +253,7 @@ export interface LedgerProps {
    * roster operation. Ordinary Agent workers return null and keep Line. */
   readonly teamMemberFor: (line: LedgerLine) => TeamMemberPresentation | null;
   readonly onOpenPath: (path: PathFact) => void;
-  readonly onOpenAttachment: (fact: AttachmentFact) => void;
+  readonly onOpenAttachment: (fact: AttachmentFact, row?: readonly AttachmentFact[]) => void;
 }
 
 const TEAM_START_BURST_MS = 5 * 60_000;
