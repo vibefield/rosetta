@@ -163,6 +163,7 @@ function createStreamgraphDomain(currentTimestamp: number): StreamgraphData["dom
 export function createModelUsageStreamgraphData(
   usage: UsageResponse,
   currentTimestamp: number,
+  { groupOthers = true }: { readonly groupOthers?: boolean } = {},
 ): StreamgraphData {
   const domain = createStreamgraphDomain(currentTimestamp);
   const visibleDays = new Set(domain.map((point) => point.id));
@@ -194,10 +195,10 @@ export function createModelUsageStreamgraphData(
         right.total - left.total || left.id.localeCompare(right.id),
     );
 
-  const series: StreamgraphSeriesData[] = allSeries
-    .slice(0, MAX_VISIBLE_MODEL_SERIES)
+  const individualSeries = groupOthers ? allSeries.slice(0, MAX_VISIBLE_MODEL_SERIES) : allSeries;
+  const series: StreamgraphSeriesData[] = individualSeries
     .map(({ id, label, color, values }) => ({ id, label, color, values }));
-  const remainingSeries = allSeries.slice(MAX_VISIBLE_MODEL_SERIES);
+  const remainingSeries = groupOthers ? allSeries.slice(MAX_VISIBLE_MODEL_SERIES) : [];
   if (remainingSeries.length > 0) {
     const existingSeriesIds = new Set(allSeries.map((modelSeries) => modelSeries.id));
     let aggregateSeriesId = "__other_models__";

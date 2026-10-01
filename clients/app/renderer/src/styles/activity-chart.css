@@ -1,6 +1,7 @@
 /* The small calendar is one launch target. The cursor repeats the app's
    fullscreen corners, with contrasting strokes that stay visible in both themes. */
 .ah-chart-launcher { position: relative; }
+.ah-chart-launcher--models { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ah-chart-launcher__button {
   position: absolute; inset: 0; width: 100%; padding: 0;
   border: 0; border-radius: 6px; background: transparent;

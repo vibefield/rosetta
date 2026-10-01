@@ -1,0 +1,66 @@
+.ah-models {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  overflow: auto; padding: 24px 28px; color: var(--vf-text-primary);
+}
+.ah-models__loading { flex: 1; display: grid; place-items: center; margin: 0; color: var(--vf-text-tertiary); font-size: 12px; }
+.ah-models .ah-chart-header { flex: none; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 20px; }
+.ah-models .ah-chart-header__title { color: var(--vf-text-secondary); font-size: 14px; }
+.ah-models .ah-chart-header__note { color: var(--vf-text-tertiary); font-size: 11px; }
+.ah-models .ah-streamgraph__plot { position: relative; margin: 12px 0 20px; }
+.ah-models .ah-streamgraph__plot svg { overflow: visible; cursor: crosshair; }
+.ah-models .ah-streamgraph__plot svg:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 6px; border-radius: 2px; }
+.ah-models .ah-streamgraph__plot [data-streamgraph-layer] { opacity: .75; }
+.dark .ah-models .ah-streamgraph__plot [data-streamgraph-layer] { opacity: 1; }
+.ah-models .ah-streamgraph__glow { opacity: calc(.16 * var(--series-glow-strength, 1)); filter: blur(3px); pointer-events: none; }
+.dark .ah-models .ah-streamgraph__glow { opacity: calc(.35 * var(--series-glow-strength, 1)); }
+.ah-models .ah-streamgraph__outline { opacity: .7; pointer-events: none; }
+.ah-models .ah-streamgraph__glow, .ah-models .ah-streamgraph__outline { stroke-linejoin: round; }
+.ah-models .ah-streamgraph__axis { flex: none; height: 16px; margin-top: 0; font-size: 11px; color: var(--vf-text-tertiary); }
+.ah-models .ah-streamgraph__legend {
+  flex: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(148px, 100%), 1fr));
+  gap: 8px 16px; max-height: 128px; overflow: auto; margin-top: 24px;
+}
+.ah-models .ah-streamgraph__legend > span { gap: 7px; min-width: 0; font-size: 11px; line-height: 16px; color: var(--vf-text-secondary); }
+.ah-models .ah-streamgraph__legend:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 4px; border-radius: 2px; }
+.ah-streamgraph__legend em { font-style: normal; }
+.ah-models .ah-streamgraph__legend em { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ah-models .ah-streamgraph__legend i { width: 8px; height: 8px; }
+.ah-models .ah-streamgraph__legend b { flex: none; color: var(--vf-text-primary); }
+.ah-models .ah-streamgraph__empty { height: 100%; display: grid; place-items: center; font-size: 12px; }
+.ah-streamgraph__crosshair { stroke: var(--vf-text-secondary); stroke-width: 1; stroke-dasharray: 4 4; pointer-events: none; }
+.ah-streamgraph__point {
+  position: absolute; width: 8px; height: 8px; box-sizing: border-box;
+  border: 2px solid var(--series-color); border-radius: 50%; background: var(--vf-chrome-solid);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--series-color) 45%, transparent);
+  transform: translate(-50%, -50%); pointer-events: none;
+}
+.ah-streamgraph__readout {
+  --readout-width: min(244px, calc(100% - 16px));
+  position: absolute; z-index: 1; top: 8px; width: var(--readout-width); box-sizing: border-box;
+  display: flex; flex-direction: column;
+  left: clamp(8px, calc(var(--inspect-x) + 14px), calc(100% - var(--readout-width) - 8px));
+  padding: 12px; border: 1px solid var(--vf-hairline); border-radius: 10px;
+  max-height: calc(100% - 16px); overflow: hidden;
+  background: var(--vf-chrome-solid); box-shadow: var(--vf-shadow-island); pointer-events: auto;
+}
+.ah-streamgraph__readout[data-side="left"] {
+  left: clamp(8px, calc(var(--inspect-x) - var(--readout-width) - 14px), calc(100% - var(--readout-width) - 8px));
+}
+.ah-streamgraph__readout-head { flex: none; display: flex; flex-direction: column; gap: 5px; padding-bottom: 10px; border-bottom: 1px solid var(--vf-hairline); }
+.ah-streamgraph__readout-head > strong { font-size: 12px; font-weight: 550; color: var(--vf-text-primary); }
+.ah-streamgraph__readout-head > span { font-size: 11px; color: var(--vf-text-tertiary); }
+.ah-streamgraph__readout-head b { margin-left: 3px; color: var(--vf-text-primary); font-weight: 550; }
+.ah-streamgraph__readout-rows { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
+.ah-streamgraph__readout-rows > div { display: grid; grid-template-columns: minmax(0, 1fr) auto 40px; align-items: center; gap: 10px; font-size: 11px; }
+.ah-streamgraph__readout-model { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; color: var(--vf-text-secondary); }
+.ah-streamgraph__readout-model i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--series-color); }
+.ah-streamgraph__readout-rows b { color: var(--vf-text-primary); font-weight: 500; }
+.ah-streamgraph__readout-rows small { text-align: right; font-size: 10px; color: var(--vf-text-tertiary); }
+.ah-streamgraph__readout b, .ah-streamgraph__readout small { font-variant-numeric: tabular-nums; }
+.ah-streamgraph__readout > p { flex: none; margin: 10px 0 0; font-size: 10px; color: var(--vf-text-tertiary); }
+@media (max-width: 760px) {
+  .ah-models { padding: 18px; }
+  .ah-models .ah-chart-header { margin-bottom: 12px; }
+  .ah-models .ah-streamgraph__plot { margin: 8px 0 16px; }
+  .ah-models .ah-streamgraph__legend { margin-top: 18px; }
+}

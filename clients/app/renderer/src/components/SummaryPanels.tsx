@@ -5,8 +5,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { UsageResponse } from "@rosetta/protocol";
-import { ActivityChartDialog, CalendarHeatmap, Streamgraph, Treemap } from "./charts";
-import type { TreemapData } from "./charts";
+import { CalendarHeatmap, ProjectChartDialog, Streamgraph, Treemap } from "./charts";
+import type { ProjectChartView, TreemapData } from "./charts";
 import { ColumnHeading, SegmentedControl, Veil } from "./ui";
 import {
   calculateActivityStats,
@@ -22,7 +22,6 @@ import { NO_SPEND, addSpend, coverage, fmtUsd, spendDescription, usdText } from 
 import type { Spend } from "../lib/spend";
 
 type TintStyle = CSSProperties & { "--tint": string };
-type ProjectChart = "activity" | "models";
 const MAX_TREEMAP_PROJECT_COUNT = 10;
 // Matches the project chart's 25px selector track, 9px gap, and 106px chart body.
 const SUMMARY_CHART_CONTENT_HEIGHT = 140;
@@ -127,9 +126,9 @@ export function ProjectSummaryPanel({
   // their own requests finish, independently of transcript readiness.
   const isVeiled = ingestActive || !project.statsReady;
   const [isExpanded, setIsExpanded] = useState(true);
-  const [isActivityOpen, setIsActivityOpen] = useState(false);
-  useEffect(() => setIsActivityOpen(false), [project.row.id]);
-  const [activeChart, setActiveChart] = useState<ProjectChart>(() =>
+  const [expandedChart, setExpandedChart] = useState<ProjectChartView | null>(null);
+  useEffect(() => setExpandedChart(null), [project.row.id]);
+  const [activeChart, setActiveChart] = useState<ProjectChartView>(() =>
     new URLSearchParams(window.location.search).get("tab") === "models" ? "models" : "activity",
   );
   const activityStats = useMemo(
@@ -266,14 +265,21 @@ export function ProjectSummaryPanel({
             />
             <div className="ah-tabbody">
               {activeChart === "models" ? (
-                <Streamgraph
-                  data={modelUsageData}
-                  title="Tokens per day · 30 days"
-                  note="no zero · thickness is the total"
-                  ariaLabel="Tokens per day by model over 30 days, shown as a wiggle-minimised streamgraph"
-                  emptyMessage="No model-attributed usage in this window"
-                  formatValue={tokenText}
-                />
+                <div className="ah-chart-launcher ah-chart-launcher--models">
+                  <Streamgraph
+                    data={modelUsageData}
+                    title="Tokens per day · 30 days"
+                    note="no zero · thickness is the total"
+                    ariaLabel="Tokens per day by model over 30 days, shown as a wiggle-minimised streamgraph"
+                    emptyMessage={usage ? "No model-attributed usage in this window" : "Loading model usage…"}
+                    formatValue={tokenText}
+                  />
+                  <button type="button" className="ah-chart-launcher__button"
+                    aria-label={`Expand models chart for ${project.row.name}`} aria-haspopup="dialog"
+                    disabled={isVeiled || usage === null} onClick={() => setExpandedChart("models")}>
+                    <span className="ah-chart-launcher__hint"><FullscreenGlyph /> Expand</span>
+                  </button>
+                </div>
               ) : (
                 <>
                   <div className="ah-chart-launcher">
@@ -290,7 +296,7 @@ export function ProjectSummaryPanel({
                     <button type="button" className="ah-chart-launcher__button"
                       aria-label={`Expand activity chart for ${project.row.name}`}
                       aria-haspopup="dialog" disabled={isVeiled}
-                      onClick={() => setIsActivityOpen(true)}>
+                      onClick={() => setExpandedChart("activity")}>
                       <span className="ah-chart-launcher__hint"><FullscreenGlyph /> Expand</span>
                     </button>
                   </div>
@@ -326,11 +332,12 @@ export function ProjectSummaryPanel({
           </div>
         </div>
       )}
-      {isActivityOpen && <ActivityChartDialog projectId={project.row.id} name={project.row.name} color={project.tint}
+      {expandedChart && <ProjectChartDialog projectId={project.row.id} name={project.row.name} color={project.tint}
+        initialView={expandedChart} usage={usage}
         data={heatmapData} today={getCalendarDayKey(currentTimestamp)}
         offsetMinutes={getViewerUtcOffsetMinutes()} currentTimestamp={currentTimestamp}
         modelColors={modelColors}
-        onClose={() => setIsActivityOpen(false)} />}
+        onClose={() => setExpandedChart(null)} />}
     </div>
   );
 }

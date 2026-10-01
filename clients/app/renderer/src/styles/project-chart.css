@@ -1,0 +1,19 @@
+/* Equal side columns keep the tabs at the dialog's center, even for long names. */
+.ah-fileview__head.ah-project-chart__head {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  padding: 12px 16px 11px;
+}
+.ah-project-chart__head .ah-fileview__title { grid-column: 1; grid-row: 1; }
+.ah-project-chart__head .ah-fileview__acts { grid-column: 3; grid-row: 1; justify-self: end; }
+.ah-project-chart__tabs { grid-column: 2; grid-row: 1; justify-self: center; }
+.ah-project-chart__tabs button { min-width: 76px; height: 26px; padding: 0 14px; font-size: 11px; }
+.ah-project-chart__panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.ah-project-chart__panel[hidden] { display: none; }
+@media (max-width: 400px) {
+  .ah-fileview__head.ah-project-chart__head { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+  .ah-project-chart__head .ah-fileview__acts { grid-column: 2; }
+  .ah-project-chart__tabs { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ah-project-chart__tabs button { transition: none; }
+}

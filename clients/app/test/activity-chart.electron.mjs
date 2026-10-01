@@ -71,6 +71,8 @@ async function run() {
     assert.match(await check(() => getComputedStyle(document.querySelector('.ah-chart-launcher__button')).cursor), /svg.*16 16, zoom-in/);
     assert.ok(Number(await check(() => getComputedStyle(document.querySelector('.ah-chart-launcher__hint')).opacity)) > .99);
     await open();
+    assert.equal(await check(() => document.querySelector('[role="tab"][aria-selected="true"]').textContent), 'Activity', 'The calendar launcher opens Activity');
+    assert.equal(await check(() => document.querySelector('.ah-models')), null, 'Unvisited details are mounted lazily');
     assert.equal(await check(() => document.querySelectorAll('.ah-activity [data-day]').length), 368);
     assert.equal(await check(() => document.querySelector('[aria-label="Activity date range"]')), null, "The full history has no date-range tabs");
     assert.equal(await check(() => document.querySelector('.ah-activity [aria-pressed="true"][data-day]').dataset.day), "2026-09-30");
@@ -150,6 +152,33 @@ async function run() {
     await click('[data-model-toggle="claude-opus-5-5"]');
     assert.equal(await check(() => document.querySelectorAll('[data-model-line]').length), 2);
     assert.equal(await check(() => document.querySelectorAll('[data-model-area], .ah-daychart__glow').length), 4, "Muting removes the model's fill and glow together");
+    const requestsBeforeTabs = await check(() => {
+      window.dialogBeforeTabs = document.querySelector('[role="dialog"]');
+      window.dayChartBeforeTabs = document.querySelector('.ah-daychart');
+      return window.activityFixture.requests.length;
+    });
+    await click('[role="tab"][aria-controls$="-models"]');
+    assert.ok(await check(() => document.querySelector('[role="dialog"]') === window.dialogBeforeTabs), 'Tabs reuse the same modal');
+    assert.equal(await check(() => document.querySelectorAll('[role="dialog"]').length), 1);
+    assert.equal(await check(() => document.querySelectorAll('[role="tabpanel"]:not([hidden])').length), 1);
+    assert.equal(await check(() => document.querySelector('[role="tabpanel"]:not([hidden]) .ah-models svg')?.getAttribute('role')), 'slider');
+    assert.ok(await check(() => document.querySelector('.ah-activity').getClientRects().length === 0), 'Inactive content is removed from layout');
+    // One tab stop, arrow-key activation with wrapping, and Home/End.
+    assert.equal(await check(() => document.querySelectorAll('[role="tab"][tabindex="0"]').length), 1);
+    await key('Right');
+    assert.equal(await check(() => document.activeElement.textContent), 'Activity');
+    assert.equal(await check(() => document.activeElement.getAttribute('aria-selected')), 'true');
+    await key('Left');
+    assert.equal(await check(() => document.activeElement.textContent), 'Models');
+    await key('Home');
+    assert.equal(await check(() => document.activeElement.textContent), 'Activity');
+    await key('End');
+    assert.equal(await check(() => document.activeElement.textContent), 'Models');
+    await click('[role="tab"][aria-controls$="-activity"]');
+    assert.equal(await check(() => document.querySelector('[data-day][aria-pressed="true"]').dataset.day), '2026-09-18', 'Tab switches preserve the selected day');
+    assert.ok(await check(() => document.querySelector('.ah-daychart') === window.dayChartBeforeTabs), 'Hourly detail stays mounted');
+    assert.equal(await check(() => document.querySelectorAll('[data-model-line]').length), 2, 'Model isolation survives tab switches');
+    assert.equal(await check(() => window.activityFixture.requests.length), requestsBeforeTabs, 'Returning to Activity does not refetch the selected day');
     await click('[data-model-toggle="claude-opus-5-5"]');
     assert.equal(await check(() => document.querySelectorAll('[data-model-line]').length), 3);
     await click('[data-run-link="best"]');
@@ -196,6 +225,10 @@ async function run() {
     await click('[aria-label="Earlier calendar weeks"]');
     assert.equal(await check(() => document.querySelector('#activity-day-title').textContent), currentDay, "Browsing calendar pages retains the selected day");
     assert.equal(await check(() => window.activityFixture.requests.length), requestsBeforePage, "Browsing calendar pages does not fetch hourly data");
+    const pageBeforeTabs = await check(() => document.querySelector('.ah-activity__calendar-nav span').textContent);
+    await click('[role="tab"][aria-controls$="-models"]');
+    await click('[role="tab"][aria-controls$="-activity"]');
+    assert.equal(await check(() => document.querySelector('.ah-activity__calendar-nav span').textContent), pageBeforeTabs, 'Hiding Activity preserves its calendar page');
     await click('.ah-activity [data-day]');
     await until(() => Boolean(document.querySelector('.ah-daychart')), 'Earlier day did not load');
     assert.notEqual(await check(() => document.querySelector('#activity-day-title').textContent), currentDay);
@@ -220,7 +253,7 @@ async function run() {
       assert.ok(dimensions.plotHeight >= 80, 'The compact plot stays readable');
       await shot(`activity-compact-${width}.png`);
     }
-    await click('[aria-label="Close activity chart"]');
+    await click('[aria-label="Close project charts"]');
     await until(() => !document.querySelector('[role="dialog"]'), "Close button did not dismiss dialog");
 
     // The current day ends at the current hour. Future guides have no fill or
@@ -293,6 +326,12 @@ async function run() {
     await pause();
     await open();
     await until(() => document.querySelector('.ah-activity__empty')?.textContent.includes('Hourly breakdown unavailable'), "Missing hourly data was presented as zero");
+    await click('[role="tab"][aria-controls$="-models"]');
+    assert.match(await check(() => document.querySelector('.ah-models [role="status"]').textContent), /Loading model usage/);
+    assert.equal(await check(() => document.querySelector('.ah-models').getAttribute('aria-busy')), 'true');
+    await check(() => window.activityFixture.setMode('ready'));
+    await until(() => Boolean(document.querySelector('.ah-models svg')), 'Loaded usage did not populate the active Models tab');
+    assert.equal(await check(() => document.querySelector('.ah-models').getAttribute('aria-busy')), 'false');
     await key("Escape");
     await check(() => window.activityFixture.setMode('zero'));
     await pause();
@@ -312,7 +351,7 @@ async function run() {
     await pause();
     assert.ok(await check(() => document.querySelector('.ah-chart-launcher__button').disabled));
     assert.deepEqual(errors, [], "Renderer errors");
-    console.log(JSON.stringify({ result: "PASS", screenshots, checks: ["fullscreen cursor", "pointer and keyboard launch", "hover does not fetch", "selected-day hourly models", "smooth curves and gradient glow", "dashed future guides without measured values", "stale response cancellation", "model isolation", "API error and retry", "full activity history without range tabs", "calendar navigation", "fullscreen and Escape", "focus trap and restoration", "backdrop dismissal", "light/dark/narrow layout", "no dialog scrollbars", "calendar page navigation", "zero and missing data", "project switch", "loading state"] }, null, 2));
+    console.log(JSON.stringify({ result: "PASS", screenshots, checks: ["fullscreen cursor", "pointer and keyboard launch", "shared dialog and keyboard tabs", "day, model isolation and calendar page survive tab switches without refetching", "model loading resolves in place", "hover does not fetch", "selected-day hourly models", "smooth curves and gradient glow", "dashed future guides without measured values", "stale response cancellation", "model isolation", "API error and retry", "full activity history without range tabs", "calendar navigation", "fullscreen and Escape", "focus trap and restoration", "backdrop dismissal", "light/dark/narrow layout", "no dialog scrollbars", "calendar page navigation", "zero and missing data", "project switch", "loading state"] }, null, 2));
   } catch (error) {
     failed = true;
     console.error(error);

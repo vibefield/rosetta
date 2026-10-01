@@ -1567,6 +1567,30 @@ gradient fills and line glow do not introduce extra peaks or negative values.
 For today's unrecorded hours, faint dashed guides continue the current level
 without a fill or numeric value; the readout labels them as awaiting usage.
 
+The project calendar and models chart open one shared detail dialog (2026-10-01),
+with centered Activity / Models tabs and one set of fullscreen and close controls.
+Each launcher selects its corresponding tab; switching keeps the same modal,
+original opener, fullscreen state, selected day, model filters, and scroll positions.
+Tabs support arrow keys, Home, and End. Each view mounts on first visit and stays
+mounted while hidden, so opening Models does not request hourly activity and
+returning to Activity does not refetch its selected day. Model usage still loading
+when reached through Activity has an explicit loading state.
+
+The Models tab enlarges the same 30-day streamgraph. Both sizes share the date domain, model
+colors, wiggle baseline algorithm, and smooth paths. The summary groups models
+after the top three under `other`; the detailed view retains every model as
+its own band, legend entry, and hover row. The expanded presentation adds fading
+gradient fills, subtle glowing outlines, and larger date labels and legend.
+It stays a single plot, fits the viewport, and makes no hourly usage requests.
+A vertical inspection guide snaps to recorded days, with markers at the band
+centers from that same layout. Its tooltip shows the date, total, and each
+model's tokens and daily share. Empty days show zero tokens and no calculated
+shares or markers. Pointer hover and
+keyboard arrows, Home, and End read the loaded values without interpolation;
+the tooltip stays inside the plot and the period-total legend remains stable.
+The legend uses compact columns; large model lists scroll within their bounded
+legend or hover card while the plot and dialog remain in the viewport.
+
 `WS /ws/collaboration/{id}` carries a complete collaboration-boundary snapshot,
 content-free response model/effort observations, then filtered live changes. It
 does not send private transcript windows or timeline metadata. Team roster

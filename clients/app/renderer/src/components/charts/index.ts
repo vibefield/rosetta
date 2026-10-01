@@ -1,7 +1,7 @@
 export { CalendarHeatmap } from "./CalendarHeatmap";
 export type { CalendarHeatmapProps } from "./CalendarHeatmap";
-export { ActivityChartDialog } from "./ActivityChartDialog";
-export type { ActivityChartDialogProps } from "./ActivityChartDialog";
+export { ProjectChartDialog } from "./ProjectChartDialog";
+export type { ProjectChartDialogProps, ProjectChartView } from "./ProjectChartDialog";
 export { Streamgraph } from "./Streamgraph";
 export type { StreamgraphProps } from "./Streamgraph";
 export { Treemap } from "./Treemap";

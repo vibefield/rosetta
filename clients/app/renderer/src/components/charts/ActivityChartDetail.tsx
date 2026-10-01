@@ -3,8 +3,6 @@ import type { CSSProperties } from "react";
 import { CalendarHeatmap } from "./CalendarHeatmap";
 import { DayActivityChart } from "./DayActivityChart";
 import type { CalendarHeatmapCellData, CalendarHeatmapData } from "./types";
-import { ColumnHeading, DialogShell } from "../ui";
-import { CloseGlyph, ExitFullscreenGlyph, FullscreenGlyph } from "../../lib/icons";
 import { createActivityDetails } from "../../lib/activity-details";
 import type { ActivityRun } from "../../lib/activity-details";
 import { useDayUsage } from "../../lib/use-day-usage";
@@ -21,7 +19,7 @@ function dateLabel(key: string, weekday = false, year = false): string {
   });
 }
 
-export interface ActivityChartDialogProps {
+export interface ActivityChartDetailProps {
   readonly projectId: string;
   readonly name: string;
   readonly color: string;
@@ -30,13 +28,11 @@ export interface ActivityChartDialogProps {
   readonly offsetMinutes: number;
   readonly currentTimestamp: number;
   readonly modelColors: Readonly<Record<string, string>>;
-  readonly onClose: () => void;
 }
 
-export function ActivityChartDialog({
-  projectId, name, color, data, today, offsetMinutes, currentTimestamp, modelColors, onClose,
-}: ActivityChartDialogProps) {
-  const [fullscreen, setFullscreen] = useState(false);
+export function ActivityChartDetail({
+  projectId, name, color, data, today, offsetMinutes, currentTimestamp, modelColors,
+}: ActivityChartDetailProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [preview, setPreview] = useState<CalendarHeatmapCellData | null>(null);
   const [calendarElement, setCalendarElement] = useState<HTMLDivElement | null>(null);
@@ -45,7 +41,8 @@ export function ActivityChartDialog({
   useLayoutEffect(() => {
     const node = calendarElement;
     if (!node) return;
-    const measure = () => setCalendarWidth(node.clientWidth);
+    // A visited tab stays mounted while hidden; retain its calendar page layout.
+    const measure = () => { if (node.clientWidth > 0) setCalendarWidth(node.clientWidth); };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(node);
@@ -80,22 +77,7 @@ export function ActivityChartDialog({
     setSelectedId(run.end); setPreview(null); setCalendarPage(null);
   };
 
-  return <DialogShell title={`${name} activity`} onClose={onClose} fullscreen={fullscreen}
-    onExitFullscreen={() => setFullscreen(false)}>
-    <header className="ah-fileview__head">
-      <div className="ah-fileview__title"><ColumnHeading name={name} tint={color} />
-        <span className="ah-fileview__kind">Activity</span></div>
-      <div className="ah-fileview__acts">
-        <button className="ah-iconbtn" type="button" aria-pressed={fullscreen}
-          title={fullscreen ? "Exit full screen (Esc)" : "View full screen"}
-          aria-label={fullscreen ? "Exit full screen" : "View full screen"}
-          onClick={() => setFullscreen(current => !current)}>
-          {fullscreen ? <ExitFullscreenGlyph /> : <FullscreenGlyph />}</button>
-        <button className="ah-iconbtn" type="button" title="Close (Esc)"
-          aria-label="Close activity chart" onClick={onClose}><CloseGlyph /></button>
-      </div>
-    </header>
-    <div className="ah-activity" style={{ "--activity-color": color } as CSSProperties}>
+  return <div className="ah-activity" style={{ "--activity-color": color } as CSSProperties}>
       <section className="ah-activity__calendar" aria-labelledby="activity-calendar-title">
         <div className="ah-activity__toolbar">
           <div><h2 id="activity-calendar-title">Daily activity</h2>
@@ -164,6 +146,5 @@ export function ActivityChartDialog({
             lastHour={selectedDay.id === today ? new Date(currentTimestamp).getHours() : 23} />
             {hourlyTotal !== selectedDay.value && <p className="ah-activity__updated">Usage has changed since the calendar was loaded.</p>}</>}
       </section>
-    </div>
-  </DialogShell>;
+    </div>;
 }

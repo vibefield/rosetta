@@ -8,6 +8,8 @@ export interface StreamgraphLayerInput {
 export interface StreamgraphLayerPath {
   seriesId: string;
   path: string;
+  /** Sample centers use the same stacked boundaries as the rendered band. */
+  samples: readonly Point[];
 }
 
 export interface StreamgraphLayoutOptions {
@@ -141,6 +143,9 @@ export function createStreamgraphLayout(
     return {
       seriesId: layer.id,
       path: `${createSmoothCurve(upperPoints, "M")} ${createSmoothCurve(lowerPoints, "L")} Z`,
+      samples: upperPoints.map(([x, upperY], index) => [
+        x, (upperY + yPosition(boundaries[layerIndex][index])) / 2,
+      ] as const),
     };
   });
 }
