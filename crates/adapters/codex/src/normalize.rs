@@ -734,6 +734,14 @@ fn response_item(
             }
             tool.failure = patch.failure;
             tool.timing = patch.timing;
+            if name == "image_generation_call"
+                && let Some(data) = item.result.as_deref()
+            {
+                let (attachment, asset) =
+                    rosetta_adapter_support::media::from_image_base64("image-0", data);
+                tool.attachments.push(attachment);
+                ops.extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
+            }
             row.tool = Some(tool);
             push_response(state, row, ops);
             LineStatus::Parsed
@@ -776,8 +784,13 @@ fn reduce_tool_output(
         // correlation behavior in that case; a transport output with no
         // opener simply remains an orphan and never becomes a message.
         push_update(ctx, tool_id, terminal_patch(item, ts), ts, ops);
+        crate::images::tool_output(ctx, tool_id, item.output.as_ref(), ts, ops);
         return;
     };
+
+    if let CellRoute::Canonical { call } = &route {
+        crate::images::tool_output(ctx, &call.correlation_key, item.output.as_ref(), ts, ops);
+    }
 
     if let Some(cell_id) = yielded_cell_id(item.output.as_ref()) {
         state.yielded_cells.insert(cell_id, route);

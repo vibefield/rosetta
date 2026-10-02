@@ -105,6 +105,7 @@ async fn live_image_urls_track_file_changes_without_storing_originals() {
     let mut row = message("live-image", MessageKind::ToolUse, "");
     row.content = None;
     row.tool = Some(ToolInteraction {
+        attachments: Vec::new(),
         correlation: ToolCorrelation {
             key: "image-read".into(),
             derivation: CorrelationDerivation::NativeId,

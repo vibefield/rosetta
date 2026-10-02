@@ -1,14 +1,16 @@
 //! Lossless codec between the closed Rust tool contract and canonical columns.
-//! `tool_detail` is a serialized `ToolAction`, never a native request/result.
+//! `tool_detail` holds a typed action and its recorded attachments, never native output.
 
 use std::error::Error;
 
+use rosetta_core::timeline::AttachmentRef;
 use rosetta_core::{
     CorrelationDerivation, FailureKind, NativeToolRef, StatusBasis, ToolAction, ToolCorrelation,
     ToolFailure, ToolInteraction, ToolStatus, ToolStatusFact, ToolTiming,
 };
 use rusqlite::Row;
 use rusqlite::types::Type;
+use serde::{Deserialize, Serialize};
 
 use crate::StoreError;
 
@@ -60,7 +62,17 @@ pub(crate) fn encode(tool: Option<&ToolInteraction>) -> Result<EncodedTool<'_>, 
 /// encoding a tool row, which a producer that resolved the row can do off
 /// the writer.
 pub(crate) fn detail(tool: &ToolInteraction) -> Result<String, StoreError> {
-    Ok(serde_json::to_string(&tool.action)?)
+    #[derive(Serialize)]
+    struct Detail<'a> {
+        #[serde(flatten)]
+        action: &'a ToolAction,
+        #[serde(skip_serializing_if = "<[AttachmentRef]>::is_empty")]
+        attachments: &'a [AttachmentRef],
+    }
+    Ok(serde_json::to_string(&Detail {
+        action: &tool.action,
+        attachments: &tool.attachments,
+    })?)
 }
 
 /// [`encode`], with `tool_detail` already serialized by [`detail`] when given.
@@ -145,8 +157,17 @@ pub(crate) fn decode_columns<I: rusqlite::RowIndex + Copy>(
     let status: String = row.get(columns.tool_status)?;
     let status_basis: String = row.get(columns.tool_status_basis)?;
     let detail: String = row.get(columns.tool_detail)?;
-    let action: ToolAction =
-        serde_json::from_str(&detail).map_err(|error| decode_error(0, error))?;
+    #[derive(Deserialize)]
+    struct Detail {
+        #[serde(flatten)]
+        action: ToolAction,
+        #[serde(default)]
+        attachments: Vec<AttachmentRef>,
+    }
+    let Detail {
+        action,
+        attachments,
+    } = serde_json::from_str(&detail).map_err(|error| decode_error(0, error))?;
     let failure_kind: Option<String> = row.get(columns.tool_error_kind)?;
     let failure = failure_kind
         .map(|kind| -> rusqlite::Result<ToolFailure> {
@@ -186,6 +207,7 @@ pub(crate) fn decode_columns<I: rusqlite::RowIndex + Copy>(
             basis: parse_status_basis(&status_basis)?,
         },
         action,
+        attachments,
         failure,
         timing,
     }))

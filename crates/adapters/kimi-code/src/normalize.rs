@@ -758,6 +758,26 @@ fn tool_result(
                 .map_or(native_session_id, |(root, _)| root);
             ids::session_id(&ctx.runtime_id, &format!("{root}/agents/{agent_id}"))
         });
+    if let Some(blocks) = result.output.as_array() {
+        let blocks: Vec<crate::raw::wire::ContentBlock> = blocks
+            .iter()
+            .filter_map(|block| serde_json::from_value(block.clone()).ok())
+            .collect();
+        let (attachments, assets) = content_attachments(&blocks);
+        ops.extend(
+            assets
+                .into_iter()
+                .map(|asset| IngestOp::ProjectionAsset { asset }),
+        );
+        rosetta_adapter_support::media::push_tool_attachments(
+            ctx,
+            tool_id,
+            tool_id,
+            attachments.into_iter().map(|attachment| (attachment, None)),
+            Some(ts),
+            ops,
+        );
+    }
     let mut patch = terminal_update(
         result.is_error,
         true,

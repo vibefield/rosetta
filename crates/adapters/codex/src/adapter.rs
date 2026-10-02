@@ -41,7 +41,8 @@ impl AgentAdapter for CodexAdapter {
         // guardian usage attributed to the parent, missed-emission deltas as
         // aggregates, missing tier key = unset (2026-09-23 audit).
         // 18: image members are WebP with bounded display renditions.
-        18
+        // 19: recorded tool images use durable optimized attachment members.
+        19
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

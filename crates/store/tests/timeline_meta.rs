@@ -112,6 +112,7 @@ fn tool_entry(id: &str, ordinal: i64, at: i64, action: ToolAction) -> TimelineEn
         effort: None,
         body: TimelineBody::ToolUse {
             tool: Box::new(ToolInteraction {
+                attachments: Vec::new(),
                 correlation: ToolCorrelation {
                     key: format!("call-{id}"),
                     derivation: CorrelationDerivation::NativeId,

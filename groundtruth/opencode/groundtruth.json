@@ -19,15 +19,15 @@
       "agent_version": "1.18.22",
       "evidence": "writer",
       "path": "sources/1.18.23.writer.json",
-      "sha256": "d93a3bfb209781048bdad2b106625d308b6f5c2fb005cc03f3ad0692c1b9b6ca",
+      "sha256": "66cec1237a12364b7a3fece5763600f16e7a9129ee82208c31984fa1b6d802cc",
       "writer_version": "v1.18.23"
     },
     {
-      "generator": "writer-source anomalyco/opencode@v2.0.14 packages/core/src/session/sql.ts SessionTable (session_v2) and SessionMessageTable (session_message); packages/core/src/event/sql.ts EventTable; packages/schema/src/session-message.ts Info (User, Synthetic, System, Skill, Shell, Assistant, AssistantContent, Compaction, Idle, AgentSelected, ModelSelected, LocationSwitched); packages/schema/src/token-usage.ts, model.ts Ref, prompt.ts FileAttachment, session-fork.ts Boundary; packages/schema/src/session-event.ts UsageRecorded (session.usage.recorded.1); packages/core/src/database/migration/20260804233008_loose_psylocke.ts DDL. Synthetic, schema-shaped, content-free: native 2.x capture pending",
+      "generator": "writer-source anomalyco/opencode@v2.0.14 packages/core/src/session/sql.ts SessionTable (session_v2) and SessionMessageTable (session_message); packages/core/src/event/sql.ts EventTable; packages/schema/src/session-message.ts Info (User, Synthetic, System, Skill, Shell, Assistant, AssistantContent, Compaction, Idle, AgentSelected, ModelSelected, LocationSwitched); packages/schema/src/token-usage.ts, model.ts Ref, prompt.ts FileAttachment, session-fork.ts Boundary; packages/schema/src/session-event.ts UsageRecorded (session.usage.recorded.1); packages/core/src/database/migration/20260804233008_loose_psylocke.ts DDL. Synthetic, schema-shaped, content-free: native 2.x capture pending; packages/schema/src/tool.ts Content (TextContent, FileContent)",
       "agent_version": "1.18.22",
       "evidence": "writer",
       "path": "sources/2.0.14.writer.json",
-      "sha256": "06224e34ccf399887d709b701dc690f5712bc0c2fbcbb28ae55cc9b65c0917b9",
+      "sha256": "1af5edbc9a6f5e2a4f5a924fa09fe9010157d41f20a0cc14d68ed74b69365c65",
       "writer_version": "v2.0.14"
     },
     {
@@ -3437,6 +3437,51 @@
                     "shape": {
                       "kind": "object",
                       "fields": {
+                        "attachments": {
+                          "shape": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "type": {
+                                  "shape": {
+                                    "kind": "string",
+                                    "values": {
+                                      "file": 0
+                                    }
+                                  },
+                                  "required": true
+                                },
+                                "mime": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true
+                                },
+                                "filename": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": false
+                                },
+                                "url": {
+                                  "shape": {
+                                    "kind": "string"
+                                  },
+                                  "required": true
+                                },
+                                "source": {
+                                  "shape": {
+                                    "kind": "object",
+                                    "fields": {}
+                                  },
+                                  "required": false
+                                }
+                              }
+                            }
+                          },
+                          "required": false
+                        },
                         "input": {
                           "shape": {
                             "kind": "object",
@@ -5345,8 +5390,61 @@
                           "shape": {
                             "kind": "array",
                             "items": {
-                              "kind": "object",
-                              "fields": {}
+                              "kind": "any_of",
+                              "variants": [
+                                {
+                                  "kind": "object",
+                                  "fields": {
+                                    "type": {
+                                      "shape": {
+                                        "kind": "string",
+                                        "values": {
+                                          "text": 0
+                                        }
+                                      },
+                                      "required": true
+                                    },
+                                    "text": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true
+                                    }
+                                  }
+                                },
+                                {
+                                  "kind": "object",
+                                  "fields": {
+                                    "type": {
+                                      "shape": {
+                                        "kind": "string",
+                                        "values": {
+                                          "file": 0
+                                        }
+                                      },
+                                      "required": true
+                                    },
+                                    "uri": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true
+                                    },
+                                    "mime": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true
+                                    },
+                                    "name": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": false
+                                    }
+                                  }
+                                }
+                              ]
                             }
                           },
                           "required": false

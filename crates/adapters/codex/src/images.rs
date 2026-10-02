@@ -9,6 +9,41 @@ use rosetta_core::timeline::{
 
 use crate::raw::rollout::ContentBlock;
 
+/// The output union uses the same ContentItem image blocks as authored prose.
+/// Inspect only that declared array, never arbitrary tool text or nested JSON.
+pub(crate) fn tool_output(
+    ctx: &rosetta_adapter_support::adapter::NormalizeCtx,
+    owner: &str,
+    output: Option<&serde_json::Value>,
+    at: Option<rosetta_core::rows::Ms>,
+    ops: &mut Vec<rosetta_core::IngestOp>,
+) {
+    let Some(blocks) = output.and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    let images = blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| block["type"] == "input_image")
+        .map(|(index, block)| {
+            let id = format!("image-{index}");
+            match block["image_url"].as_str() {
+                Some(url) => media::from_url(&id, AttachmentKind::Image, url, None),
+                None => media::unavailable(
+                    &id,
+                    AttachmentKind::Image,
+                    AttachmentUnavailableReason::InvalidData,
+                ),
+            }
+        });
+    let occurrence = format!(
+        "{}:{}",
+        ctx.evidence(0).source_identity.0,
+        ctx.src_offset.unwrap_or(0)
+    );
+    media::push_tool_attachments(ctx, owner, &occurrence, images, at, ops);
+}
+
 pub(crate) fn authored_content(
     blocks: &[ContentBlock],
 ) -> (Option<String>, Vec<AttachmentRef>, Vec<ProjectionAsset>) {

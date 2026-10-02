@@ -100,6 +100,7 @@ fn message_op(row: MessageRow) -> IngestOp {
 
 fn shell_tool(key: &str, command: &str) -> ToolInteraction {
     ToolInteraction {
+        attachments: Vec::new(),
         correlation: ToolCorrelation {
             key: key.into(),
             derivation: CorrelationDerivation::NativeId,

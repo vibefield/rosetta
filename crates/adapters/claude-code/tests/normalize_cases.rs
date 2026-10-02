@@ -2224,34 +2224,32 @@ fn unpinned_agent_writer_does_not_emit_a_delegate_only_update() {
 }
 
 #[test]
-fn read_image_results_do_not_cross_the_canonical_boundary() {
-    let encoded_png_signature = "iVBORw0KGgo=";
+fn recorded_read_images_are_optimized_tool_attachments() {
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
     let (ops, _) = run(&[user(
         json!([{"type": "tool_result", "tool_use_id": "toolu_image"}]),
-        json!({"toolUseResult": {"file": {
-            "base64": encoded_png_signature,
-            "type": "image/png",
-            "dimensions": {"originalWidth": 1, "originalHeight": 1}
-        }}}),
+        json!({"toolUseResult": {"file": {"base64": png,"type": "image/png"}}}),
     )]);
-
     assert!(
-        !ops.iter()
-            .any(|op| matches!(op, IngestOp::ProjectionAsset { .. })),
-        "a file-read body is neither authored media nor a canonical attachment"
+        messages(&ops).is_empty(),
+        "tool media must not become a user upload"
     );
-    let patch = ops
+    assert!(ops.iter().any(|op| matches!(op, IngestOp::ProjectionAsset { asset } if asset.media_type == "image/webp" && asset.image_variants.len() == 4)));
+    let attachments = ops
         .iter()
         .find_map(|op| match op {
-            IngestOp::ToolUpdate { patch, .. } => Some(patch),
+            IngestOp::ToolUpdate { patch, .. } if !patch.attachments.is_empty() => {
+                Some(&patch.attachments)
+            }
             _ => None,
         })
-        .expect("typed lifecycle update");
-    assert_eq!(
-        patch.status.as_ref().map(|status| status.value),
-        Some(ToolStatus::Succeeded)
-    );
-    assert!(patch.failure.is_none());
+        .unwrap();
+    assert_eq!(attachments.len(), 1);
+    assert!(matches!(
+        attachments[0].source,
+        AttachmentSource::Asset { .. }
+    ));
+    assert!(!serde_json::to_string(&ops).unwrap().contains(png));
 }
 
 #[test]
@@ -2295,7 +2293,7 @@ fn a_turn_with_text_and_a_result_keeps_both() {
     assert_eq!(text(rows[0]), Some("and here is my follow-up"));
 
     let patch = ops.iter().find_map(|op| match op {
-        IngestOp::ToolUpdate { patch, .. } => Some(patch),
+        IngestOp::ToolUpdate { patch, .. } if patch.status.is_some() => Some(patch),
         _ => None,
     });
     let Some(patch) = patch else {

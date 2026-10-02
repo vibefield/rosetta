@@ -308,6 +308,7 @@ fn project(
                         .and_then(Value::as_u64)
                         .and_then(|at| i64::try_from(at).ok())
                         .or(Some(record.part_time_created));
+                    crate::images::tool_output(ctx, &tool.call_id, &tool.state, at, ops);
                     ops.push(IngestOp::ToolUpdate {
                         session_id: ctx.session_id.clone(),
                         correlation_key: tool.call_id.clone(),

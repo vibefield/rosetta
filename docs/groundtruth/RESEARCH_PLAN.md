@@ -722,6 +722,22 @@ synthetic placeholders now that normalization performs a complete decode. The me
 suite covers alpha, orientation, ICC conversion, animated WebP timing/loops, bounded
 work and deterministic replay; native-capture gaps remain as listed above.
 
+**Recorded tool media (2026-10-02).** Schema 27 / protocol 26 adds resolved
+attachments to the owning tool interaction. The seven established adapters use the
+same WebP pipeline for authored and tool-result images: Codex `input_image` output
+blocks (including yielded cells) and Base64 image-generation results; Claude nested
+`tool_result` images; Pi `toolResult` image content; Kimi `tool.result.output`
+media parts; Grok ACP content plus its older `ImageContent` fallback; Copilot inline
+results and exact `session.binary_asset` joins; OpenCode completed v1 FileParts and
+v2 Tool.Content file members. Copilot joins survive checkpoints and still validate
+original bytes. Paths and remote-only references are not historical-byte recovery.
+The OpenCode canonical pack was regenerated after extending its pinned writer
+intermediates from [v1 ToolStateCompleted](https://github.com/anomalyco/opencode/blob/v1.18.23/packages/schema/src/v1/session.ts)
+and [v2 Tool.Content](https://github.com/anomalyco/opencode/blob/v2.0.14/packages/schema/src/tool.ts).
+Synthetic conformance and warm/replay tests prove the parser behavior; the native
+capture gaps in the table remain. Transcript image views now request only complete
+optimized asset bundles, never current files inferred from tool targets.
+
 **Claude numbered-image links.** The 2.1.267 native writer carries `imagePasteIds`
 through user-message construction and pairs its entries with top-level image blocks
 using an image-only counter. The binding is recorded in the `image-paste-bindings`

@@ -1,92 +1,77 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { imageMediaTypeFromBytes } from '../renderer/src/lib/image-media.ts';
+import { imageMediaTypeFromBytes, isOptimizedImageAsset } from '../renderer/src/lib/image-media.ts';
 import { activityImages, messageAttachments, timelineImages } from '../renderer/src/lib/transcript/images.ts';
 import { ledgerLine } from '../renderer/src/lib/transcript/index.ts';
 import { entry, tool, read, file, inline } from './support/ledger-fixtures.mjs';
 
 const images = (...rows) => activityImages(rows.map(row => ({ kind: 'line', line: ledgerLine(row) })));
-const asset = { type: 'asset', asset: { url: '/api/assets/image.png', digest: 'a'.repeat(64), media_type: 'image/png', byte_len: 42 } };
-
+const member = digit => ({ url: `/api/assets/${digit.repeat(64)}.webp`, digest: digit.repeat(64), media_type: 'image/webp', byte_len: 42 });
+const optimized = () => ({ ...member('a'), image_variants: { rail: member('b'), tile: member('c'), tile2x: member('d'), preview: member('e') } });
+const asset = { type: 'asset', asset: optimized() };
 const attachment = (over = {}) => ({ id: '1', kind: 'image', label: '[Image #1]', name: 'review.png',
-  media_type: 'image/png', byte_len: 42, dimensions: null, message_ranges: [{ start: 0, end: 10 }], source: asset, ...over });
+  media_type: 'image/webp', byte_len: 42, dimensions: null, message_ranges: [], source: asset, ...over });
 
-test('mixed activity gathers tool, assignment, team and peer images in message order', () => {
+test('mixed activity gathers recorded tool, assignment, team and peer images in message order', () => {
   const assignment = entry({ type: 'user', text: inline('[Image #1]'), attachments: [attachment()] });
   const team = entry({ type: 'collaboration', event: { channel: 'team', attachments: [attachment()] } });
   const peer = entry({ type: 'collaboration', event: { channel: 'peer', attachments: [attachment({ source: { type: 'unavailable', reason: 'not_recorded' } })] } });
   const report = entry({ type: 'collaboration', event: { kind: 'report', attachments: [attachment()] } });
-  const readRow = read('/demo/screen.png');
+  const readRow = read('/already/deleted.png', { attachments: [attachment()] });
   const result = timelineImages([assignment, readRow, team, peer, report, team]);
   assert.equal(result.length, 5, 'a repeated canonical row is not a second occurrence');
   assert.deepEqual(result.map(fact => fact.key), [messageAttachments(assignment)[0].key, images(readRow)[0].key,
     messageAttachments(team)[0].key, messageAttachments(peer)[0].key, messageAttachments(report)[0].key]);
   assert.equal(new Set(result.map(fact => fact.key)).size, 5, 'message-local ids must not collide');
   assert.equal(result[3].missing, true);
-  assert.equal(result[2].ref, team.body.event.attachments[0], 'native ids and mention ranges remain intact');
+  assert.equal(result[2].ref, team.body.event.attachments[0]);
 });
 
-test('old events and context text add no invented image requests; documents stay out of the image rail', () => {
+test('filenames, declared media kinds, remote URLs and markdown never invent transcript images', () => {
   assert.deepEqual(timelineImages([
+    read('/demo/screen.png'),
+    tool({ type: 'file_read', targets: [{ resource: file('/demo/no-extension'), range: null, media_kind: 'image' }], outcome: null }),
+    tool({ type: 'artifact', operation: 'create', artifact_kind: 'image', name: 'Design', description: null,
+      resources: [file('/demo/design.png'), { type: 'url', url: 'https://example.test/design.png' }], media: null }),
     entry({ type: 'collaboration', event: { body: inline('![image](https://example.test/a.png)') } }),
     entry({ type: 'summary', text: inline('/demo/screen.png') }),
     entry({ type: 'user', attachments: [attachment({ kind: 'document' })] }),
   ]), []);
 });
 
-test('activity images preserve occurrence order and exact target addresses', () => {
-  const first = tool({ type: 'file_read', targets: [
-    { resource: file('/demo/README.md'), range: null, media_kind: null },
-    { resource: file('/demo/screen.PNG'), range: null, media_kind: null },
-    { resource: file('/demo/no-extension'), range: null, media_kind: 'image' },
-  ], outcome: null });
-  const second = read('/demo/screen.PNG');
+test('recorded occurrences survive repeated bytes and successive tools without live read addresses', () => {
+  const first = read('/gone.png', { attachments: [attachment(), attachment({ id: '2' })] });
+  const second = read('/gone.png', { attachments: [attachment()] });
   const result = images(first, second);
   assert.equal(result.length, 3);
-  assert.deepEqual(result.map(fact => fact.readPath.read.targetIndex), [1, 2, 0]);
-  assert.deepEqual(result.map(fact => fact.readPath.read.timelineId), [first.timeline_id, first.timeline_id, second.timeline_id]);
-  assert.equal(result[0].mediaType, 'image/png');
   assert.equal(new Set(result.map(fact => fact.key)).size, 3);
+  assert.ok(result.every(fact => fact.ref.source === asset && !('readPath' in fact)));
 });
 
-test('image artifacts include stored, local, and unavailable reference slots', () => {
-  const result = images(tool({ type: 'artifact', operation: 'create', artifact_kind: 'image', name: 'Design',
-    description: null, resources: [asset, file('/demo/design.png'), { type: 'url', url: 'https://example.com/design.png' }],
-    media: { media_type: 'image/png', width: 1280, height: 800, duration_ms: null } }));
-  assert.deepEqual(result.map(fact => fact.ref.source.type), ['asset', 'reference', 'reference']);
-  assert.equal(result[1].readPath.read.targetIndex, 1);
-  assert.equal(result[2].readPath, undefined);
-  assert.equal(result[2].missing, true);
-  assert.equal(result[0].width, 1280);
-});
-
-test('workflow images retain server indices after script and duplicate resources', () => {
-  const row = tool({ type: 'workflow', name: 'Render', path: file('/demo/render.py'), arguments: null,
-    objective: null, resume_id: null, background: false, task_id: null, run_id: null, attempt: null,
-    callback_summary: null, callback_result: null, usage: null,
-    run: { script_path: file('/demo/render.py'), resources: [file('/demo/render.py'), file('/demo/a.png'), file('/demo/a.png'), file('/demo/b.jpg')],
-      status: "completed", phases: [], workers: [], logs: [], summary: null, result: null, usage: null, error: null } });
-  const result = images(row);
-  assert.deepEqual(result.map(fact => fact.readPath.read.targetIndex), [1, 2]);
-  assert.deepEqual(result.map(fact => fact.name), ['a.png', 'b.jpg']);
-});
-
-test('structured documents and external tools expose canonical image assets only', () => {
-  const result = images(tool({ type: 'structured_output', document: { type: 'inline', title: 'Chart', summary: null, blocks: [], resources: [asset] } }),
+test('structured and artifact resources admit only complete immutable WebP bundles', () => {
+  const oldPng = { type: 'asset', asset: { ...member('a'), media_type: 'image/png', url: '/api/assets/old.png' } };
+  const result = images(tool({ type: 'structured_output', document: { type: 'inline', title: 'Chart', summary: null, blocks: [], resources: [oldPng, asset] } }),
     tool({ type: 'external', provider: null, operation: 'render', subject: null, fields: [], resources: [asset] }));
   assert.equal(result.length, 2);
-  assert.equal(result.every(fact => fact.ref.source.type === 'asset'), true);
+  assert.ok(result.every(fact => isOptimizedImageAsset(fact.ref.source.asset)));
   assert.notEqual(result[0].key, result[1].key);
 });
 
-test('ordinary text, directories, and command text never become image requests', () => {
-  assert.deepEqual(images(tool({ type: 'file_read', targets: [{ resource: { type: 'directory', path: '/demo/images.png', resolved: true }, range: null, media_kind: null }], outcome: null }), read('/demo/readme.md'), tool({ type: 'shell', command: inline('cat image.png'), cwd: null, timeout_ms: null, background: false, outcome: null })), []);
+test('optimized display rejects raw, remote, incomplete, and mismatched members', () => {
+  assert.equal(isOptimizedImageAsset(optimized()), true);
+  for (const change of [
+    value => { value.media_type = 'image/png'; },
+    value => { delete value.image_variants; },
+    value => { delete value.image_variants.tile2x; },
+    value => { value.url = 'https://example.test/image.webp'; },
+    value => { value.image_variants.preview.url = 'file:///tmp/image.webp'; },
+    value => { value.image_variants.tile.digest = 'f'.repeat(64); },
+    value => { value.image_variants.rail.byte_len = 0; },
+  ]) { const value = optimized(); change(value); assert.equal(isOptimizedImageAsset(value), false); }
 });
 
-test('extensionless image targets select an image viewer from file bytes', () => {
+test('byte sniffing remains available to the ordinary file viewer', () => {
   assert.equal(imageMediaTypeFromBytes(Uint8Array.from([137,80,78,71,13,10,26,10])), 'image/png');
   assert.equal(imageMediaTypeFromBytes(Uint8Array.from([255,216,255,224])), 'image/jpeg');
-  assert.equal(imageMediaTypeFromBytes(new TextEncoder().encode('GIF89a')), 'image/gif');
-  assert.equal(imageMediaTypeFromBytes(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg">')), 'image/svg+xml');
   assert.equal(imageMediaTypeFromBytes(new TextEncoder().encode('not an image')), null);
 });

@@ -358,9 +358,29 @@ fn assistant_message(
                 });
                 rows.push(row);
             }
-            // Images have no canonical bitmap row. Unknown blocks are drifted
-            // after projection; neither creates a synthetic ordering slot.
-            ContentBlock::Known(KnownContentBlock::Image { .. }) | ContentBlock::Other(_) => {}
+            ContentBlock::Known(KnownContentBlock::Image {
+                data, mime_type, ..
+            }) => {
+                let mut row = row(
+                    ctx,
+                    entry,
+                    &discriminator,
+                    MessageKind::Agent,
+                    ts,
+                    model,
+                    inherited.effort.as_deref(),
+                );
+                let (attachment, asset) = rosetta_adapter_support::media::from_base64(
+                    &discriminator,
+                    rosetta_core::timeline::AttachmentKind::Image,
+                    mime_type,
+                    data,
+                );
+                row.attachments.push(attachment);
+                ops.extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
+                rows.push(row);
+            }
+            ContentBlock::Other(_) => {}
         }
     }
 
@@ -395,6 +415,39 @@ fn tool_result(
     ts: Option<Ms>,
     ops: &mut Vec<IngestOp>,
 ) {
+    let media = message
+        .content
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            let id = format!("image-{index}");
+            match block {
+                ContentBlock::Known(KnownContentBlock::Image {
+                    data, mime_type, ..
+                }) => Some(rosetta_adapter_support::media::from_base64(
+                    &id,
+                    rosetta_core::timeline::AttachmentKind::Image,
+                    mime_type,
+                    data,
+                )),
+                ContentBlock::Other(value) if value["type"] == "image" => {
+                    Some(rosetta_adapter_support::media::unavailable(
+                        &id,
+                        rosetta_core::timeline::AttachmentKind::Image,
+                        rosetta_core::timeline::AttachmentUnavailableReason::InvalidData,
+                    ))
+                }
+                _ => None,
+            }
+        });
+    rosetta_adapter_support::media::push_tool_attachments(
+        ctx,
+        &message.tool_call_id,
+        &message.tool_call_id,
+        media,
+        ts,
+        ops,
+    );
     let diagnostic = message
         .is_error
         .then(|| blocks_text(&message.content))

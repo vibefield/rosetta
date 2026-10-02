@@ -524,6 +524,7 @@ pub fn open_interaction(
     action: ToolAction,
 ) -> Result<ToolInteraction, ProjectionError> {
     Ok(ToolInteraction {
+        attachments: Vec::new(),
         correlation: ToolCorrelation {
             key: bounded_id("tool correlation key", correlation_key)?,
             derivation: correlation_derivation,

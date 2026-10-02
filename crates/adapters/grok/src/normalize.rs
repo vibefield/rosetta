@@ -581,6 +581,14 @@ fn file_edit(
 fn tool_result(ctx: &NormalizeCtx, line: &UpdateLine, ops: &mut Vec<IngestOp>) -> Result<(), ()> {
     let update = &line.params.update;
     let tool_id = update.tool_call_id.as_deref().ok_or(())?;
+    rosetta_adapter_support::media::push_tool_attachments(
+        ctx,
+        tool_id,
+        tool_id,
+        crate::images::tool_output(update.content.as_ref(), update.raw_output.as_ref()),
+        stamp(line),
+        ops,
+    );
     let terminal_error = match update.status.as_deref() {
         None | Some("in_progress") => return Ok(()),
         Some("completed") => None,

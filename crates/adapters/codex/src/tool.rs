@@ -272,6 +272,14 @@ pub(crate) fn project_exec_batch(
         .enumerate()
         .map(|(index, call)| {
             let action = project_embedded_call(program, call, cwd)?;
+            // A ContentItem image has no child-call address. Keep an image
+            // batch on its native envelope so every recorded output retains a
+            // proven owner instead of guessing which flattened child emitted it.
+            if matches!(&action, ToolAction::FileRead { targets, .. }
+                if targets.iter().any(|target| target.media_kind == Some(AttachmentKind::Image)))
+            {
+                return None;
+            }
             open_interaction(
                 format!("{correlation_key}#child-{index}"),
                 CorrelationDerivation::Synthetic,

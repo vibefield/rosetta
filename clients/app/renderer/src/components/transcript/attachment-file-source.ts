@@ -10,6 +10,7 @@ import { client } from "../../lib/rosetta";
 import { resolveKind } from "../file-viewer";
 import type { FileHandle, FileSource } from "../file-viewer";
 import type { ImageResource } from "../file-viewer/types";
+import { isOptimizedImageAsset } from "../../lib/image-media";
 
 const EXTENSION_BY_MEDIA_TYPE: ReadonlyMap<string, string> = new Map([
   ["image/png", "png"],
@@ -28,6 +29,7 @@ const EXTENSION_BY_MEDIA_TYPE: ReadonlyMap<string, string> = new Map([
 export function attachmentAssetUrl(fact: AttachmentFact): string | null {
   const source = fact.ref?.source;
   if (source === undefined || source === null || source.type !== "asset") return null;
+  if (fact.kind === "image" && !isOptimizedImageAsset(source.asset)) return null;
   try {
     const url = new URL(source.asset.url, `${client.baseUrl}/`);
     return (url.protocol === "http:" || url.protocol === "https:") && url.origin === new URL(client.baseUrl).origin ? url.toString() : null;
@@ -38,12 +40,9 @@ export function attachmentAssetUrl(fact: AttachmentFact): string | null {
 
 export function attachmentImageResource(fact: AttachmentFact): ImageResource | null {
   const source = fact.ref?.source;
-  const address = fact.readPath?.read;
   const asset = source?.type === "asset" && attachmentAssetUrl(fact) !== null ? source.asset : null;
-  if (!address && !asset) return null;
-  const url = (variant: import("@rosetta/protocol").ImageVariant) => address
-    ? client.imageFileTargetUrl(address.sessionId, address.timelineId, address.targetIndex, variant)
-    : client.imageAssetUrl(asset!, variant);
+  if (!asset || !isOptimizedImageAsset(asset)) return null;
+  const url = (variant: import("@rosetta/protocol").ImageVariant) => client.imageAssetUrl(asset, variant);
   return { full: url("full"), preview: url("preview"), rail: url("rail"), tile: url("tile"), tile2x: url("tile2x"),
     width: fact.ref?.dimensions?.width, height: fact.ref?.dimensions?.height };
 }
@@ -76,20 +75,20 @@ export function handleForAttachment(fact: AttachmentFact): FileHandle | null {
 }
 
 export function canOpenAttachment(fact: AttachmentFact): boolean {
-  return fact.kind === "image" && (handleForAttachment(fact) !== null || fact.readPath?.read !== undefined);
+  return fact.kind === "image" && handleForAttachment(fact) !== null;
 }
 
 /** Stable by construction: `useFileContent` treats source identity as a read. */
 export const attachmentFileSource: FileSource = {
   image(handle) {
     const asset = handle.ref as import("@rosetta/protocol").AssetRef;
-    if (!asset?.media_type.startsWith("image/")) return null;
+    if (!asset || !isOptimizedImageAsset(asset)) return null;
     return { full: client.imageAssetUrl(asset, "full"), preview: client.imageAssetUrl(asset, "preview"),
       rail: client.imageAssetUrl(asset, "rail"), tile: client.imageAssetUrl(asset, "tile"), tile2x: client.imageAssetUrl(asset, "tile2x") };
   },
   async read(handle: FileHandle, signal: AbortSignal): Promise<Uint8Array> {
     const asset = handle.ref as import("@rosetta/protocol").AssetRef;
-    if (!asset || typeof asset.url !== "string") throw new Error("that attachment is no longer available");
+    if (!asset || !isOptimizedImageAsset(asset)) throw new Error("that attachment is no longer available");
     return client.readAsset(asset, signal);
   },
 };

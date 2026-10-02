@@ -92,6 +92,7 @@ fn tool_message() -> MessageRow {
     row.kind = MessageKind::ToolUse;
     row.content = None;
     row.tool = Some(ToolInteraction {
+        attachments: Vec::new(),
         correlation: ToolCorrelation {
             key: "tool-semantic".into(),
             derivation: CorrelationDerivation::NativeId,

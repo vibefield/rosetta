@@ -2783,6 +2783,9 @@ pub struct ToolInteraction {
     pub native: NativeToolRef,
     pub status: ToolStatusFact,
     pub action: ToolAction,
+    /// Recorded output media, independent of the current files named by the request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentRef>,
     pub failure: Option<ToolFailure>,
     pub timing: Option<ToolTiming>,
 }
@@ -2809,6 +2812,7 @@ impl ToolInteraction {
                 basis: StatusBasis::RequestObserved,
             },
             action: ToolAction::Unknown {},
+            attachments: Vec::new(),
             failure: None,
             timing: None,
         }
@@ -2863,6 +2867,7 @@ impl ToolInteraction {
             ));
         }
         self.action.validate()?;
+        attachment::validate_attachments(&self.attachments, None)?;
         Ok(())
     }
 
@@ -2876,6 +2881,13 @@ impl ToolInteraction {
         evidence: &EvidenceOrder,
     ) -> Result<bool, CanonicalError> {
         let mut changed = false;
+
+        changed |= attachment::merge_tool_attachments(
+            &mut self.attachments,
+            &mut state.attachments,
+            &patch.attachments,
+            evidence,
+        )?;
 
         if let Some(native_id) = patch.native_id.as_ref().filter(|id| !id.is_empty()) {
             let stamp = EvidenceStamp {
@@ -4229,6 +4241,9 @@ pub struct ToolOutcomePatch {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ToolUpdatePatch {
+    /// Upserts by occurrence identity. Empty lifecycle patches never erase media.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentRef>,
     pub native_id: Option<String>,
     pub request: Option<ToolRequestPatch>,
     pub outcome: Option<ToolOutcomePatch>,
@@ -4249,6 +4264,7 @@ pub struct ToolUpdatePatch {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolFoldState {
     fields: Vec<ToolFieldStamp>,
+    attachments: attachment::ToolAttachmentState,
 }
 
 impl ToolFoldState {
@@ -5118,6 +5134,7 @@ mod tests {
     #[test]
     fn nested_tool_collections_cannot_bypass_the_canonical_bounds() {
         let tool = ToolInteraction {
+            attachments: Vec::new(),
             action: ToolAction::WebSearch {
                 query: Some("bounded query".into()),
                 allowed_domains: (0..=CANONICAL_LIST_LIMIT)
@@ -5318,6 +5335,7 @@ mod tests {
     #[test]
     fn lifecycle_merge_rejects_known_action_family_changes() {
         let mut tool = ToolInteraction {
+            attachments: Vec::new(),
             action: ToolAction::Shell {
                 command: CanonicalText::inline("true").unwrap(),
                 source_truncated: false,
@@ -5346,6 +5364,7 @@ mod tests {
     #[test]
     fn sparse_child_link_only_applies_to_delegate_actions() {
         let mut delegate = ToolInteraction {
+            attachments: Vec::new(),
             action: ToolAction::Delegate {
                 agent_kind: None,
                 name: None,
@@ -5379,6 +5398,7 @@ mod tests {
         ));
 
         let mut shell = ToolInteraction {
+            attachments: Vec::new(),
             action: ToolAction::Shell {
                 command: CanonicalText::inline("true").unwrap(),
                 source_truncated: false,
@@ -5400,6 +5420,7 @@ mod tests {
     fn lifecycle_request_fields_converge_independently() {
         fn opener() -> ToolInteraction {
             ToolInteraction {
+                attachments: Vec::new(),
                 action: ToolAction::Shell {
                     command: CanonicalText::inline("opener").unwrap(),
                     source_truncated: false,
@@ -5477,6 +5498,7 @@ mod tests {
     #[test]
     fn lifecycle_outcome_patch_cannot_replace_request_fields() {
         let mut tool = ToolInteraction {
+            attachments: Vec::new(),
             action: ToolAction::Shell {
                 command: CanonicalText::inline("keep request").unwrap(),
                 source_truncated: false,
@@ -5536,6 +5558,7 @@ mod tests {
     fn search_extracts_only_declared_fields() {
         let row = base(TimelineBody::ToolUse {
             tool: Box::new(ToolInteraction {
+                attachments: Vec::new(),
                 correlation: ToolCorrelation {
                     key: "t1".into(),
                     derivation: CorrelationDerivation::NativeId,
@@ -5580,6 +5603,7 @@ mod tests {
     fn collaboration_search_keeps_team_and_task_addresses() {
         let delegate = base(TimelineBody::ToolUse {
             tool: Box::new(ToolInteraction {
+                attachments: Vec::new(),
                 action: ToolAction::Delegate {
                     agent_kind: Some("general-purpose".into()),
                     name: Some("w2-docs".into()),
@@ -5647,6 +5671,7 @@ mod tests {
     fn opaque_orchestration_is_not_searchable() {
         let row = base(TimelineBody::ToolUse {
             tool: Box::new(ToolInteraction {
+                attachments: Vec::new(),
                 correlation: ToolCorrelation {
                     key: "opaque".into(),
                     derivation: CorrelationDerivation::Synthetic,

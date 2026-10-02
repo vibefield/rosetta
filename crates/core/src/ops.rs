@@ -539,6 +539,7 @@ mod tests {
         let command = "echo important-user-intent ".repeat(INLINE_TEXT_MAX_BYTES / 4);
         let mut row = message(MessageKind::ToolUse, None);
         row.tool = Some(ToolInteraction {
+            attachments: Vec::new(),
             action: ToolAction::Shell {
                 // Adapter projectors intentionally produce this typed draft;
                 // the central boundary owns member creation.
@@ -581,6 +582,7 @@ mod tests {
             .join("\n");
         let mut row = message(MessageKind::ToolUse, None);
         row.tool = Some(ToolInteraction {
+            attachments: Vec::new(),
             action: ToolAction::Shell {
                 command: CanonicalText::Inline {
                     text: command.clone(),
@@ -634,6 +636,7 @@ mod tests {
             .join("\n");
         let mut huge_row = message(MessageKind::ToolUse, None);
         huge_row.tool = Some(ToolInteraction {
+            attachments: Vec::new(),
             action: ToolAction::Shell {
                 command: CanonicalText::Inline { text: huge },
                 source_truncated: false,
@@ -711,6 +714,7 @@ mod tests {
             .collect();
         let mut row = message(MessageKind::ToolUse, None);
         row.tool = Some(ToolInteraction {
+            attachments: Vec::new(),
             action: ToolAction::StructuredOutput {
                 document: CanonicalDocument::Inline {
                     title: Some("Report".into()),

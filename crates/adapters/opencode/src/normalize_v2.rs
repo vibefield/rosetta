@@ -376,6 +376,7 @@ fn assistant_rows(
                     .completed
                     .and_then(|completed| i64::try_from(completed).ok())
                     .or(Some(at));
+                crate::images::tool_output_v2(ctx, &tool.id, &tool.state, ended, ops);
                 match tool.state.get("status").and_then(Value::as_str) {
                     Some("completed") => ops.push(IngestOp::ToolUpdate {
                         session_id: ctx.session_id.clone(),

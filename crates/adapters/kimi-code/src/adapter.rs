@@ -36,7 +36,8 @@ impl AgentAdapter for KimiCodeAdapter {
         // flushes at step.end; fork copies drop usage; negative inputOther
         // clamps; compaction samples name the request model (§4.1.3).
         // 14: image members are WebP with bounded display renditions.
-        14
+        // 15: recorded tool images use durable optimized attachment members.
+        15
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

@@ -16,7 +16,7 @@ export function attachmentGallery(fact: AttachmentFact, row: readonly Attachment
       label: image.ref?.label ?? `Image ${index + 1}`,
       handle: canOpenAttachment(image) ? {
         key: image.key, name: attachmentViewerName(image),
-        path: image.readPath?.resource.type === "file" ? image.readPath.resource.path : null,
+        path: null,
         size: image.byteLen ?? asset?.byte_len ?? -1,
         ref: image,
       } : null,
@@ -25,14 +25,12 @@ export function attachmentGallery(fact: AttachmentFact, row: readonly Attachment
   return { images, initialKey: fact.key };
 }
 
-/** Each read is an exact canonical target or a stored asset, never a guessed path. */
+/** Transcript galleries read only optimized members committed during ingestion. */
 export const attachmentGallerySource: FileSource = {
   image(handle) { return attachmentImageResource(handle.ref as AttachmentFact); },
   async read(handle, signal) {
     const fact = handle.ref as AttachmentFact;
     if (signal.aborted) throw new DOMException("Image read cancelled", "AbortError");
-    const address = fact.readPath?.read;
-    if (address) return client.readFileTarget(address.sessionId, address.timelineId, address.targetIndex, signal);
     if (canOpenAttachment(fact) && fact.ref?.source.type === "asset") return client.readAsset(fact.ref.source.asset, signal);
     throw new Error("Image data was not recorded");
   },

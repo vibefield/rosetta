@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { TranscriptColumn } from "../renderer/src/components/Transcript";
 import { entry, inline, tool, file } from "./support/ledger-fixtures.mjs";
 import { memberText } from "./prompt-images-data.mjs";
+import bundles from "./fixtures/prompt-images/optimized/manifest.json";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/room.css";
 import "../renderer/src/styles/transcript.css";
@@ -20,11 +21,11 @@ const session = {
 };
 const retryCase = Date.now(); // Disposable fixture request identity, not normalization.
 const imageRoot = "/test/fixtures/prompt-images/";
-const image = (id, name, ranges = [], source = null) => ({
-  id, label: `[Image #${id}]`, kind: "image", name, media_type: "image/png", byte_len: name === "portrait.png" ? 3167 : 4479,
-  dimensions: name === "portrait.png" ? { width: 320, height: 640 } : { width: 960, height: 480 },
-  message_ranges: ranges,
-  source: source ?? { type: "asset", asset: { url: imageRoot + name + `?case=${retryCase}`, digest: id.padStart(64, "0"), media_type: "image/png", byte_len: name === "portrait.png" ? 3167 : 4479 } },
+const image = (id, name, ranges = [], source = null, bundle = name.replace(/\.png$/, "")) => ({
+  id, label: `[Image #${id}]`, kind: "image", name, media_type: "image/webp",
+  byte_len: bundles[bundle]?.asset.byte_len ?? null,
+  dimensions: bundles[bundle]?.dimensions ?? null, message_ranges: ranges,
+  source: source ?? { type: "asset", asset: bundles[bundle].asset },
 });
 const markerRanges = (text, marker) => {
   const ranges = [];
@@ -38,16 +39,17 @@ const assetReads = [];
 const readAsset = client.readAsset.bind(client);
 client.readAsset = async (asset, signal) => {
   assetReads.push({ url: asset.url, signal });
-  if (asset.url.includes('gallery-slow')) await new Promise(resolve => setTimeout(resolve, 450));
-  if (asset.url.includes('gallery-retry') && window.imageFixture.failViewer) throw new Error('Temporary image read failure');
-  if (asset.url.includes('gallery-decode') && window.imageFixture.badDecode) return new TextEncoder().encode('not a valid image');
   return readAsset(asset, signal);
 };
 const imageAssetUrl = client.imageAssetUrl.bind(client);
 client.imageAssetUrl = (asset, variant) => {
   const url = new URL(imageAssetUrl(asset, variant));
-  if (asset.url.includes('gallery-retry') && window.imageFixture.failViewer) url.searchParams.set('fail', 'read');
-  if (asset.url.includes('gallery-decode') && window.imageFixture.badDecode) url.searchParams.set('fail', 'decode');
+  // Fault injection belongs to the fixture transport, never canonical refs.
+  const name = Object.keys(bundles).find(name => bundles[name].asset.digest === asset.digest);
+  url.searchParams.set('fixture', name ?? 'unknown');
+  url.searchParams.set('variant', variant);
+  if (name === 'gallery-retry' && window.imageFixture.failViewer) url.searchParams.set('fail', 'read');
+  if (name === 'gallery-decode' && window.imageFixture.badDecode) url.searchParams.set('fail', 'decode');
   return url.toString();
 };
 let ordinal = 0;
@@ -71,9 +73,11 @@ function activity() {
     tool({ type: "file_read", targets: [
       { resource: file("/demo/README.md"), range: null, media_kind: null },
       ...Array.from({ length: 5 }, (_, index) => ({ resource: file(`/demo/capture-${index}.png`), range: null, media_kind: "image" })),
-    ], outcome: null }, { timeline_id: "image-read" }),
+    ], outcome: null }, { timeline_id: "image-read", attachments: Array.from({ length: 5 }, (_, index) =>
+      image(String(index + 1), index % 2 ? "portrait.png" : "landscape.png", [], null,
+        index === 0 ? "tool-first" : index === 2 ? "tool-retry" : index % 2 ? "portrait" : "landscape")) }),
     tool({ type: "artifact", operation: "create", artifact_kind: "image", name: "Revised view", description: null,
-      resources: [file("/demo/revised.png")], media: { media_type: "image/png", width: 960, height: 480, duration_ms: null } }, { timeline_id: "image-artifact" }),
+      resources: [file("/demo/revised.png")], media: { media_type: "image/png", width: 960, height: 480, duration_ms: null } }, { timeline_id: "image-artifact", attachments: [image("1", "landscape.png")] }),
     delivery("image-team", "team", "message", "[Image #1] shows the team’s review.", [image("1", "portrait.png", [{ start: 0, end: 10 }])]),
     delivery("image-peer", "peer", "message", peerText, [
       image("1", "landscape.png", markerRanges(peerText, "[Image #1]")),
@@ -102,6 +106,10 @@ const initial = [
   ]),
   message("This image needs one retry to load.", "failed", [image("1", "retry.png")]),
   message(long, "long", [image("1", "portrait.png", markerRanges(long, "[Image #1]")), image("2", "landscape.png")]),
+  message("An old projection cannot bypass ingestion.", "unoptimized", [{
+    ...image("1", "landscape.png"), media_type: "image/png",
+    source: { type: "asset", asset: { url: `${imageRoot}landscape.png`, digest: "a".repeat(64), media_type: "image/png", byte_len: 4479 } },
+  }]),
 ];
 const member = message(memberText, "member", [image("1", "portrait.png", markerRanges(memberText, "[Image #1]"))]);
 member.body.text = { type: "member", preview: memberText.slice(0, 220), byte_len: new TextEncoder().encode(memberText).length,
@@ -118,10 +126,8 @@ function Fixture() {
     long, rows, assetReads, failViewer, setFailViewer, badDecode, setBadDecode, clearSession: () => setSession(null),
     setGalleryStress: () => setRows(old => old.map(row => row.timeline_id !== 'gallery' ? row : {
       ...row, body: { ...row.body, attachments: galleryImages.map((item, index) => index === 1 || index === 3 || index === 4
-        ? { ...item, source: { type: 'asset', asset: { ...item.source.asset,
-          url: item.source.asset.url + (index === 1 ? '&gallery-slow' : index === 3 ? '&gallery-retry' : '&gallery-decode') } } }
-        : index === 5 ? { ...item, name: 'capture', media_type: null,
-          source: { type: 'asset', asset: { ...item.source.asset, media_type: 'application/octet-stream' } } } : item) },
+        ? image(item.id, item.name, [], null, index === 1 ? 'gallery-slow' : index === 3 ? 'gallery-retry' : 'gallery-decode')
+        : index === 5 ? { ...item, name: 'capture' } : item) },
     })),
     repair: () => setRows(old => old.map(row => row.timeline_id === "failed"
       ? { ...row, body: { ...row.body, attachments: [image("1", "landscape.png")] } } : row)),

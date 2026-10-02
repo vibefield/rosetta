@@ -36,7 +36,6 @@ import type {
   SummaryPurpose,
   TimelineEntry,
 } from "@rosetta/protocol";
-import type { PathFact } from "./families.ts";
 import type { LedgerLine, RunOther, RunSummary } from "./ledger.ts";
 import { ledgerLines, runSummary } from "./ledger.ts";
 import { withinPromptCluster } from "./sittings.ts";
@@ -62,8 +61,6 @@ export interface AttachmentFact {
   readonly missing: boolean;
   readonly ref: AttachmentRef | null;
   readonly caption: string;
-  /** Live file target, addressed through its canonical tool row. UI-only. */
-  readonly readPath?: PathFact;
 }
 
 function mediaShortName(mediaType: string | null, name: string | null): string | null {

@@ -7,6 +7,45 @@ use rosetta_core::timeline::{
 use serde::Deserialize;
 use serde_json::Value;
 
+pub(crate) fn tool_attachments(
+    content: Option<&Value>,
+    native: Option<&Value>,
+) -> Vec<MaterializedAttachment> {
+    let images: Vec<_> = content
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter(|(_, block)| block["type"] == "image")
+        .map(|(index, block)| {
+            authored_attachment(
+                &format!("image-{index}"),
+                AttachmentKind::Image,
+                &block["source"],
+            )
+        })
+        .collect();
+    if !images.is_empty() {
+        return images;
+    }
+    // Older Read results retain the image in the typed native file result.
+    // The nested tool-result content is its model-facing representation when present.
+    let Some(file) = native.and_then(|native| native.get("file")) else {
+        return images;
+    };
+    let Some(data) = file["base64"].as_str() else {
+        return images;
+    };
+    vec![match file["type"].as_str() {
+        Some(mime) => media::from_base64("image-0", AttachmentKind::Image, mime, data),
+        None => media::unavailable(
+            "image-0",
+            AttachmentKind::Image,
+            AttachmentUnavailableReason::InvalidData,
+        ),
+    }]
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AuthoredSource {

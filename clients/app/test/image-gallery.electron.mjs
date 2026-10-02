@@ -127,10 +127,11 @@ async function run() {
     await click(activity + ' > .tr-attachments button.tr-att__tile'); await image(960);
     assert.deepEqual(await check(() => [...document.querySelectorAll('.ah-image-gallery__thumb')].map(node => node.dataset.imageKey)), rowKeys, 'Folded tool/team/peer images share precisely their outer row');
     const viewed = await check(async () => (await fetch('/test/image-reads')).json());
-    assert.ok(viewed['image-read:1:preview'] > 0, 'Fit requests a display preview');
-    assert.equal(viewed['image-read:1:full'], undefined, 'Fit does not request full-size pixels');
-    assert.equal(viewed['image-read:1:original'], undefined, 'The renderer does not buffer original bytes');
-    assert.equal(viewed['image-read:1:tile'], before['image-read:1:tile'], 'Opening does not reload the row tile');
+    assert.equal(viewed.liveFile, undefined, 'No live-file image route is used');
+    assert.ok(viewed['tool-first:preview'] > 0, 'Fit requests a display preview');
+    assert.equal(viewed['tool-first:full'], undefined, 'Fit does not request full-size pixels');
+    assert.equal(viewed['tool-first:original'], undefined, 'The renderer does not buffer original bytes');
+    assert.equal(viewed['tool-first:tile'], before['tool-first:tile'], 'Opening does not reload the row tile');
     await click('[data-image-key="s1:image-peer:attachment:1"]'); await image(960);
     await key('Right'); await image(320);
     assert.equal(await check(selected), 's1:image-report:attachment:1', 'Arrows skip an unavailable peer slot without changing its identity');
@@ -173,21 +174,25 @@ async function run() {
     await check(() => window.imageFixture.setBadDecode(false));
     await click('.ah-fileview__retry'); await image(960);
     await click(thumbs, 5); await image(320);
-    assert.equal(await check(() => document.querySelector('.ah-fileview__title strong').textContent), 'capture');
+    assert.equal(await check(() => document.querySelector('.ah-fileview__title strong').textContent), 'capture.webp');
     assert.equal(await check(() => document.querySelector('.ah-fileview__kind').textContent), 'Image', 'URL image navigation does not guess a format from the recorded filename');
     await check(() => window.imageFixture.clearSession());
     await until(() => !document.querySelector('[role="dialog"]'), 'Session change retained its gallery');
+    // The static prototype has no React focus management; exercise its own
+    // dialog keyboard handler explicitly after the cross-document navigation.
+    const designKey = key => check(key => document.querySelector('#im-viewer').dispatchEvent(
+      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })), key);
     // The living design record demonstrates the same row-scoped navigation.
     await win.loadURL(`http://127.0.0.1:${server.httpServer.address().port}/design/transcript-record.html`);
     win.setContentSize(1100, 900); await pause(150);
     await click('[data-image-case="many"]');
     await click('#im-gallery [data-image-open="0"]');
     assert.equal(await check(() => document.querySelectorAll('#im-viewer-thumbs button').length), 6);
-    await key('Right');
+    await designKey('ArrowRight');
     assert.equal(await check(() => document.querySelector('#im-viewer-position').textContent), '2 / 6');
-    await click('[data-image-scale="actual"]'); await key('Right');
+    await click('[data-image-scale="actual"]'); await designKey('ArrowRight');
     assert.equal(await check(() => document.querySelector('#im-viewer-content').dataset.scale), 'actual');
-    await click('[data-image-scale="fit"]'); await key('End');
+    await click('[data-image-scale="fit"]'); await designKey('End');
     assert.equal(await check(() => document.querySelector('#im-viewer-position').textContent), '6 / 6');
     await shot('gallery-design-record');
     await key('Escape');

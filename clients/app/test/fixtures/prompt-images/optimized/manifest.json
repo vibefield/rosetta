@@ -1,0 +1,306 @@
+{
+  "gallery-decode": {
+    "asset": {
+      "byte_len": 2054,
+      "digest": "87bc5b744e35b1db470d5737519c12d6e5a441cf75c208178b36b9502df1c1b2",
+      "image_variants": {
+        "preview": {
+          "byte_len": 2054,
+          "digest": "87bc5b744e35b1db470d5737519c12d6e5a441cf75c208178b36b9502df1c1b2",
+          "media_type": "image/webp",
+          "url": "/api/assets/87bc5b744e35b1db470d5737519c12d6e5a441cf75c208178b36b9502df1c1b2.webp"
+        },
+        "rail": {
+          "byte_len": 372,
+          "digest": "5bfb8855e36392a6a7ede571b4c9e7a7241f2a6c1f61dd6c76ee3fb02afd0ca6",
+          "media_type": "image/webp",
+          "url": "/api/assets/5bfb8855e36392a6a7ede571b4c9e7a7241f2a6c1f61dd6c76ee3fb02afd0ca6.webp"
+        },
+        "tile": {
+          "byte_len": 572,
+          "digest": "74c0ec69fe2e5550fb0b68b36c281b9633fe652de2fa99f6591c78266d267398",
+          "media_type": "image/webp",
+          "url": "/api/assets/74c0ec69fe2e5550fb0b68b36c281b9633fe652de2fa99f6591c78266d267398.webp"
+        },
+        "tile2x": {
+          "byte_len": 1034,
+          "digest": "c03b9b21fbad8f97006a5f43f17c7e7ed6755694e2b32ad77973b440a896c86b",
+          "media_type": "image/webp",
+          "url": "/api/assets/c03b9b21fbad8f97006a5f43f17c7e7ed6755694e2b32ad77973b440a896c86b.webp"
+        }
+      },
+      "media_type": "image/webp",
+      "url": "/api/assets/87bc5b744e35b1db470d5737519c12d6e5a441cf75c208178b36b9502df1c1b2.webp"
+    },
+    "dimensions": {
+      "height": 480,
+      "width": 960
+    }
+  },
+  "gallery-retry": {
+    "asset": {
+      "byte_len": 1192,
+      "digest": "15181074d854156633d13c08745976277815206bd46de927a260dac6d0ca0e4d",
+      "image_variants": {
+        "preview": {
+          "byte_len": 1192,
+          "digest": "15181074d854156633d13c08745976277815206bd46de927a260dac6d0ca0e4d",
+          "media_type": "image/webp",
+          "url": "/api/assets/15181074d854156633d13c08745976277815206bd46de927a260dac6d0ca0e4d.webp"
+        },
+        "rail": {
+          "byte_len": 338,
+          "digest": "51dbfd69aa984135b85e6cfb7a36ceed50d51cb0651946b5dc43bac6479c4fec",
+          "media_type": "image/webp",
+          "url": "/api/assets/51dbfd69aa984135b85e6cfb7a36ceed50d51cb0651946b5dc43bac6479c4fec.webp"
+        },
+        "tile": {
+          "byte_len": 616,
+          "digest": "32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f",
+          "media_type": "image/webp",
+          "url": "/api/assets/32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f.webp"
+        },
+        "tile2x": {
+          "byte_len": 616,
+          "digest": "32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f",
+          "media_type": "image/webp",
+          "url": "/api/assets/32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f.webp"
+        }
+      },
+      "media_type": "image/webp",
+      "url": "/api/assets/15181074d854156633d13c08745976277815206bd46de927a260dac6d0ca0e4d.webp"
+    },
+    "dimensions": {
+      "height": 640,
+      "width": 320
+    }
+  },
+  "gallery-slow": {
+    "asset": {
+      "byte_len": 1200,
+      "digest": "accd133fe5023ad5fc64c99cce07ddef484d91db98e9edf00cb124aef5d36975",
+      "image_variants": {
+        "preview": {
+          "byte_len": 1200,
+          "digest": "accd133fe5023ad5fc64c99cce07ddef484d91db98e9edf00cb124aef5d36975",
+          "media_type": "image/webp",
+          "url": "/api/assets/accd133fe5023ad5fc64c99cce07ddef484d91db98e9edf00cb124aef5d36975.webp"
+        },
+        "rail": {
+          "byte_len": 326,
+          "digest": "980b09ba2b994ef889fc841623c94f0fed62740f162e513fe1fca20b32d376e4",
+          "media_type": "image/webp",
+          "url": "/api/assets/980b09ba2b994ef889fc841623c94f0fed62740f162e513fe1fca20b32d376e4.webp"
+        },
+        "tile": {
+          "byte_len": 616,
+          "digest": "32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f",
+          "media_type": "image/webp",
+          "url": "/api/assets/32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f.webp"
+        },
+        "tile2x": {
+          "byte_len": 616,
+          "digest": "32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f",
+          "media_type": "image/webp",
+          "url": "/api/assets/32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f.webp"
+        }
+      },
+      "media_type": "image/webp",
+      "url": "/api/assets/accd133fe5023ad5fc64c99cce07ddef484d91db98e9edf00cb124aef5d36975.webp"
+    },
+    "dimensions": {
+      "height": 640,
+      "width": 320
+    }
+  },
+  "landscape": {
+    "asset": {
+      "byte_len": 2072,
+      "digest": "196b946f8d285113fe65d920d490bb82cbed79d9e334e884ec395e128b6574b0",
+      "image_variants": {
+        "preview": {
+          "byte_len": 2072,
+          "digest": "196b946f8d285113fe65d920d490bb82cbed79d9e334e884ec395e128b6574b0",
+          "media_type": "image/webp",
+          "url": "/api/assets/196b946f8d285113fe65d920d490bb82cbed79d9e334e884ec395e128b6574b0.webp"
+        },
+        "rail": {
+          "byte_len": 318,
+          "digest": "1d56027a9f28a667848b10f942a444c8274b6f9dc68cbc26f1fdf6acb0276490",
+          "media_type": "image/webp",
+          "url": "/api/assets/1d56027a9f28a667848b10f942a444c8274b6f9dc68cbc26f1fdf6acb0276490.webp"
+        },
+        "tile": {
+          "byte_len": 572,
+          "digest": "74c0ec69fe2e5550fb0b68b36c281b9633fe652de2fa99f6591c78266d267398",
+          "media_type": "image/webp",
+          "url": "/api/assets/74c0ec69fe2e5550fb0b68b36c281b9633fe652de2fa99f6591c78266d267398.webp"
+        },
+        "tile2x": {
+          "byte_len": 1034,
+          "digest": "c03b9b21fbad8f97006a5f43f17c7e7ed6755694e2b32ad77973b440a896c86b",
+          "media_type": "image/webp",
+          "url": "/api/assets/c03b9b21fbad8f97006a5f43f17c7e7ed6755694e2b32ad77973b440a896c86b.webp"
+        }
+      },
+      "media_type": "image/webp",
+      "url": "/api/assets/196b946f8d285113fe65d920d490bb82cbed79d9e334e884ec395e128b6574b0.webp"
+    },
+    "dimensions": {
+      "height": 480,
+      "width": 960
+    }
+  },
+  "portrait": {
+    "asset": {
+      "byte_len": 1118,
+      "digest": "e9484a00688a7b06cac1261f3b5ca11e50731bbcda86c49d5b25fa681f0a5abc",
+      "image_variants": {
+        "preview": {
+          "byte_len": 1118,
+          "digest": "e9484a00688a7b06cac1261f3b5ca11e50731bbcda86c49d5b25fa681f0a5abc",
+          "media_type": "image/webp",
+          "url": "/api/assets/e9484a00688a7b06cac1261f3b5ca11e50731bbcda86c49d5b25fa681f0a5abc.webp"
+        },
+        "rail": {
+          "byte_len": 328,
+          "digest": "29b192dfaebd525ff01922d9bcd24d9d282885110304f31642f73d0bb084c256",
+          "media_type": "image/webp",
+          "url": "/api/assets/29b192dfaebd525ff01922d9bcd24d9d282885110304f31642f73d0bb084c256.webp"
+        },
+        "tile": {
+          "byte_len": 616,
+          "digest": "32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f",
+          "media_type": "image/webp",
+          "url": "/api/assets/32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f.webp"
+        },
+        "tile2x": {
+          "byte_len": 616,
+          "digest": "32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f",
+          "media_type": "image/webp",
+          "url": "/api/assets/32c68cfed860ae83b87373feb9e59fe46e9cbdc4afc3e905b7b994472429332f.webp"
+        }
+      },
+      "media_type": "image/webp",
+      "url": "/api/assets/e9484a00688a7b06cac1261f3b5ca11e50731bbcda86c49d5b25fa681f0a5abc.webp"
+    },
+    "dimensions": {
+      "height": 640,
+      "width": 320
+    }
+  },
+  "retry": {
+    "asset": {
+      "byte_len": 2044,
+      "digest": "dd570d0e072bc094f12e4d71b70cea8c923f1cf8872923a593d5dbf43463685c",
+      "image_variants": {
+        "preview": {
+          "byte_len": 2044,
+          "digest": "dd570d0e072bc094f12e4d71b70cea8c923f1cf8872923a593d5dbf43463685c",
+          "media_type": "image/webp",
+          "url": "/api/assets/dd570d0e072bc094f12e4d71b70cea8c923f1cf8872923a593d5dbf43463685c.webp"
+        },
+        "rail": {
+          "byte_len": 350,
+          "digest": "aac038ff99df4b64049bb28bd7f392e2f4a13380e6536abc0edde3e895796406",
+          "media_type": "image/webp",
+          "url": "/api/assets/aac038ff99df4b64049bb28bd7f392e2f4a13380e6536abc0edde3e895796406.webp"
+        },
+        "tile": {
+          "byte_len": 572,
+          "digest": "74c0ec69fe2e5550fb0b68b36c281b9633fe652de2fa99f6591c78266d267398",
+          "media_type": "image/webp",
+          "url": "/api/assets/74c0ec69fe2e5550fb0b68b36c281b9633fe652de2fa99f6591c78266d267398.webp"
+        },
+        "tile2x": {
+          "byte_len": 1034,
+          "digest": "c03b9b21fbad8f97006a5f43f17c7e7ed6755694e2b32ad77973b440a896c86b",
+          "media_type": "image/webp",
+          "url": "/api/assets/c03b9b21fbad8f97006a5f43f17c7e7ed6755694e2b32ad77973b440a896c86b.webp"
+        }
+      },
+      "media_type": "image/webp",
+      "url": "/api/assets/dd570d0e072bc094f12e4d71b70cea8c923f1cf8872923a593d5dbf43463685c.webp"
+    },
+    "dimensions": {
+      "height": 480,
+      "width": 960
+    }
+  },
+  "tool-first": {
+    "asset": {
+      "byte_len": 2040,
+      "digest": "def3f010311dc6dbc274d7f5c8c375ac694ff7b544f830e06f9566afa3829f47",
+      "image_variants": {
+        "preview": {
+          "byte_len": 2040,
+          "digest": "def3f010311dc6dbc274d7f5c8c375ac694ff7b544f830e06f9566afa3829f47",
+          "media_type": "image/webp",
+          "url": "/api/assets/def3f010311dc6dbc274d7f5c8c375ac694ff7b544f830e06f9566afa3829f47.webp"
+        },
+        "rail": {
+          "byte_len": 362,
+          "digest": "537d0dda82ee1d67926f810065dba50b6eec8cc96db8512c3d411fe5850ffa0b",
+          "media_type": "image/webp",
+          "url": "/api/assets/537d0dda82ee1d67926f810065dba50b6eec8cc96db8512c3d411fe5850ffa0b.webp"
+        },
+        "tile": {
+          "byte_len": 572,
+          "digest": "74c0ec69fe2e5550fb0b68b36c281b9633fe652de2fa99f6591c78266d267398",
+          "media_type": "image/webp",
+          "url": "/api/assets/74c0ec69fe2e5550fb0b68b36c281b9633fe652de2fa99f6591c78266d267398.webp"
+        },
+        "tile2x": {
+          "byte_len": 1034,
+          "digest": "c03b9b21fbad8f97006a5f43f17c7e7ed6755694e2b32ad77973b440a896c86b",
+          "media_type": "image/webp",
+          "url": "/api/assets/c03b9b21fbad8f97006a5f43f17c7e7ed6755694e2b32ad77973b440a896c86b.webp"
+        }
+      },
+      "media_type": "image/webp",
+      "url": "/api/assets/def3f010311dc6dbc274d7f5c8c375ac694ff7b544f830e06f9566afa3829f47.webp"
+    },
+    "dimensions": {
+      "height": 480,
+      "width": 960
+    }
+  },
+  "tool-retry": {
+    "asset": {
+      "byte_len": 2038,
+      "digest": "517dd211b7cfb4a5bf22426a5c13514b2236d901b104c009b26df66327bb8e42",
+      "image_variants": {
+        "preview": {
+          "byte_len": 2038,
+          "digest": "517dd211b7cfb4a5bf22426a5c13514b2236d901b104c009b26df66327bb8e42",
+          "media_type": "image/webp",
+          "url": "/api/assets/517dd211b7cfb4a5bf22426a5c13514b2236d901b104c009b26df66327bb8e42.webp"
+        },
+        "rail": {
+          "byte_len": 352,
+          "digest": "a26a819af633f123c6cd7799e3dcd9a84620132c6e4107cdae81857d2fc583f8",
+          "media_type": "image/webp",
+          "url": "/api/assets/a26a819af633f123c6cd7799e3dcd9a84620132c6e4107cdae81857d2fc583f8.webp"
+        },
+        "tile": {
+          "byte_len": 572,
+          "digest": "74c0ec69fe2e5550fb0b68b36c281b9633fe652de2fa99f6591c78266d267398",
+          "media_type": "image/webp",
+          "url": "/api/assets/74c0ec69fe2e5550fb0b68b36c281b9633fe652de2fa99f6591c78266d267398.webp"
+        },
+        "tile2x": {
+          "byte_len": 1034,
+          "digest": "c03b9b21fbad8f97006a5f43f17c7e7ed6755694e2b32ad77973b440a896c86b",
+          "media_type": "image/webp",
+          "url": "/api/assets/c03b9b21fbad8f97006a5f43f17c7e7ed6755694e2b32ad77973b440a896c86b.webp"
+        }
+      },
+      "media_type": "image/webp",
+      "url": "/api/assets/517dd211b7cfb4a5bf22426a5c13514b2236d901b104c009b26df66327bb8e42.webp"
+    },
+    "dimensions": {
+      "height": 480,
+      "width": 960
+    }
+  }
+}

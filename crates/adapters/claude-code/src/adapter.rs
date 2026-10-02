@@ -50,7 +50,8 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // 31: exact single team/peer/coordinator deliveries retain authored media.
         // 32: cumulative cost-state totals reconcile missing session-tree usage.
         // 33: image members are WebP with bounded display renditions.
-        33
+        // 34: recorded tool images use durable optimized attachment members.
+        34
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

@@ -3,7 +3,7 @@
   "agent": "opencode",
   "agent_version": "1.18.22",
   "evidence": "writer",
-  "generator": "writer-source anomalyco/opencode@v2.0.14 packages/core/src/session/sql.ts SessionTable (session_v2) and SessionMessageTable (session_message); packages/core/src/event/sql.ts EventTable; packages/schema/src/session-message.ts Info (User, Synthetic, System, Skill, Shell, Assistant, AssistantContent, Compaction, Idle, AgentSelected, ModelSelected, LocationSwitched); packages/schema/src/token-usage.ts, model.ts Ref, prompt.ts FileAttachment, session-fork.ts Boundary; packages/schema/src/session-event.ts UsageRecorded (session.usage.recorded.1); packages/core/src/database/migration/20260804233008_loose_psylocke.ts DDL. Synthetic, schema-shaped, content-free: native 2.x capture pending",
+  "generator": "writer-source anomalyco/opencode@v2.0.14 packages/core/src/session/sql.ts SessionTable (session_v2) and SessionMessageTable (session_message); packages/core/src/event/sql.ts EventTable; packages/schema/src/session-message.ts Info (User, Synthetic, System, Skill, Shell, Assistant, AssistantContent, Compaction, Idle, AgentSelected, ModelSelected, LocationSwitched); packages/schema/src/token-usage.ts, model.ts Ref, prompt.ts FileAttachment, session-fork.ts Boundary; packages/schema/src/session-event.ts UsageRecorded (session.usage.recorded.1); packages/core/src/database/migration/20260804233008_loose_psylocke.ts DDL. Synthetic, schema-shaped, content-free: native 2.x capture pending; packages/schema/src/tool.ts Content (TextContent, FileContent)",
   "data_root": "~/.local/share/opencode",
   "writer_version": "v2.0.14",
   "streams": [
@@ -1632,8 +1632,61 @@
                           "shape": {
                             "kind": "array",
                             "items": {
-                              "kind": "object",
-                              "fields": {}
+                              "kind": "any_of",
+                              "variants": [
+                                {
+                                  "kind": "object",
+                                  "fields": {
+                                    "type": {
+                                      "shape": {
+                                        "kind": "string",
+                                        "values": {
+                                          "text": 0
+                                        }
+                                      },
+                                      "required": true
+                                    },
+                                    "text": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true
+                                    }
+                                  }
+                                },
+                                {
+                                  "kind": "object",
+                                  "fields": {
+                                    "type": {
+                                      "shape": {
+                                        "kind": "string",
+                                        "values": {
+                                          "file": 0
+                                        }
+                                      },
+                                      "required": true
+                                    },
+                                    "uri": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true
+                                    },
+                                    "mime": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": true
+                                    },
+                                    "name": {
+                                      "shape": {
+                                        "kind": "string"
+                                      },
+                                      "required": false
+                                    }
+                                  }
+                                }
+                              ]
                             }
                           },
                           "required": false

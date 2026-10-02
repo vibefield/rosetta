@@ -78,3 +78,60 @@ pub(crate) fn attachment(id: &str, file: &FilePart) -> Option<MaterializedAttach
     attachment.name = file.filename.as_deref().and_then(media::bounded_name);
     Some((attachment, asset))
 }
+
+/// Completed v1 tool states own FilePart attachments, not current-file previews.
+pub(crate) fn tool_output(
+    ctx: &NormalizeCtx,
+    key: &str,
+    state: &serde_json::Value,
+    at: Option<rosetta_core::rows::Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let attachments = state["attachments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, value)| {
+            let file: FilePart = serde_json::from_value(value.clone()).ok()?;
+            attachment(&format!("image-{index}"), &file)
+        });
+    media::push_tool_attachments(ctx, key, key, attachments, at, ops);
+}
+
+/// 2.x Tool.Content file members carry a URI and MIME, including on errors.
+pub(crate) fn tool_output_v2(
+    ctx: &NormalizeCtx,
+    key: &str,
+    state: &serde_json::Value,
+    at: Option<rosetta_core::rows::Ms>,
+    ops: &mut Vec<IngestOp>,
+) {
+    let attachments = state["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter(|(_, value)| {
+            value["type"] == "file"
+                && value["mime"]
+                    .as_str()
+                    .is_some_and(|mime| mime.to_ascii_lowercase().starts_with("image/"))
+        })
+        .map(|(index, value)| {
+            let id = format!("image-{index}");
+            let (mut attachment, asset) = match value["uri"].as_str() {
+                Some(uri) => {
+                    media::from_url(&id, AttachmentKind::Image, uri, value["mime"].as_str())
+                }
+                None => media::unavailable(
+                    &id,
+                    AttachmentKind::Image,
+                    rosetta_core::timeline::AttachmentUnavailableReason::InvalidData,
+                ),
+            };
+            attachment.name = value["name"].as_str().and_then(media::bounded_name);
+            (attachment, asset)
+        });
+    media::push_tool_attachments(ctx, key, key, attachments, at, ops);
+}

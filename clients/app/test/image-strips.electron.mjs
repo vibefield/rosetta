@@ -60,6 +60,8 @@ async function run() {
     await win.loadURL(`http://127.0.0.1:${server.httpServer.address().port}/test/prompt-images.html`);
     win.focus(); win.webContents.focus();
     await until(() => document.querySelectorAll('.tr-attachments').length >= 9, 'Image strips did not mount');
+    assert.equal(await check(() => document.querySelectorAll('[data-timeline-id="unoptimized"] img').length), 0);
+    assert.equal(await check(() => Boolean(document.querySelector('[data-timeline-id="unoptimized"] .tr-att__tile--missing'))), true);
     assert.equal(await check(() => document.querySelectorAll('.tr-prompt .tr-attachments').length), 0);
     assert.equal(await check(() => Boolean(document.querySelector('[data-timeline-id="image-only"] .tr-prompt'))), false);
     assert.equal(await check(() => document.querySelector('[data-timeline-id="image-reply"] .tr-att figure') !== null), true);
@@ -112,7 +114,7 @@ async function run() {
     assert.equal(await check(selector => getComputedStyle(document.querySelector(selector + ' .tr-activity__list')).display !== 'none', activity), true);
     await until(() => document.querySelector('.tr-activity > .tr-attachments img')?.naturalWidth > 0, 'Revealed tool image did not load');
     const readsBefore = await check(async () => (await fetch('/test/image-reads')).json());
-    assert.equal(readsBefore['image-read:0'], undefined, 'Text target must not be read as image');
+    assert.equal(readsBefore.liveFile, undefined, 'Transcript never reads current files for images');
     assert.equal(await check(selector => document.querySelector(selector + ' .tr-att') === window.stripBefore, activity), true);
     assert.equal(await check(() => document.querySelector('[data-timeline-id="image-read"]').getAttribute('aria-expanded')), 'false');
     await check(() => document.querySelector('[data-timeline-id="image-read"]').click());
@@ -129,10 +131,11 @@ async function run() {
     await until(() => document.querySelector('.ah-image__frame img')?.naturalWidth > 0, 'Tool image viewer did not load');
     await capture('viewer');
     const viewed = await check(async () => (await fetch('/test/image-reads')).json());
-    assert.ok(viewed['image-read:1:preview'] > 0, 'Viewer requests its display preview');
-    assert.equal(viewed['image-read:1:tile'], readsBefore['image-read:1:tile'], 'Opening retains the row thumbnail');
-    assert.equal(viewed['image-read:1:full'], undefined, 'Fit never requests full-size pixels');
-    assert.equal(viewed['image-read:1:original'], undefined, 'No original byte buffer is retained in the renderer');
+    assert.equal(viewed.liveFile, undefined, 'No live-file image route is used');
+    assert.ok(viewed['tool-first:preview'] > 0, 'Viewer requests its display preview');
+    assert.equal(viewed['tool-first:tile'], readsBefore['tool-first:tile'], 'Opening retains the row thumbnail');
+    assert.equal(viewed['tool-first:full'], undefined, 'Fit never requests full-size pixels');
+    assert.equal(viewed['tool-first:original'], undefined, 'No original byte buffer is retained in the renderer');
     await close();
     assert.equal(await check(() => document.activeElement.classList.contains('tr-att__tile')), true);
     assert.deepEqual(await check(() => ({ top: document.querySelector('.tr-scroll').scrollTop, room: document.querySelector('.ah-room').getBoundingClientRect().top })), before);
@@ -200,7 +203,7 @@ async function run() {
     await close(1);
     await close();
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ result: 'passed', artifacts: temporary, checks: ['prompt marker click and keyboard open', 'prompt and reply placement', 'both fold levels', 'no duplicate thumbnails', 'same file bytes in viewer', 'focus restoration', 'horizontal keyboard scrolling', 'narrow layout', 'asset/file retry', 'missing-image links', 'nested full-message viewer'] }));
+    console.log(JSON.stringify({ result: 'passed', artifacts: temporary, checks: ['prompt marker click and keyboard open', 'prompt and reply placement', 'both fold levels', 'no duplicate thumbnails', 'stored WebP in viewer', 'focus restoration', 'horizontal keyboard scrolling', 'narrow layout', 'stored asset retry', 'missing-image links', 'nested full-message viewer'] }));
   } catch (error) { failed = true; console.error(error); console.error('Artifacts:', temporary); if (win) await capture('failure'); }
   finally { clearTimeout(deadline); clearInterval(pulse); win?.destroy(); await Promise.race([server?.close(), pause(1000)]); app.exit(failed ? 1 : 0); }
 }

@@ -47,6 +47,7 @@ export function tool(action, over = {}) {
         native: over.native ?? { id: null, namespace: null, name: "Tool", provider: null },
         status: { value: over.status ?? "succeeded", basis: over.basis ?? "native_state" },
         action,
+        attachments: over.attachments ?? [],
         failure: over.failure ?? null,
         timing: over.timing ?? null,
       },
@@ -81,4 +82,3 @@ export const read = (path, over = {}) =>
     },
     over,
   );
-

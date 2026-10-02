@@ -1,4 +1,4 @@
-//! Pure materialization of already-classified authored media. Vendor content
+//! Pure materialization of already-classified recorded media. Vendor content
 //! blocks, labels, ownership and joins belong to the calling adapter.
 
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -9,6 +9,42 @@ use rosetta_core::timeline::{
 };
 
 pub type MaterializedAttachment = (AttachmentRef, Option<ProjectionAsset>);
+
+/// Attach recorded output occurrences to their proven tool owner. The separate
+/// media patch cannot collide with a lifecycle patch from the same native record.
+pub fn push_tool_attachments(
+    ctx: &crate::adapter::NormalizeCtx,
+    correlation_key: &str,
+    occurrence: &str,
+    media: impl IntoIterator<Item = MaterializedAttachment>,
+    at: Option<rosetta_core::rows::Ms>,
+    ops: &mut Vec<rosetta_core::IngestOp>,
+) {
+    let scope = blake3::hash(occurrence.as_bytes()).to_hex().to_string();
+    let attachments: Vec<_> = media
+        .into_iter()
+        .map(|(mut attachment, asset)| {
+            attachment.id = format!("{scope}:{}", attachment.id);
+            attachment.message_ranges.clear();
+            ops.extend(asset.map(|asset| rosetta_core::IngestOp::ProjectionAsset { asset }));
+            attachment
+        })
+        .collect();
+    if attachments.is_empty() {
+        return;
+    }
+    rosetta_core::IngestOp::push_tool_update(
+        ops,
+        ctx.session_id.clone(),
+        correlation_key.to_owned(),
+        ctx.evidence(u32::MAX - 1),
+        rosetta_core::ToolUpdatePatch {
+            attachments,
+            ..Default::default()
+        },
+        at,
+    );
+}
 
 pub fn bounded_name(value: &str) -> Option<String> {
     bounded(value, CORE_SCALAR_MAX_BYTES)
@@ -50,6 +86,30 @@ pub fn from_base64(
         Ok(bytes) => from_bytes(id, kind, mime, bytes),
         Err(_) => unavailable(id, kind, Missing::InvalidData),
     }
+}
+
+/// Some native image-generation records store Base64 without a MIME field.
+/// Determine the encoding from those recorded bytes, never a filename hint.
+pub fn from_image_base64(id: &str, data: &str) -> MaterializedAttachment {
+    if data.len() > rosetta_media::MAX_INPUT_BYTES.div_ceil(3) * 4 {
+        return unavailable(id, AttachmentKind::Image, Missing::UnsupportedMedia);
+    }
+    let Ok(bytes) = STANDARD.decode(data) else {
+        return unavailable(id, AttachmentKind::Image, Missing::InvalidData);
+    };
+    let Some(mime) = [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "image/x-icon",
+    ]
+    .into_iter()
+    .find(|mime| magic_matches(mime, &bytes)) else {
+        return unavailable(id, AttachmentKind::Image, Missing::UnsupportedMedia);
+    };
+    from_bytes(id, AttachmentKind::Image, mime, bytes)
 }
 
 pub fn from_bytes(
@@ -136,10 +196,12 @@ pub fn from_url(
 
 pub fn canonical_media_type(mime: &str) -> Option<&'static str> {
     match mime.trim().to_ascii_lowercase().as_str() {
-        "image/png" => Some("image/png"),
+        "image/png" | "image/apng" => Some("image/png"),
         "image/jpeg" | "image/jpg" => Some("image/jpeg"),
         "image/gif" => Some("image/gif"),
         "image/webp" => Some("image/webp"),
+        "image/bmp" => Some("image/bmp"),
+        "image/x-icon" | "image/vnd.microsoft.icon" => Some("image/x-icon"),
         "application/pdf" => Some("application/pdf"),
         "text/plain" | "text/plain; charset=utf-8" => Some("text/plain; charset=utf-8"),
         _ => None,
@@ -152,6 +214,8 @@ fn magic_matches(mime: &str, bytes: &[u8]) -> bool {
         "image/jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
         "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
         "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
+        "image/bmp" => bytes.starts_with(b"BM"),
+        "image/x-icon" => bytes.starts_with(&[0, 0, 1, 0]),
         "application/pdf" => bytes.starts_with(b"%PDF-"),
         "text/plain; charset=utf-8" => std::str::from_utf8(bytes).is_ok(),
         _ => false,

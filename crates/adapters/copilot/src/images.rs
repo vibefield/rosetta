@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 pub(crate) struct Images {
     assets: BTreeMap<String, Recorded>,
     owners: BTreeMap<String, Owner>,
+    #[serde(default)]
+    tool_owners: BTreeMap<String, ToolOwner>,
 }
 // Source metadata belongs to the exact native join, never to the encoded
 // AssetRef. Only the selected source's bounded proof survives a checkpoint.
@@ -62,6 +64,11 @@ struct Owner {
     links: Vec<Link>,
 }
 #[derive(Debug, Serialize, Deserialize)]
+struct ToolOwner {
+    attachments: Vec<AttachmentRef>,
+    links: Vec<Link>,
+}
+#[derive(Debug, Serialize, Deserialize)]
 struct Link {
     slot: usize,
     asset_id: String,
@@ -76,6 +83,22 @@ impl Images {
         attachments: &[Value],
         ops: &mut Vec<IngestOp>,
     ) {
+        let (attachments, links) = self.collect(attachments, ops);
+        row.attachments = attachments;
+        IngestOp::push_message(ops, row.clone());
+        if !links.is_empty() {
+            row.src_cursor = None;
+            self.owners
+                .insert(row.timeline_id.clone(), Owner { row, links });
+        }
+    }
+
+    fn collect(
+        &self,
+        attachments: &[Value],
+        ops: &mut Vec<IngestOp>,
+    ) -> (Vec<AttachmentRef>, Vec<Link>) {
+        let mut recorded_attachments = Vec::new();
         let mut links = Vec::new();
         for (index, value) in attachments.iter().enumerate() {
             let Some(mime) = value["mimeType"]
@@ -99,7 +122,7 @@ impl Images {
                 (attachment, asset)
             } else if let Some(asset_id) = value["assetId"].as_str().filter(|id| !id.is_empty()) {
                 links.push(Link {
-                    slot: row.attachments.len(),
+                    slot: recorded_attachments.len(),
                     asset_id: asset_id.to_owned(),
                     mime: mime.to_owned(),
                     byte_len: declared_len,
@@ -151,13 +174,37 @@ impl Images {
             }
             attachment.name = value["displayName"].as_str().and_then(media::bounded_name);
             ops.extend(asset.map(|asset| IngestOp::ProjectionAsset { asset }));
-            row.attachments.push(attachment);
+            recorded_attachments.push(attachment);
         }
-        IngestOp::push_message(ops, row.clone());
+        (recorded_attachments, links)
+    }
+
+    pub(crate) fn tool(
+        &mut self,
+        ctx: &NormalizeCtx,
+        key: &str,
+        result: &Value,
+        at: Option<rosetta_core::rows::Ms>,
+        ops: &mut Vec<IngestOp>,
+    ) {
+        // Both writer-declared collections can contain recorded media. Keep
+        // their occurrences even when their bytes happen to be identical.
+        let values: Vec<_> = ["binaryResultsForLlm", "contents"]
+            .into_iter()
+            .flat_map(|field| result[field].as_array().into_iter().flatten().cloned())
+            .collect();
+        let (attachments, links) = self.collect(&values, ops);
+        media::push_tool_attachments(
+            ctx,
+            key,
+            key,
+            attachments.iter().cloned().map(|a| (a, None)),
+            at,
+            ops,
+        );
         if !links.is_empty() {
-            row.src_cursor = None;
-            self.owners
-                .insert(row.timeline_id.clone(), Owner { row, links });
+            self.tool_owners
+                .insert(key.to_owned(), ToolOwner { attachments, links });
         }
     }
 
@@ -175,6 +222,12 @@ impl Images {
         if !is_image
             && !self.assets.contains_key(&source.asset_id)
             && !self.owners.values().any(|owner| {
+                owner
+                    .links
+                    .iter()
+                    .any(|link| link.asset_id == source.asset_id)
+            })
+            && !self.tool_owners.values().any(|owner| {
                 owner
                     .links
                     .iter()
@@ -214,6 +267,32 @@ impl Images {
         source_image.attachment = attachment.clone();
         self.assets
             .insert(source.asset_id.clone(), source_image.clone());
+        for (key, owner) in &mut self.tool_owners {
+            let mut changed = false;
+            for link in owner
+                .links
+                .iter()
+                .filter(|link| link.asset_id == source.asset_id)
+            {
+                let old = &owner.attachments[link.slot];
+                let mut resolved = attachment.clone();
+                resolved.id.clone_from(&old.id);
+                resolved.name.clone_from(&old.name);
+                check_metadata(&mut resolved, &source_image, &link.mime, link.byte_len);
+                changed |= *old != resolved;
+                owner.attachments[link.slot] = resolved;
+            }
+            if changed {
+                media::push_tool_attachments(
+                    ctx,
+                    key,
+                    key,
+                    owner.attachments.iter().cloned().map(|a| (a, None)),
+                    None,
+                    ops,
+                );
+            }
+        }
         for owner in self.owners.values_mut() {
             let mut changed = false;
             for link in owner

@@ -99,6 +99,27 @@ fn session_row() -> SessionRow {
 
 fn tool_interaction() -> ToolInteraction {
     ToolInteraction {
+        attachments: vec![rosetta_core::timeline::AttachmentRef::new(
+            "tool-image-1",
+            rosetta_core::timeline::AttachmentKind::Image,
+            rosetta_core::timeline::AttachmentSource::Asset {
+                asset: {
+                    let mut asset = rosetta_core::ProjectionAsset::new(
+                        "image/webp",
+                        b"golden tool image".to_vec(),
+                    )
+                    .unwrap();
+                    asset.image_variants = rosetta_core::assets::ImageVariant::DERIVED
+                        .into_iter()
+                        .map(|variant| rosetta_core::assets::ImageVariantBytes {
+                            variant,
+                            bytes: format!("golden tool {}", variant.name()).into_bytes(),
+                        })
+                        .collect();
+                    asset.reference()
+                },
+            },
+        )],
         correlation: ToolCorrelation {
             key: "toolu_1".into(),
             derivation: CorrelationDerivation::NativeId,

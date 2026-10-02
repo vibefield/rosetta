@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 rosetta-media = { path = "../media" }
 base64 = { workspace = true }
+blake3 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 time = { workspace = true }

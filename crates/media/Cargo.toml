@@ -10,3 +10,6 @@ webp.workspace = true
 fast_image_resize.workspace = true
 blake3.workspace = true
 moxcms.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

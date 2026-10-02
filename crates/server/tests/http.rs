@@ -629,6 +629,7 @@ async fn recorded_file_read_serves_only_the_addressed_canonical_target() {
     let mut row = message("read-target", MessageKind::ToolUse, "");
     row.content = None;
     row.tool = Some(ToolInteraction {
+        attachments: Vec::new(),
         correlation: ToolCorrelation {
             key: "tool-read".into(),
             derivation: CorrelationDerivation::NativeId,
@@ -694,6 +695,7 @@ async fn recorded_artifact_serves_each_addressed_file_resource() {
     let mut row = message("artifact-target", MessageKind::ToolUse, "");
     row.content = None;
     row.tool = Some(ToolInteraction {
+        attachments: Vec::new(),
         correlation: ToolCorrelation {
             key: "tool-artifact".into(),
             derivation: CorrelationDerivation::NativeId,
@@ -767,6 +769,7 @@ async fn full_command_is_loaded_only_through_its_raw_source_anchor() {
     row.src_cursor = Some(h.cursor);
     row.src_offset = Some(42);
     row.tool = Some(ToolInteraction {
+        attachments: Vec::new(),
         correlation: ToolCorrelation {
             key: "tool-long".into(),
             derivation: CorrelationDerivation::NativeId,
@@ -1705,6 +1708,7 @@ async fn search_filters_inside_the_ranked_query_and_rejects_bad_input() {
     tool_row.ts = Some(7_200_000);
     tool_row.content = None;
     tool_row.tool = Some(ToolInteraction {
+        attachments: Vec::new(),
         correlation: ToolCorrelation {
             key: "tool-1".into(),
             derivation: CorrelationDerivation::NativeId,

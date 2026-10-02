@@ -991,7 +991,7 @@ an asset cannot be nested inside that variant. `Unavailable` needs no invented U
 file path, or asset digest. Its reason describes source evidence, never a transient
 HTTP failure. Existing kind/metadata validation still applies; all new strings and
 collections receive the core's corresponding scalar/id/collection bounds. This
-contract retains the PNG/JPEG/GIF/WebP image-member allowlist.
+contract uses WebP bundles for display; original encodings remain in the raw ledger.
 
 Attachment identity is derived from a stable native part identity, or a deterministic
 source-block position when none exists. It is not a content digest: two uses of the
@@ -1055,26 +1055,33 @@ full image but produce different thumbnails. The store materializes and syncs ev
 member before publishing its references; identical member bytes deduplicate. No image
 table, original-byte cache, Base64 column or normalization journal is added.
 
-The helper never reads paths or fetches URLs. Source-only authored references remain
-references; recovering historical bytes requires separately ledgered capture. Exact
-canonical tool-file targets use the existing admitted read route with a finite
-`?image=rail|tile|tile2x|preview|full&v=1` recipe. Four blocking request lanes share the
-two-job codec pool. The mutable-file cache contains only WebPs, keyed by original
-content hash; file size/mtime/identity changes invalidate its bounded stat map.
-It is limited to 512 MiB/512 source versions, separate from canonical members. Browser
-ETag revalidation tracks current files. Browser-supported SVG/AVIF tool files retain
-a bounded direct-source fallback, with no original disk cache; SVG responses are
-sandboxed. Those uncommon source-only formats receive no generated thumbnails.
+The helper never reads paths or fetches URLs. Source-only references remain
+references; recovering historical bytes requires separately ledgered capture.
 
-Schema 26 / protocol 25 and the seven image-producing normalizer versions land
+**Recorded tool images (2026-10-02).** `ToolInteraction.attachments` owns images
+returned by a tool, including an opaque orchestration tool. Adapters classify only
+their declared media fields and emit the same optimized `ProjectionAsset` bundles
+as authored messages. Tool lifecycle updates and media patches have distinct
+mutation indices; attachments merge by occurrence identity and evidence order.
+Repeated bytes retain separate slots. A delayed binary asset corrects its existing
+slot, including after a checkpoint resume. Merge evidence stays in RAM; SQLite's
+existing `tool_detail` holds only the action and resolved attachment references.
+Attachment collections allow up to 1,024 occurrences independently of the smaller
+semantic-field list bound. No native output or new reconciliation table is stored.
+
+Schema 27 / protocol 26 and the seven image-producing normalizer versions land
 together. Existing projections follow the established **explicit ledger rebuild**
 contract, not an in-place migration: stop the daemon and run
 `rosettad rebuild --db PATH` (include `--ledger DIR` if the archive uses a custom root),
 then restart. Use the same enrollment file for unstamped enrolled runtimes. The rebuild
 validates privately and atomically publishes before pruning unreferenced image members,
-including old PNG/JPEG copies. Cleanup follows workflow resources and references inside externalized canonical
-documents, and is deferred if those cannot be verified. A failed rebuild leaves the
-installed projection and its referenced images intact.
+including old PNG/JPEG copies. Cleanup follows tool attachments, workflow resources,
+and references inside externalized canonical documents, and is deferred if those
+cannot be verified. A failed rebuild leaves the installed projection and its
+referenced images intact.
+
+The generic file viewer still supports the admitted current-file read route and its
+bounded mutable WebP cache. It is separate from transcript image presentation.
 
 The adapter removes transport text only when structural evidence identifies it;
 human-authored quotations of the same syntax survive. Human text blocks retain their
@@ -1083,14 +1090,17 @@ presents images in a horizontal strip below the prompt’s text bubble. Agent re
 and full-message views use the same strip beneath their prose. That is an intentional
 gallery layout, not a claim to reproduce arbitrary text/image interleaving. The raw
 ledger remains available if a future consumer needs an ordered rich-content model.
-Activity image references are collected from canonical file reads, artifacts, workflow
-resources, and structured/external tool resources. One strip sits outside both activity
-fold levels and keeps its DOM identity as the folds open. Stored assets use the usual
-asset route; exact canonical tool file targets use the existing bounded read endpoint,
-lazily when near the visible area. These previews describe the **current file**, and
-the browser loads a sized WebP resource. Unavailable or remote-only
-references keep a placeholder. No arbitrary tool output or Markdown URL is parsed
-into an image request.
+Activity images come from recorded tool attachments and optimized assets in
+canonical artifact/workflow/structured/external resources. One strip sits outside
+both activity fold levels and keeps its DOM identity as the folds open. Transcript
+thumbnails, inline image mentions and the full-message gallery accept only immutable
+WebP assets with all four content-addressed rendition references. A path, filename,
+media-kind hint, remote URL, raw PNG, or incomplete bundle cannot trigger an image
+request or open the image viewer. Source-only/unavailable recorded occurrences keep
+a placeholder. Current-file reads and on-demand fallback encoders cannot stand in
+for a recorded transcript image; deleting the original temporary file has no effect
+on an image whose bytes were captured. No arbitrary tool output or Markdown URL is
+parsed into an image request.
 
 Opening an image snapshots its visible row into the shared file viewer (2026-10-01).
 For multi-image rows, a bottom thumbnail strip retains every occurrence in order,
@@ -1128,7 +1138,7 @@ of a text part, so its old part-based prompt anchors change on replay.
 
 Acceptance requires fixture replay for text+image, image-only, several images,
 repeated bytes, missing first image, exact labels, literal markup, malformed encoding,
-unsupported media, reference-only content, tool media exclusion, and late/out-of-order
+unsupported media, reference-only content, tool media ownership, and late/out-of-order
 asset joins. Verify deterministic ids and source-generation replacement, asset durability
 before publication, ledger-only replay, absence of encoded bytes from timeline/search
 JSON, and no new canonical reconciliation state. The renderer must pass compact thumbnail strips and uncropped full-image
@@ -1137,7 +1147,10 @@ and focus restoration, failed-load retry, paging/search landing, light/dark them
 stable scroll geometry while images load. Runtime performance claims require the usual
 frozen paired campaign; this implementation makes none.
 
-`crates/pipeline/tests/authored_images.rs` exercises durability before publication and
+`crates/pipeline/tests/warm_tool_images.rs` proves new-session warm admission, an
+output arriving after restart, equality with cold ingest, image GC retention, and
+ledger-only reconstruction. `recorded_tool_images.rs` exercises every established
+tool-image encoding. `crates/pipeline/tests/authored_images.rs` exercises durability before publication and
 rebuild into fresh assets after deleting the captured native files and original assets.
 Adapter conformance tests cover occurrence identity, invalid/missing inputs, exact
 bindings, checkpointed joins and replacement snapshots. These synthetic inputs are

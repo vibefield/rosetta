@@ -43,7 +43,8 @@ impl AgentAdapter for GrokAdapter {
         // aggregate scope, and usage for prompts without a row (§4.1.3).
         // 11: turns carry their `modelCalls` request count.
         // 12: image members are WebP with bounded display renditions.
-        12
+        // 13: recorded tool images use durable optimized attachment members.
+        13
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

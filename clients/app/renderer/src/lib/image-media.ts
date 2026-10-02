@@ -1,3 +1,5 @@
+import type { AssetRef } from "@rosetta/protocol";
+
 /** File-format hints for image targets without a filename extension or MIME type.
  * This only selects the existing viewer; the browser still validates/decodes it. */
 export function imageMediaTypeFromBytes(bytes: Uint8Array): string | null {
@@ -12,4 +14,12 @@ export function imageMediaTypeFromBytes(bytes: Uint8Array): string | null {
   if (text(4, 4) === "ftyp" && ["avif", "avis"].includes(text(8, 4))) return "image/avif";
   if (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(new TextDecoder().decode(bytes.subarray(0, 512)))) return "image/svg+xml";
   return null;
+}
+/** Transcript images must be committed WebP bundles produced by ingestion. */
+export function isOptimizedImageAsset(asset: AssetRef): boolean {
+  const member = (value: AssetRef | undefined) => value?.media_type === "image/webp"
+    && value.byte_len > 0 && /^[a-f0-9]{64}$/.test(value.digest)
+    && value.url === `/api/assets/${value.digest}.webp`;
+  return member(asset) && ["rail", "tile", "tile2x", "preview"].every(variant =>
+    member(asset.image_variants?.[variant as "rail" | "tile" | "tile2x" | "preview"]));
 }

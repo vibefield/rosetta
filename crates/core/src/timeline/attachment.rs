@@ -1,6 +1,73 @@
-//! Authored media occurrences. An attachment's identity is not its blob's digest.
+//! Recorded media occurrences. An attachment's identity is not its blob's digest.
 
 use super::*;
+
+// Images are occurrences, not a compact semantic preview list. A tool can emit
+// many images across output chunks; do not apply the twenty-field action limit.
+const ATTACHMENT_LIMIT: usize = 1024;
+
+/// Per-occurrence ordering and correction evidence, kept only in the live fold.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct ToolAttachmentState {
+    entries: std::collections::BTreeMap<String, (EvidenceOrder, usize, EvidenceOrder)>,
+}
+
+pub(super) fn merge_tool_attachments(
+    current: &mut Vec<AttachmentRef>,
+    state: &mut ToolAttachmentState,
+    incoming: &[AttachmentRef],
+    evidence: &EvidenceOrder,
+) -> Result<bool, CanonicalError> {
+    if incoming.is_empty() {
+        return Ok(false);
+    }
+    validate_attachments(incoming, None)?;
+    let before = current.clone();
+    // A reloaded resolved row precedes its new append. Full source replay restores
+    // the exact ordering evidence when a source generation is replaced.
+    for (index, attachment) in current.iter().enumerate() {
+        state
+            .entries
+            .entry(attachment.id.clone())
+            .or_insert_with(|| {
+                let first = EvidenceOrder {
+                    source_identity: SourceIdentity(String::new()),
+                    generation: 0,
+                    record_offset: 0,
+                    mutation_index: 0,
+                };
+                (first.clone(), index, first)
+            });
+    }
+    for (index, attachment) in incoming.iter().enumerate() {
+        if let Some((first, first_index, last)) = state.entries.get_mut(&attachment.id) {
+            if evidence < first {
+                *first = evidence.clone();
+                *first_index = index;
+            }
+            if evidence <= last {
+                continue;
+            }
+            *last = evidence.clone();
+            if let Some(slot) = current.iter_mut().find(|slot| slot.id == attachment.id) {
+                slot.clone_from(attachment);
+            }
+        } else {
+            state.entries.insert(
+                attachment.id.clone(),
+                (evidence.clone(), index, evidence.clone()),
+            );
+            current.push(attachment.clone());
+        }
+    }
+    current.sort_by(|a, b| {
+        let a_order = &state.entries[&a.id];
+        let b_order = &state.entries[&b.id];
+        (&a_order.0, a_order.1, &a.id).cmp(&(&b_order.0, b_order.1, &b.id))
+    });
+    validate_attachments(current, None)?;
+    Ok(*current != before)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -145,11 +212,7 @@ pub(super) fn validate_attachments(
     attachments: &[AttachmentRef],
     text: Option<&CanonicalText>,
 ) -> Result<(), CanonicalError> {
-    bounded_collection(
-        "message attachments",
-        attachments.len(),
-        CANONICAL_LIST_LIMIT,
-    )?;
+    bounded_collection("message attachments", attachments.len(), ATTACHMENT_LIMIT)?;
     let mut ids = std::collections::BTreeSet::new();
     let mut spans = Vec::new();
     // Full member text is checked before externalization; at the public boundary
@@ -240,5 +303,42 @@ mod tests {
         assert!(attachment.validate().is_ok());
         attachment.id.clear();
         assert!(attachment.validate().is_err());
+    }
+
+    #[test]
+    fn tool_images_merge_by_occurrence_and_evidence_without_losing_order_or_corrections() {
+        let evidence = |offset| EvidenceOrder {
+            source_identity: SourceIdentity("source".into()),
+            generation: 1,
+            record_offset: offset,
+            mutation_index: 0,
+        };
+        let mut resolved = image("a", vec![]);
+        resolved.name = Some("resolved.png".into());
+        let patches = [
+            (1, vec![image("a", vec![]), image("b", vec![])]),
+            (2, vec![image("c", vec![])]),
+            (3, vec![resolved.clone()]),
+        ];
+        let mut expected = Vec::new();
+        let mut state = ToolAttachmentState::default();
+        for (offset, incoming) in &patches {
+            merge_tool_attachments(&mut expected, &mut state, incoming, &evidence(*offset))
+                .unwrap();
+        }
+        let mut shuffled = Vec::new();
+        let mut state = ToolAttachmentState::default();
+        for (offset, incoming) in patches.iter().rev() {
+            merge_tool_attachments(&mut shuffled, &mut state, incoming, &evidence(*offset))
+                .unwrap();
+        }
+        assert_eq!(shuffled, expected);
+        assert_eq!(expected, [resolved, image("b", vec![]), image("c", vec![])]);
+        assert!(
+            !merge_tool_attachments(&mut shuffled, &mut state, &patches[0].1, &evidence(1))
+                .unwrap()
+        );
+        let many: Vec<_> = (0..30).map(|i| image(&i.to_string(), vec![])).collect();
+        validate_attachments(&many, None).unwrap();
     }
 }

@@ -842,8 +842,14 @@ fn user_line(emit: &mut Emit, line: &UserLine) {
         emit.push_row(row);
     }
 
+    let single_result = results.len() == 1;
     for (index, result) in results.into_iter().enumerate() {
-        emit.tool_result(&result, u32::try_from(index).unwrap_or(u32::MAX), ts);
+        emit.tool_result(
+            &result,
+            u32::try_from(index).unwrap_or(u32::MAX),
+            ts,
+            single_result,
+        );
     }
 }
 
@@ -1991,7 +1997,24 @@ impl<'a> Emit<'a> {
             .and_then(|state| state.take_collaboration_call(tool_use_id))
     }
 
-    fn tool_result(&mut self, result: &ToolResultBlock<'_>, mutation_index: u32, at: Option<Ms>) {
+    fn tool_result(
+        &mut self,
+        result: &ToolResultBlock<'_>,
+        mutation_index: u32,
+        at: Option<Ms>,
+        single_result: bool,
+    ) {
+        rosetta_adapter_support::media::push_tool_attachments(
+            self.ctx,
+            result.tool_use_id,
+            result.tool_use_id,
+            crate::media::tool_attachments(
+                result.content,
+                single_result.then_some(result.tool_use_result).flatten(),
+            ),
+            at,
+            &mut self.ops,
+        );
         let native_failure = result
             .tool_use_result
             .and_then(|value| value.get("success"))

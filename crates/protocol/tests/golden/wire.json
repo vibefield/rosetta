@@ -142,7 +142,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 25,
+      "protocol_version": 26,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -172,6 +172,53 @@
                 "timeout_ms": null,
                 "type": "shell"
               },
+              "attachments": [
+                {
+                  "byte_len": null,
+                  "dimensions": null,
+                  "id": "tool-image-1",
+                  "kind": "image",
+                  "label": null,
+                  "media_type": null,
+                  "message_ranges": [],
+                  "name": null,
+                  "source": {
+                    "asset": {
+                      "byte_len": 17,
+                      "digest": "09aab85791343d3f141e31e18f5a98b981114f9b2babb2437b5747d98b8502cc",
+                      "image_variants": {
+                        "preview": {
+                          "byte_len": 19,
+                          "digest": "b52df5cf0e656a83a86bc2ff13bb1c9eb6226da58a8e65b83d18fefdcb285af9",
+                          "media_type": "image/webp",
+                          "url": "/api/assets/b52df5cf0e656a83a86bc2ff13bb1c9eb6226da58a8e65b83d18fefdcb285af9.webp"
+                        },
+                        "rail": {
+                          "byte_len": 16,
+                          "digest": "519d98f459836c14839edca49654dbeb4d698380f38e80bc37c23725817fc762",
+                          "media_type": "image/webp",
+                          "url": "/api/assets/519d98f459836c14839edca49654dbeb4d698380f38e80bc37c23725817fc762.webp"
+                        },
+                        "tile": {
+                          "byte_len": 16,
+                          "digest": "72eb3b938fb710cae106aa3e7805002363c6df4d63a1d175a07d816dad47211d",
+                          "media_type": "image/webp",
+                          "url": "/api/assets/72eb3b938fb710cae106aa3e7805002363c6df4d63a1d175a07d816dad47211d.webp"
+                        },
+                        "tile2x": {
+                          "byte_len": 18,
+                          "digest": "18c7bfef4056353384174f2edda6228c7cb0d02d1781ae4a0e078dd1f438d732",
+                          "media_type": "image/webp",
+                          "url": "/api/assets/18c7bfef4056353384174f2edda6228c7cb0d02d1781ae4a0e078dd1f438d732.webp"
+                        }
+                      },
+                      "media_type": "image/webp",
+                      "url": "/api/assets/09aab85791343d3f141e31e18f5a98b981114f9b2babb2437b5747d98b8502cc.webp"
+                    },
+                    "type": "asset"
+                  }
+                }
+              ],
               "correlation": {
                 "derivation": "native_id",
                 "key": "toolu_1"
@@ -727,6 +774,53 @@
             "timeout_ms": null,
             "type": "shell"
           },
+          "attachments": [
+            {
+              "byte_len": null,
+              "dimensions": null,
+              "id": "tool-image-1",
+              "kind": "image",
+              "label": null,
+              "media_type": null,
+              "message_ranges": [],
+              "name": null,
+              "source": {
+                "asset": {
+                  "byte_len": 17,
+                  "digest": "09aab85791343d3f141e31e18f5a98b981114f9b2babb2437b5747d98b8502cc",
+                  "image_variants": {
+                    "preview": {
+                      "byte_len": 19,
+                      "digest": "b52df5cf0e656a83a86bc2ff13bb1c9eb6226da58a8e65b83d18fefdcb285af9",
+                      "media_type": "image/webp",
+                      "url": "/api/assets/b52df5cf0e656a83a86bc2ff13bb1c9eb6226da58a8e65b83d18fefdcb285af9.webp"
+                    },
+                    "rail": {
+                      "byte_len": 16,
+                      "digest": "519d98f459836c14839edca49654dbeb4d698380f38e80bc37c23725817fc762",
+                      "media_type": "image/webp",
+                      "url": "/api/assets/519d98f459836c14839edca49654dbeb4d698380f38e80bc37c23725817fc762.webp"
+                    },
+                    "tile": {
+                      "byte_len": 16,
+                      "digest": "72eb3b938fb710cae106aa3e7805002363c6df4d63a1d175a07d816dad47211d",
+                      "media_type": "image/webp",
+                      "url": "/api/assets/72eb3b938fb710cae106aa3e7805002363c6df4d63a1d175a07d816dad47211d.webp"
+                    },
+                    "tile2x": {
+                      "byte_len": 18,
+                      "digest": "18c7bfef4056353384174f2edda6228c7cb0d02d1781ae4a0e078dd1f438d732",
+                      "media_type": "image/webp",
+                      "url": "/api/assets/18c7bfef4056353384174f2edda6228c7cb0d02d1781ae4a0e078dd1f438d732.webp"
+                    }
+                  },
+                  "media_type": "image/webp",
+                  "url": "/api/assets/09aab85791343d3f141e31e18f5a98b981114f9b2babb2437b5747d98b8502cc.webp"
+                },
+                "type": "asset"
+              }
+            }
+          ],
           "correlation": {
             "derivation": "native_id",
             "key": "toolu_1"
@@ -919,6 +1013,53 @@
           "timeout_ms": null,
           "type": "shell"
         },
+        "attachments": [
+          {
+            "byte_len": null,
+            "dimensions": null,
+            "id": "tool-image-1",
+            "kind": "image",
+            "label": null,
+            "media_type": null,
+            "message_ranges": [],
+            "name": null,
+            "source": {
+              "asset": {
+                "byte_len": 17,
+                "digest": "09aab85791343d3f141e31e18f5a98b981114f9b2babb2437b5747d98b8502cc",
+                "image_variants": {
+                  "preview": {
+                    "byte_len": 19,
+                    "digest": "b52df5cf0e656a83a86bc2ff13bb1c9eb6226da58a8e65b83d18fefdcb285af9",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/b52df5cf0e656a83a86bc2ff13bb1c9eb6226da58a8e65b83d18fefdcb285af9.webp"
+                  },
+                  "rail": {
+                    "byte_len": 16,
+                    "digest": "519d98f459836c14839edca49654dbeb4d698380f38e80bc37c23725817fc762",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/519d98f459836c14839edca49654dbeb4d698380f38e80bc37c23725817fc762.webp"
+                  },
+                  "tile": {
+                    "byte_len": 16,
+                    "digest": "72eb3b938fb710cae106aa3e7805002363c6df4d63a1d175a07d816dad47211d",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/72eb3b938fb710cae106aa3e7805002363c6df4d63a1d175a07d816dad47211d.webp"
+                  },
+                  "tile2x": {
+                    "byte_len": 18,
+                    "digest": "18c7bfef4056353384174f2edda6228c7cb0d02d1781ae4a0e078dd1f438d732",
+                    "media_type": "image/webp",
+                    "url": "/api/assets/18c7bfef4056353384174f2edda6228c7cb0d02d1781ae4a0e078dd1f438d732.webp"
+                  }
+                },
+                "media_type": "image/webp",
+                "url": "/api/assets/09aab85791343d3f141e31e18f5a98b981114f9b2babb2437b5747d98b8502cc.webp"
+              },
+              "type": "asset"
+            }
+          }
+        ],
         "correlation": {
           "derivation": "native_id",
           "key": "toolu_1"
@@ -1059,7 +1200,7 @@
       }
     ]
   },
-  "protocol_version": 25,
+  "protocol_version": 26,
   "runtimes": {
     "runtimes": [
       {
@@ -1267,7 +1408,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 25,
+    "protocol_version": 26,
     "schema_version": 16,
     "search": {
       "progress": null,
@@ -1320,6 +1461,53 @@
             "timeout_ms": null,
             "type": "shell"
           },
+          "attachments": [
+            {
+              "byte_len": null,
+              "dimensions": null,
+              "id": "tool-image-1",
+              "kind": "image",
+              "label": null,
+              "media_type": null,
+              "message_ranges": [],
+              "name": null,
+              "source": {
+                "asset": {
+                  "byte_len": 17,
+                  "digest": "09aab85791343d3f141e31e18f5a98b981114f9b2babb2437b5747d98b8502cc",
+                  "image_variants": {
+                    "preview": {
+                      "byte_len": 19,
+                      "digest": "b52df5cf0e656a83a86bc2ff13bb1c9eb6226da58a8e65b83d18fefdcb285af9",
+                      "media_type": "image/webp",
+                      "url": "/api/assets/b52df5cf0e656a83a86bc2ff13bb1c9eb6226da58a8e65b83d18fefdcb285af9.webp"
+                    },
+                    "rail": {
+                      "byte_len": 16,
+                      "digest": "519d98f459836c14839edca49654dbeb4d698380f38e80bc37c23725817fc762",
+                      "media_type": "image/webp",
+                      "url": "/api/assets/519d98f459836c14839edca49654dbeb4d698380f38e80bc37c23725817fc762.webp"
+                    },
+                    "tile": {
+                      "byte_len": 16,
+                      "digest": "72eb3b938fb710cae106aa3e7805002363c6df4d63a1d175a07d816dad47211d",
+                      "media_type": "image/webp",
+                      "url": "/api/assets/72eb3b938fb710cae106aa3e7805002363c6df4d63a1d175a07d816dad47211d.webp"
+                    },
+                    "tile2x": {
+                      "byte_len": 18,
+                      "digest": "18c7bfef4056353384174f2edda6228c7cb0d02d1781ae4a0e078dd1f438d732",
+                      "media_type": "image/webp",
+                      "url": "/api/assets/18c7bfef4056353384174f2edda6228c7cb0d02d1781ae4a0e078dd1f438d732.webp"
+                    }
+                  },
+                  "media_type": "image/webp",
+                  "url": "/api/assets/09aab85791343d3f141e31e18f5a98b981114f9b2babb2437b5747d98b8502cc.webp"
+                },
+                "type": "asset"
+              }
+            }
+          ],
           "correlation": {
             "derivation": "native_id",
             "key": "toolu_1"
@@ -1406,6 +1594,53 @@
               "timeout_ms": null,
               "type": "shell"
             },
+            "attachments": [
+              {
+                "byte_len": null,
+                "dimensions": null,
+                "id": "tool-image-1",
+                "kind": "image",
+                "label": null,
+                "media_type": null,
+                "message_ranges": [],
+                "name": null,
+                "source": {
+                  "asset": {
+                    "byte_len": 17,
+                    "digest": "09aab85791343d3f141e31e18f5a98b981114f9b2babb2437b5747d98b8502cc",
+                    "image_variants": {
+                      "preview": {
+                        "byte_len": 19,
+                        "digest": "b52df5cf0e656a83a86bc2ff13bb1c9eb6226da58a8e65b83d18fefdcb285af9",
+                        "media_type": "image/webp",
+                        "url": "/api/assets/b52df5cf0e656a83a86bc2ff13bb1c9eb6226da58a8e65b83d18fefdcb285af9.webp"
+                      },
+                      "rail": {
+                        "byte_len": 16,
+                        "digest": "519d98f459836c14839edca49654dbeb4d698380f38e80bc37c23725817fc762",
+                        "media_type": "image/webp",
+                        "url": "/api/assets/519d98f459836c14839edca49654dbeb4d698380f38e80bc37c23725817fc762.webp"
+                      },
+                      "tile": {
+                        "byte_len": 16,
+                        "digest": "72eb3b938fb710cae106aa3e7805002363c6df4d63a1d175a07d816dad47211d",
+                        "media_type": "image/webp",
+                        "url": "/api/assets/72eb3b938fb710cae106aa3e7805002363c6df4d63a1d175a07d816dad47211d.webp"
+                      },
+                      "tile2x": {
+                        "byte_len": 18,
+                        "digest": "18c7bfef4056353384174f2edda6228c7cb0d02d1781ae4a0e078dd1f438d732",
+                        "media_type": "image/webp",
+                        "url": "/api/assets/18c7bfef4056353384174f2edda6228c7cb0d02d1781ae4a0e078dd1f438d732.webp"
+                      }
+                    },
+                    "media_type": "image/webp",
+                    "url": "/api/assets/09aab85791343d3f141e31e18f5a98b981114f9b2babb2437b5747d98b8502cc.webp"
+                  },
+                  "type": "asset"
+                }
+              }
+            ],
             "correlation": {
               "derivation": "native_id",
               "key": "toolu_1"

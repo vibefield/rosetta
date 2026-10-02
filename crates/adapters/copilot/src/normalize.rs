@@ -275,6 +275,11 @@ fn project(
             }
         }
         EventPayload::ToolExecutionComplete(complete) => {
+            if let Some(result) = complete.result.as_ref() {
+                state
+                    .images
+                    .tool(ctx, &complete.tool_call_id, result, ts, ops);
+            }
             tool_result(ctx, complete, ts, ops);
         }
         EventPayload::SessionShutdown(shutdown) => {

@@ -110,6 +110,7 @@ fn entry_tool(entry: &TimelineEntry) -> Option<&ToolInteraction> {
 
 fn pending_tool(key: &str, name: &str, action: ToolAction) -> ToolInteraction {
     ToolInteraction {
+        attachments: Vec::new(),
         correlation: ToolCorrelation {
             key: key.into(),
             derivation: CorrelationDerivation::NativeId,

@@ -40,7 +40,7 @@ pub use rosetta_store::timeline_meta::{
 /// unpriced-model coverage report on `/api/pricing`.
 /// 24 (2026-09-30): cumulative reported-cost adjustment beside aggregate spend.
 /// 25 (2026-10-01): WebP image renditions on asset and canonical file-read URLs.
-pub const PROTOCOL_VERSION: u32 = 25;
+pub const PROTOCOL_VERSION: u32 = 26;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

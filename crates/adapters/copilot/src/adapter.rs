@@ -46,7 +46,8 @@ impl AgentAdapter for CopilotAdapter {
         // intervals keep only unmetered usage and reset on required counters
         // alone, and float nano-AIU/premium counts no longer fail the line.
         // 12: image members are WebP with bounded display renditions.
-        12
+        // 13: recorded tool images use durable optimized attachment members.
+        13
     }
 
     /// The store's per-call usage rows. `SELECT *` is compatibility

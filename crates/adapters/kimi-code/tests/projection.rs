@@ -516,7 +516,11 @@ fn writer_optional_tool_fields_and_multimodal_results_are_bounded() {
         br#"{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"call-media","result":{"output":[{"type":"text","text":"caption"},{"type":"think","think":"not searchable","encrypted":"ciphertext"},{"type":"image_url","imageUrl":{"url":"blobref:image"}},{"type":"audio_url","audioUrl":{"url":"blobref:audio"}},{"type":"video_url","videoUrl":{"url":"blobref:video"}}]}},"time":2}"#,
     );
     assert_eq!(result.status, LineStatus::Parsed);
-    let [IngestOp::ToolUpdate { patch, .. }] = result.ops.as_slice() else {
+    let [
+        IngestOp::ToolUpdate { patch: media, .. },
+        IngestOp::ToolUpdate { patch, .. },
+    ] = result.ops.as_slice()
+    else {
         panic!("expected one tool result merge, got {:?}", result.ops);
     };
     assert_eq!(
@@ -524,6 +528,7 @@ fn writer_optional_tool_fields_and_multimodal_results_are_bounded() {
         Some(ToolStatus::Succeeded)
     );
     assert!(patch.failure.is_none());
+    assert_eq!(media.attachments.len(), 3);
 
     let media_only = KimiCodeAdapter.ingest_line(
         &mut ctx,
@@ -531,7 +536,11 @@ fn writer_optional_tool_fields_and_multimodal_results_are_bounded() {
         br#"{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"call-media","result":{"output":[{"type":"image_url","imageUrl":{"url":"blobref:image-only"}}]}},"time":3}"#,
     );
     assert_eq!(media_only.status, LineStatus::Parsed);
-    let [IngestOp::ToolUpdate { patch, .. }] = media_only.ops.as_slice() else {
+    let [
+        IngestOp::ToolUpdate { patch: media, .. },
+        IngestOp::ToolUpdate { patch, .. },
+    ] = media_only.ops.as_slice()
+    else {
         panic!(
             "expected one media-only result merge, got {:?}",
             media_only.ops
@@ -542,6 +551,7 @@ fn writer_optional_tool_fields_and_multimodal_results_are_bounded() {
         Some(ToolStatus::Succeeded)
     );
     assert!(patch.failure.is_none());
+    assert_eq!(media.attachments.len(), 1);
 }
 
 fn synthetic_context() -> NormalizeCtx {
@@ -688,7 +698,7 @@ fn undeclared_content_parts_are_soft_drift() {
 }
 
 #[test]
-fn authored_image_data_url_materializes_but_tool_output_does_not() {
+fn authored_and_tool_image_data_urls_share_the_optimizer() {
     let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
     let mut ctx = synthetic_context();
     let record = json!({"type":"context.append_message","message":{"role":"user","origin":{"kind":"user"},"id":"image","toolCalls":[],"content":[{"type":"image_url","imageUrl":{"url":png}}]},"time":1});
@@ -718,10 +728,8 @@ fn authored_image_data_url_materializes_but_tool_output_does_not() {
     assert!(!serde_json::to_string(row).unwrap().contains("base64"));
     let record = json!({"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool","result":{"output":[{"type":"image_url","imageUrl":{"url":png}}]}},"time":2});
     let tool = KimiCodeAdapter.ingest_line(&mut ctx, "wire", record.to_string().as_bytes());
-    assert!(
-        !tool
-            .ops
-            .iter()
-            .any(|op| matches!(op, IngestOp::Message(_) | IngestOp::ProjectionAsset { .. }))
-    );
+    assert!(!tool.ops.iter().any(|op| matches!(op, IngestOp::Message(_))));
+    assert!(tool.ops.iter().any(
+        |op| matches!(op, IngestOp::ProjectionAsset { asset } if asset.media_type == "image/webp")
+    ));
 }

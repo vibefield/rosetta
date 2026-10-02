@@ -1399,6 +1399,7 @@ name = "rosetta-adapter-support"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "blake3",
  "rosetta-core",
  "rosetta-media",
  "serde",
@@ -1450,6 +1451,7 @@ dependencies = [
  "image",
  "moxcms",
  "rosetta-core",
+ "serde_json",
  "webp",
 ]
 

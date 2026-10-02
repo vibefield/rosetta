@@ -15,6 +15,7 @@ fn ctx() -> NormalizeCtx {
     ctx
 }
 fn ingest(ctx: &mut NormalizeCtx, id: &str, kind: &str, data: Value) -> Vec<IngestOp> {
+    ctx.src_offset = Some(ctx.src_offset.unwrap_or(0) + 1);
     let result = CopilotAdapter.ingest_line(
         ctx,
         "events",
@@ -24,6 +25,91 @@ fn ingest(ctx: &mut NormalizeCtx, id: &str, kind: &str, data: Value) -> Vec<Inge
     );
     assert_eq!(result.status, LineStatus::Parsed);
     result.ops
+}
+
+#[test]
+fn tool_binary_assets_resolve_after_checkpoint_and_correct_the_same_occurrences() {
+    use rosetta_core::{ToolFoldState, ToolInteraction};
+    let result = json!({"toolCallId":"call", "success":true,"result":{
+        "content":"", "binaryResultsForLlm":[
+            {"type":"image","assetId":"a","mimeType":"image/png","byteLength":68},
+            {"type":"image","assetId":"a","mimeType":"image/png","byteLength":68}
+        ]
+    }});
+    let mut context = ctx();
+    let mut tool = ToolInteraction::unknown(
+        "call",
+        rosetta_core::CorrelationDerivation::NativeId,
+        "view_image",
+    );
+    let mut fold = ToolFoldState::default();
+    let mut apply = |ops: &[IngestOp]| {
+        for op in ops {
+            if let IngestOp::ToolUpdate {
+                patch, evidence, ..
+            } = op
+            {
+                tool.apply_patch(&mut fold, patch, evidence).unwrap();
+            }
+        }
+        tool.attachments.clone()
+    };
+    let first = apply(&ingest(
+        &mut context,
+        "owner",
+        "tool.execution_complete",
+        result.clone(),
+    ));
+    assert_eq!(first.len(), 2);
+    assert_ne!(first[0].id, first[1].id);
+    assert!(
+        first
+            .iter()
+            .all(|a| matches!(a.source, AttachmentSource::Unavailable { .. }))
+    );
+    let checkpoint = CopilotAdapter
+        .checkpoint_state(context.state.as_deref())
+        .unwrap();
+    assert!(!serde_json::to_string(&checkpoint).unwrap().contains(PNG));
+    context.state = CopilotAdapter.restore_state(checkpoint.as_ref()).unwrap();
+    let resolved = apply(&ingest(
+        &mut context,
+        "bytes",
+        "session.binary_asset",
+        binary(),
+    ));
+    assert_eq!(
+        resolved.iter().map(|a| &a.id).collect::<Vec<_>>(),
+        first.iter().map(|a| &a.id).collect::<Vec<_>>()
+    );
+    assert!(resolved.iter().all(|a| matches!(&a.source,AttachmentSource::Asset { asset } if asset.media_type == "image/webp" && asset.image_variants.as_ref().unwrap().len() == 4)));
+    // A conflicting original source identity invalidates the already visible slots.
+    let mut corrupt = binary();
+    corrupt["byteLength"] = json!(99);
+    let invalid = apply(&ingest(
+        &mut context,
+        "conflict",
+        "session.binary_asset",
+        corrupt,
+    ));
+    assert!(
+        invalid
+            .iter()
+            .all(|a| matches!(a.source, AttachmentSource::Unavailable { .. }))
+    );
+    let mut earlier = ctx();
+    ingest(&mut earlier, "bytes", "session.binary_asset", binary());
+    let before = ingest(&mut earlier, "owner", "tool.execution_complete", result);
+    let before = before
+        .iter()
+        .find_map(|op| match op {
+            IngestOp::ToolUpdate { patch, .. } if !patch.attachments.is_empty() => {
+                Some(&patch.attachments)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(&resolved, before);
 }
 fn message(ops: &[IngestOp]) -> &TimelineEntry {
     ops.iter()
