@@ -22,7 +22,11 @@
 
 /* The calendar is a compact date picker; the hourly plot uses the remaining
    dialog height. Overflow remains available as a fallback, never as clipping. */
-.ah-activity { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 14px 16px; color: var(--vf-text-primary); }
+.ah-activity {
+  --activity-run-current: var(--vf-foreground);
+  --activity-run-best: color-mix(in srgb, var(--vf-foreground) 45%, var(--vf-chrome-solid));
+  flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 14px 16px; color: var(--vf-text-primary);
+}
 .ah-activity__calendar { flex: none; min-width: 0; }
 .ah-activity__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .ah-activity h2 { margin: 0 0 3px; font-size: 15px; font-weight: 550; letter-spacing: -.02em; }
@@ -39,9 +43,9 @@
 .ah-activity .ah-calendar-heatmap__axis span { font-size: 9px; color: var(--vf-text-tertiary); }
 .ah-activity .ah-calendar-heatmap__grid, .ah-activity .ah-calendar-heatmap__week { gap: 2px; }
 .ah-activity .ah-calendar-heatmap__cell { position: relative; border: 0; padding: 0; border-radius: 2px; min-height: 0; max-height: 14px; }
-.ah-activity .ah-calendar-heatmap__cell[data-run]::after { content: ''; position: absolute; left: 1px; right: 1px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--vf-accent-6); }
-.ah-activity .ah-calendar-heatmap__cell[data-run="best"]::after { background: var(--vf-accent-3); }
-.ah-activity .ah-calendar-heatmap__cell[data-run="both"]::after { background: linear-gradient(90deg, var(--vf-accent-6) 50%, var(--vf-accent-3) 50%); }
+.ah-activity .ah-calendar-heatmap__cell[data-run]::after { content: ''; position: absolute; left: 1px; right: 1px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--activity-run-current); }
+.ah-activity .ah-calendar-heatmap__cell[data-run="best"]::after { background: var(--activity-run-best); }
+.ah-activity .ah-calendar-heatmap__cell[data-run="both"]::after { background: linear-gradient(90deg, var(--activity-run-current) 50%, var(--activity-run-best) 50%); }
 .ah-activity .ah-calendar-heatmap__cell[aria-pressed="true"] { outline: 2px solid var(--vf-foreground); outline-offset: 1px; }
 .ah-activity .ah-calendar-heatmap__cell:hover, .ah-activity .ah-calendar-heatmap__cell:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; }
 .ah-activity .ah-calendar-heatmap__footer { width: var(--activity-footer-width); min-width: 0; margin-top: 8px; font-size: 9px; min-height: 13px; }
@@ -49,9 +53,9 @@
 .ah-activity .ah-calendar-heatmap__legend i { width: 8px; height: 8px; }
 .ah-activity__runs { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 18px; margin-top: 8px; min-height: 24px; }
 .ah-activity__run { display: grid; grid-template-columns: 11px auto auto; align-items: center; gap: 5px; padding: 3px 0; border: 0; background: transparent; color: var(--vf-text-secondary); font: inherit; font-size: 10px; text-align: left; }
-.ah-activity__run > i { width: 9px; height: 3px; border-radius: 2px; background: var(--vf-accent-6); }
-.ah-activity__run > i[data-kind="best"] { background: var(--vf-accent-3); }
-.ah-activity__run > i[data-kind="both"] { background: linear-gradient(90deg, var(--vf-accent-6) 50%, var(--vf-accent-3) 50%); }
+.ah-activity__run > i { width: 9px; height: 3px; border-radius: 2px; background: var(--activity-run-current); }
+.ah-activity__run > i[data-kind="best"] { background: var(--activity-run-best); }
+.ah-activity__run > i[data-kind="both"] { background: linear-gradient(90deg, var(--activity-run-current) 50%, var(--activity-run-best) 50%); }
 .ah-activity__run b { font-weight: 500; margin-left: 3px; }
 .ah-activity__run small { font-size: 9px; color: var(--vf-text-tertiary); }
 .ah-activity__run:hover span { text-decoration: underline; }
