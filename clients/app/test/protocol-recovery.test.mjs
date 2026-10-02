@@ -171,7 +171,8 @@ test("metadata updates batch notifications and retain unaffected published array
   const clock = fakeClock(t);
   const h = harness(t, { notificationIntervalMs: 16 });
   const changes = [];
-  const meta = h.client.subscribeMeta({ onChange: (state) => changes.push(state) });
+  const sources = [];
+  const meta = h.client.subscribeMeta({ onChange: (state, source) => { changes.push(state); sources.push(source); } });
   t.after(() => meta.close());
   const socket = h.sockets[1];
   socket.open(null);
@@ -196,6 +197,10 @@ test("metadata updates batch notifications and retain unaffected published array
   assert.equal(initial.sessions[0].id, "s9999", "previously published state was not mutated");
   assert.equal(changes[1].runtimes, initial.runtimes);
   assert.equal(changes[1].projects, initial.projects);
+  assert.deepEqual(sources, ['snapshot', 'mutation']);
+  socket.frame({ frame: 'resync' });
+  socket.frame({ frame: 'meta_snapshot', ...initial });
+  assert.deepEqual(sources, ['snapshot', 'mutation', 'snapshot']);
 });
 
 test("incompatible WebSocket versions stop with an actionable error", (t) => {

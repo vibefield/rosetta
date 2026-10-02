@@ -1,10 +1,12 @@
 import { useLayoutEffect, useRef } from "react";
+import type { RefObject } from "react";
 import { ListMotion, REDUCED_MOTION_QUERY } from "./motion.ts";
 
 /** Call after rendering stable, sibling rows with data-motion-key identities.
  * `order` includes group labels so crossing a day boundary also moves rows. */
-export function useListMotion(order: string, scope: string) {
-  const ref = useRef<HTMLDivElement>(null);
+export function useListMotion(order: string, scope: string, externalRef?: RefObject<HTMLDivElement | null>) {
+  const ownRef = useRef<HTMLDivElement>(null);
+  const ref = externalRef ?? ownRef;
   const refresh = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {

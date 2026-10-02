@@ -40,7 +40,8 @@ import {
 } from "./lib/model";
 import type { ProjectViewModel } from "./lib/model";
 import { desktopHost } from "./lib/desktop-host";
-import { compareSessionActivity } from "./lib/session-activity";
+import { compareOrderedSessions } from "./lib/activity-order";
+import { useActivityOrder } from "./lib/use-activity-order";
 import { client } from "./lib/rosetta";
 import { createSearchResultsViewModel } from "./lib/search-results";
 import {
@@ -93,7 +94,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 export default function App() {
-  const { meta, status: metaStatus } = useMeta();
+  const { meta, snapshotVersion, status: metaStatus } = useMeta();
   const nowMs = useNow(meta);
   const daemonStatus = useDaemonStatus();
   const {
@@ -105,6 +106,10 @@ export default function App() {
   } = daemonStatus;
   const activity = useIngestActivity(daemonStatus);
   const ingestActive = isIngestActive(ingest);
+  const activityOrder = useActivityOrder(
+    meta, snapshotVersion, metaStatus === "live" && canonicalReady === true && !ingestActive,
+    canonicalReady !== true || ingestActive, nowMs,
+  );
   const [query, setQuery] = useState(
     () => new URLSearchParams(window.location.search).get("q") ?? "",
   );
@@ -210,8 +215,8 @@ export default function App() {
           projectKey(s) === projectId &&
           s.parent_session_id === null,
       )
-      .sort(compareSessionActivity);
-  }, [meta, projectId]);
+      .sort((left, right) => compareOrderedSessions(left, right, activityOrder));
+  }, [meta, projectId, activityOrder]);
 
   useEffect(() => {
     if (sessionId !== null && !projectSessions.some((s) => s.id === sessionId)) {
@@ -413,6 +418,7 @@ export default function App() {
           <div className="ah-cols" data-rail={worktree.visible ? "on" : "off"}>
             <ProjectsColumn
               projects={projectViewModels}
+              activityOrder={activityOrder}
               selectedProjectId={projectId}
               sort={sort}
               onSortChange={setSort}
