@@ -84,7 +84,9 @@
 .ah-scroll[data-flush] { padding-left: 0; padding-right: 0; }
 /* FLIP owns row displacement; browser anchoring must not jump the viewport
    halfway through a sort. Scrolling itself never starts an animation. */
-.ah-motion-list { overflow-anchor: none; }
+.ah-motion-list { position: relative; overflow-anchor: none; }
+.ah-list-view { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ah-list-update-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 
 /* ── Projects ─────────────────────────────────────────────────────────────
@@ -569,6 +571,8 @@ code, .mono { font-family: var(--vf-font-mono); }
   scroll-padding-bottom: var(--ah-scroll-foot, 32px);
 }
 .ah-newpill { bottom: var(--ah-floating-foot, 24px); }
+.ah-list-updates { bottom: 16px; }
+.ah-list-updates[hidden] { display: none; }
 /* Four columns: the worktree rail is real now (the proto's base grid rules
    above already carry the rail track and its H-3 close); the footprint
    guest still waits on Q4, so its 0px fifth track stays empty. */

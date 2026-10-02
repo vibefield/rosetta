@@ -15,6 +15,7 @@
     "start": "npm run build && electron .",
     "test": "node --test test/*.test.mjs",
     "test:ui-motion": "electron test/ui-motion.electron.mjs",
+    "test:list-order": "electron test/list-order.electron.mjs",
     "test:web-search": "electron test/web-search.electron.mjs",
     "test:image-strips": "electron test/image-strips.electron.mjs",
     "test:message-preview": "electron test/message-preview.electron.mjs",

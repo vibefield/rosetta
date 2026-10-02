@@ -94,6 +94,8 @@ jobs:
         with:
           node-version: '22'
       - run: npx --yes --package typescript@5.9.2 tsc -p clients/ts
+      - name: Check live list ordering and subscription recovery
+        run: node --experimental-strip-types --test clients/app/test/activity-order.test.mjs clients/app/test/protocol-recovery.test.mjs
 
   check:
     name: CI passed

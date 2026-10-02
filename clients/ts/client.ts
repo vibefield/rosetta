@@ -92,7 +92,8 @@ export interface MetaState {
 }
 
 export interface MetaSubscriptionHandlers {
-  onChange?: (state: MetaState) => void;
+  /** Snapshots establish a baseline; only mutations describe subsequent changes. */
+  onChange?: (state: MetaState, source: "snapshot" | "mutation") => void;
   onStatus?: (status: SubscriptionStatus) => void;
   onError?: (error: ApiError) => void;
 }
@@ -969,6 +970,7 @@ export class MetaSubscription extends BaseSubscription {
     (a, b) => b.updated_at - a.updated_at || a.id.localeCompare(b.id),
   );
   private dirty = false;
+  private source: "snapshot" | "mutation" = "snapshot";
 
   constructor(transport: SubscriptionTransport, handlers: MetaSubscriptionHandlers) {
     super(transport);
@@ -993,6 +995,7 @@ export class MetaSubscription extends BaseSubscription {
         this.projects.replace(frame.projects);
         this.sessions.replace(frame.sessions);
         this.dirty = true;
+        this.source = "snapshot";
         this.live();
         this.changed(true);
         break;
@@ -1009,6 +1012,7 @@ export class MetaSubscription extends BaseSubscription {
           this.sessions.set(row);
         } else return;
         this.dirty = true;
+        this.source = "mutation";
         this.changed();
         break;
       }
@@ -1023,7 +1027,7 @@ export class MetaSubscription extends BaseSubscription {
   protected flushChanges(): void {
     if (this.dirty) {
       this.dirty = false;
-      this.handlers.onChange?.(this.state());
+      this.handlers.onChange?.(this.state(), this.source);
     }
   }
   protected onStatus(status: SubscriptionStatus): void {
