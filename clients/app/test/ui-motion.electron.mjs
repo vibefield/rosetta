@@ -35,7 +35,7 @@ const atBottom = () => {
   const s = document.querySelector(".tr-scroll");
   return s && Math.abs(s.scrollHeight - s.clientHeight - s.scrollTop) < 2;
 };
-const buttonVisible = () => document.querySelector(".ah-newpill")?.hasAttribute("data-visible");
+const buttonVisible = () => document.querySelector(".ah-col--measure .ah-newpill")?.hasAttribute("data-visible");
 
 async function run() {
   try {
@@ -68,6 +68,8 @@ async function run() {
       errors.push(JSON.stringify(details)),
     );
     await win.loadURL(`http://127.0.0.1:${port}/test/ui-motion.html`);
+    win.webContents.debugger.attach('1.3');
+    await win.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
     await until(
       () => Boolean(window.motionFixture && document.querySelectorAll(".tr-prose").length > 5),
       "fixture did not render",
@@ -126,14 +128,19 @@ async function run() {
         const target = document.querySelector('[data-motion-key="s7"]');
         target.focus({ preventScroll: true });
         window.motionFixture.flush(window.motionFixture.promote);
+        const held = document.activeElement === target &&
+          document.querySelector(".ah-session-list-item") !== target &&
+          !document.querySelector('.ah-session-list').parentElement.querySelector('[data-list-updates]').hidden;
+        window.motionFixture.flush(() => document.querySelector('.ah-session-list').parentElement.querySelector('[data-list-updates]').click());
         return (
+          held &&
           document.activeElement === target &&
           document.querySelector(".ah-session-list-item") === target &&
           target.getAnimations().length > 0
         );
       }),
       true,
-      "crossing day groups must retain the button and its keyboard focus",
+      "crossing day groups waits for the focused reader, then retains the button and focus",
     );
 
     const appended = await check(() => {
@@ -159,7 +166,7 @@ async function run() {
       s.scrollTop -= 300;
     });
     await until(buttonVisible, "Latest must appear even without unread messages");
-    assert.equal(await check(() => document.querySelector(".ah-newpill").textContent), "Latest");
+    assert.equal(await check(() => document.querySelector(".ah-col--measure .ah-newpill").textContent), "Latest");
     const reading = await check(() => {
       const s = document.querySelector(".tr-scroll");
       const before = s.scrollTop;
@@ -168,7 +175,7 @@ async function run() {
       return {
         before,
         after: s.scrollTop,
-        label: document.querySelector(".ah-newpill").textContent,
+        label: document.querySelector(".ah-col--measure .ah-newpill").textContent,
       };
     });
     assert.equal(reading.before, reading.after, "paused reader must stay in place");
@@ -184,7 +191,7 @@ async function run() {
       window.motionFixture.flush(window.motionFixture.prepend);
       return {
         delta: Math.abs(before - document.getElementById(anchor.id).getBoundingClientRect().top),
-        label: document.querySelector(".ah-newpill").textContent,
+        label: document.querySelector(".ah-col--measure .ah-newpill").textContent,
       };
     });
     assert.ok(history.delta < 2, "history prepend must preserve the visible message");
@@ -193,7 +200,7 @@ async function run() {
     const screenshot = path.join(temporary, "unread-light.png");
     await fs.writeFile(screenshot, (await win.webContents.capturePage()).toPNG());
 
-    await check(() => document.querySelector(".ah-newpill").click());
+    await check(() => document.querySelector(".ah-col--measure .ah-newpill").click());
     await pause(60);
     assert.equal(
       await check(atBottom),
@@ -207,10 +214,10 @@ async function run() {
     );
     await until(buttonVisible, "wheel input must interrupt return to latest");
     assert.equal(
-      await check(() => document.querySelector(".ah-newpill").textContent),
+      await check(() => document.querySelector(".ah-col--measure .ah-newpill").textContent),
       "5 new messages",
     );
-    await check(() => document.querySelector(".ah-newpill").click());
+    await check(() => document.querySelector(".ah-col--measure .ah-newpill").click());
     await until(atBottom, "return to latest did not settle");
     assert.equal(await check(buttonVisible), false);
     assert.equal(
@@ -220,7 +227,7 @@ async function run() {
     win.webContents.sendInputEvent({ type: "keyDown", keyCode: "PageUp" });
     win.webContents.sendInputEvent({ type: "keyUp", keyCode: "PageUp" });
     await until(buttonVisible, "keyboard scrolling must reveal Latest");
-    await check(() => document.querySelector(".ah-newpill").click());
+    await check(() => document.querySelector(".ah-col--measure .ah-newpill").click());
     await until(atBottom, "keyboard reader must be able to return to the foot");
 
     const grew = await check(() => {
@@ -242,7 +249,6 @@ async function run() {
     await until(atBottom, "switching session must reset follow and unread state");
     assert.equal(await check(buttonVisible), false);
 
-    win.webContents.debugger.attach("1.3");
     await win.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", {
       features: [{ name: "prefers-reduced-motion", value: "reduce" }],
     });

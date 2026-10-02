@@ -27,6 +27,26 @@ describes indexing completeness and never asserts that an agent is running.
 Archived task/workflow states are likewise last-recorded facts: missing completion
 evidence never starts a wall-clock duration or an indefinite activity animation.
 
+The History room's navigation order is separate client-side memory (2026-10-02).
+Initial discovery sorts by recorded activity. Subsequently, a fresh conversation
+event promotes a session only after at least five minutes of recorded quiet;
+continuing output updates its row in place, and quiet expiry itself moves nothing.
+A project promotes only after its whole root-session set has been quiet. Coalesced
+root progress is folded chronologically, so a sibling's continued activity prevents
+a project promotion. Snapshot replacements, reconnects, metadata-only changes,
+stale imports, and source retractions never manufacture a new activity period.
+The SDK labels metadata callbacks as snapshots or mutations; the renderer carries
+a snapshot version across batched callbacks. This adds no wire or stored fields.
+Calendar-day grouping still follows recorded activity, including midnight, with
+stable ranks inside each day. Pointer interaction, keyboard focus, and browsing
+below the top hold list positions, new insertions, and day membership together;
+row values continue updating. A deferred group whose dates changed says “Activity
+updated” until reconciliation. “Show recent activity” applies pending geometry
+and returns to the top without changing selection. Authoritative removals retain
+a surviving visible scroll anchor. The activity-order and subscription recovery
+unit tests run in CI; `pnpm test:list-order` exercises production hooks, lists,
+focus, scroll, themes, and reduced motion against synthetic data in Electron.
+
 > **Implementation checkpoint (2026-08-31).** Nine ground-truth/runtime-adapter packs are
 > registered. The generic runtime handles adapter-selected JSONL, bounded document snapshots,
 > and SQLite snapshots; virtual membership/deletion, generation reconciliation, deterministic

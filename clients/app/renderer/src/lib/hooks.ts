@@ -41,18 +41,25 @@ import {
 
 export interface MetaFeed {
   meta: MetaState | null;
+  /** Advances even if React batches a replacement and its first live mutation. */
+  snapshotVersion: number;
   status: SubscriptionStatus;
   error: ApiError | null;
 }
 
 export function useMeta(): MetaFeed {
-  const [meta, setMeta] = useState<MetaState | null>(null);
+  const [feed, setFeed] = useState<{ meta: MetaState | null; snapshotVersion: number }>({
+    meta: null, snapshotVersion: 0,
+  });
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
   const [error, setError] = useState<ApiError | null>(null);
   useEffect(() => {
     const sub = client.subscribeMeta({
-      onChange: (state) => {
-        setMeta(state);
+      onChange: (meta, source) => {
+        setFeed((previous) => ({
+          meta,
+          snapshotVersion: previous.snapshotVersion + (source === "snapshot" ? 1 : 0),
+        }));
         setError(null);
       },
       onStatus: setStatus,
@@ -60,7 +67,7 @@ export function useMeta(): MetaFeed {
     });
     return () => sub.close();
   }, []);
-  return { meta, status, error };
+  return { ...feed, status, error };
 }
 
 export interface DaemonStatusFeed {

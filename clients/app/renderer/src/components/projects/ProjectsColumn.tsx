@@ -2,6 +2,9 @@ import { useMemo } from "react";
 import type { IngestProgress } from "@rosetta/protocol";
 import { isCensusRunning, isIngestActive, projectBackfills } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
+import { UNASSIGNED_PROJECT_ID } from "../../lib/model";
+import { compareActivityRanks } from "../../lib/activity-order";
+import type { ActivityOrder } from "../../lib/activity-order";
 import { PortfolioSummaryPanel } from "../SummaryPanels";
 import { ListSummaryHeader, ListToolbar, SegmentedControl } from "../ui";
 import { IngestStatus } from "../IngestStatus";
@@ -17,6 +20,7 @@ const PROJECT_SORT_OPTIONS = [
 
 export interface ProjectsColumnProps {
   readonly projects: readonly ProjectViewModel[];
+  readonly activityOrder: ActivityOrder;
   readonly selectedProjectId: string | null;
   readonly sort: ProjectSort;
   readonly onSortChange: (sort: ProjectSort) => void;
@@ -30,6 +34,7 @@ export interface ProjectsColumnProps {
 
 export function ProjectsColumn({
   projects,
+  activityOrder,
   selectedProjectId,
   sort,
   onSortChange,
@@ -59,11 +64,15 @@ export function ProjectsColumn({
     () =>
       [...projects].sort((left, right) =>
         sort === "recent"
-          ? (right.lastActiveMs ?? 0) - (left.lastActiveMs ?? 0)
+          ? compareActivityRanks(
+              activityOrder.projects.get(left.row.id === UNASSIGNED_PROJECT_ID ? null : left.row.id)?.rankAt ?? null,
+              activityOrder.projects.get(right.row.id === UNASSIGNED_PROJECT_ID ? null : right.row.id)?.rankAt ?? null,
+              left.row.id, right.row.id,
+            )
           : (right.lifetimeSpend.costMicroUsd ?? 0) - (left.lifetimeSpend.costMicroUsd ?? 0)
-            || right.lifetimeTokens - left.lifetimeTokens,
+            || right.lifetimeTokens - left.lifetimeTokens || left.row.id.localeCompare(right.row.id),
       ),
-    [projects, sort],
+    [projects, sort, activityOrder],
   );
 
   return (
@@ -92,6 +101,7 @@ export function ProjectsColumn({
       <div className="ah-veilhost">
         <ProjectList
           projects={visibleProjects}
+          orderScope={`projects:${sort}`}
           selectedProjectId={selectedProjectId}
           maximumLifetimeCost={maximumLifetimeCost}
           homeDirectory={homeDirectory}
