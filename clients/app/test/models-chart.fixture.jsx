@@ -59,4 +59,9 @@ function Fixture() {
       isWorktreeVisible={true} onToggleWorktree={() => {}} /></aside>
   </main>;
 }
-createRoot(document.getElementById("root")).render(<RoomProvider ports={ports}><Fixture /></RoomProvider>);
+// The page names its summary tab (?tab=models) the way the app's shell does:
+// the room reads no URL, its host hands it the tab.
+const initialSummaryTab = new URLSearchParams(window.location.search).get("tab") === "models" ? "models" : "activity";
+createRoot(document.getElementById("root")).render(
+  <RoomProvider ports={ports} options={{ initialSummaryTab }}><Fixture /></RoomProvider>,
+);
