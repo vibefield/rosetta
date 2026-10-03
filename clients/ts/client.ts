@@ -149,7 +149,10 @@ export class UnauthorizedError extends ApiRequestError {
   }
 }
 
-function withAuthorization(init: HeadersInit | undefined, credential: RosettaCredential): Headers {
+// `RequestInit["headers"]`, not `HeadersInit`: a Node consumer compiled without the DOM lib
+// (VibeField's fieldd, `lib: ["ES2022"]` + `@types/node`) has `RequestInit` as a global but no
+// `HeadersInit`; the indexed type is the same bag under both libs.
+function withAuthorization(init: RequestInit["headers"], credential: RosettaCredential): Headers {
   const headers = new Headers(init);
   headers.set("authorization", authorizationHeader(credential));
   return headers;
