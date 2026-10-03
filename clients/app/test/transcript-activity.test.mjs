@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { documentTurns, sittings, teamChronology } from "../renderer/src/lib/transcript/index.ts";
-import { documentPlan } from "../renderer/src/components/transcript/document-plan.ts";
-import { activityPlan, activityCuts, summarizeActivity } from "../renderer/src/components/transcript/activity-plan.ts";
-import { createDisclosureStore } from "../renderer/src/components/transcript/disclosure-store.ts";
+import { documentTurns, sittings, teamChronology } from "../../room/src/lib/transcript/index.ts";
+import { documentPlan } from "../../room/src/components/transcript/document-plan.ts";
+import { activityPlan, activityCuts, summarizeActivity } from "../../room/src/components/transcript/activity-plan.ts";
+import { createDisclosureStore } from "../../room/src/components/transcript/disclosure-store.ts";
 import { entry, inline, shell, tool, file } from "./support/ledger-fixtures.mjs";
 
 const now = new Date(2026, 8, 28, 12).getTime();

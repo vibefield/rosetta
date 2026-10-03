@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createActivityDetails } from "../renderer/src/lib/activity-details.ts";
+import { createActivityDetails } from "../../room/src/lib/activity-details.ts";
 
 function calendar(start, count, value) {
   const days = Array.from({ length: count }, (_, index) => {

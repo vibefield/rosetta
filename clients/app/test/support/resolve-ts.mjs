@@ -1,16 +1,29 @@
 // The room's sources import one another without extensions, as a bundler and
 // a consumer's TypeScript expect. Node's ESM loader resolves none, so a test
 // that runs those modules straight under type stripping registers this first:
-// `node --import ./test/support/resolve-ts.mjs --test …`. Only relative
-// specifiers that name no file of their own are retried, and only with the
-// extensions the room's sources use.
-import { registerHooks } from "node:module";
+// `node --import ./test/support/resolve-ts.mjs --test …`.
+//
+// - Relative specifiers that name no file of their own are retried with the
+//   extensions the room's sources use.
+// - `@rosetta/room` is the package's source, as the app's Vite alias and
+//   tsconfig paths resolve it; its `.tsx` modules are transpiled (type
+//   stripping takes no JSX) and its stylesheets load as nothing.
+import { readFileSync } from "node:fs";
+import { createRequire, registerHooks } from "node:module";
+import { fileURLToPath } from "node:url";
 
 const CANDIDATES = [".ts", ".tsx", "/index.ts"];
 const NAMED = /\.(?:[cm]?[jt]sx?|json|css)$/;
+const PACKAGE = {
+  "@rosetta/room": new URL("../../../room/src/index.ts", import.meta.url).href,
+  "@rosetta/room/fixtures": new URL("../../../room/src/fixtures/index.ts", import.meta.url).href,
+};
+let typescript = null;
+const ts = () => (typescript ??= createRequire(import.meta.url)("typescript"));
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    if (specifier in PACKAGE) return { url: PACKAGE[specifier], shortCircuit: true };
     if (!/^\.{1,2}\//.test(specifier) || NAMED.test(specifier)) return nextResolve(specifier, context);
     try {
       return nextResolve(specifier, context);
@@ -26,5 +39,17 @@ registerHooks({
       }
       throw error;
     }
+  },
+  load(url, context, nextLoad) {
+    if (url.startsWith("file:") && url.endsWith(".css")) return { format: "module", source: "", shortCircuit: true };
+    if (url.startsWith("file:") && url.endsWith(".tsx")) {
+      const path = fileURLToPath(url);
+      const { outputText } = ts().transpileModule(readFileSync(path, "utf8"), {
+        fileName: path,
+        compilerOptions: { module: ts().ModuleKind.ESNext, target: ts().ScriptTarget.ES2022, jsx: ts().JsxEmit.ReactJSX },
+      });
+      return { format: "module", source: outputText, shortCircuit: true };
+    }
+    return nextLoad(url, context);
   },
 });

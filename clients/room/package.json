@@ -1,0 +1,43 @@
+{
+  "name": "@rosetta/room",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "rosetta's History room as a package: the projects, sessions and worktree columns, the panels and charts, and the transcript, behind injected ports. It dials nothing.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fixtures": "./src/fixtures/index.ts",
+    "./styles/room.css": "./src/styles/history-room.css"
+  },
+  "sideEffects": [
+    "*.css"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=18 <20",
+    "react-dom": ">=18 <20"
+  },
+  "dependencies": {
+    "@radix-ui/react-context-menu": "^2.3.7",
+    "@radix-ui/react-dialog": "^1.1.23",
+    "@radix-ui/react-tooltip": "^1.2.16",
+    "@rosetta/protocol": "link:../ts",
+    "@tanstack/react-virtual": "^3.14.10",
+    "@vibecook/mille": "link:../../../mille/packages/mille",
+    "@vibecook/mille-ui": "link:../../../mille/packages/mille-ui"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "typescript": "5.9.3"
+  }
+}

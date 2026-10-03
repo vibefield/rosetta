@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { lastActive, dayLabel } from "../renderer/src/lib/format.ts";
-import { compareSessionActivity, sessionLastActive } from "../renderer/src/lib/session-activity.ts";
-import { buildProjectViewModel } from "../renderer/src/lib/model.ts";
-import { createSearchResultsViewModel } from "../renderer/src/lib/search-results.ts";
-import { getSessionStatus } from "../renderer/src/components/sessions/session-display.ts";
-import { recordedTaskDuration, recordedWorkflowDuration } from "../renderer/src/components/transcript/timeline-meta-state.ts";
+import { lastActive, dayLabel } from "../../room/src/lib/format.ts";
+import { compareSessionActivity, sessionLastActive } from "../../room/src/lib/session-activity.ts";
+import { buildProjectViewModel } from "../../room/src/lib/model.ts";
+import { createSearchResultsViewModel } from "../../room/src/lib/search-results.ts";
+import { getSessionStatus } from "../../room/src/components/sessions/session-display.ts";
+import { recordedTaskDuration, recordedWorkflowDuration } from "../../room/src/components/transcript/timeline-meta-state.ts";
 
 const now = new Date(2026, 8, 9, 12).getTime();
 const day = 86_400_000;

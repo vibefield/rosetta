@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ProjectSummaryPanel } from "../renderer/src/components/SummaryPanels";
-import { getActivityGridStartTimestamp } from "../renderer/src/lib/model";
-import { RoomProvider } from "../renderer/src/room-context";
+import { ProjectSummaryPanel } from "../../room/src/components/SummaryPanels";
+import { getActivityGridStartTimestamp } from "../../room/src/lib/model";
+import { RoomProvider } from "../../room/src/room-context";
 import { client, ports } from "./support/room-ports.mjs";
-import { NO_SPEND } from "../renderer/src/lib/spend";
+import { NO_SPEND } from "../../room/src/lib/spend";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/app.css";
-import "../renderer/src/styles/room.css";
+import "../../room/src/styles/room.css";
 
 const now = new Date(2026, 8, 30, 17, 35).getTime();
 const start = getActivityGridStartTimestamp(now);

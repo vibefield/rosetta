@@ -3,15 +3,10 @@ import App from "./App";
 import { createRosettaHost } from "./host/rosetta-host";
 import "./styles/tokens.css";
 import "./styles/app.css";
-import "./styles/room.css";
-import "./styles/ingest.css";
-import "./styles/transcript.css";
-import "./styles/search.css";
-// Column ③'s tree: mille's token surface plus the shipped VibeField theme,
-// which reads this app's --vf-* tokens live (its published fallbacks only
-// carry a host that has none).
-import "@vibecook/mille-ui/tokens.css";
-import "@vibecook/mille-ui/theme/vibefield.css";
+// The room's own stylesheet, scoped to its root: its sheets and, for column
+// ③'s tree, mille's token surface and the VibeField theme, which reads this
+// app's --vf-* tokens live.
+import "@rosetta/room/styles/room.css";
 
 // No StrictMode: mille's port handshake is single-consumer (a MessagePort,
 // once claimed, cannot be re-claimed by a double-invoked effect), and the

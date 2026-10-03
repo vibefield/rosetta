@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { activityPhase, progressBytes, progressDuration, sampleActivity } from "../renderer/src/lib/ingest-activity.ts";
+import { activityPhase, progressBytes, progressDuration, sampleActivity } from "../../room/src/lib/ingest-activity.ts";
 import { dataHooks, microtasks } from "./support/hooks.mjs";
 import { deferred, fakeClock } from "./support/protocol.mjs";
 

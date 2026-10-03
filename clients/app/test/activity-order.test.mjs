@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   ACTIVITY_QUIET_MS as quiet, activityDay, advanceActivityOrder,
   compareActivityRanks, compareOrderedSessions,
-} from '../renderer/src/lib/activity-order.ts';
+} from '../../room/src/lib/activity-order.ts';
 
 const now = new Date(2026, 9, 2, 12).getTime();
 function session(id, at, project = 'p', parent = null) {

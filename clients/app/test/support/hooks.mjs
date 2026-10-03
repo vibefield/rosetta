@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import ts from "typescript";
 import { CursorExpiredError } from "../../../ts/client.ts";
-import * as head from "../../renderer/src/lib/transcript/head-state.ts";
-import * as historyWindow from "../../renderer/src/lib/transcript/history-window.ts";
-import { createSessionLeases } from "../../renderer/src/lib/session-leases.ts";
-import { catalogStatusOf } from "../../renderer/src/lib/catalog-status.ts";
+import * as head from "../../../room/src/lib/transcript/head-state.ts";
+import * as historyWindow from "../../../room/src/lib/transcript/history-window.ts";
+import { createSessionLeases } from "../../../room/src/lib/session-leases.ts";
+import { catalogStatusOf } from "../../../room/src/lib/catalog-status.ts";
 
 // The hooks that read one session's body take the room's session leases; the
 // rest take the catalog. A fake client stands in for both, as rosetta's app
@@ -71,7 +71,7 @@ export function dataHooks(client) {
     "./transcript/history-window": historyWindow,
   };
   const source = fs.readFileSync(
-    new URL("../../renderer/src/lib/hooks.ts", import.meta.url),
+    new URL("../../../room/src/lib/hooks.ts", import.meta.url),
     "utf8",
   );
   const { outputText } = ts.transpileModule(source, {

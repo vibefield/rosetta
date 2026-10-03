@@ -2,18 +2,18 @@
 import { StrictMode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import { ProjectsColumn } from '../renderer/src/components/projects/ProjectsColumn';
-import { SessionList } from '../renderer/src/components/sessions/SessionList';
-import { useMeta } from '../renderer/src/lib/hooks';
-import { useActivityOrder } from '../renderer/src/lib/use-activity-order';
-import { compareOrderedSessions } from '../renderer/src/lib/activity-order';
-import { buildProjectViewModel } from '../renderer/src/lib/model';
-import { RoomProvider, useRoom } from '../renderer/src/room-context';
+import { ProjectsColumn } from '../../room/src/components/projects/ProjectsColumn';
+import { SessionList } from '../../room/src/components/sessions/SessionList';
+import { useMeta } from '../../room/src/lib/hooks';
+import { useActivityOrder } from '../../room/src/lib/use-activity-order';
+import { compareOrderedSessions } from '../../room/src/lib/activity-order';
+import { buildProjectViewModel } from '../../room/src/lib/model';
+import { RoomProvider, useRoom } from '../../room/src/room-context';
 import { client, ports } from './support/room-ports.mjs';
 import '../renderer/src/styles/tokens.css';
 import '../renderer/src/styles/app.css';
-import '../renderer/src/styles/room.css';
-import '../renderer/src/styles/ingest.css';
+import '../../room/src/styles/room.css';
+import '../../room/src/styles/ingest.css';
 
 const start = new Date(2026, 9, 2, 12).getTime();
 const nothing = () => {};

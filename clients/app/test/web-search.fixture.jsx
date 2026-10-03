@@ -1,18 +1,18 @@
 // Production ledger components, deterministic source records, no external requests.
-import { RoomProvider } from "../renderer/src/room-context";
+import { RoomProvider } from "../../room/src/room-context";
 import { ports } from "./support/room-ports.mjs";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { Line } from "../renderer/src/components/transcript/Ledger";
-import { Favicon } from "../renderer/src/components/transcript/Favicon";
-import { ledgerLines } from "../renderer/src/lib/transcript/ledger";
+import { Line } from "../../room/src/components/transcript/Ledger";
+import { Favicon } from "../../room/src/components/transcript/Favicon";
+import { ledgerLines } from "../../room/src/lib/transcript/ledger";
 import { line, url } from "./support/ledger-fixtures.mjs";
-import { useSetSiteIconsEnabled } from "../renderer/src/lib/transcript/favicons";
+import { useSetSiteIconsEnabled } from "../../room/src/lib/transcript/favicons";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/app.css";
-import "../renderer/src/styles/room.css";
-import "../renderer/src/styles/transcript.css";
+import "../../room/src/styles/room.css";
+import "../../room/src/styles/transcript.css";
 
 const calls = [];
 const pending = [];

@@ -5,8 +5,7 @@
 // localhost-only daemon, stated exactly once, here.
 import { useEffect, useMemo, useState } from "react";
 import type { DiscoveryRow, RosettaClient } from "@rosetta/protocol";
-import { AgentMark } from "../lib/agents";
-import { lastActive } from "../lib/format";
+import { AgentMark, lastActive } from "@rosetta/room";
 
 
 function formatBytes(bytes: number): string {

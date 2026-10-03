@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createGallerySource } from '../renderer/src/components/file-viewer/gallery-source.ts';
+import { createGallerySource } from '../../room/src/components/file-viewer/gallery-source.ts';
 
 const handle = key => ({ key, name: 'image.png', path: null, size: 4 });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };

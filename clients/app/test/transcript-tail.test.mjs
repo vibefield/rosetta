@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { TailArrivals, tailStep } from "../renderer/src/lib/transcript/tail-state.ts";
-import { TailScroll } from "../renderer/src/lib/transcript/tail-scroll.ts";
+import { TailArrivals, tailStep } from "../../room/src/lib/transcript/tail-state.ts";
+import { TailScroll } from "../../room/src/lib/transcript/tail-scroll.ts";
 
 const row = (ordinal, session_id = "root") => ({
   session_id,

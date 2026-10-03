@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createRoomStorage, DEFAULT_STORAGE_PREFIX } from "../renderer/src/lib/room-storage.ts";
-import { createTintDealer, tintOf } from "../renderer/src/lib/tint.ts";
-import { RECENT_QUERIES_KEY, rememberQuery, readRecentQueries } from "../renderer/src/lib/search-sheet.ts";
+import { createRoomStorage, DEFAULT_STORAGE_PREFIX } from "../../room/src/lib/room-storage.ts";
+import { createTintDealer, tintOf } from "../../room/src/lib/tint.ts";
+import { RECENT_QUERIES_KEY, rememberQuery, readRecentQueries } from "../../room/src/lib/search-sheet.ts";
 
 const memory = () => {
   const map = new Map();

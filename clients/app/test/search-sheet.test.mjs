@@ -15,8 +15,8 @@ import {
   rememberQuery,
   sessionCrumb,
   stateSentence,
-} from "../renderer/src/lib/search-sheet.ts";
-import { createSearchResultsViewModel } from "../renderer/src/lib/search-results.ts";
+} from "../../room/src/lib/search-sheet.ts";
+import { createSearchResultsViewModel } from "../../room/src/lib/search-results.ts";
 
 /* ── factories ───────────────────────────────────────────────────────────── */
 

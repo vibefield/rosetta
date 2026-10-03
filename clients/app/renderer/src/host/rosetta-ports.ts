@@ -3,8 +3,8 @@
 // the room its catalog, its sessions and its assets. Pure: no window, no
 // bridge — `rosetta-host.ts` does the wiring.
 import type { AssetRef, RosettaClient } from "@rosetta/protocol";
-import type { AssetSource, CatalogPort, SessionPort } from "../ports";
-import { catalogStatusOf } from "../lib/catalog-status";
+import type { AssetSource, CatalogPort, SessionPort } from "@rosetta/room";
+import { catalogStatusOf } from "@rosetta/room";
 
 /** What the host knows about its daemon beyond the client: its own words for
  * why the daemon cannot answer, and when its route to it changes. */

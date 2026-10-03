@@ -14,7 +14,7 @@ import type {
   WorktreeFileActionRequest,
   WorktreeFileActionResult,
   WorktreeOpenResult,
-} from "../ports";
+} from "@rosetta/room";
 
 export interface DesktopDaemonState {
   readonly phase: "starting" | "ready" | "restarting" | "failed" | "stopped" | "external";

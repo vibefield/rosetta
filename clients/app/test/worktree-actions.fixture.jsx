@@ -2,14 +2,14 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { createFakeEngine } from "@vibecook/mille-ui/testing";
-import { WorktreeFileTree } from "../renderer/src/components/worktree/WorktreeFileTree";
-import { RoomProvider } from "../renderer/src/room-context";
+import { WorktreeFileTree } from "../../room/src/components/worktree/WorktreeFileTree";
+import { RoomProvider } from "../../room/src/room-context";
 import { desktopHost } from "../renderer/src/host/desktop-bridge";
 import { hostPortOver } from "../renderer/src/host/rosetta-host";
 import { ports } from "./support/room-ports.mjs";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/app.css";
-import "../renderer/src/styles/room.css";
+import "../../room/src/styles/room.css";
 import "@vibecook/mille-ui/tokens.css";
 import "@vibecook/mille-ui/theme/vibefield.css";
 

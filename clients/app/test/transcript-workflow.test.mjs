@@ -9,7 +9,7 @@ import {
   workflowAttemptsFor,
   workflowRuntime,
   workflowWorkerState,
-} from "../renderer/src/lib/transcript/index.ts";
+} from "../../room/src/lib/transcript/index.ts";
 
 const inline = (text) => ({ type: "inline", text });
 const file = (path) => ({ type: "file", path, resolved: true });

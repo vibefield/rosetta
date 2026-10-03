@@ -5,11 +5,11 @@ import {
   MESSAGE_PREVIEW_LINES,
   messageCharacterCount,
   messageExcerpt,
-} from "../renderer/src/components/transcript/message-preview.ts";
+} from "../../room/src/components/transcript/message-preview.ts";
 import {
   handleForMessage,
   messageFileSource,
-} from "../renderer/src/components/transcript/message-file-source.ts";
+} from "../../room/src/components/transcript/message-file-source.ts";
 
 test("short messages retain their exact Markdown, whitespace and line breaks", () => {
   const text = "# Review\r\n\r\nKeep **these words**, [this link](https://example.com), and 尾声.  \n";

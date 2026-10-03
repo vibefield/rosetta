@@ -5,13 +5,13 @@
 import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { HistoryRoom } from "../renderer/src/HistoryRoom";
-import { createDemoPorts, createRoomDemo } from "../renderer/src/fixtures";
+import { HistoryRoom } from "../../room/src/HistoryRoom";
+import { createDemoPorts, createRoomDemo } from "../../room/src/fixtures";
 import "../renderer/src/styles/tokens.css";
-import "../renderer/src/styles/room.css";
-import "../renderer/src/styles/ingest.css";
-import "../renderer/src/styles/transcript.css";
-import "../renderer/src/styles/search.css";
+import "../../room/src/styles/room.css";
+import "../../room/src/styles/ingest.css";
+import "../../room/src/styles/transcript.css";
+import "../../room/src/styles/search.css";
 
 const demo = createRoomDemo();
 const firstPrompt = demo.timelines.get("s0")[0];

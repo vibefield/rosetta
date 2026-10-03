@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The History room \u2014 rosetta's agent-view app, to be ported into vibe-field once polished.",
+  "description": "rosetta's agent-view app: the Electron host of the History room, which lives in clients/room as @rosetta/room.",
   "main": "electron/main.mjs",
   "engines": {
     "node": ">=22"

@@ -1,17 +1,17 @@
 // Real document, synthetic canonical events, no daemon or user archive.
-import { RoomProvider } from "../renderer/src/room-context";
+import { RoomProvider } from "../../room/src/room-context";
 import { ports } from "./support/room-ports.mjs";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { TranscriptColumn } from "../renderer/src/components/Transcript";
-import { Subthread } from "../renderer/src/components/transcript/Subthread";
-import { ThreadNavigationContext } from "../renderer/src/components/transcript/thread-navigation";
-import { buildThreadIndex } from "../renderer/src/components/transcript/thread-index";
+import { TranscriptColumn } from "../../room/src/components/Transcript";
+import { Subthread } from "../../room/src/components/transcript/Subthread";
+import { ThreadNavigationContext } from "../../room/src/components/transcript/thread-navigation";
+import { buildThreadIndex } from "../../room/src/components/transcript/thread-index";
 import { entry, inline, shell } from "./support/ledger-fixtures.mjs";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/app.css";
-import "../renderer/src/styles/room.css";
-import "../renderer/src/styles/transcript.css";
+import "../../room/src/styles/room.css";
+import "../../room/src/styles/transcript.css";
 
 const nothing = () => {};
 const now = Date.now() - 60_000;

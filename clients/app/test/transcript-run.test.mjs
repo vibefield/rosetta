@@ -9,7 +9,7 @@ import {
   ledgerLines,
   objectText,
   runSummary,
-} from "../renderer/src/lib/transcript/index.ts";
+} from "../../room/src/lib/transcript/index.ts";
 import { CTX, entry, file, inline, read, shell, tool } from "./support/ledger-fixtures.mjs";
 
 /* ── the run's closing sentence ──────────────────────────────────────────── */

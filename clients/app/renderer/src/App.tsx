@@ -4,9 +4,8 @@
 // a daemon that is not there — and hands the room its ports.
 import { useEffect, useRef, useState } from "react";
 import type { RosettaClient } from "@rosetta/protocol";
-import { HistoryRoom } from "./HistoryRoom";
-import type { HistoryRoomHandle } from "./HistoryRoom";
-import { hasPrimaryModifier } from "./components/search";
+import { HistoryRoom, hasPrimaryModifier } from "@rosetta/room";
+import type { HistoryRoomHandle } from "@rosetta/room";
 import { RollCallPanel } from "./components/RollCall";
 import { ThemeToggle } from "./components/ThemeToggle";
 import type { RosettaHost } from "./host/rosetta-host";

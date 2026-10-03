@@ -1,7 +1,7 @@
 // Production transcript and viewer with synthetic text; no daemon or archive.
 import { RosettaClient } from "@rosetta/protocol";
 import { sameOriginAssetUrl } from "../renderer/src/host/rosetta-ports";
-import { RoomProvider } from "../renderer/src/room-context";
+import { RoomProvider } from "../../room/src/room-context";
 import { client, ports } from "./support/room-ports.mjs";
 // The fixture server stands in for the daemon; every read the room makes
 // reaches it through the ports, as rosetta's app reaches its own daemon.
@@ -12,14 +12,14 @@ for (const name of ["readTextAsset", "readFileTarget", "readPlan", "command", "r
   client[name] = daemon[name].bind(daemon);
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { TranscriptColumn } from "../renderer/src/components/Transcript";
+import { TranscriptColumn } from "../../room/src/components/Transcript";
 import { entry, inline, tool, file } from "./support/ledger-fixtures.mjs";
 import { memberText } from "./prompt-images-data.mjs";
 import bundles from "./fixtures/prompt-images/optimized/manifest.json";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/app.css";
-import "../renderer/src/styles/room.css";
-import "../renderer/src/styles/transcript.css";
+import "../../room/src/styles/room.css";
+import "../../room/src/styles/transcript.css";
 
 const nothing = () => {};
 const now = 1_789_000_000_000;

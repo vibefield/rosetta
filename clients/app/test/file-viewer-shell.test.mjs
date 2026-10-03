@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
-const roomCss = readFileSync(new URL("../renderer/src/styles/room.css", import.meta.url), "utf8");
+const roomCss = readFileSync(new URL("../../room/src/styles/room.css", import.meta.url), "utf8");
 // The window's drag region is the app's, not the room's: the room only marks
 // its root while one of its dialogs is open (test/room-host covers the mark).
 const appCss = readFileSync(new URL("../renderer/src/styles/app.css", import.meta.url), "utf8");

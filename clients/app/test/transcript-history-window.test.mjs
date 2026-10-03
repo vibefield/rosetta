@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { conversationStart, readConversationPage, withinHistoryWindow } from '../renderer/src/lib/transcript/history-window.ts';
-import { documentTurns, sittings, teamChronology } from '../renderer/src/lib/transcript/index.ts';
-import { documentPlan } from '../renderer/src/components/transcript/document-plan.ts';
-import { activityPlan, activityCuts } from '../renderer/src/components/transcript/activity-plan.ts';
-import { retainReadingIdentity } from '../renderer/src/components/transcript/reading-identity.ts';
+import { conversationStart, readConversationPage, withinHistoryWindow } from '../../room/src/lib/transcript/history-window.ts';
+import { documentTurns, sittings, teamChronology } from '../../room/src/lib/transcript/index.ts';
+import { documentPlan } from '../../room/src/components/transcript/document-plan.ts';
+import { activityPlan, activityCuts } from '../../room/src/components/transcript/activity-plan.ts';
+import { retainReadingIdentity } from '../../room/src/components/transcript/reading-identity.ts';
 import { entry, inline, shell } from './support/ledger-fixtures.mjs';
 
 const now = new Date(2026, 8, 28, 12).getTime();

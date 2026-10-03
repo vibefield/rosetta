@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { imageMediaTypeFromBytes, isOptimizedImageAsset } from '../renderer/src/lib/image-media.ts';
-import { activityImages, messageAttachments, timelineImages } from '../renderer/src/lib/transcript/images.ts';
-import { ledgerLine } from '../renderer/src/lib/transcript/index.ts';
+import { imageMediaTypeFromBytes, isOptimizedImageAsset } from '../../room/src/lib/image-media.ts';
+import { activityImages, messageAttachments, timelineImages } from '../../room/src/lib/transcript/images.ts';
+import { ledgerLine } from '../../room/src/lib/transcript/index.ts';
 import { entry, tool, read, file, inline } from './support/ledger-fixtures.mjs';
 
 const images = (...rows) => activityImages(rows.map(row => ({ kind: 'line', line: ledgerLine(row) })));

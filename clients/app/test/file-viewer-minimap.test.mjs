@@ -9,12 +9,12 @@ import {
   sampleLineIndexes,
   scrollTopForThumbDelta,
   wheelDeltaPixels,
-} from "../renderer/src/components/file-viewer/minimap/layout.ts";
+} from "../../room/src/components/file-viewer/minimap/layout.ts";
 import {
   MINIMAP_LEFT_GUTTER_DEVICE_PIXELS,
   MINIMAP_MAX_COLUMNS,
   rasterizeMinimap,
-} from "../renderer/src/components/file-viewer/minimap/raster.ts";
+} from "../../room/src/components/file-viewer/minimap/raster.ts";
 
 const TOKEN_COLORS = {
   comment: 2,

@@ -12,7 +12,7 @@ import {
   spendText,
   sumSpend,
   usdText,
-} from "../renderer/src/lib/spend.ts";
+} from "../../room/src/lib/spend.ts";
 
 const row = (cost, billed, unpriced, unrecorded = 0) => ({
   cost_micro_usd: cost,

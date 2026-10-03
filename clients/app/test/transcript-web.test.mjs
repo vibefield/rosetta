@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ledgerLines } from "../renderer/src/lib/transcript/ledger.ts";
-import { webAddress } from "../renderer/src/lib/transcript/web-address.ts";
+import { ledgerLines } from "../../room/src/lib/transcript/ledger.ts";
+import { webAddress } from "../../room/src/lib/transcript/web-address.ts";
 import { line, url } from "./support/ledger-fixtures.mjs";
 
 const search = (sources, total = sources?.length) => ({ type: "web_search", query: "webgpu", allowed_domains: [], blocked_domains: [], outcome: sources === null ? null : { sources, total_count: total } });

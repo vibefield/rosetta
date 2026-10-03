@@ -8,7 +8,7 @@ import { desktopHost } from "./desktop-bridge";
 import type { DesktopDaemonState, DesktopHost } from "./desktop-bridge";
 import { worktreePorts } from "./worktree-ports";
 import { assetsOver, catalogOver, sessionsOver } from "./rosetta-ports";
-import type { HostPort, RoomPorts } from "../ports";
+import type { HostPort, RoomPorts } from "@rosetta/room";
 
 function baseUrl(): string {
   const fromQuery = new URLSearchParams(window.location.search).get("daemon");

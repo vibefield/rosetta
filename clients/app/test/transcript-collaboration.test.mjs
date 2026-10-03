@@ -15,7 +15,7 @@ import {
   teamParticipants,
   teamSessionIds,
   workerThreadLinks,
-} from "../renderer/src/lib/transcript/index.ts";
+} from "../../room/src/lib/transcript/index.ts";
 
 const inline = (text) => ({ type: "inline", text });
 

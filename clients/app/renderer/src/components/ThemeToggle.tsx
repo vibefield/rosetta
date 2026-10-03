@@ -1,4 +1,4 @@
-import { MoonGlyph, SunGlyph } from "../lib/icons";
+import { MoonGlyph, SunGlyph } from "@rosetta/room";
 import { useTheme } from "../lib/theme";
 
 export function ThemeToggle() {

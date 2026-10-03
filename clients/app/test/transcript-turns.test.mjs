@@ -6,7 +6,7 @@ import {
   attachmentMentions,
   objectText,
   readAttachments,
-} from "../renderer/src/lib/transcript/index.ts";
+} from "../../room/src/lib/transcript/index.ts";
 
 /* ── factories ───────────────────────────────────────────────────────────── */
 

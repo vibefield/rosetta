@@ -2,15 +2,15 @@
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import { TranscriptColumn } from '../renderer/src/components/Transcript';
-import { useTimeline } from '../renderer/src/lib/hooks';
-import { RoomProvider, useRoom } from '../renderer/src/room-context';
+import { TranscriptColumn } from '../../room/src/components/Transcript';
+import { useTimeline } from '../../room/src/lib/hooks';
+import { RoomProvider, useRoom } from '../../room/src/room-context';
 import { client, ports } from './support/room-ports.mjs';
 import { entry, inline, shell } from './support/ledger-fixtures.mjs';
 import '../renderer/src/styles/tokens.css';
 import '../renderer/src/styles/app.css';
-import '../renderer/src/styles/room.css';
-import '../renderer/src/styles/transcript.css';
+import '../../room/src/styles/room.css';
+import '../../room/src/styles/transcript.css';
 
 const now = Date.now() - 1_300_000;
 const nothing = () => {};

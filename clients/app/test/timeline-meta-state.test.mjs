@@ -4,7 +4,7 @@ import { test } from "node:test";
 import {
   availableTimelineMetaKinds,
   resolveTimelineMetaKind,
-} from "../renderer/src/components/transcript/timeline-meta-state.ts";
+} from "../../room/src/components/transcript/timeline-meta-state.ts";
 
 const task = {
   id: "task-1",

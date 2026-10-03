@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDemoPorts, createRoomDemo, demoActivityOrder, demoProjectViewModels } from "../renderer/src/fixtures/index.ts";
-import { isOptimizedImageAsset } from "../renderer/src/lib/image-media.ts";
+import { createDemoPorts, createRoomDemo, demoActivityOrder, demoProjectViewModels } from "../../room/src/fixtures/index.ts";
+import { isOptimizedImageAsset } from "../../room/src/lib/image-media.ts";
 
 const NOW = Date.UTC(2026, 9, 3, 12);
 

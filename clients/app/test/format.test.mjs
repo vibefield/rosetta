@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { fmtCompactNumber, fmtTokens, tokenText } from "../renderer/src/lib/format.ts";
+import { fmtCompactNumber, fmtTokens, tokenText } from "../../room/src/lib/format.ts";
 
 describe("compact summary numbers", () => {
   it("uses the same scale and precision for counts and tokens", () => {

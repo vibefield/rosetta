@@ -21,7 +21,7 @@ import {
   PULL_THRESHOLD_PX,
   pullProgress,
   reduceEarlier,
-} from "../renderer/src/lib/transcript/head-state.ts";
+} from "../../room/src/lib/transcript/head-state.ts";
 
 /** One row, enough of a TimelineEntry for identity and order. */
 function row(id, ordinal) {

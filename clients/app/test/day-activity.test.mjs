@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createDayActivity, createHourlyCurve, hourLabel } from "../renderer/src/lib/day-activity.ts";
-import { createModelColors } from "../renderer/src/lib/model-labels.ts";
+import { createDayActivity, createHourlyCurve, hourLabel } from "../../room/src/lib/day-activity.ts";
+import { createModelColors } from "../../room/src/lib/model-labels.ts";
 
 describe("selected day hourly activity", () => {
   it("reconciles models and hours without redistributing the day's usage", () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ListMotion } from "../renderer/src/lib/motion.ts";
+import { ListMotion } from "../../room/src/lib/motion.ts";
 
 function list(t, count = 5) {
   const originalStyle = globalThis.getComputedStyle;

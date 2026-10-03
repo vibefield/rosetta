@@ -2,13 +2,13 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import fs from "node:fs";
 import ts from "typescript";
-import * as transcript from "../renderer/src/lib/transcript/index.ts";
-import { documentPlan } from "../renderer/src/components/transcript/document-plan.ts";
+import * as transcript from "../../room/src/lib/transcript/index.ts";
+import { documentPlan } from "../../room/src/components/transcript/document-plan.ts";
 import { entry, inline, shell } from "./support/ledger-fixtures.mjs";
 
 // Load the production model with its normal pure dependencies; only React's
 // unused memo hook is stubbed for this Node test.
-const source = fs.readFileSync(new URL("../renderer/src/components/transcript/document-model.ts", import.meta.url), "utf8");
+const source = fs.readFileSync(new URL("../../room/src/components/transcript/document-model.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } });
 const exports = {};
 new Function("require", "exports", outputText)((name) => {

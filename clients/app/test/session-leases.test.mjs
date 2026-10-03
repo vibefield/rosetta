@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createSessionLeases } from "../renderer/src/lib/session-leases.ts";
+import { createSessionLeases } from "../../room/src/lib/session-leases.ts";
 
 function recordingPort(answer = (id) => ({ id })) {
   const calls = [];

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { parseDiff } from "../renderer/src/components/file-viewer/diff/parse.ts";
+import { parseDiff } from "../../room/src/components/file-viewer/diff/parse.ts";
 
 describe("file viewer diff parser", () => {
   it("renders Codex apply_patch hunks without inventing line numbers", () => {

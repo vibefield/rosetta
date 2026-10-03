@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseMarkdown } from "../renderer/src/components/file-viewer/markdown/index.ts";
+import { parseMarkdown } from "../../room/src/components/file-viewer/markdown/index.ts";
 
 function textNodes(tree, inLink = false) {
   return tree.flatMap(node => {

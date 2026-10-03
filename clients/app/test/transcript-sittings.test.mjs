@@ -14,7 +14,7 @@ import {
   sittingDayLabel,
   sittings,
   withinPromptCluster,
-} from "../renderer/src/lib/transcript/index.ts";
+} from "../../room/src/lib/transcript/index.ts";
 
 let seq = 0;
 const at = (y, mo, d, h, mi, s = 0) => new Date(y, mo - 1, d, h, mi, s).getTime();

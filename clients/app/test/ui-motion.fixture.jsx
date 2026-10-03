@@ -1,17 +1,17 @@
 // Real production components with deterministic data; no daemon or user stores.
-import { RoomProvider } from "../renderer/src/room-context";
+import { RoomProvider } from "../../room/src/room-context";
 import { ports } from "./support/room-ports.mjs";
 import { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { ProjectList } from "../renderer/src/components/projects/ProjectList";
-import { SessionList } from "../renderer/src/components/sessions/SessionList";
-import { TranscriptColumn } from "../renderer/src/components/Transcript";
-import { NO_SPEND } from "../renderer/src/lib/spend";
+import { ProjectList } from "../../room/src/components/projects/ProjectList";
+import { SessionList } from "../../room/src/components/sessions/SessionList";
+import { TranscriptColumn } from "../../room/src/components/Transcript";
+import { NO_SPEND } from "../../room/src/lib/spend";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/app.css";
-import "../renderer/src/styles/room.css";
-import "../renderer/src/styles/transcript.css";
+import "../../room/src/styles/room.css";
+import "../../room/src/styles/transcript.css";
 
 const now = new Date(2026, 8, 7, 14).getTime();
 const nothing = () => {};

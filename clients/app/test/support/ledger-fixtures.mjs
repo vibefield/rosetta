@@ -1,7 +1,7 @@
 // Hand-built TimelineEntry factories for the ledger's tests — never a live
 // home directory, never a captured transcript. Shared by the family, hue and
 // fold tests and by the run-summary tests, which are one unit each.
-import { ledgerLine, objectText } from "../../renderer/src/lib/transcript/index.ts";
+import { ledgerLine, objectText } from "../../../room/src/lib/transcript/index.ts";
 
 let seq = 0;
 export const CTX = { cwd: "/w", home: "/Users/x" };

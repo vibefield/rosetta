@@ -15,7 +15,7 @@ import {
   linkedChildSessionIds,
   objectText,
   taskDisplayRows,
-} from "../renderer/src/lib/transcript/index.ts";
+} from "../../room/src/lib/transcript/index.ts";
 
 import {
   CTX,

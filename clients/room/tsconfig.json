@@ -1,0 +1,25 @@
+{
+  // The flags a host that compiles this source (VibeField) builds with, on
+  // top of the room's own strictness: the package passes them here so it
+  // passes them there. No allowImportingTsExtensions — relative imports carry
+  // no extension, so a host's compiler needs nothing extra.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true
+  },
+  "include": ["src"]
+}

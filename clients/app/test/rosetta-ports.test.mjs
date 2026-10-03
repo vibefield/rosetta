@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RosettaClient } from "../../ts/client.ts";
-import { catalogStatusOf } from "../renderer/src/lib/catalog-status.ts";
+import { catalogStatusOf } from "../../room/src/lib/catalog-status.ts";
 import { assetsOver, catalogOver, sameOriginAssetUrl, sessionsOver } from "../renderer/src/host/rosetta-ports.ts";
 
 test("a daemon status reads as the room's catalog status, missing blocks as absent", () => {

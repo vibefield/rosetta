@@ -230,9 +230,13 @@ crates/                    all Rust crates
   search-bench/            frozen-input FTS percentile campaign harness
 clients/                   TypeScript consumers                       [Phase 4]
   ts/                      generated protocol types + RosettaClient SDK
-  app/                     agent-history app — Electron + React History room,
-                           design source: protos/agent-history-proto; the locked
-                           transcript record ships in clients/app/design/
+  room/                    @rosetta/room — the History room as a package behind
+                           injected ports (catalog, sessions, assets, host); it
+                           dials nothing; ./fixtures renders it with no daemon
+  app/                     agent-history app — the Electron host of the History
+                           room (its reference host: the client, the bridge, the
+                           keys); design source: protos/agent-history-proto; the
+                           locked transcript record ships in clients/app/design/
 ```
 
 ## Conventions

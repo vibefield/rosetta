@@ -1,0 +1,16 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   @rosetta/room's stylesheet (`@rosetta/room/styles/room.css`). Import it once,
+   after the host's tokens: the room reads the VibeField design-kit's --vf-*
+   names and brings its own (--ah-*, --tr-*, the --tint-* band). Every rule is
+   scoped to the room's root (.ah-frame) and to the layers it portals
+   (.ah-layer); the page itself is the host's. A few parts import their own
+   sheets beside them, which the bundler brings along.
+   ═══════════════════════════════════════════════════════════════════════ */
+@import "./room.css";
+@import "./ingest.css";
+@import "./transcript.css";
+@import "./search.css";
+/* The worktree guest's tree: mille's token surface and the VibeField theme,
+   which reads the host's --vf-* tokens live. */
+@import "@vibecook/mille-ui/tokens.css";
+@import "@vibecook/mille-ui/theme/vibefield.css";
