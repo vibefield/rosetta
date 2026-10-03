@@ -7,7 +7,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 
 test('HTTP image resources pass through the gallery without reading byte buffers', () => {
   let reads = 0;
-  const urls = { full: '/full.webp', preview: '/preview.webp', rail: '/rail.webp', tile: '/tile.webp', tile2x: '/tile2x.webp' };
+  const urls = { key: 'one', url: rendition => `/${rendition}.webp` };
   const source = { image: () => urls, read: async () => { reads++; return new Uint8Array(0); } };
   const gallery = createGallerySource(source);
   assert.equal(gallery.source.image(handle('one')), urls);

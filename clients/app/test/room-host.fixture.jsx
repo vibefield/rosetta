@@ -135,8 +135,15 @@ function ports(scenario) {
     },
     assets: {
       imageAssetUrl(asset, variant) {
-        log.images.push(`${asset.digest.slice(0, 4)}:${variant}`);
-        return `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"><rect width="4" height="3" fill="#6366f1"/></svg>')}`;
+        const name = `${asset.digest.slice(0, 4)}:${variant}`;
+        log.images.push(name);
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"><rect width="4" height="3" fill="#6366f1"/></svg>';
+        if (scenario !== "fetching") return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+        // A credentialed host: bytes first, then an object URL. The first ask
+        // for image b is refused, as a host whose fetch failed would answer.
+        const refused = asset.digest.startsWith("bbbb") && log.images.filter((n) => n === name).length === 1;
+        return new Promise((resolve) => setTimeout(() => resolve(refused ? null
+          : URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }))), 120));
       },
       attachmentAssetUrl(asset) { log.attachments.push(asset.digest.slice(0, 4)); return asset.url; },
     },
@@ -148,7 +155,10 @@ function Fixture() {
   const [sheetOpen, setSheetOpen] = useState(false);
   window.roomFixture = {
     log,
-    mount(name) { flushSync(() => setScenario({ name, key: Math.random(), ports: ports(name) })); },
+    mount(name) {
+      for (const list of Object.values(log)) list.length = 0;
+      flushSync(() => setScenario({ name, key: Math.random(), ports: ports(name) }));
+    },
   };
   if (scenario === null) return null;
   const { name, key, ports: p } = scenario;

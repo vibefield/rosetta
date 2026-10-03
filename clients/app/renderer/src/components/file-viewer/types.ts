@@ -49,12 +49,19 @@ export interface FileSource {
   compare?(handle: FileHandle, signal: AbortSignal): Promise<{ readonly unified: string }>;
 }
 
+/** The sized renditions a source may address. */
+export type ImageRendition = "full" | "preview" | "rail" | "tile" | "tile2x";
+
+/** An image address: now, once the source has it, or not at all. */
+export type ImageUrl = string | null | PromiseLike<string | null>;
+
+/** Sized, browser-loadable renditions of one image, asked for one at a time:
+ * a source that must fetch before it can address an image fetches only the
+ * rendition a view shows. */
 export interface ImageResource {
-  readonly full: string;
-  readonly preview: string;
-  readonly rail: string;
-  readonly tile: string;
-  readonly tile2x: string;
+  /** Stable for this image: the same key asks for the same bytes. */
+  readonly key: string;
+  url(rendition: ImageRendition): ImageUrl;
   readonly width?: number | undefined;
   readonly height?: number | undefined;
 }

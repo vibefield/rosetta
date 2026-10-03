@@ -52,6 +52,20 @@ async function run() {
     await pause(300);
     writeFileSync(path.join(temporary, 'plain.png'), (await win.webContents.capturePage()).toPNG());
 
+    // Every image the room draws is addressed by the host's asset source.
+    const tiles = await check(() => [...document.querySelectorAll('.tr-attachments img')].map(img => img.getAttribute('src').slice(0, 19)));
+    assert.deepEqual(tiles, ['data:image/svg+xml,', 'data:image/svg+xml,'], 'both tiles load what the source answered');
+    assert.deepEqual(await check(() => [...new Set(window.roomFixture.log.images)].sort()), ['aaaa:tile', 'bbbb:tile'], 'one rendition asked per tile');
+    assert.equal(await check(() => window.roomFixture.log.attachments.includes('aaaa') && window.roomFixture.log.attachments.includes('bbbb')), true, 'attachments named by the source');
+    await click('.tr-attachments .tr-att__tile');
+    await until(() => document.querySelector('.ah-image img'), 'the viewer\'s image');
+    assert.equal(await check(() => document.querySelector('.ah-image img').getAttribute('src').startsWith('data:image/svg+xml,')), true);
+    await until(() => document.querySelectorAll('.ah-image-gallery__thumb img').length === 2, 'the gallery\'s thumbnails');
+    assert.deepEqual(await check(() => [...new Set(window.roomFixture.log.images)].sort()), ['aaaa:preview', 'aaaa:rail', 'aaaa:tile', 'bbbb:rail', 'bbbb:tile'], 'the viewer and its rail ask the source too');
+    assert.equal(await check(() => [...document.querySelectorAll('img')].every(img => /^(data|blob):/.test(img.getAttribute('src')))), true, 'no image the source did not answer');
+    await check(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true; });
+    await until(() => !document.querySelector('.ah-image img'), 'the viewer closes');
+
     // No host: the honest faces. No worktree to offer, a closed guest, a
     // globe for every site, and nobody asked.
     assert.equal(await check(() => document.querySelector('[aria-label="Toggle the project worktree"]')), null, 'no worktree toggle without a host');
@@ -72,6 +86,20 @@ async function run() {
     await until(() => document.querySelectorAll('.tr-fav img').length >= 2, 'the host\'s icons');
     assert.deepEqual(await check(() => [...window.roomFixture.log.favicons].sort()), ['developer.mozilla.org', 'github.com'], 'one ask per site, of the host');
     assert.equal(await check(() => document.querySelector('[aria-label="Toggle the project worktree"]')), null, 'no worktree engine, no toggle');
+
+    // A source that fetches before it can address: tiles wait, then load its
+    // object URLs; a refusal is the "could not load" face, and Retry asks again.
+    await mount('fetching');
+    await click('.ah-project-list-item[data-motion-key="p0"]');
+    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s0"]'), 'sessions while fetching');
+    await click('.ah-session-list-item[data-motion-key="s0"]');
+    await until(() => document.querySelectorAll('.tr-attachments figure').length === 2, 'two tiles');
+    await until(() => document.querySelector('.tr-attachments img')?.getAttribute('src')?.startsWith('blob:'), 'an object URL once fetched');
+    await until(() => document.querySelector('.tr-att__retry'), 'the refused image\'s face');
+    assert.equal(await check(() => document.querySelector('.tr-att__tile--missing span').textContent), 'Could not load image');
+    await click('.tr-att__retry');
+    await until(() => document.querySelectorAll('.tr-attachments img').length === 2, 'the retry asks the source again and loads');
+    assert.equal(await check(() => window.roomFixture.log.images.filter(name => name === 'bbbb:tile').length), 2, 'asked once, then once more on retry');
 
     // The search option brings the room's strip, with the host's accessory in it.
     await mount('search');

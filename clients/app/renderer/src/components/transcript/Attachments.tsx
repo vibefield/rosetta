@@ -2,7 +2,7 @@ import { createContext, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AttachmentFact } from "../../lib/transcript";
 import { fmtBytes } from "../../lib/format";
 import { useAttachmentReader } from "./attachment-file-source";
-import { imageRequestUrl, useImageVisibility } from "../file-viewer/image-resource";
+import { useImageUrl, useImageVisibility } from "../file-viewer/image-resource";
 import type { AttachmentOpener } from "./attachment-gallery";
 import "../../styles/attachments.css";
 
@@ -49,8 +49,11 @@ function Tile({ fact, index, onOpen }: {
   const visible = useImageVisibility(figureRef);
   const attachments = useAttachmentReader();
   const resource = fact.kind === "image" ? attachments.imageResource(fact) : null;
-  const url = resource ? imageRequestUrl(window.devicePixelRatio > 2 ? resource.tile2x : resource.tile, attempt) : null;
-  const failed = url !== null && failedUrl === url;
+  const { url, pending } = useImageUrl(resource, window.devicePixelRatio > 2 ? "tile2x" : "tile", attempt);
+  // A source that could not address a recorded image failed to load it, the
+  // same fact to a reader as a broken response, and Retry asks it again.
+  const refused = resource !== null && !pending && url === null;
+  const failed = refused || (url !== null && failedUrl === url);
   useLayoutEffect(() => {
     if (!restoreFocus.current) return;
     (failed ? retryRef.current : openRef.current)?.focus({ preventScroll: true });
@@ -59,7 +62,7 @@ function Tile({ fact, index, onOpen }: {
   const label = fact.ref?.label ?? `${fact.kind === "image" ? "Image" : "Attachment"} ${index + 1}`;
   const details = [label, fact.name, fact.caption, fact.byteLen === null ? null : fmtBytes(fact.byteLen)].filter(Boolean).join(" · ");
   return <figure ref={figureRef} data-attachment-id={fact.key} title={details}>
-    {url === null || failed ? (
+    {resource === null || failed ? (
       <div className="tr-att__tile tr-att__tile--missing" tabIndex={-1} aria-label={details}>
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
           <rect x="3" y="3" width="18" height="18" rx="4" /><circle cx="8" cy="8" r="1.5" />
@@ -73,7 +76,7 @@ function Tile({ fact, index, onOpen }: {
     ) : (
       <button type="button" ref={openRef} className="tr-att__tile" aria-label={`Open ${label}${fact.name ? ` — ${fact.name}` : ""}`}
         aria-haspopup="dialog" onClick={() => onOpen(fact)}>
-        {visible && <img key={url} src={url} alt={fact.name ?? label} decoding="async" onError={() => {
+        {visible && url !== null && <img key={url} src={url} alt={fact.name ?? label} decoding="async" onError={() => {
           restoreFocus.current = Boolean(figureRef.current?.contains(document.activeElement)); setFailedUrl(url);
         }} />}
       </button>

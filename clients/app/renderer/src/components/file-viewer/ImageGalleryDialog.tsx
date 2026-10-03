@@ -5,7 +5,7 @@ import type { FileViewerDialogProps } from "./FileViewerDialog";
 import type { FileHandle, FileSource } from "./types";
 import { createGallerySource } from "./gallery-source";
 import { useFileContent } from "./use-file-content";
-import { imageRequestUrl, useImageVisibility } from "./image-resource";
+import { useImageUrl, useImageVisibility } from "./image-resource";
 import "../../styles/image-gallery.css";
 
 export interface GalleryImage {
@@ -20,21 +20,19 @@ function Thumbnail({ image, source, selected, index, revision, onSelect }: {
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const visible = useImageVisibility(ref, true);
-  const [url, setUrl] = useState<string | null>(null);
+  const [bytesUrl, setBytesUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const content = useFileContent(visible || selected ? image.handle : null, source, false, revision, true);
+  const addressed = useImageUrl(content.status === "ready" ? content.file.image : null, "rail", revision);
   useEffect(() => {
-    if (content.status !== "ready") { setUrl(null); return; }
-    if (content.file.image) {
-      setUrl(imageRequestUrl(content.file.image.rail, revision));
-      setFailed(false);
-      return;
-    }
-    const objectUrl = URL.createObjectURL(new Blob([content.file.bytes as BlobPart], { type: content.file.kind.mime ?? "application/octet-stream" }));
-    setUrl(objectUrl);
+    if (content.status !== "ready") { setBytesUrl(null); return; }
     setFailed(false);
+    if (content.file.image) { setBytesUrl(null); return; }
+    const objectUrl = URL.createObjectURL(new Blob([content.file.bytes as BlobPart], { type: content.file.kind.mime ?? "application/octet-stream" }));
+    setBytesUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [content, revision]);
+  const url = content.status === "ready" && content.file.image ? addressed.url : bytesUrl;
   const label = `${image.label}${image.handle ? ` — ${image.handle.name}` : " — Image unavailable"}`;
   return <button ref={ref} className="ah-image-gallery__thumb" type="button"
     data-image-key={image.key} aria-label={`View ${label}`} title={label}

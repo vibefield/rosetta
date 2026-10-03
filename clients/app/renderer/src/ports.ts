@@ -191,10 +191,25 @@ export interface HostPort {
   readonly worktree?: WorktreeHostPort | undefined;
 }
 
+/** An address an `<img>` can load: now, later, or not at all. */
+export type AssetUrl = string | null | PromiseLike<string | null>;
+
 /** Where every stored image and attachment is addressed. */
 export interface AssetSource {
-  imageAssetUrl(asset: AssetRef, variant: ImageVariant): string;
-  /** The address of one stored attachment member, or null when it names none. */
+  /**
+   * One recorded image rendition's address, or null for the image's
+   * "could not load" face. A host whose daemon wants no credential answers
+   * the daemon's own URL (rosetta's app). A host whose daemon wants one cannot
+   * put it in an `<img src>`: it fetches the bytes through a session's client
+   * and answers an object URL — a promise while it fetches — bounding and
+   * revoking what it made. The room asks on every mount and every retry, so
+   * an evicted URL is asked for again, never reused, and a host must not
+   * keep a failure.
+   */
+  imageAssetUrl(asset: AssetRef, variant: ImageVariant): AssetUrl;
+  /** The address that names one stored attachment member, or null when the
+   * room should not offer it. The room uses it as the attachment's identity
+   * and to decide it can be opened; it never loads it. */
   attachmentAssetUrl(asset: AssetRef): string | null;
 }
 

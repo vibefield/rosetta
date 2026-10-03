@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ViewBodyProps } from "../types";
-import { imageRequestUrl } from "../image-resource";
+import { useImageUrl } from "../image-resource";
 
 export const IMAGE_MODES = [
   { id: "fit", label: "Fit" },
@@ -16,12 +16,15 @@ export function ImageView({ file, mode, onRetry }: ViewBodyProps) {
   const blob = useMemo(() => file.image ? null : URL.createObjectURL(
     new Blob([file.bytes as BlobPart], { type: file.kind.mime ?? "application/octet-stream" })), [file]);
   useEffect(() => () => { if (blob) URL.revokeObjectURL(blob); }, [blob]);
-  const url = file.image
-    ? imageRequestUrl(mode === "actual" ? file.image.full : file.image.preview, file.imageAttempt)
-    : blob!;
+  const addressed = useImageUrl(file.image, mode === "actual" ? "full" : "preview", file.imageAttempt);
+  const url = file.image ? addressed.url : blob!;
   const dimensions = file.image?.width && file.image.height ? file.image : natural;
 
-  if (failedUrl === url) return <div className="ah-fileview__state">
+  if (url === null && addressed.pending) return <div className="ah-image" data-mode={mode} aria-busy="true">
+    <span className="ah-image__loading" role="status">Loading image…</span>
+  </div>;
+
+  if (url === null || failedUrl === url) return <div className="ah-fileview__state">
     <b>Could not load this image</b>
     <span>The image could not be read or decoded.</span>
     {onRetry && <button className="ah-fileview__retry" type="button" onClick={onRetry}>Retry</button>}

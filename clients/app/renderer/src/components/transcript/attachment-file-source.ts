@@ -8,7 +8,7 @@
 // session's client.
 
 import { useMemo } from "react";
-import type { AssetRef, ImageVariant } from "@rosetta/protocol";
+import type { AssetRef } from "@rosetta/protocol";
 import type { AttachmentFact } from "../../lib/transcript";
 import type { AssetSource } from "../../ports";
 import { useReadingSession, useRoom } from "../../room-context";
@@ -58,6 +58,11 @@ export function attachmentViewerName(fact: AttachmentFact): string {
   return extension === undefined ? base : `${base}.${extension}`;
 }
 
+/** One stored image as the viewer asks for it: by rendition, through the host. */
+function imageOf(assets: AssetSource, asset: AssetRef, width?: number, height?: number): ImageResource {
+  return { key: asset.digest, url: (rendition) => assets.imageAssetUrl(asset, rendition), width, height };
+}
+
 export function createAttachmentReader(assets: AssetSource, readAsset: AssetReader): AttachmentReader {
   function assetUrl(fact: AttachmentFact): string | null {
     const source = fact.ref?.source;
@@ -70,9 +75,7 @@ export function createAttachmentReader(assets: AssetSource, readAsset: AssetRead
     const source = fact.ref?.source;
     const asset = source?.type === "asset" && assetUrl(fact) !== null ? source.asset : null;
     if (!asset || !isOptimizedImageAsset(asset)) return null;
-    const url = (variant: ImageVariant) => assets.imageAssetUrl(asset, variant);
-    return { full: url("full"), preview: url("preview"), rail: url("rail"), tile: url("tile"), tile2x: url("tile2x"),
-      width: fact.ref?.dimensions?.width, height: fact.ref?.dimensions?.height };
+    return imageOf(assets, asset, fact.ref?.dimensions?.width, fact.ref?.dimensions?.height);
   }
 
   function handleFor(fact: AttachmentFact): FileHandle | null {
@@ -92,8 +95,7 @@ export function createAttachmentReader(assets: AssetSource, readAsset: AssetRead
     image(handle) {
       const asset = handle.ref as AssetRef;
       if (!asset || !isOptimizedImageAsset(asset)) return null;
-      return { full: assets.imageAssetUrl(asset, "full"), preview: assets.imageAssetUrl(asset, "preview"),
-        rail: assets.imageAssetUrl(asset, "rail"), tile: assets.imageAssetUrl(asset, "tile"), tile2x: assets.imageAssetUrl(asset, "tile2x") };
+      return imageOf(assets, asset);
     },
     async read(handle: FileHandle, signal: AbortSignal): Promise<Uint8Array> {
       const asset = handle.ref as AssetRef;
