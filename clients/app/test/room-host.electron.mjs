@@ -226,7 +226,7 @@ async function run() {
 
     writeFileSync(path.join(temporary, 'room.png'), (await win.webContents.capturePage()).toPNG());
     assert.deepEqual(errors, []);
-    console.log(`PASS: the room behind its ports — catalog, session, search option, unavailable words, consent. Screenshot: ${temporary}/room.png`);
+    console.log(`PASS: the room behind its ports on the demo set — catalog and one session open, every image through the asset source, the overlay mark, its own tokens, no host's honest faces, a host without an engine, a host's surface and container, openAt and the selection, the host's inset and feet, the guest by the room's width, the storage prefix, a fetching and a refusing source, the search option, unavailable words, consent. Screenshot: ${temporary}/room.png`);
   } catch (error) {
     console.error(error);
     process.exitCode = 1;
