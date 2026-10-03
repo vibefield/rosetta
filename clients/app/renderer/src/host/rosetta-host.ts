@@ -69,9 +69,6 @@ export function createRosettaHost(): RosettaHost {
   window.addEventListener("pagehide", () => removeDaemonListener?.(), { once: true });
 
   const catalog: CatalogPort = {
-    get baseUrl() {
-      return client.baseUrl;
-    },
     subscribeMeta: (handlers) => client.subscribeMeta(handlers),
     status: (signal) => client.status(signal),
     onConnectionChange: (listener) => {
@@ -89,8 +86,6 @@ export function createRosettaHost(): RosettaHost {
     dayUsage: (projectId, day, offsetMinutes, signal) => client.dayUsage(projectId, day, offsetMinutes, signal),
     search: (request, signal) => client.search(request, signal),
     boost: (sessionId, signal) => client.boost(sessionId, signal),
-    discoveries: (signal) => client.discoveries(signal),
-    enableRuntimes: (kinds, signal) => client.enableRuntimes(kinds, signal),
   };
   // One client reads every session: this daemon wants no per-session
   // credential, so opening is handing it over and closing is nothing.

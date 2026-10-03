@@ -4,10 +4,10 @@
 // Begin, and the reassurance line is the literal truth of the
 // localhost-only daemon, stated exactly once, here.
 import { useEffect, useMemo, useState } from "react";
-import type { DiscoveryRow } from "@rosetta/protocol";
+import type { DiscoveryRow, RosettaClient } from "@rosetta/protocol";
 import { AgentMark } from "../lib/agents";
 import { lastActive } from "../lib/format";
-import { useRoom } from "../room-context";
+
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
@@ -15,8 +15,8 @@ function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
 }
 
-export function RollCallPanel() {
-  const { catalog: client } = useRoom();
+/** Consent is the app's to ask: it speaks to its own daemon directly. */
+export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient, "discoveries" | "enableRuntimes"> }) {
   const [rows, setRows] = useState<DiscoveryRow[] | null>(null);
   const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);

@@ -6,22 +6,41 @@ import type { AssetSource, CatalogPort, HostPort, RoomPorts } from "./ports";
 import { createSessionLeases } from "./lib/session-leases";
 import type { SessionLeases } from "./lib/session-leases";
 
+/** The two faces the project panel's chart can open on. */
+export type SummaryTab = "activity" | "models";
+
+/** What a host decides about the room beyond its ports. */
+export interface RoomOptions {
+  /** The chart the project panel opens on (rosetta's app reads `?tab=`). */
+  readonly initialSummaryTab?: SummaryTab | undefined;
+}
+
 export interface Room {
   readonly catalog: CatalogPort;
   readonly sessions: SessionLeases;
   readonly assets: AssetSource;
   readonly host: HostPort | null;
+  readonly initialSummaryTab: SummaryTab;
 }
 
 const RoomContext = createContext<Room | null>(null);
 
-export function RoomProvider({ ports, children }: { readonly ports: RoomPorts; readonly children?: ReactNode }) {
+export function RoomProvider({
+  ports,
+  options = {},
+  children,
+}: {
+  readonly ports: RoomPorts;
+  readonly options?: RoomOptions;
+  readonly children?: ReactNode;
+}) {
   const { catalog, sessions: sessionPort, assets } = ports;
   const host = ports.host ?? null;
+  const initialSummaryTab = options.initialSummaryTab ?? "activity";
   const sessions = useMemo(() => createSessionLeases(sessionPort), [sessionPort]);
   const room = useMemo<Room>(
-    () => ({ catalog, sessions, assets, host }),
-    [catalog, sessions, assets, host],
+    () => ({ catalog, sessions, assets, host, initialSummaryTab }),
+    [catalog, sessions, assets, host, initialSummaryTab],
   );
   return <RoomContext.Provider value={room}>{children}</RoomContext.Provider>;
 }

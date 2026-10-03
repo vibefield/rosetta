@@ -7,18 +7,18 @@
 // worktree column is a guest and the measure is not (H-3) — see
 // `components/worktree/use-worktree-guest`, which owns that rule and the
 // engine lifecycle behind it.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import type { ForwardedRef, ReactNode } from "react";
 import type { SearchHit, SessionRow } from "@rosetta/protocol";
 import type { RoomPorts } from "./ports";
 import { RoomProvider, useRoom } from "./room-context";
+import type { SummaryTab } from "./room-context";
 import { ColdStartPanel } from "./components/ColdStart";
-import { RollCallPanel } from "./components/RollCall";
 import { ProjectsColumn } from "./components/projects";
 import type { ProjectSort } from "./components/projects";
-import { SearchLauncher, SearchSheet, hasPrimaryModifier } from "./components/search";
+import { SearchLauncher, SearchSheet } from "./components/search";
 import { SessionsColumn } from "./components/sessions";
 import type { SessionFacts } from "./components/sessions";
-import { ThemeToggle } from "./components/ThemeToggle";
 import { TranscriptColumn } from "./components/Transcript";
 import type { MatchStepperState, ThreadFocus } from "./components/Transcript";
 import { EmptyState } from "./components/ui";
@@ -89,24 +89,68 @@ function safeStorage(): Storage | null {
   }
 }
 
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+/** The room's own search: the strip's launcher and the sheet it opens. A host
+ * that offers search its own way (VibeField's Peek) leaves this out, and the
+ * room then draws neither. */
+export interface HistoryRoomSearch {
+  /** Whether the sheet is open. The host owns it, so its own keys can open it. */
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  /** The query the room opens with (rosetta's app reads `?q=`). */
+  readonly initialQuery?: string | undefined;
+  /** Drawn at the strip's end, after the launcher. */
+  readonly accessory?: ReactNode;
 }
 
-export type HistoryRoomProps = RoomPorts;
+export interface HistoryRoomProps extends RoomPorts {
+  readonly search?: HistoryRoomSearch | undefined;
+  /** The chart the project panel opens on. */
+  readonly initialSummaryTab?: SummaryTab | undefined;
+  /** The host's words under "rosettad is not answering" when the catalog
+   * itself has none — rosetta's app says where it looked and how to start one. */
+  readonly unavailable?: ReactNode;
+  /** What the room shows while the index waits for consent to read anything.
+   * Absent: the room says it is waiting. */
+  readonly consent?: ReactNode;
+}
+
+/** What a host may ask of a mounted room. */
+export interface HistoryRoomHandle {
+  /** Walk the landed session's search matches. False when there is nothing to
+   * walk, so the host's key can fall through. */
+  stepMatch(delta: 1 | -1): boolean;
+}
 
 /** The room. A host hands it its ports; everything inside reads them from context. */
-export function HistoryRoom(props: HistoryRoomProps) {
+export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(function HistoryRoom(props, ref) {
+  const { catalog, sessions, assets, host } = props;
+  const ports = useMemo<RoomPorts>(
+    () => ({ catalog, sessions, assets, ...(host === undefined ? {} : { host }) }),
+    [catalog, sessions, assets, host],
+  );
   return (
-    <RoomProvider ports={props}>
-      <RoomBody />
+    <RoomProvider ports={ports} options={{ initialSummaryTab: props.initialSummaryTab }}>
+      <RoomBody
+        handle={ref}
+        search={props.search ?? null}
+        unavailable={props.unavailable ?? null}
+        consent={props.consent ?? null}
+      />
     </RoomProvider>
   );
-}
+});
 
-function RoomBody() {
+function RoomBody({
+  handle,
+  search: searchOption,
+  unavailable,
+  consent,
+}: {
+  readonly handle: ForwardedRef<HistoryRoomHandle>;
+  readonly search: HistoryRoomSearch | null;
+  readonly unavailable: ReactNode;
+  readonly consent: ReactNode;
+}) {
   const { catalog, sessions } = useRoom();
   const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog);
   const nowMs = useNow(meta);
@@ -124,10 +168,9 @@ function RoomBody() {
     meta, snapshotVersion, metaStatus === "live" && canonicalReady === true && !ingestActive,
     canonicalReady !== true || ingestActive, nowMs,
   );
-  const [query, setQuery] = useState(
-    () => new URLSearchParams(window.location.search).get("q") ?? "",
-  );
-  const [sheetOpen, setSheetOpen] = useState(false);
+  const [query, setQuery] = useState(() => searchOption?.initialQuery ?? "");
+  const sheetOpen = searchOption?.open ?? false;
+  const setSheetOpen = (open: boolean) => searchOption?.onOpenChange(open);
   const [filters, setFilters] = useState<SearchFilters>(DEFAULT_SEARCH_FILTERS);
   const [stepper, setStepper] = useState<StepperMemory | null>(null);
   const [sort, setSort] = useState<ProjectSort>("recent");
@@ -326,6 +369,16 @@ function RoomBody() {
     },
     [],
   );
+  // ⌘G / ⇧⌘G belong to the host's window; it asks the room to walk.
+  const stepping = useRef(false);
+  stepping.current = stepper !== null;
+  useImperativeHandle(handle, () => ({
+    stepMatch(delta) {
+      if (!stepping.current) return false;
+      stepMatch(delta);
+      return true;
+    },
+  }), [stepMatch]);
 
   // The stepper belongs to the session it was born in.
   useEffect(() => {
@@ -337,37 +390,6 @@ function RoomBody() {
     setStepper(null);
   };
 
-  // ⌘K summons the sheet from anywhere; `/` does the same when nothing is
-  // being typed; ⌘G / ⇧⌘G walk the landed session's matches.
-  const stepping = stepper !== null;
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.altKey) return;
-      const primary = hasPrimaryModifier(event);
-      if (primary && (event.key === "k" || event.key === "K")) {
-        event.preventDefault();
-        setSheetOpen((open) => !open);
-        return;
-      }
-      if (primary && stepping && !sheetOpen && (event.key === "g" || event.key === "G")) {
-        event.preventDefault();
-        stepMatch(event.shiftKey ? -1 : 1);
-        return;
-      }
-      if (
-        event.key === "/" &&
-        !primary &&
-        !sheetOpen &&
-        !isTypingTarget(event.target) &&
-        !document.body.querySelector("[data-ah-fileview]")
-      ) {
-        event.preventDefault();
-        setSheetOpen(true);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [sheetOpen, stepping, stepMatch]);
 
   const showReceipt = (text: string) => {
     setReceipt(text);
@@ -402,15 +424,17 @@ function RoomBody() {
   return (
     <div className="ah-frame is-tall">
       <div className="ah-room">
-        <div className="ah-searchbar">
-          <SearchLauncher
-            query={search.query}
-            placeholder={launcherPlaceholder}
-            onOpen={() => setSheetOpen(true)}
-            onClear={clearSearch}
-          />
-          <ThemeToggle />
-        </div>
+        {searchOption !== null && (
+          <div className="ah-searchbar">
+            <SearchLauncher
+              query={search.query}
+              placeholder={launcherPlaceholder}
+              onOpen={() => setSheetOpen(true)}
+              onClear={clearSearch}
+            />
+            {searchOption.accessory}
+          </div>
+        )}
         {disconnected && !coldStarting ? (
           <EmptyState
             style={{ flex: 1 }}
@@ -419,20 +443,20 @@ function RoomBody() {
                 ? "rosettad is not answering"
                 : "Connecting to rosettad"
             }
-            description={connectionError ?? (
-              <>
-                Looking for the daemon at <code>{catalog.baseUrl}</code>. Start it with{" "}
-                <code>rosettad serve --db &lt;projection&gt;</code> and this room fills in on
-                its own.
-              </>
-            )}
+            description={connectionError ?? unavailable}
           >
             <div className="ah-meter">
               <i style={{ width: metaStatus === "connecting" ? "30%" : "8%" }} />
             </div>
           </EmptyState>
         ) : awaitingConsent ? (
-          <RollCallPanel />
+          consent ?? (
+            <EmptyState
+              style={{ flex: 1 }}
+              title="Waiting for consent"
+              description="The index has found agents on this machine and reads nothing until it is told which ones to read."
+            />
+          )
         ) : coldStarting ? (
           <ColdStartPanel activity={activity} />
         ) : (
@@ -501,7 +525,7 @@ function RoomBody() {
           </div>
         )}
       </div>
-      <SearchSheet
+      {searchOption !== null && <SearchSheet
         open={sheetOpen}
         onClose={() => setSheetOpen(false)}
         query={query}
@@ -524,7 +548,7 @@ function RoomBody() {
         nowMs={nowMs}
         getRuntimeKind={kindOf}
         onOpenHit={openHit}
-      />
+      />}
       {receipt !== null && <div className="ah-receipt">{receipt}</div>}
     </div>
   );

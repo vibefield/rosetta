@@ -16,4 +16,4 @@ import "@vibecook/mille-ui/theme/vibefield.css";
 // once claimed, cannot be re-claimed by a double-invoked effect), and the
 // embedding guide's own playground makes the same call.
 const host = createRosettaHost();
-createRoot(document.getElementById("root")!).render(<App ports={host.ports} />);
+createRoot(document.getElementById("root")!).render(<App host={host} />);

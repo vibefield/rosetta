@@ -8,8 +8,6 @@ import type {
   CommandResponse,
   ContributionResponse,
   DayUsageResponse,
-  DiscoveriesResponse,
-  EnableResponse,
   HeatmapResponse,
   ImageVariant,
   MetaSubscriptionHandlers,
@@ -33,8 +31,6 @@ export interface Closable {
 /** The index's catalog: who and what exists, the figures a panel draws,
  * search, and the index's own state. Never a transcript body. */
 export interface CatalogPort {
-  /** The address the catalog reads from, for the room's disconnected state. */
-  readonly baseUrl: string;
   subscribeMeta(handlers: MetaSubscriptionHandlers): Closable;
   status(signal?: AbortSignal): Promise<StatusResponse>;
   /** Fires when the host's route to the index changes; the room re-asks status. */
@@ -60,8 +56,6 @@ export interface CatalogPort {
   ): Promise<DayUsageResponse>;
   search(request: SearchRequest, signal?: AbortSignal): Promise<SearchResponse>;
   boost(sessionId: string, signal?: AbortSignal): Promise<unknown>;
-  discoveries(signal?: AbortSignal): Promise<DiscoveriesResponse>;
-  enableRuntimes(kinds: string[], signal?: AbortSignal): Promise<EnableResponse>;
 }
 
 /** One session's live transcript, as the room reads it. */

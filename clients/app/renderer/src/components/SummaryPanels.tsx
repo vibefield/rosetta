@@ -21,6 +21,7 @@ import { getCalendarDayKey, getViewerUtcOffsetMinutes } from "../lib/model";
 import type { ProjectViewModel } from "../lib/model";
 import { NO_SPEND, addSpend, coverage, usdText } from "../lib/spend";
 import type { Spend } from "../lib/spend";
+import { useRoom } from "../room-context";
 
 type TintStyle = CSSProperties & { "--tint": string };
 const MAX_TREEMAP_PROJECT_COUNT = 10;
@@ -76,9 +77,8 @@ export function ProjectSummaryPanel({
   const [isExpanded, setIsExpanded] = useState(true);
   const [expandedChart, setExpandedChart] = useState<ProjectChartView | null>(null);
   useEffect(() => setExpandedChart(null), [project.row.id]);
-  const [activeChart, setActiveChart] = useState<ProjectChartView>(() =>
-    new URLSearchParams(window.location.search).get("tab") === "models" ? "models" : "activity",
-  );
+  const { initialSummaryTab } = useRoom();
+  const [activeChart, setActiveChart] = useState<ProjectChartView>(initialSummaryTab);
   const activityStats = useMemo(
     () => calculateActivityStats(project.dailyTokens, project.currentDayIndex),
     [project.currentDayIndex, project.dailyTokens],

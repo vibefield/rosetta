@@ -24,9 +24,6 @@ const sessionClient = {
 
 export const ports = {
   catalog: {
-    get baseUrl() {
-      return client.baseUrl ?? "http://fixture.invalid";
-    },
     subscribeMeta: call("subscribeMeta", () => ({ close() {} })),
     status: call("status", never),
     onConnectionChange: call("onConnectionChange", () => () => {}),
@@ -36,8 +33,6 @@ export const ports = {
     dayUsage: call("dayUsage", never),
     search: call("search", never),
     boost: call("boost", async () => ({})),
-    discoveries: call("discoveries", never),
-    enableRuntimes: call("enableRuntimes", never),
   },
   sessions: { open: () => sessionClient, close() {} },
   assets: {
