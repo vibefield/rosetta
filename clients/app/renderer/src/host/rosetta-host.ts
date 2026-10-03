@@ -4,11 +4,11 @@
 // the development default; the Electron shell's daemon-state pushes repoint it
 // when the app owns its daemon.
 import { RosettaClient } from "@rosetta/protocol";
-import type { AssetRef } from "@rosetta/protocol";
 import { desktopHost } from "./desktop-bridge";
 import type { DesktopDaemonState, DesktopHost } from "./desktop-bridge";
 import { worktreePorts } from "./worktree-ports";
-import type { AssetSource, CatalogPort, HostPort, RoomPorts, SessionPort } from "../ports";
+import { assetsOver, catalogOver, sessionsOver } from "./rosetta-ports";
+import type { HostPort, RoomPorts } from "../ports";
 
 function baseUrl(): string {
   const fromQuery = new URLSearchParams(window.location.search).get("daemon");
@@ -28,18 +28,6 @@ export interface RosettaHost {
   /** The shell's latest word on the daemon it owns, or null in a browser tab. */
   daemonState(): DesktopDaemonState | null;
   onDaemonState(listener: () => void): () => void;
-}
-
-/** The daemon's own URL for a stored member, as long as it names that daemon. */
-export function sameOriginAssetUrl(client: RosettaClient, asset: AssetRef): string | null {
-  try {
-    const url = new URL(asset.url, `${client.baseUrl}/`);
-    return (url.protocol === "http:" || url.protocol === "https:") && url.origin === new URL(client.baseUrl).origin
-      ? url.toString()
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 /** The room's desktop, over the Electron bridge. */
@@ -88,35 +76,14 @@ export function createRosettaHost(): RosettaHost {
     .catch(() => {});
   window.addEventListener("pagehide", () => removeDaemonListener?.(), { once: true });
 
-  const catalog: CatalogPort = {
-    subscribeMeta: (handlers) => client.subscribeMeta(handlers),
-    status: (signal) => client.status(signal),
-    onConnectionChange: (listener) => {
-      const removeConnection = client.onConnectionChange(listener);
-      const removeDesktop = onDaemonState(listener);
-      return () => {
-        removeConnection();
-        removeDesktop();
-      };
-    },
-    unavailable: () => daemonState?.error ?? null,
-    heatmap: (projectId, options, signal) => client.heatmap(projectId, options, signal),
-    contribution: (projectId, signal) => client.contribution(projectId, signal),
-    usage: (projectId, options, signal) => client.usage(projectId, options, signal),
-    dayUsage: (projectId, day, offsetMinutes, signal) => client.dayUsage(projectId, day, offsetMinutes, signal),
-    search: (request, signal) => client.search(request, signal),
-    boost: (sessionId, signal) => client.boost(sessionId, signal),
-  };
-  // One client reads every session: this daemon wants no per-session
-  // credential, so opening is handing it over and closing is nothing.
-  const sessions: SessionPort = { open: () => client, close: () => {} };
-  const assets: AssetSource = {
-    imageAssetUrl: (asset, variant) => client.imageAssetUrl(asset, variant),
-    attachmentAssetUrl: (asset) => sameOriginAssetUrl(client, asset),
-  };
   return {
     client,
-    ports: { catalog, sessions, assets, host: bridge === null ? null : hostPortOver(bridge) },
+    ports: {
+      catalog: catalogOver(client, { unavailable: () => daemonState?.error ?? null, onChange: onDaemonState }),
+      sessions: sessionsOver(client),
+      assets: assetsOver(client),
+      host: bridge === null ? null : hostPortOver(bridge),
+    },
     daemonState: () => daemonState,
     onDaemonState,
   };

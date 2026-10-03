@@ -4,6 +4,7 @@ import { CursorExpiredError } from "../../../ts/client.ts";
 import * as head from "../../renderer/src/lib/transcript/head-state.ts";
 import * as historyWindow from "../../renderer/src/lib/transcript/history-window.ts";
 import { createSessionLeases } from "../../renderer/src/lib/session-leases.ts";
+import { catalogStatusOf } from "../../renderer/src/lib/catalog-status.ts";
 
 // The hooks that read one session's body take the room's session leases; the
 // rest take the catalog. A fake client stands in for both, as rosetta's app
@@ -14,6 +15,11 @@ const SESSION_HOOKS = new Set(["useTimeline", "useTeamTimelines"]);
 // network is needed to exercise effect cleanup and responses arriving late.
 export function dataHooks(client) {
   const sessions = createSessionLeases({ open: () => client, close() {} });
+  // The app's own adapter reads a daemon status this way; the fakes speak
+  // the daemon's shape.
+  const catalog = Object.create(client, {
+    status: { value: (signal) => client.status(signal).then(catalogStatusOf) },
+  });
   let active;
   const react = {
     useState(initial) {
@@ -100,7 +106,7 @@ export function dataHooks(client) {
           runtime.index = 0;
           runtime.dirty = false;
           active = runtime;
-          result = exports[name](SESSION_HOOKS.has(name) ? sessions : client, ...args);
+          result = exports[name](SESSION_HOOKS.has(name) ? sessions : catalog, ...args);
           renders.push(result);
           active = null;
           for (const effect of runtime.effects.splice(0)) effect();

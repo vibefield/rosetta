@@ -6,55 +6,84 @@ import type {
   AssetRef,
   CollaborationSubscriptionHandlers,
   CommandResponse,
-  ContributionResponse,
   DayUsageResponse,
-  HeatmapResponse,
   ImageVariant,
+  IngestProgress,
   MetaSubscriptionHandlers,
   RosettaClient,
-  SearchRequest,
+  SearchBuildProgress,
+  SearchReadiness,
   SearchResponse,
   SessionSubscriptionHandlers,
-  StatusResponse,
   TimelineEntry,
   TimelineMetaPlanSource,
   TimelinePage,
   UsageResponse,
 } from "@rosetta/protocol";
+import type { ProjectStats } from "./lib/model";
 
 /** A live subscription the room can end. */
 export interface Closable {
   close(): void;
 }
 
-/** The index's catalog: who and what exists, the figures a panel draws,
- * search, and the index's own state. Never a transcript body. */
+/** The index's own state, as the room reads it. */
+export interface CatalogStatus {
+  /** Canonical publication: the cross-session figures are served. */
+  readonly canonicalReady: boolean;
+  readonly searchReadiness: SearchReadiness;
+  readonly searchProgress: SearchBuildProgress | null;
+  /** The cold-start board; null from an index that keeps none. */
+  readonly ingest: IngestProgress | null;
+  readonly startedAt: number | null;
+  readonly uptimeMs: number;
+}
+
+/** The window the figures are folded over: since when, in which timezone. */
+export interface FigureWindow {
+  readonly sinceMs: number;
+  readonly offsetMinutes: number;
+}
+
+/** One settled search, as the room's sheet asks it. */
+export interface CatalogSearch {
+  readonly q: string;
+  readonly limit: number;
+  readonly project: string | null;
+  readonly kind: string | null;
+  readonly agent: string | null;
+}
+
+/**
+ * The index's catalog: who and what exists, the figures a panel draws,
+ * search, and the index's own state — never a transcript body.
+ *
+ * A project's sessions and the unassigned pseudo-project are the room's own
+ * reading of the meta rows; a session's facts (tokens, messages, cost) are
+ * its row in its project's `contribution`.
+ */
 export interface CatalogPort {
+  /** Runtimes, projects and every session row, live: one snapshot, then
+   * mutations. */
   subscribeMeta(handlers: MetaSubscriptionHandlers): Closable;
-  status(signal?: AbortSignal): Promise<StatusResponse>;
+  /** Liveness, publication, search readiness and the cold-start board.
+   * Rejects when the index cannot answer. */
+  status(signal?: AbortSignal): Promise<CatalogStatus>;
   /** Fires when the host's route to the index changes; the room re-asks status. */
   onConnectionChange?(listener: () => void): () => void;
   /** The host's own sentence for why the index cannot answer, or null. */
   unavailable?(): string | null;
-  heatmap(
-    projectId: string,
-    options: { sinceMs?: number; offsetMinutes?: number },
-    signal?: AbortSignal,
-  ): Promise<HeatmapResponse>;
-  contribution(projectId: string, signal?: AbortSignal): Promise<ContributionResponse>;
-  usage(
-    projectId: string,
-    options: { sinceMs?: number; offsetMinutes?: number },
-    signal?: AbortSignal,
-  ): Promise<UsageResponse>;
-  dayUsage(
-    projectId: string,
-    day: string,
-    offsetMinutes: number,
-    signal?: AbortSignal,
-  ): Promise<DayUsageResponse>;
-  search(request: SearchRequest, signal?: AbortSignal): Promise<SearchResponse>;
-  boost(sessionId: string, signal?: AbortSignal): Promise<unknown>;
+  /** One project's per-day heat over the window, and its sessions' facts. */
+  projectStats(projectId: string, window: FigureWindow, signal?: AbortSignal): Promise<ProjectStats>;
+  /** The selected project's usage by model and hour over the same window. */
+  usage(projectId: string, window: FigureWindow, signal?: AbortSignal): Promise<UsageResponse>;
+  /** One day of that project, hour by hour. */
+  dayUsage(projectId: string, day: string, offsetMinutes: number, signal?: AbortSignal): Promise<DayUsageResponse>;
+  search(request: CatalogSearch, signal?: AbortSignal): Promise<SearchResponse>;
+  /** Advisory: read this still-queued session next. Optional — a grant never
+   * opens a write, so only a host that holds the daemon's bearer offers it;
+   * without it the index keeps its own order. */
+  boost?(sessionId: string, signal?: AbortSignal): Promise<unknown>;
 }
 
 /** One session's live transcript, as the room reads it. */

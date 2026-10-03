@@ -1,6 +1,6 @@
 // Production transcript and viewer with synthetic text; no daemon or archive.
 import { RosettaClient } from "@rosetta/protocol";
-import { sameOriginAssetUrl } from "../renderer/src/host/rosetta-host";
+import { sameOriginAssetUrl } from "../renderer/src/host/rosetta-ports";
 import { RoomProvider } from "../renderer/src/room-context";
 import { client, ports } from "./support/room-ports.mjs";
 // The fixture server stands in for the daemon; every read the room makes

@@ -120,19 +120,19 @@ export function useDaemonStatus(catalog: CatalogPort): DaemonStatusFeed {
         if (cancelled) return;
         setFeed({
           connectionError: null,
-          canonicalReady: status.canonical_ready,
-          searchReadiness: status.search.readiness,
-          ingest: status.daemon?.ingest ?? null,
-          searchProgress: status.search.progress ?? null,
-          startedAt: status.daemon?.started_at ?? null,
-          uptimeMs: status.daemon?.uptime_ms ?? 0,
+          canonicalReady: status.canonicalReady,
+          searchReadiness: status.searchReadiness,
+          ingest: status.ingest,
+          searchProgress: status.searchProgress,
+          startedAt: status.startedAt,
+          uptimeMs: status.uptimeMs,
           receivedAt: Date.now(),
         });
-        const phase = status.daemon?.ingest?.phase;
+        const phase = status.ingest?.phase;
         // Keep search visible after canonical publication. Audit/consent are
         // intentional pauses; an unanswered first request retries promptly.
         const paused = phase === "metadata_ready" || phase === "awaiting_consent";
-        const complete = status.canonical_ready && status.search.readiness === "ready";
+        const complete = status.canonicalReady && status.searchReadiness === "ready";
         delay = complete ? 30_000 : paused ? 2_500 : 500;
       } catch (error: unknown) {
         if (!cancelled) setFeed((previous) => ({
@@ -190,14 +190,11 @@ export function useProjectStats(
           const id = queue.shift();
           if (id === undefined) return;
           try {
-            const [heat, contribution] = await Promise.all([
-              catalog.heatmap(id, { sinceMs, offsetMinutes }, controller.signal),
-              catalog.contribution(id, controller.signal),
-            ]);
+            const figures = await catalog.projectStats(id, { sinceMs, offsetMinutes }, controller.signal);
             if (!cancelled) {
               setStats((current) => {
                 const next = new Map(current);
-                next.set(id, { heat: heat.days, contribution: contribution.rows });
+                next.set(id, figures);
                 return next;
               });
             }
@@ -703,23 +700,7 @@ export function useSearch(
     setSearching(true);
     const timer = setTimeout(() => {
       catalog
-        .search(
-          {
-            q,
-            limit: SEARCH_LIMIT,
-            session: null,
-            sessions: null,
-            prefix: null,
-            runtime: null,
-            agent,
-            project,
-            kind,
-            is_error: null,
-            after_ts: null,
-            before_ts: null,
-          },
-          controller.signal,
-        )
+        .search({ q, limit: SEARCH_LIMIT, project, kind, agent }, controller.signal)
         .then((res) => {
           if (cancelled) return;
           setResponse(res);

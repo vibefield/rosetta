@@ -301,7 +301,7 @@ function RoomBody({
   useEffect(() => {
     if (viewedSessionId === null || sessionState === null || sessionState === "indexed") return;
     if (ingest?.phase !== "backfilling") return;
-    catalog.boost(viewedSessionId).catch(() => {});
+    catalog.boost?.(viewedSessionId).catch(() => {});
   }, [catalog, viewedSessionId, sessionState, ingest?.phase]);
   const feed = useTimeline(sessions, viewedSessionId);
   const usage = useProjectUsage(catalog, projectId, canonicalReady === true);

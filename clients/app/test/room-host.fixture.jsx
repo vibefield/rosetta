@@ -69,10 +69,8 @@ const contribution = (project) => sessions.filter((s) => s.project_id === projec
   cost_micro_usd: 2_000_000, billed_micro_usd: null, unpriced_tokens: 0, unrecorded_output: 0, reported_cost_adjustment_micro_usd: 0,
 }));
 const status = (phase = "live") => ({
-  protocol_version: 26, schema_version: 13, canonical_ready: phase === "live",
-  search: { readiness: "ready", progress: null, projection_epoch: null, revision: null },
-  daemon: { started_at: now - H, uptime_ms: H, runtimes: [], hub: { subscribers: 0, rings: 0, session_mutations: 0, meta_events: 0, resyncs: 0, rings_evicted: 0, overflow_rewarms: 0 },
-    ingest: { phase, runtimes: [], projects: [] } },
+  canonicalReady: phase === "live", searchReadiness: "ready", searchProgress: null,
+  ingest: { phase, runtimes: [], projects: [] }, startedAt: now - H, uptimeMs: H,
 });
 
 export const log = { opened: [], closed: [], images: [], attachments: [], favicons: [], boosts: [] };
@@ -122,11 +120,10 @@ function ports(scenario) {
       status: () => connected
         ? Promise.resolve(status(scenario.startsWith("consent") ? "awaiting_consent" : "live"))
         : never(),
-      heatmap: async () => ({ days: heat(1) }),
-      contribution: async (project) => ({ rows: contribution(project) }),
+      projectStats: async (project) => ({ heat: heat(1), contribution: contribution(project) }),
       usage: async () => ({ models: [], hours: [] }),
       dayUsage: async (_project, day) => ({ day, models: [] }),
-      search: async () => ({ state: status().search, hits: [] }),
+      search: async () => ({ state: { readiness: "ready", progress: null, projection_epoch: null, revision: null }, hits: [] }),
       boost: async (id) => { log.boosts.push(id); return {}; },
     },
     sessions: {
