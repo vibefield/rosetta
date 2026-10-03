@@ -1,7 +1,8 @@
 # Daemon access control
 
-**Status:** built 2026-09-30 (RO-1 the bearer, RO-10 per-session grants), on
-`feat/direct-plane-grants`. This page is the rule; `crates/server/src/auth.rs`
+**Status:** built 2026-09-30 (RO-1 the bearer, RO-10 per-session grants) on
+`feat/direct-plane-grants`; rebased onto `main` `886baed` and MERGED 2026-10-03 (tip `ee6724e`,
+the branch's five commits intact). This page is the rule; `crates/server/src/auth.rs`
 and `grant.rs` are its code, `clients/ts/grants.ts` its TypeScript twin, and
 `crates/server/tests/fixtures/grants.json` the vectors both reproduce.
 ARCHITECTURE §5.1 points here.
