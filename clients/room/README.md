@@ -106,6 +106,8 @@ the room uses React 19's boolean `inert`, so 19 is the floor.
 This folder's install carries a development React and its types, for the
 package's own typecheck. A host that links the folder rather than installing
 the package resolves `react` and `react-dom` to its own single copy (Vite's
-`resolve.dedupe`, as `clients/app` does). Its TypeScript treats the two
-`@types/react` installs as one only while their versions match, so the app
-and this package bump them together.
+`resolve.dedupe`, as `clients/app` does). Its TypeScript treats two
+`@types/react` installs as one only when their versions match. The pins here
+follow VibeField's, so rosetta's own app (React 19.2.8, types 19.2.18)
+typechecks against a second copy of the types: the two agree today, and the
+app's typecheck is where a drift would show.
