@@ -21,7 +21,7 @@ const DEPENDENCIES = new Set([...Object.keys(manifest.dependencies), ...Object.k
 test("every export the manifest names is there, and the css is a side effect", () => {
   assert.deepEqual(Object.keys(manifest.exports), [".", "./fixtures", "./styles/room.css"]);
   for (const target of Object.values(manifest.exports)) assert.equal(existsSync(path.join(ROOM, target)), true, target);
-  assert.deepEqual(manifest.peerDependencies, { react: ">=18 <20", "react-dom": ">=18 <20" });
+  assert.deepEqual(manifest.peerDependencies, { react: ">=19 <20", "react-dom": ">=19 <20" });
   assert.deepEqual(manifest.sideEffects, ["*.css"]);
 });
 

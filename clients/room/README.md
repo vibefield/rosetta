@@ -98,8 +98,8 @@ no extension, so a host's compiler needs no `allowImportingTsExtensions`.
 `pnpm install` in this folder brings its dependencies; `@vibecook/mille` and
 `mille-ui` are `link:` rows into a sibling mille checkout, as in the app, and
 the two Radix menus are there as mille-ui's peers (the room's tree uses them).
-React is a peer (`>=18 <20`); `@vibecook/mille-ui` itself wants React 19, and
-the room uses React 19's `inert`, so 19 is the floor in practice.
+React is a peer at `>=19 <20`: `@vibecook/mille-ui` itself wants React 19, and
+the room uses React 19's boolean `inert`, so 19 is the floor.
 
 This folder's install carries a development React and its types, for the
 package's own typecheck. A host that links the folder rather than installing
