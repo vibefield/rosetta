@@ -21,8 +21,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
-    "react": ">=18 <20",
-    "react-dom": ">=18 <20"
+    "react": ">=19 <20",
+    "react-dom": ">=19 <20"
   },
   "dependencies": {
     "@radix-ui/react-context-menu": "^2.3.7",
