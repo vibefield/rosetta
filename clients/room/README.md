@@ -98,7 +98,9 @@ no extension, so a host's compiler needs no `allowImportingTsExtensions`.
 `pnpm install` in this folder brings its dependencies; `@vibecook/mille` and
 `mille-ui` are `link:` rows into a sibling mille checkout, as in the app, and
 the two Radix menus are there as mille-ui's peers (the room's tree uses them).
-React is a peer at `>=19 <20`: `@vibecook/mille-ui` itself wants React 19, and
+React is a peer at `>=19 <20` (the dev and test React is pinned to 19.2.7 — the version
+the package's first host, VibeField, resolves; its dependency check requires one React across
+its linked siblings, so the pin moves only with that host's): `@vibecook/mille-ui` itself wants React 19, and
 the room uses React 19's boolean `inert`, so 19 is the floor.
 
 This folder's install carries a development React and its types, for the
