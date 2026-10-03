@@ -6,6 +6,7 @@ import { RoomProvider } from "../renderer/src/room-context";
 import { client, ports } from "./support/room-ports.mjs";
 import { NO_SPEND } from "../renderer/src/lib/spend";
 import "../renderer/src/styles/tokens.css";
+import "../renderer/src/styles/app.css";
 import "../renderer/src/styles/room.css";
 
 const now = new Date(2026, 8, 30, 17, 35).getTime();

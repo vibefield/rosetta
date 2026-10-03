@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { TranscriptColumn } from "../renderer/src/components/Transcript";
 import { entry, inline } from "./support/ledger-fixtures.mjs";
 import "../renderer/src/styles/tokens.css";
+import "../renderer/src/styles/app.css";
 import "../renderer/src/styles/room.css";
 import "../renderer/src/styles/transcript.css";
 

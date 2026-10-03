@@ -1,0 +1,66 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   rosetta's app: the window the History room fills. The room scopes its own
+   styles to its root (styles/room.css, "THE ROOM IN ITS HOST"); what belongs
+   to the page, the window and the app's own parts is here.
+   ═══════════════════════════════════════════════════════════════════════ */
+html, body, #root { height: 100%; }
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--vf-canvas-bg); color: var(--vf-text-primary);
+  font-family: var(--vf-font-sans); -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+code, .mono { font-family: var(--vf-font-mono); }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* M6 — non-negotiable quality floor */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* macOS: the traffic lights sit over the search strip, and the strip is the
+   window's drag region (hiddenInset title bar; inert elsewhere).
+   A modal occupies the native title-bar strip when it goes edge-to-edge.
+   Remove the room's drag region for the whole modal lifetime: Electron drops
+   every pointer event over a drag region before the restore button can see
+   it, even though the modal paints above the room. The room marks its root
+   while one of its dialogs or its sheet is open. */
+.ah-searchbar { -webkit-app-region: drag; }
+.ah-frame[data-ah-overlay] .ah-searchbar { -webkit-app-region: no-drag; }
+
+/* the theme control, at the strip's right edge */
+.ah-theme-toggle {
+  position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+  width: 32px; height: 32px; border-radius: 999px;
+  color: var(--vf-text-secondary);
+  -webkit-app-region: no-drag;
+}
+.ah-theme-toggle svg { width: 16px; height: 16px; }
+
+/* the roll call: consent in one screen — census rows on the ramp, one act */
+.ah-rollcall { display: flex; flex-direction: column; gap: 4px; width: min(400px, 88%); margin-top: 6px; text-align: left; }
+.ah-rollcall__row {
+  display: grid; grid-template-columns: 14px 14px minmax(0, 1fr); gap: 3px 10px; align-items: center;
+  padding: 8px 11px; border-radius: 10px; background: var(--vf-fill); cursor: pointer;
+  transition: background-color 160ms ease;
+}
+.ah-rollcall__row:hover { background: var(--vf-fill-hover); }
+.ah-rollcall__row input { width: 13px; height: 13px; margin: 0; accent-color: var(--vf-select); }
+.ah-rollcall__row .ah-agent { width: 14px; height: 14px; }
+.ah-rollcall__row b { font-size: 12px; font-weight: 500; color: var(--vf-text-primary); }
+.ah-rollcall__census {
+  grid-column: 3; color: var(--vf-text-faint); font-size: 9.5px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-rollcall__census code { font-size: 9.5px; }
+.ah-rollcall__absent { margin: 2px 0 0; color: var(--vf-text-faint); font-size: 10px; }
+.ah-rollcall__begin {
+  margin-top: 10px; height: 30px; padding: 0 20px; border: 0; border-radius: 999px;
+  background: var(--vf-foreground); color: var(--vf-canvas-bg); font-size: 12px; font-weight: 500;
+  transition: opacity 160ms ease, transform 140ms ease;
+}
+.ah-rollcall__begin:not(:disabled):active { transform: scale(0.96); }
+.ah-rollcall__begin:disabled { opacity: 0.45; cursor: default; }
+.ah-rollcall__error { margin: 4px 0 0; color: var(--vf-red); font-size: 10.5px; }

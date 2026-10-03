@@ -27,7 +27,7 @@
 .ah-room {
   position: absolute; inset: 0;
   display: flex; flex-direction: column;
-  background: var(--vf-sheet-surface);
+  background: var(--ah-plate);
   backdrop-filter: blur(40px);
   border-top: 1px solid var(--vf-hairline);
 }
@@ -378,7 +378,7 @@
 .ah-day {
   position: sticky; top: 0; z-index: 2;
   padding: 10px 10px 5px; margin-top: 4px;
-  background: linear-gradient(var(--vf-sheet-surface) 72%, transparent);
+  background: linear-gradient(var(--ah-plate) 72%, transparent);
   color: var(--vf-text-faint); font-size: 9.5px; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.08em;
 }
@@ -528,34 +528,62 @@
 .ah-fileview a:focus-visible,
 .ah-sheet button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
 
-/* M6 — non-negotiable quality floor */
-@media (prefers-reduced-motion: reduce) {
-  * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
-}
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   APP SHELL — where the specimen page's frame becomes the application.
-   Everything above is the proto verbatim; everything below is the port.
+   THE ROOM IN ITS HOST — where the specimen page's frame becomes whatever
+   holds it: rosetta's window, or another app's slot. Everything above is the
+   proto verbatim; everything below is the port. The page itself (html, body,
+   the window's drag region, the global motion floor) is the host's:
+   rosetta's app keeps it in styles/app.css.
    ═══════════════════════════════════════════════════════════════════════ */
-html, body, #root { height: 100%; }
-* { box-sizing: border-box; }
-body {
-  margin: 0; background: var(--vf-canvas-bg); color: var(--vf-text-primary);
-  font-family: var(--vf-font-sans); -webkit-font-smoothing: antialiased;
-  overflow: hidden;
-}
-button, input { font: inherit; color: inherit; }
-button { cursor: pointer; }
-code, .mono { font-family: var(--vf-font-mono); }
-.tnum { font-variant-numeric: tabular-nums; }
 
-/* the frame is the window now: no radius, no shadow, no fixed height */
+/* The room's own assumptions, scoped to its root and to the layers it
+   portals out (`.ah-layer`), at zero specificity so every rule above still
+   wins as it did when these were the page's. */
+:where(.ah-frame, .ah-layer), :where(.ah-frame, .ah-layer) * { box-sizing: border-box; }
+:where(.ah-frame, .ah-layer) :where(button, input) { font: inherit; color: inherit; }
+:where(.ah-frame, .ah-layer) :where(button) { cursor: pointer; }
+:where(.ah-frame, .ah-layer) :where(code, .mono) { font-family: var(--vf-font-mono); }
+:where(.ah-frame, .ah-layer) .tnum { font-variant-numeric: tabular-nums; }
+
+/* The room's own tokens. `--ah-plate` is the colour its surface reads as —
+   the paper it paints, and what its fades and cut-out rings are drawn in. The
+   project band (`--tint-*`) is the room's identity system; both themes. */
+:where(.ah-frame, .ah-layer) {
+  --ah-plate: var(--vf-sheet-surface);
+  --tint-l: 0.60;
+  --tint-c: 0.15;
+}
+.dark :where(.ah-frame, .ah-layer) { --tint-l: 0.74; }
+
+/* the frame fills what holds it: no radius, no shadow, no fixed height */
 .ah-frame, .ah-frame.is-tall {
   height: 100%; min-height: 0;
   border: 0; border-radius: 0; box-shadow: none;
+  font-family: var(--vf-font-sans); -webkit-font-smoothing: antialiased;
   --composer-h: 0px;
   --ah-scroll-foot: calc(32px + env(safe-area-inset-bottom, 0px));
   --ah-floating-foot: calc(24px + env(safe-area-inset-bottom, 0px));
+}
+
+/* A host that paints its own surface beneath the room (`surface="host"`):
+   no ground, no plate, and the paper fades become frost — a blur of whatever
+   passes beneath, feathered by its own mask, under the chrome it grounds.
+   A mask on the scroller itself would fade the pinned chrome with the rows. */
+.ah-frame[data-ah-surface="host"] { background: none; }
+.ah-frame[data-ah-surface="host"] .ah-room { background: none; backdrop-filter: none; }
+.ah-frame[data-ah-surface="host"] .tr-frost::before {
+  background: none;
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgb(0 0 0 / 88%) 38%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, rgb(0 0 0 / 88%) 38%, transparent 100%);
+}
+.ah-frame[data-ah-surface="host"] .ah-day { background: none; }
+.ah-frame[data-ah-surface="host"] .ah-day::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  -webkit-mask-image: linear-gradient(#000 72%, transparent);
+  mask-image: linear-gradient(#000 72%, transparent);
 }
 /* The search strip takes its own height. The grid fills only what remains:
    a 100% height with an automatic minimum pushed every column's foot below
@@ -612,15 +640,6 @@ code, .mono { font-family: var(--vf-font-mono); }
 .ah-worktree code { font-size: 10px; color: var(--vf-text-faint); font-variant-numeric: tabular-nums; }
 .ah-worktree code[data-dirty] { color: var(--vf-cyan); }
 
-/* macOS: the traffic lights sit over the search strip, and the strip is the
-   window's drag region (hiddenInset title bar; inert elsewhere) — drawn in
-   styles/search.css beside the launcher it seats.
-   A modal occupies the native title-bar strip when it goes edge-to-edge.
-   Remove the room's drag region for the whole modal lifetime: Electron drops
-   every pointer event over a drag region before the restore button can see
-   it, even though the modal paints above the room. */
-body:has([data-ah-fileview]) .ah-searchbar { -webkit-app-region: no-drag; }
-
 /* a receipt, so a copy or an act is never silent */
 .ah-receipt {
   position: absolute; left: 50%; bottom: 26px; z-index: 45;
@@ -650,7 +669,7 @@ body:has([data-ah-fileview]) .ah-searchbar { -webkit-app-region: no-drag; }
 .ah-veil {
   position: absolute; inset: 0; z-index: 5;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
-  background: color-mix(in srgb, var(--vf-sheet-surface) 55%, transparent);
+  background: color-mix(in srgb, var(--ah-plate) 55%, transparent);
   backdrop-filter: blur(5px);
   animation: ah-veil-in 240ms ease;
 }
@@ -675,7 +694,7 @@ body:has([data-ah-fileview]) .ah-searchbar { -webkit-app-region: no-drag; }
   content: ""; position: absolute; inset: -2px -4px; border-radius: 6px;
   background: linear-gradient(100deg,
     transparent 20%,
-    color-mix(in srgb, var(--vf-sheet-surface) 55%, transparent) 50%,
+    color-mix(in srgb, var(--ah-plate) 55%, transparent) 50%,
     transparent 80%);
   background-size: 200% 100%;
   animation: ah-cook-sweep 1.6s ease-in-out infinite;
@@ -718,31 +737,6 @@ body:has([data-ah-fileview]) .ah-searchbar { -webkit-app-region: no-drag; }
 .ah-coldstart__row[data-state="done"] .ah-meter i { background: var(--vf-green); }
 .ah-coldstart__row[data-state="queued"] .ah-coldstart__kind { color: var(--vf-text-faint); }
 
-/* the roll call: consent in one screen — census rows on the ramp, one act */
-.ah-rollcall { display: flex; flex-direction: column; gap: 4px; width: min(400px, 88%); margin-top: 6px; text-align: left; }
-.ah-rollcall__row {
-  display: grid; grid-template-columns: 14px 14px minmax(0, 1fr); gap: 3px 10px; align-items: center;
-  padding: 8px 11px; border-radius: 10px; background: var(--vf-fill); cursor: pointer;
-  transition: background-color 160ms ease;
-}
-.ah-rollcall__row:hover { background: var(--vf-fill-hover); }
-.ah-rollcall__row input { width: 13px; height: 13px; margin: 0; accent-color: var(--vf-select); }
-.ah-rollcall__row .ah-agent { width: 14px; height: 14px; }
-.ah-rollcall__row b { font-size: 12px; font-weight: 500; color: var(--vf-text-primary); }
-.ah-rollcall__census {
-  grid-column: 3; color: var(--vf-text-faint); font-size: 9.5px;
-  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.ah-rollcall__census code { font-size: 9.5px; }
-.ah-rollcall__absent { margin: 2px 0 0; color: var(--vf-text-faint); font-size: 10px; }
-.ah-rollcall__begin {
-  margin-top: 10px; height: 30px; padding: 0 20px; border: 0; border-radius: 999px;
-  background: var(--vf-foreground); color: var(--vf-canvas-bg); font-size: 12px; font-weight: 500;
-  transition: opacity 160ms ease, transform 140ms ease;
-}
-.ah-rollcall__begin:not(:disabled):active { transform: scale(0.96); }
-.ah-rollcall__begin:disabled { opacity: 0.45; cursor: default; }
-.ah-rollcall__error { margin: 4px 0 0; color: var(--vf-red); font-size: 10.5px; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    THE FILE VIEWER — new vocabulary.
@@ -761,10 +755,10 @@ body:has([data-ah-fileview]) .ah-searchbar { -webkit-app-region: no-drag; }
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* M5, the stage recedes: a dialog is focus made physical, so the room behind
-   it steps back rather than merely dimming. `:has` on the body because the
-   dialog is portalled out of the room it belongs to. */
+   it steps back rather than merely dimming. The room marks its own root while
+   one of its dialogs is open, because the dialog is portalled out of it. */
 .ah-room { transition: transform 240ms var(--vf-ease-island); }
-body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
+.ah-frame[data-ah-overlay] .ah-room { transform: scale(0.98); }
 
 .ah-fileview__backdrop {
   position: fixed; inset: 0; z-index: 60;
@@ -780,7 +774,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
   top: 50%; left: 50%;
   transform: translate(-50%, -50%);
   display: flex; flex-direction: column;
-  width: min(1080px, 92vw); height: min(760px, 86vh);
+  width: min(1080px, 92%); height: min(760px, 86%);
   border-radius: var(--vf-radius-card);
   /* Opaque, not the sheet's glass: this frame's job is to be read through by
      nobody. Code at 12.5px over a blurred room is a legibility tax the room
@@ -795,7 +789,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 .ah-fileview:focus-visible, .ah-fileview:focus { outline: none; }
 .ah-fileview[data-fullscreen] {
   inset: 0;
-  width: 100vw; height: 100vh; height: 100dvh;
+  width: 100%; height: 100%;
   border-radius: 0;
   transform: none;
   animation: none;
@@ -815,7 +809,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
    stage stops travelling. */
 @media (prefers-reduced-motion: reduce) {
   .ah-room { transition: none; }
-  body:has([data-ah-fileview]) .ah-room { transform: none; }
+  .ah-frame[data-ah-overlay] .ah-room { transform: none; }
   .ah-fileview, .ah-fileview__backdrop { animation-duration: 1ms; }
 }
 
@@ -1272,7 +1266,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
 .ah-confirm {
   position: fixed; z-index: 61; top: 50%; left: 50%;
   transform: translate(-50%, -50%);
-  width: min(420px, 88vw); padding: 20px 22px 18px;
+  width: min(420px, 88%); padding: 20px 22px 18px;
   border-radius: 18px; background: var(--vf-chrome-solid);
   box-shadow: var(--vf-shadow-dialog);
   animation: ah-fileview-in 200ms var(--vf-ease-island);
@@ -1354,7 +1348,7 @@ body:has([data-ah-fileview]) .ah-room { transform: scale(0.98); }
    on the left, the change on the right, both at once. Same shell as the file
    viewer, one size wider, because two panes need the room. */
 
-.ah-fileview[data-wide] { width: min(1320px, 94vw); height: min(820px, 90vh); }
+.ah-fileview[data-wide] { width: min(1320px, 94%); height: min(820px, 90%); }
 
 .ah-commitview__head { grid-template-columns: minmax(0, 1fr) auto; padding-bottom: 9px; }
 .ah-commitview__subject {

@@ -8,6 +8,7 @@ import { desktopHost } from "../renderer/src/host/desktop-bridge";
 import { hostPortOver } from "../renderer/src/host/rosetta-host";
 import { ports } from "./support/room-ports.mjs";
 import "../renderer/src/styles/tokens.css";
+import "../renderer/src/styles/app.css";
 import "../renderer/src/styles/room.css";
 import "@vibecook/mille-ui/tokens.css";
 import "@vibecook/mille-ui/theme/vibefield.css";

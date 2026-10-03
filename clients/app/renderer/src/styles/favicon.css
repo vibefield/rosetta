@@ -61,7 +61,7 @@
 }
 
 .tr-favs .tr-fav {
-  box-shadow: 0 0 0 1.5px var(--vf-sheet-surface);
+  box-shadow: 0 0 0 1.5px var(--ah-plate);
 }
 
 .tr-favs .tr-fav--globe {

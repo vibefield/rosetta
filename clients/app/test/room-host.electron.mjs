@@ -63,8 +63,17 @@ async function run() {
     await until(() => document.querySelectorAll('.ah-image-gallery__thumb img').length === 2, 'the gallery\'s thumbnails');
     assert.deepEqual(await check(() => [...new Set(window.roomFixture.log.images)].sort()), ['aaaa:preview', 'aaaa:rail', 'aaaa:tile', 'bbbb:rail', 'bbbb:tile'], 'the viewer and its rail ask the source too');
     assert.equal(await check(() => [...document.querySelectorAll('img')].every(img => /^(data|blob):/.test(img.getAttribute('src')))), true, 'no image the source did not answer');
+    // An open dialog marks the room's root, and the stage recedes behind it.
+    assert.equal(await check(() => document.querySelector('.ah-frame').hasAttribute('data-ah-overlay')), true, 'the root is marked');
+    await until(() => getComputedStyle(document.querySelector('.ah-room')).transform === 'matrix(0.98, 0, 0, 0.98, 0, 0)', 'the stage recedes');
+    assert.equal(await check(() => document.querySelector('.ah-fileview').classList.contains('ah-layer') && document.querySelector('.ah-fileview').parentElement === document.body), true, 'a paper room portals to the body');
     await check(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true; });
     await until(() => !document.querySelector('.ah-image img'), 'the viewer closes');
+    await until(() => !document.querySelector('.ah-frame').hasAttribute('data-ah-overlay'), 'the mark leaves with the dialog');
+    // The room's own tokens travel with it: no page stylesheet defines the band.
+    assert.equal(await check(() => getComputedStyle(document.querySelector('.ah-frame')).getPropertyValue('--tint-l').trim()), '0.74', 'the dark tint band');
+    assert.equal(await check(() => getComputedStyle(document.documentElement).getPropertyValue('--tint-l').trim()), '', 'and nothing set on the page');
+    assert.equal(await check(() => getComputedStyle(document.querySelector('.ah-room')).backgroundColor), 'rgba(28, 28, 30, 0.96)', 'paper: the room paints its plate');
 
     // No host: the honest faces. No worktree to offer, a closed guest, a
     // globe for every site, and nobody asked.
@@ -86,6 +95,35 @@ async function run() {
     await until(() => document.querySelectorAll('.tr-fav img').length >= 2, 'the host\'s icons');
     assert.deepEqual(await check(() => [...window.roomFixture.log.favicons].sort()), ['developer.mozilla.org', 'github.com'], 'one ask per site, of the host');
     assert.equal(await check(() => document.querySelector('[aria-label="Toggle the project worktree"]')), null, 'no worktree engine, no toggle');
+
+    // A host that paints its own surface: no ground, no plate, frost for the
+    // fades, and the room's layers land in the host's container.
+    await mount('glass');
+    await click('.ah-project-list-item[data-motion-key="p0"]');
+    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s0"]'), 'sessions on glass');
+    await click('.ah-session-list-item[data-motion-key="s0"]');
+    await until(() => document.querySelector('[data-timeline-id="t1"]'), 'transcript on glass');
+    const glass = await check(() => {
+      const css = (selector, pseudo) => getComputedStyle(document.querySelector(selector), pseudo);
+      return {
+        surface: document.querySelector('.ah-frame').dataset.ahSurface,
+        ground: css('.ah-frame').backgroundImage, plate: css('.ah-room').backgroundColor, plateFilter: css('.ah-room').backdropFilter,
+        frost: css('.tr-frost', '::before').backdropFilter, frostPaint: css('.tr-frost', '::before').backgroundImage,
+        frostMask: css('.tr-frost', '::before').webkitMaskImage.startsWith('linear-gradient'),
+        day: css('.ah-day', '::before').backdropFilter, dayPaint: css('.ah-day').backgroundImage,
+      };
+    });
+    assert.deepEqual(glass, { surface: 'host', ground: 'none', plate: 'rgba(0, 0, 0, 0)', plateFilter: 'none',
+      frost: 'blur(14px)', frostPaint: 'none', frostMask: true, day: 'blur(14px)', dayPaint: 'none' }, 'the host paints beneath');
+    await check(() => { const s = document.querySelector('.tr-scroll'); s.scrollTop = 60; s.dispatchEvent(new Event('scroll')); return true; });
+    await pause(300);
+    writeFileSync(path.join(temporary, 'glass.png'), (await win.webContents.capturePage()).toPNG());
+    await check(() => { const s = document.querySelector('.tr-scroll'); s.scrollTop = 0; s.dispatchEvent(new Event('scroll')); return true; });
+    await click('.tr-attachments .tr-att__tile');
+    await until(() => document.querySelector('#host-layer .ah-fileview'), 'the viewer in the host\'s container');
+    assert.equal(await check(() => document.querySelector('body > .ah-fileview, body > div > .ah-fileview:not(#host-layer *)')), null, 'nothing portalled to the body');
+    await check(() => { document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true; });
+    await until(() => !document.querySelector('#host-layer .ah-fileview'), 'the viewer closes in the host\'s container');
 
     // A source that fetches before it can address: tiles wait, then load its
     // object URLs; a refusal is the "could not load" face, and Retry asks again.

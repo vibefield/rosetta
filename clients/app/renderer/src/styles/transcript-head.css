@@ -192,8 +192,8 @@
   opacity: var(--frost, 0);
   background: linear-gradient(
     to bottom,
-    var(--vf-sheet-surface) 0%,
-    color-mix(in srgb, var(--vf-sheet-surface) 88%, transparent) 38%,
+    var(--ah-plate) 0%,
+    color-mix(in srgb, var(--ah-plate) 88%, transparent) 38%,
     transparent 100%
   );
   transition: opacity 120ms ease;

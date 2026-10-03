@@ -10,6 +10,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import type { ReactNode } from "react";
+import { useRoomOverlay, useRoomPortal } from "../../room-context";
 
 export interface ConfirmDialogProps {
   /** `null` when nothing is being asked. */
@@ -25,12 +26,14 @@ export interface ConfirmDialogProps {
 }
 
 export function ConfirmDialog({ question, onConfirm, onCancel }: ConfirmDialogProps) {
+  useRoomOverlay(question !== null);
+  const container = useRoomPortal();
   if (question === null) return null;
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onCancel()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="ah-fileview__backdrop" data-ah-fileview />
-        <Dialog.Content className="ah-confirm" aria-describedby={undefined}>
+      <Dialog.Portal container={container}>
+        <Dialog.Overlay className="ah-layer ah-fileview__backdrop" data-ah-fileview />
+        <Dialog.Content className="ah-layer ah-confirm" aria-describedby={undefined}>
           <Dialog.Title className="ah-confirm__title">{question.title}</Dialog.Title>
           <div className="ah-confirm__body">{question.body}</div>
           <div className="ah-confirm__acts">

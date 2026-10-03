@@ -9,6 +9,7 @@ import { SessionList } from "../renderer/src/components/sessions/SessionList";
 import { TranscriptColumn } from "../renderer/src/components/Transcript";
 import { NO_SPEND } from "../renderer/src/lib/spend";
 import "../renderer/src/styles/tokens.css";
+import "../renderer/src/styles/app.css";
 import "../renderer/src/styles/room.css";
 import "../renderer/src/styles/transcript.css";
 

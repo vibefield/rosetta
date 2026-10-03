@@ -51,6 +51,7 @@ import type {
 import { ActivityGlyph } from "../transcript/glyphs";
 import { SegmentedControl } from "../ui";
 import { hasPrimaryModifier } from "./shortcut";
+import { useRoomOverlay, useRoomPortal } from "../../room-context";
 
 const LIST_ID = "ah-sheet-listbox";
 
@@ -237,6 +238,8 @@ export function SearchSheet({
   getRuntimeKind,
   onOpenHit,
 }: SearchSheetProps) {
+  useRoomOverlay(open);
+  const container = useRoomPortal();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const { lines, options } = useMemo(() => buildSheetLines(results), [results]);
   const emptyQuery = query.trim() === "";
@@ -461,12 +464,12 @@ export function SearchSheet({
         if (!next) onClose();
       }}
     >
-      <Dialog.Portal>
-        {/* `data-ah-sheet` is what the room's stylesheet watches to recede
-            the stage and to stop the strip from dragging under the sheet. */}
-        <Dialog.Overlay className="ah-sheet__backdrop" data-ah-sheet="" />
+      <Dialog.Portal container={container}>
+        {/* While the sheet is open the room marks its root, so the stage
+            recedes and the host's strip stops dragging under it. */}
+        <Dialog.Overlay className="ah-layer ah-sheet__backdrop" data-ah-sheet="" />
         <Dialog.Content
-          className="ah-sheet"
+          className="ah-layer ah-sheet"
           aria-describedby={undefined}
           onOpenAutoFocus={(event) => {
             // The field takes focus with its remembered text selected, so

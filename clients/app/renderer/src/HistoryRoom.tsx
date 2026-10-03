@@ -11,7 +11,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import type { ForwardedRef, ReactNode } from "react";
 import type { SearchHit, SessionRow } from "@rosetta/protocol";
 import type { RoomPorts } from "./ports";
-import { RoomProvider, useRoom } from "./room-context";
+import { RoomProvider, useRoom, useRoomOverlayOpen } from "./room-context";
 import type { SummaryTab } from "./room-context";
 import { ColdStartPanel } from "./components/ColdStart";
 import { ProjectsColumn } from "./components/projects";
@@ -103,6 +103,14 @@ export interface HistoryRoomSearch {
 }
 
 export interface HistoryRoomProps extends RoomPorts {
+  /** Who paints beneath the room. `paper` (the default): the room paints its
+   * own ground and plate, as rosetta's app shows it. `host`: the host paints
+   * its own surface beneath; the room paints neither, and its fades become
+   * frost over whatever the host painted. */
+  readonly surface?: "paper" | "host" | undefined;
+  /** Where the room's dialogs and its sheet are portalled (the host's frame,
+   * so its overlays anchor there); the document's body when absent. */
+  readonly portalContainer?: HTMLElement | null | undefined;
   readonly search?: HistoryRoomSearch | undefined;
   /** The chart the project panel opens on. */
   readonly initialSummaryTab?: SummaryTab | undefined;
@@ -129,9 +137,13 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
     [catalog, sessions, assets, host],
   );
   return (
-    <RoomProvider ports={ports} options={{ initialSummaryTab: props.initialSummaryTab }}>
+    <RoomProvider
+      ports={ports}
+      options={{ initialSummaryTab: props.initialSummaryTab, portalContainer: props.portalContainer }}
+    >
       <RoomBody
         handle={ref}
+        surface={props.surface ?? "paper"}
         search={props.search ?? null}
         unavailable={props.unavailable ?? null}
         consent={props.consent ?? null}
@@ -142,16 +154,19 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
 
 function RoomBody({
   handle,
+  surface,
   search: searchOption,
   unavailable,
   consent,
 }: {
   readonly handle: ForwardedRef<HistoryRoomHandle>;
+  readonly surface: "paper" | "host";
   readonly search: HistoryRoomSearch | null;
   readonly unavailable: ReactNode;
   readonly consent: ReactNode;
 }) {
   const { catalog, sessions, host } = useRoom();
+  const overlayOpen = useRoomOverlayOpen();
   const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog);
   const nowMs = useNow(meta);
   const daemonStatus = useDaemonStatus(catalog);
@@ -422,7 +437,7 @@ function RoomBody({
     projectRows.length === 0 && ingestActive && ingest !== null && !awaitingConsent;
 
   return (
-    <div className="ah-frame is-tall">
+    <div className="ah-frame is-tall" data-ah-surface={surface} data-ah-overlay={overlayOpen ? "" : undefined}>
       <div className="ah-room">
         {searchOption !== null && (
           <div className="ah-searchbar">

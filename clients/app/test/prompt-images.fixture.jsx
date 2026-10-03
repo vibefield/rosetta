@@ -17,6 +17,7 @@ import { entry, inline, tool, file } from "./support/ledger-fixtures.mjs";
 import { memberText } from "./prompt-images-data.mjs";
 import bundles from "./fixtures/prompt-images/optimized/manifest.json";
 import "../renderer/src/styles/tokens.css";
+import "../renderer/src/styles/app.css";
 import "../renderer/src/styles/room.css";
 import "../renderer/src/styles/transcript.css";
 

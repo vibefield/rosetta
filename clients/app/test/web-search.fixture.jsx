@@ -10,6 +10,7 @@ import { ledgerLines } from "../renderer/src/lib/transcript/ledger";
 import { line, url } from "./support/ledger-fixtures.mjs";
 import { useSetSiteIconsEnabled } from "../renderer/src/lib/transcript/favicons";
 import "../renderer/src/styles/tokens.css";
+import "../renderer/src/styles/app.css";
 import "../renderer/src/styles/room.css";
 import "../renderer/src/styles/transcript.css";
 

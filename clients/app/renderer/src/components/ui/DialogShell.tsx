@@ -11,6 +11,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useRef } from "react";
 import type { KeyboardEventHandler, ReactNode } from "react";
+import { useRoomOverlay, useRoomPortal } from "../../room-context";
 
 export interface DialogShellProps {
   /** The accessible name. Rendered for screen readers only — the visible
@@ -41,14 +42,17 @@ export function DialogShell({
   // These controlled dialogs have no Radix Trigger. Remember the actual
   // opener so closing a message returns to its preview without scrolling.
   const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  // The room's root recedes while this is open; the dialog lands where the
+  // host asked the room's layers to go.
+  useRoomOverlay(true);
+  const container = useRoomPortal();
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        {/* `data-ah-fileview` is what the room's own stylesheet watches to
-            let the stage recede behind an open dialog. */}
-        <Dialog.Overlay className="ah-fileview__backdrop" data-ah-fileview />
+      <Dialog.Portal container={container}>
+        {/* `data-ah-fileview` names an open file dialog to the host's keys. */}
+        <Dialog.Overlay className="ah-layer ah-fileview__backdrop" data-ah-fileview />
         <Dialog.Content
-          className="ah-fileview"
+          className="ah-layer ah-fileview"
           data-wide={wide ? "" : undefined}
           data-fullscreen={fullscreen ? "" : undefined}
           aria-describedby={undefined}

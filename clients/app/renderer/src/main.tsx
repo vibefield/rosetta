@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { createRosettaHost } from "./host/rosetta-host";
 import "./styles/tokens.css";
+import "./styles/app.css";
 import "./styles/room.css";
 import "./styles/ingest.css";
 import "./styles/transcript.css";

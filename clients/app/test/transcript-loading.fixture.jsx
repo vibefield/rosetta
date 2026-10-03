@@ -8,6 +8,7 @@ import { RoomProvider, useRoom } from '../renderer/src/room-context';
 import { client, ports } from './support/room-ports.mjs';
 import { entry, inline, shell } from './support/ledger-fixtures.mjs';
 import '../renderer/src/styles/tokens.css';
+import '../renderer/src/styles/app.css';
 import '../renderer/src/styles/room.css';
 import '../renderer/src/styles/transcript.css';
 

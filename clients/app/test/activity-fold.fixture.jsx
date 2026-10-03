@@ -9,6 +9,7 @@ import { ThreadNavigationContext } from "../renderer/src/components/transcript/t
 import { buildThreadIndex } from "../renderer/src/components/transcript/thread-index";
 import { entry, inline, shell } from "./support/ledger-fixtures.mjs";
 import "../renderer/src/styles/tokens.css";
+import "../renderer/src/styles/app.css";
 import "../renderer/src/styles/room.css";
 import "../renderer/src/styles/transcript.css";
 

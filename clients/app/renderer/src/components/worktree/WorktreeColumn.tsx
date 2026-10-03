@@ -244,11 +244,11 @@ export function WorktreeColumn({
             type="button"
             onClick={onRetry}
             style={{
-              border: "1px solid var(--vf-border)",
+              border: "1px solid var(--vf-hairline-strong)",
               borderRadius: 6,
               padding: "4px 9px",
               color: "var(--vf-text-secondary)",
-              background: "var(--vf-surface-raised)",
+              background: "var(--vf-fill)",
               cursor: "pointer",
             }}
           >

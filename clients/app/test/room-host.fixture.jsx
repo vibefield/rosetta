@@ -7,6 +7,7 @@ import { flushSync } from "react-dom";
 import { HistoryRoom } from "../renderer/src/HistoryRoom";
 import { entry, inline, read, shell, tool, url } from "./support/ledger-fixtures.mjs";
 import "../renderer/src/styles/tokens.css";
+
 import "../renderer/src/styles/room.css";
 import "../renderer/src/styles/ingest.css";
 import "../renderer/src/styles/transcript.css";
@@ -159,10 +160,15 @@ function Fixture() {
   };
   if (scenario === null) return null;
   const { name, key, ports: p } = scenario;
+  // What a host paints beneath a room that asked it to: here, a loud ground,
+  // so a capture shows whether anything of the room's paper is left.
+  document.body.style.background = name === "glass"
+    ? "repeating-linear-gradient(45deg, #2b4a8a 0 40px, #8a2b5e 40px 80px)" : "";
   return <HistoryRoom key={key} {...p}
     {...(name === "search" ? { search: { open: sheetOpen, onOpenChange: setSheetOpen, accessory: <span data-accessory="">host</span> } } : {})}
     {...(name === "disconnected" ? { unavailable: <span data-host-words="">The index is resting.</span> } : {})}
     {...(name === "consent" ? { consent: <div data-consent="">Choose your agents</div> } : {})}
+    {...(name === "glass" ? { surface: "host", portalContainer: document.getElementById("host-layer") } : {})}
   />;
 }
 

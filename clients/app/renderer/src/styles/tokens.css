@@ -46,13 +46,6 @@
   --vf-accent-7: #ef4444;
   --vf-accent-8: #3b82f6;
 
-  /* PROJECT IDENTITY — the band every project tint is cut from. Only the hue
-     varies from project to project; lightness and chroma are the same for all
-     of them, so no project can look louder than another by accident. Two
-     values per theme, and a project is the same colour in both. */
-  --tint-l: 0.60;
-  --tint-c: 0.15;
-
   --vf-radius-card: 22px;
   --vf-radius-island: 32px;
   --vf-radius-sheet: 40px;
@@ -83,7 +76,6 @@
 
 .dark {
   color-scheme: dark;
-  --tint-l: 0.74;
 
   --vf-canvas-bg: #171717;
   --vf-canvas-dot: rgba(255, 255, 255, 0.08);

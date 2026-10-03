@@ -15,15 +15,7 @@
   display: flex; align-items: center; justify-content: center; flex: none;
   min-height: 50px; padding: 9px 84px;
   border-bottom: 1px solid var(--vf-hairline);
-  -webkit-app-region: drag;
 }
-.ah-theme-toggle {
-  position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
-  width: 32px; height: 32px; border-radius: 999px;
-  color: var(--vf-text-secondary);
-  -webkit-app-region: no-drag;
-}
-.ah-theme-toggle svg { width: 16px; height: 16px; }
 .ah-launcher {
   position: relative; display: flex; align-items: center;
   width: min(460px, 100%); height: 32px; border-radius: 999px;
@@ -64,8 +56,8 @@
   position: fixed; z-index: 61; top: 0; left: 50%;
   transform: translateX(-50%);
   display: flex; flex-direction: column;
-  width: min(760px, calc(100vw - 168px));
-  max-height: min(68vh, 640px);
+  width: min(760px, calc(100% - 168px));
+  max-height: min(68%, 640px);
   /* a top-attached sheet: square where it meets the window, the card radius
      where it meets the room */
   border-radius: 0 0 var(--vf-radius-card) var(--vf-radius-card);
@@ -86,11 +78,10 @@
   from { opacity: 0; transform: translateX(-50%) translateY(-6px) scale(0.985); }
   to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
 }
-/* M5 — the stage recedes behind the sheet, the way it does behind a file */
+/* M5 — the stage recedes behind the sheet, the way it does behind a file:
+   the room marks its root while the sheet is open */
 .ah-room { transition: transform 240ms var(--vf-ease-island); }
-body:has([data-ah-sheet]) .ah-room { transform: scale(0.98); }
-/* the sheet covers the native title strip, so the strip stops dragging */
-body:has([data-ah-sheet]) .ah-searchbar { -webkit-app-region: no-drag; }
+.ah-frame[data-ah-overlay] .ah-room { transform: scale(0.98); }
 
 /* the field — the launcher, grown: same pill, one size up */
 .ah-sheet__field {
@@ -257,5 +248,5 @@ body:has([data-ah-sheet]) .ah-searchbar { -webkit-app-region: no-drag; }
 @media (prefers-reduced-motion: reduce) {
   .ah-sheet, .ah-sheet__backdrop { animation-duration: 1ms; }
   .ah-sheet__list { transition: none; }
-  body:has([data-ah-sheet]) .ah-room { transform: none; }
+  .ah-frame[data-ah-overlay] .ah-room { transform: none; }
 }

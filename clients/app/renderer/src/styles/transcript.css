@@ -785,14 +785,14 @@ button.tr-sub__head:hover { color: var(--vf-text-primary); }
    A worker's machine-delivered assignment remains inside its one child
    document. Team members are addressable and their delivered boundary events
    enter shared chronology. Hue is confined to the small Claude mark. */
-[data-member-color="blue"] { --member-color: #3b82f6; }
-[data-member-color="green"] { --member-color: #22c55e; }
-[data-member-color="yellow"] { --member-color: #ffd60a; }
-[data-member-color="purple"] { --member-color: #8b5cf6; }
-[data-member-color="orange"] { --member-color: #f59e0b; }
-[data-member-color="pink"] { --member-color: #ec4899; }
-[data-member-color="cyan"] { --member-color: #06b6d4; }
-[data-member-color="red"] { --member-color: #ef4444; }
+:where(.ah-frame, .ah-layer) [data-member-color="blue"] { --member-color: #3b82f6; }
+:where(.ah-frame, .ah-layer) [data-member-color="green"] { --member-color: #22c55e; }
+:where(.ah-frame, .ah-layer) [data-member-color="yellow"] { --member-color: #ffd60a; }
+:where(.ah-frame, .ah-layer) [data-member-color="purple"] { --member-color: #8b5cf6; }
+:where(.ah-frame, .ah-layer) [data-member-color="orange"] { --member-color: #f59e0b; }
+:where(.ah-frame, .ah-layer) [data-member-color="pink"] { --member-color: #ec4899; }
+:where(.ah-frame, .ah-layer) [data-member-color="cyan"] { --member-color: #06b6d4; }
+:where(.ah-frame, .ah-layer) [data-member-color="red"] { --member-color: #ef4444; }
 .tr-assignment {
   margin: 5px 0 10px; padding: 6px 0 7px 11px;
   border-left: 2px solid var(--vf-hairline-strong);
