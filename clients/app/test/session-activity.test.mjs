@@ -43,9 +43,9 @@ test("session ranking and project recency ignore recently rewritten metadata", (
   assert.equal(sessionLastActive(unknown), null);
   assert.equal(sessionLastActive({ ...unknown, activity: undefined }), null);
   const project = { id: "p", name: "Project", root_paths: [], git_repo: null };
-  const vm = buildProjectViewModel(project, rows, undefined, () => "claude-code", now);
+  const vm = buildProjectViewModel(project, rows, undefined, () => "claude-code", now, () => "tint");
   assert.equal(vm.lastActiveMs, recent.activity.last_at);
-  assert.equal(buildProjectViewModel(project, [unknown], undefined, () => "claude-code", now).lastActiveMs, null);
+  assert.equal(buildProjectViewModel(project, [unknown], undefined, () => "claude-code", now, () => "tint").lastActiveMs, null);
   assert.equal(compareSessionActivity(session("a", 10), session("b", 10)) < 0, true);
 });
 

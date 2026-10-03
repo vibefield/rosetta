@@ -164,6 +164,32 @@ async function run() {
     await click('.ah-project-list-item[data-motion-key="p0"]');
     await until(() => document.querySelector('.ah-cols')?.dataset.rail === 'on', 'the guest opens in a wide room');
 
+    // Every name the room keeps goes under the host's prefix, in the host's
+    // store: dealt tints, the fold, the site-icon setting, recent searches.
+    const before = await check(() => Object.keys(localStorage).sort());
+    await mount('prefixed');
+    await until(() => document.querySelectorAll('.ah-project-list-item').length === 2, 'projects, tints dealt');
+    await click('.ah-searchbar .ah-launcher__open');
+    await until(() => document.querySelector('.ah-sheet__field input'), 'the sheet');
+    await check(() => {
+      const input = document.querySelector('.ah-sheet__field input');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'room');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    });
+    await until(() => document.querySelector('.ah-sheet__row'), 'a hit');
+    await click('.ah-sheet__row');
+    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s0"].is-selected') && !document.querySelector('.ah-sheet'), 'the hit opens its session');
+    await until(() => document.querySelector('.ah-col--measure .ah-iconbtn[aria-pressed]'), 'the activity act');
+    await click('.ah-col--measure .ah-iconbtn[aria-pressed]');
+    await until(() => document.querySelector('.tr-line[data-timeline-id="t4"]'), 'the web line, every run open');
+    await click('.tr-line[data-timeline-id="t4"]');
+    await until(() => document.querySelector('.tr-site-icons input'), 'the site-icon setting');
+    await click('.tr-site-icons input');
+    assert.deepEqual(await check(() => window.roomFixture.stored()),
+      ['vf.history.search.recent', 'vf.history.siteIcons.v1', 'vf.history.tintSeq.v1', 'vf.history.transcript.fold.v2'], 'four names, one prefix');
+    assert.deepEqual(await check(() => Object.keys(localStorage).sort()), before, 'nothing in the page\'s own storage');
+
     // A source that fetches before it can address: tiles wait, then load its
     // object URLs; a refusal is the "could not load" face, and Retry asks again.
     await mount('fetching');

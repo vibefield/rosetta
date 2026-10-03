@@ -142,7 +142,10 @@ function ports(scenario) {
       projectStats: async (project) => ({ heat: heat(1), contribution: contribution(project) }),
       usage: async () => ({ models: [], hours: [] }),
       dayUsage: async (_project, day) => ({ day, models: [] }),
-      search: async () => ({ state: { readiness: "ready", progress: null, projection_epoch: null, revision: null }, hits: [] }),
+      search: async () => ({ state: { readiness: "ready", progress: null, projection_epoch: null, revision: null },
+        hits: scenario === "prefixed"
+          ? [{ timeline_id: "t2", session_id: "s0", kind: "agent", at: now - 20 * 60_000, snippet: "I'll read the [room]'s seams first", score: 1 }]
+          : [] }),
       boost: async (id) => { log.boosts.push(id); return {}; },
     },
     sessions: {
@@ -166,6 +169,10 @@ function ports(scenario) {
   };
 }
 
+/** A host's own store, recording every name the room writes into it. */
+const recorded = new Map();
+const recordingStore = { getItem: (key) => recorded.get(key) ?? null, setItem: (key, value) => { recorded.set(key, value); } };
+
 function Fixture() {
   const [scenario, setScenario] = useState(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -177,6 +184,7 @@ function Fixture() {
       flushSync(() => setScenario({ name, key: Math.random(), ports: ports(name) }));
     },
     openAt(target) { room.current.openAt(target); },
+    stored: () => [...recorded.keys()].sort(),
   };
   if (scenario === null) return null;
   const { name, key, ports: p } = scenario;
@@ -189,7 +197,8 @@ function Fixture() {
   return <div style={{ height: "100%", ...(width === null ? {} : { width }) }}><HistoryRoom key={key} ref={room} {...p}
     onSelect={(selection) => log.selections.push(selection)}
     {...(name === "sized" ? { edgeInset: { top: 12, right: 8, bottom: 8, left: 8 }, scrollFoot: "48px", floatingFoot: "40px" } : {})}
-    {...(name === "search" ? { search: { open: sheetOpen, onOpenChange: setSheetOpen, accessory: <span data-accessory="">host</span> } } : {})}
+    {...(name === "search" || name === "prefixed" ? { search: { open: sheetOpen, onOpenChange: setSheetOpen, accessory: <span data-accessory="">host</span> } } : {})}
+    {...(name === "prefixed" ? { storagePrefix: "vf.history.", storage: recordingStore } : {})}
     {...(name === "disconnected" ? { unavailable: <span data-host-words="">The index is resting.</span> } : {})}
     {...(name === "consent" ? { consent: <div data-consent="">Choose your agents</div> } : {})}
     {...(name === "glass" ? { surface: "host", portalContainer: document.getElementById("host-layer") } : {})}

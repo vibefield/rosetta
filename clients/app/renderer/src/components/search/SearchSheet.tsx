@@ -41,7 +41,6 @@ import {
   stateSentence,
 } from "../../lib/search-sheet";
 import type {
-  RecentStore,
   SearchFilters,
   SearchKindFilter,
   SearchScopeFilter,
@@ -51,7 +50,7 @@ import type {
 import { ActivityGlyph } from "../transcript/glyphs";
 import { SegmentedControl } from "../ui";
 import { hasPrimaryModifier } from "./shortcut";
-import { useRoomOverlay, useRoomPortal } from "../../room-context";
+import { useRoom, useRoomOverlay, useRoomPortal } from "../../room-context";
 
 const LIST_ID = "ah-sheet-listbox";
 
@@ -78,13 +77,7 @@ export interface SearchSheetProps {
   readonly onOpenHit: (session: SessionRow, hit: SearchHit) => void;
 }
 
-function safeStorage(): RecentStore | null {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
+
 
 type TintStyle = CSSProperties & { "--tint": string };
 
@@ -240,6 +233,7 @@ export function SearchSheet({
 }: SearchSheetProps) {
   useRoomOverlay(open);
   const container = useRoomPortal();
+  const { storage } = useRoom();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const { lines, options } = useMemo(() => buildSheetLines(results), [results]);
   const emptyQuery = query.trim() === "";
@@ -250,7 +244,7 @@ export function SearchSheet({
   const movedBy = useRef<"keyboard" | "pointer">("keyboard");
 
   useEffect(() => {
-    if (open) setRecent(readRecentQueries(safeStorage()));
+    if (open) setRecent(readRecentQueries(storage));
   }, [open]);
 
   // New rows → the first one is the cursor, so Enter lands at once. Keyed on
@@ -397,7 +391,7 @@ export function SearchSheet({
                   tabIndex={-1}
                   onClick={(event) => {
                     event.stopPropagation();
-                    setRecent(forgetQuery(safeStorage(), remembered));
+                    setRecent(forgetQuery(storage, remembered));
                   }}
                 >
                   ×

@@ -9,7 +9,6 @@ import type {
 import type { AgentShare } from "./agents";
 import { NO_SPEND, addSpend, spendOf, sumSpend } from "./spend";
 import type { Spend } from "./spend";
-import { projectTint } from "./tint";
 import { sessionLastActive } from "./session-activity";
 
 export interface ProjectStats {
@@ -140,6 +139,8 @@ export function buildProjectViewModel(
   projectStats: ProjectStats | undefined,
   getRuntimeKind: (runtimeId: string) => string,
   currentTimestamp: number,
+  /** The room's dealt colour for a project (`TintDealer.projectTint`). */
+  projectTint: (projectId: string) => string,
 ): ProjectViewModel {
   const projectSessions = allSessions.filter(
     (session) => projectKey(session) === projectRow.id,

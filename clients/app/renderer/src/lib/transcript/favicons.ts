@@ -19,10 +19,11 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { useRoom } from "../../room-context";
 import { webAddress } from "./web-address";
+import type { KeyValueStore } from "../room-storage";
 
-/** Versioned like `ah.tintSeq.v1`, and stored the same way: a renderer
- * preference that has no home on the daemon side yet. */
-const STORE_KEY = "ah.siteIcons.v1";
+/** Versioned like `tintSeq.v1`, and stored the same way, under the room's
+ * storage prefix: a renderer preference with no home on the daemon side yet. */
+const STORE_KEY = "siteIcons.v1";
 
 /** What a site wears while nothing is known, and what it wears when the
  * answer was no. `off` is the setting; `globe` is the outcome. */
@@ -61,6 +62,7 @@ export interface FaviconStore {
  */
 export function createFaviconStore(
   fetchIcon: ((host: string) => Promise<string | null>) | null,
+  store: KeyValueStore | null,
 ): FaviconStore {
   let enabled: boolean | null = null;
   /** Settled answers, by host: a `data:` URL, or null for every honest no.
@@ -86,7 +88,7 @@ export function createFaviconStore(
       try {
         // Anything but an explicit "off" is on, so a blocked or corrupt store
         // lands on the default rather than silently disabling the feature.
-        enabled = localStorage.getItem(STORE_KEY) !== "off";
+        enabled = store?.getItem(STORE_KEY) !== "off";
       } catch {
         enabled = true;
       }
@@ -109,7 +111,7 @@ export function createFaviconStore(
       enabled = on;
       generation += 1;
       try {
-        localStorage.setItem(STORE_KEY, on ? "on" : "off");
+        store?.setItem(STORE_KEY, on ? "on" : "off");
       } catch {
         // storage refused; the choice holds for this run
       }

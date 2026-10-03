@@ -8,7 +8,7 @@ import { useMeta } from '../renderer/src/lib/hooks';
 import { useActivityOrder } from '../renderer/src/lib/use-activity-order';
 import { compareOrderedSessions } from '../renderer/src/lib/activity-order';
 import { buildProjectViewModel } from '../renderer/src/lib/model';
-import { RoomProvider } from '../renderer/src/room-context';
+import { RoomProvider, useRoom } from '../renderer/src/room-context';
 import { client, ports } from './support/room-ports.mjs';
 import '../renderer/src/styles/tokens.css';
 import '../renderer/src/styles/app.css';
@@ -48,6 +48,7 @@ const publish = source => {
   handlers.onChange({ projects, sessions: [...rows], runtimes: [{ id: 'codex', kind: 'codex' }] }, source);
 };
 function Fixture() {
+  const { tints } = useRoom();
   const { meta, snapshotVersion, status } = useMeta(ports.catalog);
   const [clock, setClock] = useState(start);
   const [selected, select] = useState('parser');
@@ -58,7 +59,7 @@ function Fixture() {
   const sessions = (meta?.sessions ?? []).filter(row => row.project_id === projectId)
     .sort((a, b) => compareOrderedSessions(a, b, order));
   const projectModels = (meta?.projects ?? []).map(project =>
-    buildProjectViewModel(project, meta.sessions, undefined, () => 'codex', clock));
+    buildProjectViewModel(project, meta.sessions, undefined, () => 'codex', clock, tints.projectTint));
   window.listOrderFixture = {
     get ready() { return Boolean(handlers); }, order, snapshotVersion, flush: flushSync,
     initial() { publish('snapshot'); },

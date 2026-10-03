@@ -328,7 +328,8 @@ export function stateSentence(input: SheetStateInput): string {
 
 /* ── what was searched before ──────────────────────────────────────────── */
 
-export const RECENT_QUERIES_KEY = "ah.search.recent";
+/** Under the room's storage prefix. */
+export const RECENT_QUERIES_KEY = "search.recent";
 export const RECENT_QUERIES_CAP = 8;
 
 export interface RecentStore {

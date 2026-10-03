@@ -20,6 +20,7 @@ import {
 import type { CSSProperties, ForwardedRef, ReactNode, RefObject } from "react";
 import type { SearchHit, SessionRow } from "@rosetta/protocol";
 import type { RoomPorts } from "./ports";
+import type { KeyValueStore } from "./lib/room-storage";
 import { RoomProvider, useRoom, useRoomOverlayOpen } from "./room-context";
 import type { SummaryTab } from "./room-context";
 import { ColdStartPanel } from "./components/ColdStart";
@@ -90,13 +91,6 @@ interface StepperMemory {
   readonly at: number;
 }
 
-function safeStorage(): Storage | null {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
 
 /** The room's own search: the strip's launcher and the sheet it opens. A host
  * that offers search its own way (VibeField's Peek) leaves this out, and the
@@ -120,6 +114,13 @@ export interface HistoryRoomProps extends RoomPorts {
   /** Where the room's dialogs and its sheet are portalled (the host's frame,
    * so its overlays anchor there); the document's body when absent. */
   readonly portalContainer?: HTMLElement | null | undefined;
+  /** Every name the room keeps in storage goes under this prefix: recent
+   * searches, dealt project tints, the site-icon setting, the fold. Default
+   * `ah.`, which is where rosetta's app has always kept them. */
+  readonly storagePrefix?: string | undefined;
+  /** The store those names live in: the browser's localStorage when absent;
+   * null keeps nothing across runs. */
+  readonly storage?: KeyValueStore | null | undefined;
   readonly search?: HistoryRoomSearch | undefined;
   /** The chart the project panel opens on. */
   readonly initialSummaryTab?: SummaryTab | undefined;
@@ -213,7 +214,12 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
   return (
     <RoomProvider
       ports={ports}
-      options={{ initialSummaryTab: props.initialSummaryTab, portalContainer: props.portalContainer }}
+      options={{
+        initialSummaryTab: props.initialSummaryTab,
+        portalContainer: props.portalContainer,
+        storagePrefix: props.storagePrefix,
+        storage: props.storage,
+      }}
     >
       <RoomBody
         handle={ref}
@@ -249,7 +255,7 @@ function RoomBody({
   readonly onSelect: ((selection: RoomSelection | null) => void) | undefined;
   readonly frameStyle: CSSProperties;
 }) {
-  const { catalog, sessions, host } = useRoom();
+  const { catalog, sessions, host, storage, tints } = useRoom();
   const overlayOpen = useRoomOverlayOpen();
   const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog);
   const nowMs = useNow(meta);
@@ -331,9 +337,9 @@ function RoomBody({
   const projectViewModels: ProjectViewModel[] = useMemo(
     () =>
       projectRows.map((p) =>
-        buildProjectViewModel(p, meta?.sessions ?? [], stats.get(p.id), kindOf, nowMs),
+        buildProjectViewModel(p, meta?.sessions ?? [], stats.get(p.id), kindOf, nowMs, tints.projectTint),
       ),
-    [projectRows, meta, stats, kindOf, nowMs],
+    [projectRows, meta, stats, kindOf, nowMs, tints],
   );
   const projectById = useMemo(
     () => new Map(projectViewModels.map((project) => [project.row.id, project])),
@@ -461,7 +467,7 @@ function RoomBody({
   // room opens the thread, the transcript lands on the message, and the
   // stepper remembers the session's other matches.
   const openHit = (rootSession: SessionRow, hit: SearchHit) => {
-    rememberQuery(safeStorage(), query);
+    rememberQuery(storage, query);
     setSheetOpen(false);
     setProjectId(projectKey(rootSession));
     setSessionId(rootSession.id);

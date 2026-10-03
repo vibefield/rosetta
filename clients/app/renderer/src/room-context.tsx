@@ -7,6 +7,12 @@ import { createSessionLeases } from "./lib/session-leases";
 import type { SessionLeases } from "./lib/session-leases";
 import { createFaviconStore } from "./lib/transcript/favicons";
 import type { FaviconStore } from "./lib/transcript/favicons";
+import { browserStorage, createRoomStorage, DEFAULT_STORAGE_PREFIX } from "./lib/room-storage";
+import type { KeyValueStore, RoomStorage } from "./lib/room-storage";
+import { createTintDealer } from "./lib/tint";
+import type { TintDealer } from "./lib/tint";
+import { createFoldPreference } from "./components/transcript/fold-preference";
+import type { FoldPreference } from "./components/transcript/fold-preference";
 
 /** The two faces the project panel's chart can open on. */
 export type SummaryTab = "activity" | "models";
@@ -18,6 +24,11 @@ export interface RoomOptions {
   /** Where the room's dialogs and its sheet are portalled; the document's
    * body when absent. */
   readonly portalContainer?: HTMLElement | null | undefined;
+  /** Every name the room stores goes under this prefix. Default `ah.`. */
+  readonly storagePrefix?: string | undefined;
+  /** The host's store: the browser's localStorage when absent; null keeps
+   * nothing across runs. */
+  readonly storage?: KeyValueStore | null | undefined;
 }
 
 /** How many of the room's dialogs are open: the root recedes while any is. */
@@ -65,6 +76,12 @@ export interface Room {
   readonly favicons: FaviconStore;
   readonly portalContainer: HTMLElement | null;
   readonly overlays: OverlayCount;
+  /** The host's store under the host's prefix. */
+  readonly storage: RoomStorage;
+  /** The room's project colours, dealt once each and remembered. */
+  readonly tints: TintDealer;
+  /** The room's fold: conversation or every run open. */
+  readonly fold: FoldPreference;
 }
 
 const RoomContext = createContext<Room | null>(null);
@@ -82,15 +99,23 @@ export function RoomProvider({
   const host = ports.host ?? null;
   const initialSummaryTab = options.initialSummaryTab ?? "activity";
   const portalContainer = options.portalContainer ?? null;
+  const prefix = options.storagePrefix ?? DEFAULT_STORAGE_PREFIX;
+  const backend = options.storage === undefined ? browserStorage() : options.storage;
+  const storage = useMemo(() => createRoomStorage(prefix, backend), [prefix, backend]);
   const overlays = useMemo(createOverlayCount, []);
   const sessions = useMemo(() => createSessionLeases(sessionPort), [sessionPort]);
   const favicons = useMemo(
-    () => createFaviconStore(host === null ? null : (site) => host.favicon(site)),
-    [host],
+    () => createFaviconStore(host === null ? null : (site) => host.favicon(site), storage),
+    [host, storage],
   );
+  const tints = useMemo(() => createTintDealer(storage), [storage]);
+  const fold = useMemo(() => createFoldPreference(storage), [storage]);
   const room = useMemo<Room>(
-    () => ({ catalog, sessions, assets, host, initialSummaryTab, favicons, portalContainer, overlays }),
-    [catalog, sessions, assets, host, initialSummaryTab, favicons, portalContainer, overlays],
+    () => ({
+      catalog, sessions, assets, host, initialSummaryTab, favicons, portalContainer, overlays,
+      storage, tints, fold,
+    }),
+    [catalog, sessions, assets, host, initialSummaryTab, favicons, portalContainer, overlays, storage, tints, fold],
   );
   return <RoomContext.Provider value={room}>{children}</RoomContext.Provider>;
 }
