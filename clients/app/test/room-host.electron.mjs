@@ -49,6 +49,8 @@ async function run() {
     await click('.ah-session-list-item[data-motion-key="s0"]');
     await until(() => document.querySelector('[data-timeline-id="t1"]'), 'the transcript through the session port');
     assert.deepEqual(await check(() => window.roomFixture.log.opened), ['s0'], 'one open for the session being read');
+    assert.deepEqual(await check(() => window.roomFixture.log.selections), [null,
+      { sessionId: 's0', nativeSessionId: 'native-s0', folder: '/Users/demo/Projects/vibe-field' }], 'the host hears the selection');
     await pause(300);
     writeFileSync(path.join(temporary, 'plain.png'), (await win.webContents.capturePage()).toPNG());
 
@@ -124,6 +126,43 @@ async function run() {
     assert.equal(await check(() => document.querySelector('body > .ah-fileview, body > div > .ah-fileview:not(#host-layer *)')), null, 'nothing portalled to the body');
     await check(() => { document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true; });
     await until(() => !document.querySelector('#host-layer .ah-fileview'), 'the viewer closes in the host\'s container');
+
+    // openAt before the index has delivered: the room waits, then opens the
+    // session's thread in its project and lands on the message.
+    await mount('late');
+    await check(() => { window.roomFixture.openAt({ sessionId: 's2', timelineId: 'u2' }); return true; });
+    await until(() => document.querySelector('.ah-project-list-item[data-motion-key="p1"].is-selected'), 'the session\'s project');
+    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s2"].is-selected'), 'the session itself');
+    await until(() => document.querySelector('[data-hit] [data-timeline-id="u2"], [data-hit][data-timeline-id="u2"], [data-timeline-id="u2"] [data-hit]'), 'landed on the message');
+    assert.deepEqual(await check(() => window.roomFixture.log.selections.at(-1)), { sessionId: 's2', nativeSessionId: 'native-s2', folder: '/Users/demo/Projects/rosetta' });
+    await click('.ah-project-list-item[data-motion-key="p0"]');
+    await until(() => window.roomFixture.log.selections.at(-1) === null, 'a new project clears the selection the host hears');
+    await check(() => { window.roomFixture.openAt({ sessionId: 'nope' }); return true; });
+    await until(() => document.querySelector('.ah-receipt')?.textContent === 'That session is not in this index', 'an unknown session is said so');
+
+    // The host sizes the room: its edge inset, and where lists and floating
+    // controls end.
+    await mount('sized');
+    await click('.ah-project-list-item[data-motion-key="p0"]');
+    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s0"]'), 'sessions when sized');
+    await click('.ah-session-list-item[data-motion-key="s0"]');
+    await until(() => document.querySelector('.ah-col--measure .ah-newpill'), 'the floating control');
+    assert.deepEqual(await check(() => {
+      const room = getComputedStyle(document.querySelector('.ah-room'));
+      return [room.top, room.right, room.bottom, room.left, getComputedStyle(document.querySelector('.tr-scroll')).paddingBottom,
+        getComputedStyle(document.querySelector('.ah-col--measure .ah-newpill')).bottom];
+    }), ['12px', '8px', '8px', '8px', '48px', '40px']);
+
+    // The guest closes by the room's own width, not the window's: a host that
+    // seats the room in 1200px of a 1440px window gets no guest until asked.
+    await mount('narrow-host');
+    await click('.ah-project-list-item[data-motion-key="p0"]');
+    await until(() => document.querySelector('[aria-label="Toggle the project worktree"]'), 'an engine offers the worktree');
+    assert.equal(await check(() => window.innerWidth >= 1360 && document.querySelector('.ah-room').clientWidth === 1200), true);
+    assert.equal(await check(() => document.querySelector('.ah-cols').dataset.rail), 'off', 'the guest yields in a narrow room');
+    await mount('wide-host');
+    await click('.ah-project-list-item[data-motion-key="p0"]');
+    await until(() => document.querySelector('.ah-cols')?.dataset.rail === 'on', 'the guest opens in a wide room');
 
     // A source that fetches before it can address: tiles wait, then load its
     // object URLs; a refusal is the "could not load" face, and Retry asks again.

@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRoom } from "../../room-context";
 
-/** Below this the guest closes itself (design record H-3). 260 + 300 + 280
+/** Below this room width the guest closes itself (design record H-3). 260 + 300 + 280
  * of columns leaves the transcript its full measure down to ~1100px once the
  * guest is out of the way, so the guest is what pays. */
 const GUEST_MIN_FRAME_WIDTH = 1360;
@@ -31,21 +31,13 @@ export interface WorktreeGuest {
   retry(): void;
 }
 
-function useFrameWiderThan(minimumWidth: number): boolean {
-  const [wide, setWide] = useState(() => window.innerWidth >= minimumWidth);
-  useEffect(() => {
-    const measure = () => setWide(window.innerWidth >= minimumWidth);
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [minimumWidth]);
-  return wide;
-}
-
 /**
  * Whether column ③ is open, and the act of flipping it — plus the standing
- * instruction to the shell to keep an engine on `projectRoot` while it is.
+ * instruction to the host to keep an engine on `projectRoot` while it is.
+ * `roomWidth` is the room's own measured width, not the window's: a host may
+ * seat the room in less than its window. Null until measured.
  */
-export function useWorktreeGuest(projectRoot: string | null): WorktreeGuest {
+export function useWorktreeGuest(projectRoot: string | null, roomWidth: number | null): WorktreeGuest {
   const engine = useRoom().host?.worktree ?? null;
   const available = engine !== null;
   const [wanted, setWanted] = useState(true);
@@ -56,7 +48,7 @@ export function useWorktreeGuest(projectRoot: string | null): WorktreeGuest {
   const [failure, setFailure] = useState<{ root: string; message: string } | null>(null);
   const openedRoot = useRef<string | null>(null);
   const requestId = useRef(0);
-  const frameWide = useFrameWiderThan(GUEST_MIN_FRAME_WIDTH);
+  const frameWide = roomWidth !== null && roomWidth >= GUEST_MIN_FRAME_WIDTH;
 
   // A wide room keeps the guest's empty state visible before a project is
   // chosen. A missing root suppresses the engine, not the column explaining it.

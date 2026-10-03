@@ -7,8 +7,17 @@
 // worktree column is a guest and the measure is not (H-3) — see
 // `components/worktree/use-worktree-guest`, which owns that rule and the
 // engine lifecycle behind it.
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import type { ForwardedRef, ReactNode } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { CSSProperties, ForwardedRef, ReactNode, RefObject } from "react";
 import type { SearchHit, SessionRow } from "@rosetta/protocol";
 import type { RoomPorts } from "./ports";
 import { RoomProvider, useRoom, useRoomOverlayOpen } from "./room-context";
@@ -120,13 +129,78 @@ export interface HistoryRoomProps extends RoomPorts {
   /** What the room shows while the index waits for consent to read anything.
    * Absent: the room says it is waiting. */
   readonly consent?: ReactNode;
+  /** The selected session, or null — on mount and on every change. */
+  readonly onSelect?: ((selection: RoomSelection | null) => void) | undefined;
+  /** Edges kept clear inside the room's frame for the host's chrome. */
+  readonly edgeInset?: RoomInset | undefined;
+  /** Scrollable space after every list's last row (`--ah-scroll-foot`), and
+   * where floating controls rest (`--ah-floating-foot`): CSS lengths. */
+  readonly scrollFoot?: string | undefined;
+  readonly floatingFoot?: string | undefined;
 }
+
+/** The session the reader has selected, as a host acts on it (Resume). */
+export interface RoomSelection {
+  readonly sessionId: string;
+  /** The agent's own id for the conversation: what a host resumes by. */
+  readonly nativeSessionId: string;
+  /** Where the session ran; null when the index does not know. */
+  readonly folder: string | null;
+}
+
+/** A place in the record: a session, and optionally one of its messages. */
+export interface RoomTarget {
+  readonly sessionId: string;
+  readonly timelineId?: string | null | undefined;
+}
+
+/** The room's edges kept clear for the host's own chrome, in pixels. */
+export type RoomInset =
+  | number
+  | {
+      readonly top?: number | undefined;
+      readonly right?: number | undefined;
+      readonly bottom?: number | undefined;
+      readonly left?: number | undefined;
+    };
 
 /** What a host may ask of a mounted room. */
 export interface HistoryRoomHandle {
   /** Walk the landed session's search matches. False when there is nothing to
    * walk, so the host's key can fall through. */
   stepMatch(delta: 1 | -1): boolean;
+  /** Open a session — its thread, in its project — and land on one of its
+   * messages when given. A session the index has not delivered yet is opened
+   * when it arrives; one it does not have is said so in a receipt. */
+  openAt(target: RoomTarget): void;
+}
+
+function insetStyle(inset: RoomInset | undefined): CSSProperties {
+  if (inset === undefined) return {};
+  const sides = typeof inset === "number" ? { top: inset, right: inset, bottom: inset, left: inset } : inset;
+  return Object.fromEntries(
+    (["top", "right", "bottom", "left"] as const)
+      .filter((side) => sides[side] !== undefined)
+      .map((side) => [`--ah-inset-${side}`, `${sides[side]}px`]),
+  ) as CSSProperties;
+}
+
+/** The element's laid-out width, before the first paint and on every resize;
+ * a transform (the stage receding) does not change it. */
+function useLayoutWidth(ref: RefObject<HTMLElement | null>): number | null {
+  const [width, setWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (node === null) return;
+    setWidth(node.clientWidth);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry !== undefined) setWidth(entry.contentRect.width);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+  return width;
 }
 
 /** The room. A host hands it its ports; everything inside reads them from context. */
@@ -147,6 +221,12 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
         search={props.search ?? null}
         unavailable={props.unavailable ?? null}
         consent={props.consent ?? null}
+        onSelect={props.onSelect}
+        frameStyle={{
+          ...insetStyle(props.edgeInset),
+          ...(props.scrollFoot === undefined ? {} : { "--ah-scroll-foot": props.scrollFoot }),
+          ...(props.floatingFoot === undefined ? {} : { "--ah-floating-foot": props.floatingFoot }),
+        } as CSSProperties}
       />
     </RoomProvider>
   );
@@ -158,12 +238,16 @@ function RoomBody({
   search: searchOption,
   unavailable,
   consent,
+  onSelect,
+  frameStyle,
 }: {
   readonly handle: ForwardedRef<HistoryRoomHandle>;
   readonly surface: "paper" | "host";
   readonly search: HistoryRoomSearch | null;
   readonly unavailable: ReactNode;
   readonly consent: ReactNode;
+  readonly onSelect: ((selection: RoomSelection | null) => void) | undefined;
+  readonly frameStyle: CSSProperties;
 }) {
   const { catalog, sessions, host } = useRoom();
   const overlayOpen = useRoomOverlayOpen();
@@ -345,7 +429,27 @@ function RoomBody({
      Files, changes and history are one column now, so the room is back to
      one guest and the record's original rule applies unchanged: below a
      1360px frame it closes rather than squeeze the transcript. */
-  const worktree = useWorktreeGuest(projectRoot);
+  const roomRef = useRef<HTMLDivElement | null>(null);
+  const roomWidth = useLayoutWidth(roomRef);
+  const worktree = useWorktreeGuest(projectRoot, roomWidth);
+
+  // The host hears which session is selected — what its own acts (Resume)
+  // would continue — on mount and whenever it changes.
+  const selected = useMemo(
+    () => (sessionId === null ? null : ((meta?.sessions ?? []).find((s) => s.id === sessionId) ?? null)),
+    [meta, sessionId],
+  );
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const selectionKey = selected === null ? null : `${selected.id}\u0000${selected.native_session_id}\u0000${selected.cwd ?? ""}`;
+  useEffect(() => {
+    onSelectRef.current?.(
+      selected === null
+        ? null
+        : { sessionId: selected.id, nativeSessionId: selected.native_session_id, folder: selected.cwd },
+    );
+    // `selectionKey` is the selection's identity; `selected` is read with it.
+  }, [selectionKey]);
 
   /* ── search: one view model, held over the room ─────────────────────── */
   const searchResults = useMemo(() => {
@@ -384,6 +488,31 @@ function RoomBody({
     },
     [],
   );
+  // A host's "open this": the thread the session belongs to, in its project,
+  // landed on the message when one is named. It waits for the index to
+  // deliver the session, and says so when the index does not have it.
+  const [pendingOpen, setPendingOpen] = useState<RoomTarget | null>(null);
+  useEffect(() => {
+    if (pendingOpen === null || meta === null) return;
+    const target = meta.sessions.find((s) => s.id === pendingOpen.sessionId) ?? null;
+    if (target === null) {
+      if (metaStatus !== "live") return;
+      setPendingOpen(null);
+      showReceipt("That session is not in this index");
+      return;
+    }
+    const root = target.parent_session_id === null
+      ? target
+      : (meta.sessions.find((s) => s.id === target.root_session_id) ?? target);
+    setPendingOpen(null);
+    setProjectId(projectKey(root));
+    setSessionId(root.id);
+    setInspectedThread(null);
+    setStepper(null);
+    const timelineId = pendingOpen.timelineId ?? null;
+    setFocus(timelineId === null ? null : { sessionId: target.id, timelineId });
+  }, [pendingOpen, meta, metaStatus]);
+
   // ⌘G / ⇧⌘G belong to the host's window; it asks the room to walk.
   const stepping = useRef(false);
   stepping.current = stepper !== null;
@@ -392,6 +521,9 @@ function RoomBody({
       if (!stepping.current) return false;
       stepMatch(delta);
       return true;
+    },
+    openAt(target) {
+      setPendingOpen({ sessionId: target.sessionId, timelineId: target.timelineId ?? null });
     },
   }), [stepMatch]);
 
@@ -437,8 +569,13 @@ function RoomBody({
     projectRows.length === 0 && ingestActive && ingest !== null && !awaitingConsent;
 
   return (
-    <div className="ah-frame is-tall" data-ah-surface={surface} data-ah-overlay={overlayOpen ? "" : undefined}>
-      <div className="ah-room">
+    <div
+      className="ah-frame is-tall"
+      data-ah-surface={surface}
+      data-ah-overlay={overlayOpen ? "" : undefined}
+      style={frameStyle}
+    >
+      <div className="ah-room" ref={roomRef}>
         {searchOption !== null && (
           <div className="ah-searchbar">
             <SearchLauncher

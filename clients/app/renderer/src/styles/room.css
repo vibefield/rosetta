@@ -566,6 +566,12 @@
   --ah-floating-foot: calc(24px + env(safe-area-inset-bottom, 0px));
 }
 
+/* The edges a host keeps clear for its own chrome (HistoryRoom's
+   `edgeInset`): the room sits inside its frame by that much. */
+.ah-room {
+  inset: var(--ah-inset-top, 0px) var(--ah-inset-right, 0px) var(--ah-inset-bottom, 0px) var(--ah-inset-left, 0px);
+}
+
 /* A host that paints its own surface beneath the room (`surface="host"`):
    no ground, no plate, and the paper fades become frost — a blur of whatever
    passes beneath, feathered by its own mask, under the chrome it grounds.

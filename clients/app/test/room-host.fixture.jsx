@@ -1,7 +1,7 @@
 // The whole room, mounted the way a host mounts it: HistoryRoom over ports,
 // with no daemon and no desktop bridge. The driver picks a scenario through
 // `window.roomFixture.mount(name)` and reads what the room asked of its ports.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { HistoryRoom } from "../renderer/src/HistoryRoom";
@@ -47,7 +47,11 @@ let ordinal = 0;
 const at = () => now - 30 * 60_000 + ordinal * 40_000;
 const row = (body, group = "agent_cycle") => { ordinal += 1; return { ...entry(body, { timeline_id: `t${ordinal}`, ordinal, at: at(), group: { id: `g${ordinal}`, kind: group, derivation: "native" } }), session_id: "s0" }; };
 const toolRow = (made) => { ordinal += 1; return { ...made, timeline_id: `t${ordinal}`, ordinal, at: at(), session_id: "s0" }; };
+const s2Row = (id, text, type = "agent") => ({ ...entry(type === "user"
+  ? { type, text: inline(text), attachments: [] }
+  : { type, text: inline(text), attachments: [], citations: [] }, { timeline_id: id, ordinal: Number(id.slice(1)), at: now - 5 * H + Number(id.slice(1)) * 60_000 }), session_id: "s2" });
 const timeline = {
+  s2: [s2Row("u1", "Cut the ports first.", "user"), s2Row("u2", "The catalog reads the room's own shapes."), s2Row("u3", "Done.")],
   s0: [
     row({ type: "user", text: inline("Port the History room into a package the frame can mount."), attachments: [image("a", "a"), image("b", "b")] }, "human_turn"),
     row({ type: "agent", text: inline("I'll read the room's seams first, then cut the ports."), attachments: [], citations: [] }),
@@ -74,7 +78,7 @@ const status = (phase = "live") => ({
   ingest: { phase, runtimes: [], projects: [] }, startedAt: now - H, uptimeMs: H,
 });
 
-export const log = { opened: [], closed: [], images: [], attachments: [], favicons: [], boosts: [] };
+export const log = { opened: [], closed: [], images: [], attachments: [], favicons: [], boosts: [], selections: [] };
 
 function sessionClient() {
   return {
@@ -103,19 +107,33 @@ const desktop = {
   favicon: async (site) => { log.favicons.push(site); return icon; },
 };
 
+/** A desktop that also runs a worktree engine, which never reports. */
+const engineDesktop = {
+  ...desktop,
+  worktree: {
+    open: async () => ({ ok: true, generation: 1 }),
+    gitFacts: async () => null,
+    fileAction: async () => ({ ok: true }),
+    ports: () => () => {},
+  },
+};
+
 function ports(scenario) {
   const connected = scenario !== "disconnected";
+  const engine = scenario === "narrow-host" || scenario === "wide-host";
   return {
-    ...(scenario === "host" ? { host: desktop } : {}),
+    ...(scenario === "host" ? { host: desktop } : engine ? { host: engineDesktop } : {}),
     catalog: {
       subscribeMeta(handlers) {
-        queueMicrotask(() => {
+        const deliver = () => {
           if (!connected) { handlers.onStatus?.("closed"); return; }
           handlers.onStatus?.("live");
           handlers.onChange?.(scenario === "consent" || scenario === "consent-default"
             ? { runtimes: [], projects: [], sessions: [] }
             : { runtimes, projects, sessions }, "snapshot");
-        });
+        };
+        // "late": the index delivers its rows a beat after the room mounts.
+        if (scenario === "late") setTimeout(deliver, 250); else queueMicrotask(deliver);
         return { close() {} };
       },
       status: () => connected
@@ -151,12 +169,14 @@ function ports(scenario) {
 function Fixture() {
   const [scenario, setScenario] = useState(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const room = useRef(null);
   window.roomFixture = {
     log,
     mount(name) {
       for (const list of Object.values(log)) list.length = 0;
       flushSync(() => setScenario({ name, key: Math.random(), ports: ports(name) }));
     },
+    openAt(target) { room.current.openAt(target); },
   };
   if (scenario === null) return null;
   const { name, key, ports: p } = scenario;
@@ -164,12 +184,16 @@ function Fixture() {
   // so a capture shows whether anything of the room's paper is left.
   document.body.style.background = name === "glass"
     ? "repeating-linear-gradient(45deg, #2b4a8a 0 40px, #8a2b5e 40px 80px)" : "";
-  return <HistoryRoom key={key} {...p}
+  // A host may seat the room in less than its window.
+  const width = name === "narrow-host" ? 1200 : name === "wide-host" ? 1400 : null;
+  return <div style={{ height: "100%", ...(width === null ? {} : { width }) }}><HistoryRoom key={key} ref={room} {...p}
+    onSelect={(selection) => log.selections.push(selection)}
+    {...(name === "sized" ? { edgeInset: { top: 12, right: 8, bottom: 8, left: 8 }, scrollFoot: "48px", floatingFoot: "40px" } : {})}
     {...(name === "search" ? { search: { open: sheetOpen, onOpenChange: setSheetOpen, accessory: <span data-accessory="">host</span> } } : {})}
     {...(name === "disconnected" ? { unavailable: <span data-host-words="">The index is resting.</span> } : {})}
     {...(name === "consent" ? { consent: <div data-consent="">Choose your agents</div> } : {})}
     {...(name === "glass" ? { surface: "host", portalContainer: document.getElementById("host-layer") } : {})}
-  />;
+  /></div>;
 }
 
 createRoot(document.getElementById("root")).render(<Fixture />);
