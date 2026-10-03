@@ -4,7 +4,7 @@
 // so the viewer never repeats a mutable filesystem read.
 
 import type { TimelineMetaArtifact, TimelineMetaPlan } from "@rosetta/protocol";
-import { client } from "../../lib/rosetta";
+import type { SessionLeases } from "../../lib/session-leases";
 import { resolveKind } from "../file-viewer";
 import type { FileHandle, FileSource } from "../file-viewer";
 
@@ -47,24 +47,26 @@ function handle(
 }
 
 export async function handleForTimelineMetaPlan(
+  sessions: SessionLeases,
   sessionId: string,
   plan: TimelineMetaPlan,
 ): Promise<FileHandle> {
-  const bytes = await client.readPlan(sessionId, plan.source);
+  const bytes = await sessions.run(sessionId, (client) => client.readPlan(sessionId, plan.source));
   return handle(`timeline-meta:plan:${sessionId}:${plan.id}`, plan.name, null, bytes);
 }
 
 export async function handleForTimelineMetaArtifact(
+  sessions: SessionLeases,
   sessionId: string,
   artifact: TimelineMetaArtifact,
 ): Promise<FileHandle> {
   const source = artifact.source;
   if (source.type === "timeline_file") {
-    const bytes = await client.readFileTarget(
+    const bytes = await sessions.run(sessionId, (client) => client.readFileTarget(
       sessionId,
       source.timeline_id,
       source.target_index,
-    );
+    ));
     return handle(
       `timeline-meta:artifact:${sessionId}:${artifact.id}`,
       nameWithType(artifact.name, artifact.media_type),
@@ -73,7 +75,7 @@ export async function handleForTimelineMetaArtifact(
     );
   }
 
-  const bytes = await client.readAsset(source.asset);
+  const bytes = await sessions.run(sessionId, (client) => client.readAsset(source.asset));
   return handle(
     `timeline-meta:artifact:${sessionId}:${artifact.id}`,
     nameWithType(artifact.name, artifact.media_type ?? source.asset.media_type),

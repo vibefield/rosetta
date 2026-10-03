@@ -1,4 +1,6 @@
 // Real production components with deterministic data; no daemon or user stores.
+import { RoomProvider } from "../renderer/src/room-context";
+import { ports } from "./support/room-ports.mjs";
 import { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
@@ -274,4 +276,4 @@ function Fixture() {
   );
 }
 
-createRoot(document.getElementById("root")).render(<Fixture />);
+createRoot(document.getElementById("root")).render(<RoomProvider ports={ports}><Fixture /></RoomProvider>);

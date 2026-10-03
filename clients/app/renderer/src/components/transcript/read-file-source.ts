@@ -8,7 +8,7 @@
 // changed between requests.
 
 import type { PathFact } from "../../lib/transcript";
-import { client } from "../../lib/rosetta";
+import type { SessionLeases } from "../../lib/session-leases";
 import type { FileHandle, FileSource } from "../file-viewer";
 
 interface ReadFilePayload {
@@ -17,14 +17,19 @@ interface ReadFilePayload {
 }
 
 /** Resolve and read one exact canonical target before opening the viewer. */
-export async function handleForReadPath(path: PathFact, previewBytes?: Uint8Array, name?: string): Promise<FileHandle | null> {
+export async function handleForReadPath(
+  sessions: SessionLeases,
+  path: PathFact,
+  previewBytes?: Uint8Array,
+  name?: string,
+): Promise<FileHandle | null> {
   const address = path.read;
   if (address === undefined || path.resource.type !== "file") return null;
-  const bytes = previewBytes ?? await client.readFileTarget(
+  const bytes = previewBytes ?? await sessions.run(address.sessionId, (client) => client.readFileTarget(
     address.sessionId,
     address.timelineId,
     address.targetIndex,
-  );
+  ));
   return {
     key: `read:${address.sessionId}:${address.timelineId}:${address.targetIndex}`,
     name: name || path.name || "file",

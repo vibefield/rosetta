@@ -15,6 +15,7 @@ import type { TimelineLayout } from "../../lib/transcript/use-transcript-tail";
 import { clock } from "../../lib/format";
 import { AgentMark, agentLabel } from "../../lib/agents";
 import { useTimeline } from "../../lib/hooks";
+import { ReadingSessionProvider, useRoom } from "../../room-context";
 import type { AttachmentFact, PathFact } from "../../lib/transcript";
 import { TranscriptDocument } from "./Document";
 import { useTranscriptModel } from "./document-model";
@@ -71,7 +72,8 @@ function EmbeddedSubthread({
   // parent with nine of them must not open nine subscriptions to draw nothing.
   const [open, setOpen] = useState(anchored || onFocusPath);
   const shown = open || onFocusPath;
-  const feed = useTimeline(shown ? session.id : null);
+  const { sessions } = useRoom();
+  const feed = useTimeline(sessions, shown ? session.id : null);
   const cuts = useMemo(() => activityCuts(feed.rows, feed.watermark), [feed.rows, feed.watermark]);
   const model = useTranscriptModel(feed.rows, session, homeDirectory, Date.now(), { cutBefore: cuts.cutBefore });
   const [highlightedTimelineId, setHighlightedTimelineId] = useState<string | null>(null);
@@ -150,6 +152,7 @@ function EmbeddedSubthread({
         <span className="when">{range}</span>
       </button>
       {shown && (
+      <ReadingSessionProvider value={session.id}>
       <div className="tr">
         {!feed.snapshotReady && <p className="tr-quiet" role="status">Loading messages…</p>}
         {feed.snapshotReady && feed.earlier.kind !== "none" && <div className="tr-activity__loading" role="status">
@@ -177,6 +180,7 @@ function EmbeddedSubthread({
           nested
         />
       </div>
+      </ReadingSessionProvider>
       )}
     </div>
   );

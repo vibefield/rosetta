@@ -1,10 +1,9 @@
 // The room's data spine: one meta subscription for who/what exists, REST for
-// figures, and one session subscription for the transcript being read.
+// figures, and one session subscription for the transcript being read. Every
+// hook reads through the port it is handed; none of them dials anything.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApiError,
-  SessionSubscription,
-  CollaborationSubscription,
   CollaborationTimeline,
   IngestProgress,
   MetaState,
@@ -20,7 +19,8 @@ import type {
 import { CursorExpiredError } from "@rosetta/protocol";
 import type { ProjectStats } from "./model";
 import { getActivityGridStartTimestamp, getViewerUtcOffsetMinutes } from "./model";
-import { client, desktopDaemonState, onDesktopDaemonState } from "./rosetta";
+import type { CatalogPort, CollaborationFeed, SessionClient, SessionFeed } from "../ports";
+import type { SessionLeases } from "./session-leases";
 import { conversationStart, readConversationPage } from "./transcript/history-window";
 import type {
   EarlierAction,
@@ -47,14 +47,14 @@ export interface MetaFeed {
   error: ApiError | null;
 }
 
-export function useMeta(): MetaFeed {
+export function useMeta(catalog: CatalogPort): MetaFeed {
   const [feed, setFeed] = useState<{ meta: MetaState | null; snapshotVersion: number }>({
     meta: null, snapshotVersion: 0,
   });
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
   const [error, setError] = useState<ApiError | null>(null);
   useEffect(() => {
-    const sub = client.subscribeMeta({
+    const sub = catalog.subscribeMeta({
       onChange: (meta, source) => {
         setFeed((previous) => ({
           meta,
@@ -66,7 +66,7 @@ export function useMeta(): MetaFeed {
       onError: setError,
     });
     return () => sub.close();
-  }, []);
+  }, [catalog]);
   return { ...feed, status, error };
 }
 
@@ -89,17 +89,12 @@ export interface DaemonStatusFeed {
  * before the projection is even readable — so it is the room's connectivity
  * truth during a cold start. Polls fast through canonical publication and
  * search preparation, then quietly once both are ready. */
-export function useDaemonStatus(): DaemonStatusFeed {
+export function useDaemonStatus(catalog: CatalogPort): DaemonStatusFeed {
   const [connectionRevision, setConnectionRevision] = useState(0);
-  useEffect(() => {
-    const changed = () => setConnectionRevision((value) => value + 1);
-    const removeConnection = client.onConnectionChange(changed);
-    const removeDesktop = onDesktopDaemonState(changed);
-    return () => {
-      removeConnection();
-      removeDesktop();
-    };
-  }, []);
+  useEffect(
+    () => catalog.onConnectionChange?.(() => setConnectionRevision((value) => value + 1)),
+    [catalog],
+  );
   const [feed, setFeed] = useState<DaemonStatusFeed>({
     connectionError: null,
     canonicalReady: null,
@@ -121,7 +116,7 @@ export function useDaemonStatus(): DaemonStatusFeed {
       let delay = 1_000;
       deadline = window.setTimeout(() => request.abort(), 5_000);
       try {
-        const status = await client.status(request.signal);
+        const status = await catalog.status(request.signal);
         if (cancelled) return;
         setFeed({
           connectionError: null,
@@ -142,7 +137,7 @@ export function useDaemonStatus(): DaemonStatusFeed {
       } catch (error: unknown) {
         if (!cancelled) setFeed((previous) => ({
           ...previous,
-          connectionError: desktopDaemonState()?.error ??
+          connectionError: catalog.unavailable?.() ??
             (request.signal.aborted ? "Progress updates timed out. Reconnecting…" :
               error instanceof Error ? error.message : "Unable to reach the background service."),
         }));
@@ -158,7 +153,7 @@ export function useDaemonStatus(): DaemonStatusFeed {
       window.clearTimeout(deadline);
       window.clearTimeout(timer);
     };
-  }, [connectionRevision]);
+  }, [catalog, connectionRevision]);
   return feed;
 }
 
@@ -166,7 +161,11 @@ export function useDaemonStatus(): DaemonStatusFeed {
  * so they begin only after the daemon's canonical publication gate. Four
  * workers hydrate the list progressively; unbounded Promise.all here once
  * launched two full-corpus queries per project and starved cold ingestion. */
-export function useProjectStats(projectIds: string[], ready = false): Map<string, ProjectStats> {
+export function useProjectStats(
+  catalog: CatalogPort,
+  projectIds: string[],
+  ready = false,
+): Map<string, ProjectStats> {
   const [stats, setStats] = useState<Map<string, ProjectStats>>(new Map());
   const key = projectIds.join("\n");
   useEffect(() => {
@@ -192,8 +191,8 @@ export function useProjectStats(projectIds: string[], ready = false): Map<string
           if (id === undefined) return;
           try {
             const [heat, contribution] = await Promise.all([
-              client.heatmap(id, { sinceMs, offsetMinutes }, controller.signal),
-              client.contribution(id, controller.signal),
+              catalog.heatmap(id, { sinceMs, offsetMinutes }, controller.signal),
+              catalog.contribution(id, controller.signal),
             ]);
             if (!cancelled) {
               setStats((current) => {
@@ -220,13 +219,17 @@ export function useProjectStats(projectIds: string[], ready = false): Map<string
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [key, ready]);
+  }, [catalog, key, ready]);
   return stats;
 }
 
 /** The selected project's usage decomposition — per-model days and the
  * hour-of-day profile, over the same 53-week window the heatmap draws. */
-export function useProjectUsage(projectId: string | null, ready = false): UsageResponse | null {
+export function useProjectUsage(
+  catalog: CatalogPort,
+  projectId: string | null,
+  ready = false,
+): UsageResponse | null {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   useEffect(() => {
     setUsage(null);
@@ -234,7 +237,7 @@ export function useProjectUsage(projectId: string | null, ready = false): UsageR
     let cancelled = false;
     const controller = new AbortController();
     const load = () => {
-      client
+      catalog
         .usage(
           projectId,
           {
@@ -257,7 +260,7 @@ export function useProjectUsage(projectId: string | null, ready = false): UsageR
       controller.abort();
       clearInterval(timer);
     };
-  }, [projectId, ready]);
+  }, [catalog, projectId, ready]);
   return usage;
 }
 
@@ -303,14 +306,14 @@ export interface TimelineFeed {
   loadAnchor: (timelineId: string) => Promise<boolean>;
 }
 
-export function useTimeline(sessionId: string | null): TimelineFeed {
+export function useTimeline(sessions: SessionLeases, sessionId: string | null): TimelineFeed {
   const [owner, setOwner] = useState(sessionId);
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [tail, setTail] = useState<TimelineEntry[]>([]);
   const [windowStart, setWindowStart] = useState<number | null>(null);
   const [anchors, setAnchors] = useState<ReadonlySet<string>>(new Set());
-  const subscription = useRef<SessionSubscription | null>(null);
+  const subscription = useRef<SessionFeed | null>(null);
   const [timelineMeta, setTimelineMeta] = useState<TimelineMeta | null>(null);
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
   const [snapshotReady, setSnapshotReady] = useState(false);
@@ -370,55 +373,75 @@ export function useTimeline(sessionId: string | null): TimelineFeed {
     apply({ type: "reset" });
     if (sessionId === null) return;
     let active = true;
-    const sub = client.subscribeSession(sessionId, {
-      onReset: () => {
-        if (!active) return;
-        setTail([]);
-        setWindowStart(null);
-        setAnchors(new Set());
-        setTimelineMeta(null);
-        setSnapshotReady(false);
-        setWatermark(null);
-        setError(null);
-        sawSnapshot.current = false;
-        apply({ type: "reset" });
-      },
-      onSnapshot: (page) => {
-        if (!active) return;
-        setWindowStart(conversationStart(page.entries, page.cursor !== null));
-        apply({ type: "snapshot", cursor: page.cursor });
-      },
-      onChange: (entries) => {
-        if (!active) return;
-        setTail(entries);
-        setSnapshotReady(true);
-        setError(null);
-        if (!sawSnapshot.current) {
-          sawSnapshot.current = true;
-          // Everything in the snapshot is the past; the line goes after it.
-          setWatermark(entries.length ? Math.max(...entries.map((entry) => entry.ordinal)) : null);
-        }
-      },
-      onTimelineMetaChange: (meta) => { if (active) setTimelineMeta(meta); },
-      onStatus: (status) => {
-        if (!active) return;
-        setStatus(status);
-        if (status === "closed") setError(previous => previous ?? "The message connection closed.");
-      },
-      onError: (error) => {
-        if (!active) return;
-        if (error.code === "cursor_expired")
-          apply({ type: "expired", seq: modelRef.current.fetchSeq });
-        else if (error.code !== "not_ready") setError(error.message);
-      },
-    });
-    subscription.current = sub;
+    let sub: SessionFeed | null = null;
+    const lease = sessions.acquire(sessionId);
+    const start = (client: SessionClient) => {
+      sub = client.subscribeSession(sessionId, {
+        onReset: () => {
+          if (!active) return;
+          setTail([]);
+          setWindowStart(null);
+          setAnchors(new Set());
+          setTimelineMeta(null);
+          setSnapshotReady(false);
+          setWatermark(null);
+          setError(null);
+          sawSnapshot.current = false;
+          apply({ type: "reset" });
+        },
+        onSnapshot: (page) => {
+          if (!active) return;
+          setWindowStart(conversationStart(page.entries, page.cursor !== null));
+          apply({ type: "snapshot", cursor: page.cursor });
+        },
+        onChange: (entries) => {
+          if (!active) return;
+          setTail(entries);
+          setSnapshotReady(true);
+          setError(null);
+          if (!sawSnapshot.current) {
+            sawSnapshot.current = true;
+            // Everything in the snapshot is the past; the line goes after it.
+            setWatermark(entries.length ? Math.max(...entries.map((entry) => entry.ordinal)) : null);
+          }
+        },
+        onTimelineMetaChange: (meta) => { if (active) setTimelineMeta(meta); },
+        onStatus: (status) => {
+          if (!active) return;
+          setStatus(status);
+          if (status === "closed") setError(previous => previous ?? "The message connection closed.");
+        },
+        onError: (error) => {
+          if (!active) return;
+          if (error.code === "cursor_expired")
+            apply({ type: "expired", seq: modelRef.current.fetchSeq });
+          else if (error.code !== "not_ready") setError(error.message);
+        },
+      });
+      subscription.current = sub;
+    };
+    // A port that answers at once subscribes in this effect, exactly as a
+    // bare client did; one that must ask first subscribes when it answers.
+    if (lease.client !== null) start(lease.client);
+    else {
+      lease.ready.then(
+        (client) => {
+          if (active) start(client);
+        },
+        (error: unknown) => {
+          if (!active) return;
+          setStatus("closed");
+          setError(error instanceof Error ? error.message : "This session could not be opened.");
+        },
+      );
+    }
     return () => {
       active = false;
       subscription.current = null;
-      sub.close();
+      (sub as SessionFeed | null)?.close();
+      lease.release();
     };
-  }, [sessionId, attempt, apply]);
+  }, [sessions, sessionId, attempt, apply]);
 
   const retry = useCallback(() => setAttempt(value => value + 1), []);
 
@@ -520,13 +543,21 @@ export interface TeamTimelineFeed {
  * document owns a small subscription set. Unlike ordinary Agent subthreads it
  * is eager: delivered boundary messages belong in shared chronology even when
  * no disclosure is open. */
-export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFeed {
+export function useTeamTimelines(
+  sessions: SessionLeases,
+  sessionIds: readonly string[],
+): TeamTimelineFeed {
   const key = [...new Set(sessionIds)].sort().join("\n");
   const ids = useMemo(() => (key === "" ? [] : key.split("\n")), [key]);
   const records = useRef(
     new Map<
       string,
-      { sub: CollaborationSubscription | null; history: CollaborationTimeline | null; error: string | null }
+      {
+        sub: CollaborationFeed | null;
+        history: CollaborationTimeline | null;
+        error: string | null;
+        release: () => void;
+      }
     >(),
   );
   const [revision, setRevision] = useState(0);
@@ -536,47 +567,64 @@ export function useTeamTimelines(sessionIds: readonly string[]): TeamTimelineFee
       if (!wanted.has(id)) {
         records.current.delete(id);
         record.sub?.close();
+        record.release();
       }
     }
     for (const id of ids) {
       if (records.current.has(id)) continue;
+      const lease = sessions.acquire(id);
       const record = {
-        sub: null as CollaborationSubscription | null,
+        sub: null as CollaborationFeed | null,
         history: null as CollaborationTimeline | null,
         error: null as string | null,
+        release: () => lease.release(),
       };
       records.current.set(id, record);
-      record.sub = client.subscribeCollaboration(id, {
-        onReset: () => {
+      const start = (client: SessionClient) => {
+        if (records.current.get(id) !== record) return;
+        record.sub = client.subscribeCollaboration(id, {
+          onReset: () => {
+            if (records.current.get(id) !== record) return;
+            record.history = null;
+            setRevision((value) => value + 1);
+          },
+          onChange: (history) => {
+            if (records.current.get(id) !== record) return;
+            record.history = history;
+            record.error = null;
+            setRevision((value) => value + 1);
+          },
+          onError: error => {
+            if (records.current.get(id) !== record) return;
+            record.error = error.message;
+            setRevision(value => value + 1);
+          },
+          onStatus: status => {
+            if (records.current.get(id) !== record || record.history !== null) return;
+            if (status === "closed") record.error = "Could not load team messages";
+            setRevision(value => value + 1);
+          },
+        });
+      };
+      if (lease.client !== null) start(lease.client);
+      else {
+        lease.ready.then(start, (error: unknown) => {
           if (records.current.get(id) !== record) return;
-          record.history = null;
-          setRevision((value) => value + 1);
-        },
-        onChange: (history) => {
-          if (records.current.get(id) !== record) return;
-          record.history = history;
-          record.error = null;
-          setRevision((value) => value + 1);
-        },
-        onError: error => {
-          if (records.current.get(id) !== record) return;
-          record.error = error.message;
+          record.error = error instanceof Error ? error.message : "Could not load team messages";
           setRevision(value => value + 1);
-        },
-        onStatus: status => {
-          if (records.current.get(id) !== record || record.history !== null) return;
-          if (status === "closed") record.error = "Could not load team messages";
-          setRevision(value => value + 1);
-        },
-      });
+        });
+      }
     }
     setRevision((value) => value + 1);
-  }, [ids]);
+  }, [sessions, ids]);
   useEffect(
     () => () => {
       const previous = [...records.current.values()];
       records.current.clear();
-      previous.forEach((record) => record.sub?.close());
+      previous.forEach((record) => {
+        record.sub?.close();
+        record.release();
+      });
     },
     [],
   );
@@ -631,7 +679,11 @@ export const SEARCH_LIMIT = 200;
  * reads as a search that keeps failing — and only the newest request may
  * land: a superseded one is aborted and its late result ignored.
  */
-export function useSearch(query: string, facets: SearchFacets = {}): SearchFeed {
+export function useSearch(
+  catalog: CatalogPort,
+  query: string,
+  facets: SearchFacets = {},
+): SearchFeed {
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
@@ -650,7 +702,7 @@ export function useSearch(query: string, facets: SearchFacets = {}): SearchFeed 
     let cancelled = false;
     setSearching(true);
     const timer = setTimeout(() => {
-      client
+      catalog
         .search(
           {
             q,
@@ -687,6 +739,6 @@ export function useSearch(query: string, facets: SearchFacets = {}): SearchFeed 
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query, project, kind, agent]);
+  }, [catalog, query, project, kind, agent]);
   return { query: query.trim(), response, error, searching };
 }

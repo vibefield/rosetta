@@ -54,8 +54,8 @@ import { ColumnHeading, EmptyState } from "./ui";
 import { FileViewerDialog } from "./file-viewer";
 import { ImageGalleryDialog } from "./file-viewer/ImageGalleryDialog";
 import type { FileHandle, FileSource } from "./file-viewer";
-import { attachmentFileSource, canOpenAttachment } from "./transcript/attachment-file-source";
-import { attachmentGallery, attachmentGallerySource } from "./transcript/attachment-gallery";
+import { useAttachmentReader } from "./transcript/attachment-file-source";
+import { attachmentGallery, createAttachmentGallerySource } from "./transcript/attachment-gallery";
 import type { AttachmentOpener } from "./transcript/attachment-gallery";
 import {
   handleForReadPath,
@@ -69,6 +69,7 @@ import {
 
 import { scrollRowTo } from "./transcript/scroll-to-row";
 import { activityCuts } from "./transcript/activity-plan";
+import { ReadingSessionProvider, useRoom } from "../room-context";
 
 export type { ThreadFocus } from "./transcript/thread-index";
 
@@ -123,7 +124,11 @@ export interface TranscriptColumnProps {
 export function TranscriptColumn(props: TranscriptColumnProps) {
   // Selection owns the document's disclosures, overlays and opening state.
   // Reset them in the selection commit, before the previous session can paint.
-  return <SessionTranscript key={props.session?.id ?? "no-session"} {...props} />;
+  return (
+    <ReadingSessionProvider value={props.session?.id ?? null}>
+      <SessionTranscript key={props.session?.id ?? "no-session"} {...props} />
+    </ReadingSessionProvider>
+  );
 }
 
 function SessionTranscript({
@@ -143,6 +148,9 @@ function SessionTranscript({
   onOpenThread,
   onBackToParent,
 }: TranscriptColumnProps) {
+  const { sessions: leases } = useRoom();
+  const attachments = useAttachmentReader();
+  const gallerySource = useMemo(() => createAttachmentGallerySource(attachments), [attachments]);
   const threadNavigation = useMemo(() => ({ depth: 0, open: onOpenThread ?? null }), [onOpenThread]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const focusAfterOpening = useRef(false);
@@ -203,23 +211,23 @@ function SessionTranscript({
 
   const openAttachment: AttachmentOpener = (fact, row) => {
     viewerRequest.current += 1;
-    if (!canOpenAttachment(fact)) {
+    if (!attachments.canOpen(fact)) {
       onReceipt(attachmentStatus(fact));
       return;
     }
     if (viewerTarget?.message === undefined) setViewerTarget(null);
-    setImageGallery(attachmentGallery(fact, row));
+    setImageGallery(attachmentGallery(attachments, fact, row));
   };
 
   const openMessage = useCallback((message: FullMessage) => {
     viewerRequest.current += 1;
     setViewerTarget({ handle: handleForMessage(message),
-      source: message.recordedText?.type === "member" ? attachmentFileSource : messageFileSource, message });
-  }, []);
+      source: message.recordedText?.type === "member" ? attachments.fileSource : messageFileSource, message });
+  }, [attachments]);
 
   const openReadPath = (path: PathFact, previewBytes?: Uint8Array, name?: string) => {
     const request = (viewerRequest.current += 1);
-    void handleForReadPath(path, previewBytes, name)
+    void handleForReadPath(leases, path, previewBytes, name)
       .then((handle) => {
         if (request !== viewerRequest.current) return;
         if (handle === null) {
@@ -253,7 +261,7 @@ function SessionTranscript({
   const openMetaPlan = (plan: TimelineMetaPlan) => {
     if (session === null) return;
     openMetaFile(
-      () => handleForTimelineMetaPlan(session.id, plan),
+      () => handleForTimelineMetaPlan(leases, session.id, plan),
       "Could not open that recorded plan",
     );
   };
@@ -261,7 +269,7 @@ function SessionTranscript({
   const openMetaArtifact = (artifact: TimelineMetaArtifact) => {
     if (session === null) return;
     openMetaFile(
-      () => handleForTimelineMetaArtifact(session.id, artifact),
+      () => handleForTimelineMetaArtifact(leases, session.id, artifact),
       "Could not open that recorded artifact",
     );
   };
@@ -601,7 +609,7 @@ function SessionTranscript({
           messageKey={viewerTarget.message!.key} role={viewerTarget.message!.role} preview={false}
           attachments={viewerTarget.message!.attachments ?? []} onOpenAttachment={openAttachment} onReceipt={onReceipt} />}
         handle={viewerTarget?.handle ?? null}
-        source={viewerTarget?.source ?? attachmentFileSource}
+        source={viewerTarget?.source ?? attachments.fileSource}
         tint={project?.tint ?? null}
         homeDirectory={homeDirectory}
         onClose={() => {
@@ -612,7 +620,7 @@ function SessionTranscript({
         onReceipt={onReceipt}
         openInBrowser={desktopHost()?.openInBrowser ?? null}
       />
-      {imageGallery && <ImageGalleryDialog {...imageGallery} source={attachmentGallerySource}
+      {imageGallery && <ImageGalleryDialog {...imageGallery} source={gallerySource}
         tint={project?.tint ?? null} homeDirectory={homeDirectory}
         onClose={() => setImageGallery(null)} onReceipt={onReceipt}
         openInBrowser={desktopHost()?.openInBrowser ?? null} />}

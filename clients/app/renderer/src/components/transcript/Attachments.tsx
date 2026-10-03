@@ -1,7 +1,7 @@
 import { createContext, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AttachmentFact } from "../../lib/transcript";
 import { fmtBytes } from "../../lib/format";
-import { attachmentAssetUrl, attachmentImageResource, canOpenAttachment } from "./attachment-file-source";
+import { useAttachmentReader } from "./attachment-file-source";
 import { imageRequestUrl, useImageVisibility } from "../file-viewer/image-resource";
 import type { AttachmentOpener } from "./attachment-gallery";
 import "../../styles/attachments.css";
@@ -12,8 +12,9 @@ export const ActivityImagesContext = createContext<AttachmentOpener | null>(null
 export function useAttachmentActions(onOpenAttachment: AttachmentOpener, onReceipt: (text: string) => void,
   facts: readonly AttachmentFact[]) {
   const [reveal, setReveal] = useState<{ key: string; request: number } | null>(null);
+  const attachments = useAttachmentReader();
   const open: AttachmentOpener = (fact, row = facts) => {
-    if (canOpenAttachment(fact)) onOpenAttachment(fact, row);
+    if (attachments.canOpen(fact)) onOpenAttachment(fact, row);
     else {
       setReveal(old => ({ key: fact.key, request: (old?.request ?? 0) + 1 }));
       onReceipt(attachmentStatus(fact));
@@ -46,7 +47,8 @@ function Tile({ fact, index, onOpen }: {
   const retryRef = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef(false);
   const visible = useImageVisibility(figureRef);
-  const resource = fact.kind === "image" ? attachmentImageResource(fact) : null;
+  const attachments = useAttachmentReader();
+  const resource = fact.kind === "image" ? attachments.imageResource(fact) : null;
   const url = resource ? imageRequestUrl(window.devicePixelRatio > 2 ? resource.tile2x : resource.tile, attempt) : null;
   const failed = url !== null && failedUrl === url;
   useLayoutEffect(() => {
@@ -93,6 +95,7 @@ export function Attachments({ facts, onOpenAttachment, reveal }: {
   readonly onOpenAttachment: AttachmentOpener;
 }) {
   const id = useId();
+  const attachments = useAttachmentReader();
   const gallery = useRef<HTMLDivElement>(null);
   const handledReveal = useRef<typeof reveal>(undefined);
   const [edges, setEdges] = useState({ before: false, after: false });
@@ -145,7 +148,7 @@ export function Attachments({ facts, onOpenAttachment, reveal }: {
       const next = event.key === "Home" ? 0 : event.key === "End" ? tiles.length - 1 : Math.max(0, Math.min(tiles.length - 1, index + (event.key === "ArrowRight" ? 1 : -1)));
       tiles[next]?.focus({ preventScroll: true });
     }}>
-      {facts.map((fact, index) => <Tile key={`${fact.key}:${attachmentAssetUrl(fact) ?? "reference"}`} fact={fact} index={index}
+      {facts.map((fact, index) => <Tile key={`${fact.key}:${attachments.assetUrl(fact) ?? "reference"}`} fact={fact} index={index}
         onOpen={selected => onOpenAttachment(selected, facts)} />)}
     </div>
     {(edges.before || edges.after) && <button className="tr-att__nav tr-att__nav--previous" type="button" aria-label="Previous images" aria-disabled={!edges.before} data-edge={!edges.before || undefined} aria-controls={id} onClick={() => page(-1)}>‹</button>}

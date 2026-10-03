@@ -36,7 +36,7 @@ import type {
 import { parseDiff } from "../file-viewer/diff";
 import { highlight, languageFor, PLAIN_TEXT } from "../file-viewer/syntax";
 import type { Language, TokenLine } from "../file-viewer/syntax";
-import { client } from "../../lib/rosetta";
+import { useRoom } from "../../room-context";
 import { DirectoryGlyph } from "./glyphs";
 
 /** Derived, never re-declared: a document's blocks are whatever the generated
@@ -424,6 +424,7 @@ export function CommandList({
 }
 
 function CommandSource({ command, code }: { readonly command: CommandFact; readonly code: boolean }) {
+  const { sessions } = useRoom();
   const [full, setFull] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -444,7 +445,8 @@ function CommandSource({ command, code }: { readonly command: CommandFact; reado
     setLoading(true);
     setFailed(false);
     try {
-      const response = await client.command(command.sessionId!, command.timelineId!);
+      const sessionId = command.sessionId!;
+      const response = await sessions.run(sessionId, (client) => client.command(sessionId, command.timelineId!));
       setFull(response.command);
       setExpanded(true);
     } catch {

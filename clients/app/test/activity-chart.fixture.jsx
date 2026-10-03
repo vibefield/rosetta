@@ -3,7 +3,8 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ProjectSummaryPanel } from "../renderer/src/components/SummaryPanels";
 import { getActivityGridStartTimestamp, getCalendarDayKey } from "../renderer/src/lib/model";
-import { client } from "../renderer/src/lib/rosetta";
+import { RoomProvider } from "../renderer/src/room-context";
+import { client, ports } from "./support/room-ports.mjs";
 import { NO_SPEND } from "../renderer/src/lib/spend";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/room.css";
@@ -82,4 +83,4 @@ function Fixture() {
   </main>;
 }
 
-createRoot(document.getElementById("root")).render(<Fixture />);
+createRoot(document.getElementById("root")).render(<RoomProvider ports={ports}><Fixture /></RoomProvider>);

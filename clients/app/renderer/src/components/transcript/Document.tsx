@@ -39,7 +39,7 @@ import {
 import type { TimelineFeed } from "../../lib/hooks";
 import type { TimelineLayout } from "../../lib/transcript/use-transcript-tail";
 import { useTeamTimelines } from "../../lib/hooks";
-import { client } from "../../lib/rosetta";
+import { useRoom } from "../../room-context";
 import { lastActive } from "../../lib/format";
 import { sessionLastActive } from "../../lib/session-activity";
 import { withinHistoryWindow } from "../../lib/transcript/history-window";
@@ -75,16 +75,18 @@ function LazyReportWork({ report, ...props }: {
 } & Omit<ComponentProps<typeof ReportWorkDocument>, "rows" | "startedAt" | "endedAt">) {
   const [rows, setRows] = useState<TimelineEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { sessions } = useRoom();
   useEffect(() => {
     const controller = new AbortController();
     setRows(null);
     setError(null);
-    void client.reportWork(report.session_id, report.timeline_id, controller.signal).then(
+    void sessions.run(report.session_id, (client) =>
+      client.reportWork(report.session_id, report.timeline_id, controller.signal)).then(
       (rows) => { if (!controller.signal.aborted) setRows(rows); },
       (error: unknown) => { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "The recorded work is unavailable"); },
     );
     return () => controller.abort();
-  }, [report]);
+  }, [report, sessions]);
   if (error !== null) return <p className="tr-quiet">{error}</p>;
   if (rows === null) return <p className="tr-quiet">Loading recorded work…</p>;
   const work = taskBoundedReportWork(report, rows);
@@ -248,6 +250,7 @@ export function TranscriptDocument({
   nested = false,
   onTimelineLayout,
 }: TranscriptDocumentProps) {
+  const { sessions } = useRoom();
   const navigation = useContext(ThreadNavigationContext);
   const childNavigation = useMemo(() => ({ ...navigation, depth: navigation.depth + 1 }), [navigation]);
   const runtimeKind = getRuntimeKind(session.runtime_id);
@@ -261,7 +264,7 @@ export function TranscriptDocument({
     [session.id, directChildren, feed.rows],
   );
   const teamIdSet = useMemo(() => new Set(teamIds), [teamIds]);
-  const teamFeed = useTeamTimelines(teamIds);
+  const teamFeed = useTeamTimelines(sessions, teamIds);
   const hasEarlier = !feed.snapshotReady || feed.earlier.kind !== "none";
   const chronology = useMemo(
     () => teamChronology(feed.rows, teamFeed.rowsBySession, { hasEarlier, ready: feed.snapshotReady }),
@@ -496,7 +499,7 @@ export function TranscriptDocument({
     );
     void Promise.allSettled(
       anchors.map(async (timelineId) => {
-        const row = await client.timelineEntry(session.id, timelineId);
+        const row = await sessions.run(session.id, (client) => client.timelineEntry(session.id, timelineId));
         return linkedChildSessionIds(row);
       }),
     ).then((results) => {
@@ -514,7 +517,7 @@ export function TranscriptDocument({
     return () => {
       current = false;
     };
-  }, [legacyWorkflowKey, session.id]);
+  }, [legacyWorkflowKey, session.id, sessions]);
   const indexedWorkflowChildren = useMemo(
     () => {
       const ids = new Set(

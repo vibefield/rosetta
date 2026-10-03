@@ -4,9 +4,14 @@
 // adapter turns a canonical content-addressed asset into the same `FileHandle`
 // + `FileSource` pair the worktree supplies, so thumbnails and inline image
 // markers open the established image view instead of navigating the page.
+// Addresses come from the host's asset source; bytes ride the reading
+// session's client.
 
+import { useMemo } from "react";
+import type { AssetRef, ImageVariant } from "@rosetta/protocol";
 import type { AttachmentFact } from "../../lib/transcript";
-import { client } from "../../lib/rosetta";
+import type { AssetSource } from "../../ports";
+import { useReadingSession, useRoom } from "../../room-context";
 import { resolveKind } from "../file-viewer";
 import type { FileHandle, FileSource } from "../file-viewer";
 import type { ImageResource } from "../file-viewer/types";
@@ -25,26 +30,19 @@ const EXTENSION_BY_MEDIA_TYPE: ReadonlyMap<string, string> = new Map([
   ["image/svg+xml", "svg"],
 ]);
 
-/** The URL of bytes the daemon kept, never a provider-authored path. */
-export function attachmentAssetUrl(fact: AttachmentFact): string | null {
-  const source = fact.ref?.source;
-  if (source === undefined || source === null || source.type !== "asset") return null;
-  if (fact.kind === "image" && !isOptimizedImageAsset(source.asset)) return null;
-  try {
-    const url = new URL(source.asset.url, `${client.baseUrl}/`);
-    return (url.protocol === "http:" || url.protocol === "https:") && url.origin === new URL(client.baseUrl).origin ? url.toString() : null;
-  } catch {
-    return null;
-  }
-}
+/** Reads one stored member's bytes. */
+export type AssetReader = (asset: AssetRef, signal: AbortSignal) => Promise<Uint8Array>;
 
-export function attachmentImageResource(fact: AttachmentFact): ImageResource | null {
-  const source = fact.ref?.source;
-  const asset = source?.type === "asset" && attachmentAssetUrl(fact) !== null ? source.asset : null;
-  if (!asset || !isOptimizedImageAsset(asset)) return null;
-  const url = (variant: import("@rosetta/protocol").ImageVariant) => client.imageAssetUrl(asset, variant);
-  return { full: url("full"), preview: url("preview"), rail: url("rail"), tile: url("tile"), tile2x: url("tile2x"),
-    width: fact.ref?.dimensions?.width, height: fact.ref?.dimensions?.height };
+export interface AttachmentReader {
+  /** The address of bytes the daemon kept, never a provider-authored path. */
+  assetUrl(fact: AttachmentFact): string | null;
+  imageResource(fact: AttachmentFact): ImageResource | null;
+  /** A stored transcript asset as the generic file viewer understands it. */
+  handleFor(fact: AttachmentFact): FileHandle | null;
+  canOpen(fact: AttachmentFact): boolean;
+  /** Stable by construction: `useFileContent` treats source identity as a read. */
+  readonly fileSource: FileSource;
+  readonly readAsset: AssetReader;
 }
 
 export function attachmentViewerName(fact: AttachmentFact): string {
@@ -60,35 +58,67 @@ export function attachmentViewerName(fact: AttachmentFact): string {
   return extension === undefined ? base : `${base}.${extension}`;
 }
 
-/** A stored transcript asset as the generic file viewer understands it. */
-export function handleForAttachment(fact: AttachmentFact): FileHandle | null {
-  const source = fact.ref?.source;
-  const url = attachmentAssetUrl(fact);
-  if (source === undefined || source === null || source.type !== "asset" || url === null) return null;
+export function createAttachmentReader(assets: AssetSource, readAsset: AssetReader): AttachmentReader {
+  function assetUrl(fact: AttachmentFact): string | null {
+    const source = fact.ref?.source;
+    if (source === undefined || source === null || source.type !== "asset") return null;
+    if (fact.kind === "image" && !isOptimizedImageAsset(source.asset)) return null;
+    return assets.attachmentAssetUrl(source.asset);
+  }
+
+  function imageResource(fact: AttachmentFact): ImageResource | null {
+    const source = fact.ref?.source;
+    const asset = source?.type === "asset" && assetUrl(fact) !== null ? source.asset : null;
+    if (!asset || !isOptimizedImageAsset(asset)) return null;
+    const url = (variant: ImageVariant) => assets.imageAssetUrl(asset, variant);
+    return { full: url("full"), preview: url("preview"), rail: url("rail"), tile: url("tile"), tile2x: url("tile2x"),
+      width: fact.ref?.dimensions?.width, height: fact.ref?.dimensions?.height };
+  }
+
+  function handleFor(fact: AttachmentFact): FileHandle | null {
+    const source = fact.ref?.source;
+    const url = assetUrl(fact);
+    if (source === undefined || source === null || source.type !== "asset" || url === null) return null;
+    return {
+      key: `attachment:${source.asset.digest}`,
+      name: attachmentViewerName(fact),
+      path: null,
+      size: fact.byteLen ?? source.asset.byte_len,
+      ref: source.asset,
+    };
+  }
+
+  const fileSource: FileSource = {
+    image(handle) {
+      const asset = handle.ref as AssetRef;
+      if (!asset || !isOptimizedImageAsset(asset)) return null;
+      return { full: assets.imageAssetUrl(asset, "full"), preview: assets.imageAssetUrl(asset, "preview"),
+        rail: assets.imageAssetUrl(asset, "rail"), tile: assets.imageAssetUrl(asset, "tile"), tile2x: assets.imageAssetUrl(asset, "tile2x") };
+    },
+    async read(handle: FileHandle, signal: AbortSignal): Promise<Uint8Array> {
+      const asset = handle.ref as AssetRef;
+      if (!asset || !isOptimizedImageAsset(asset)) throw new Error("that attachment is no longer available");
+      return readAsset(asset, signal);
+    },
+  };
+
   return {
-    key: `attachment:${source.asset.digest}`,
-    name: attachmentViewerName(fact),
-    path: null,
-    size: fact.byteLen ?? source.asset.byte_len,
-    ref: source.asset,
+    assetUrl,
+    imageResource,
+    handleFor,
+    canOpen: (fact) => fact.kind === "image" && handleFor(fact) !== null,
+    fileSource,
+    readAsset,
   };
 }
 
-export function canOpenAttachment(fact: AttachmentFact): boolean {
-  return fact.kind === "image" && handleForAttachment(fact) !== null;
+/** The attachment reader for the document being read here: the host's
+ * addresses, and bytes through the reading session's client. */
+export function useAttachmentReader(): AttachmentReader {
+  const { assets, sessions } = useRoom();
+  const sessionId = useReadingSession();
+  return useMemo(() => createAttachmentReader(assets, (asset, signal) => {
+    if (sessionId === null) return Promise.reject(new Error("No session is open to read that attachment"));
+    return sessions.run(sessionId, (client) => client.readAsset(asset, signal));
+  }), [assets, sessions, sessionId]);
 }
-
-/** Stable by construction: `useFileContent` treats source identity as a read. */
-export const attachmentFileSource: FileSource = {
-  image(handle) {
-    const asset = handle.ref as import("@rosetta/protocol").AssetRef;
-    if (!asset || !isOptimizedImageAsset(asset)) return null;
-    return { full: client.imageAssetUrl(asset, "full"), preview: client.imageAssetUrl(asset, "preview"),
-      rail: client.imageAssetUrl(asset, "rail"), tile: client.imageAssetUrl(asset, "tile"), tile2x: client.imageAssetUrl(asset, "tile2x") };
-  },
-  async read(handle: FileHandle, signal: AbortSignal): Promise<Uint8Array> {
-    const asset = handle.ref as import("@rosetta/protocol").AssetRef;
-    if (!asset || !isOptimizedImageAsset(asset)) throw new Error("that attachment is no longer available");
-    return client.readAsset(asset, signal);
-  },
-};

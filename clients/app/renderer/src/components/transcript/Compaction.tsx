@@ -1,7 +1,7 @@
 // §03 G — generated continuation context belongs to the system marker.
 import { useEffect, useState } from "react";
 import type { CanonicalText } from "@rosetta/protocol";
-import { client } from "../../lib/rosetta";
+import { useReadingSession, useRoom } from "../../room-context";
 import { MessagePreview } from "./MessagePreview";
 import { LineChevron } from "./glyphs";
 import { useRowDisclosure } from "./disclosure-state";
@@ -21,11 +21,16 @@ function SummaryBody({
 }) {
   const [loaded, setLoaded] = useState<{ text: string | null; error: string | null } | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const { sessions } = useRoom();
+  const readingSession = useReadingSession();
   useEffect(() => {
     if (canonical.type === "inline") return;
     const controller = new AbortController();
     setLoaded(null);
-    void client.readTextAsset(canonical.asset, controller.signal).then(
+    const read = readingSession === null
+      ? Promise.reject(new Error("No session is open to read the stored summary"))
+      : sessions.run(readingSession, (client) => client.readTextAsset(canonical.asset, controller.signal));
+    void read.then(
       (text) => {
         if (!controller.signal.aborted) setLoaded({ text, error: null });
       },
@@ -38,7 +43,7 @@ function SummaryBody({
       },
     );
     return () => controller.abort();
-  }, [canonical, attempt]);
+  }, [canonical, attempt, sessions, readingSession]);
 
   const text = canonical.type === "inline" ? canonical.text : loaded?.text ?? null;
   return (

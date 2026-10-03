@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { createRosettaHost } from "./host/rosetta-host";
 import "./styles/tokens.css";
 import "./styles/room.css";
 import "./styles/ingest.css";
@@ -14,4 +15,5 @@ import "@vibecook/mille-ui/theme/vibefield.css";
 // No StrictMode: mille's port handshake is single-consumer (a MessagePort,
 // once claimed, cannot be re-claimed by a double-invoked effect), and the
 // embedding guide's own playground makes the same call.
-createRoot(document.getElementById("root")!).render(<App />);
+const host = createRosettaHost();
+createRoot(document.getElementById("root")!).render(<App ports={host.ports} />);

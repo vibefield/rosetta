@@ -4,7 +4,8 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { TranscriptColumn } from '../renderer/src/components/Transcript';
 import { useTimeline } from '../renderer/src/lib/hooks';
-import { client } from '../renderer/src/lib/rosetta';
+import { RoomProvider, useRoom } from '../renderer/src/room-context';
+import { client, ports } from './support/room-ports.mjs';
 import { entry, inline, shell } from './support/ledger-fixtures.mjs';
 import '../renderer/src/styles/tokens.css';
 import '../renderer/src/styles/room.css';
@@ -71,7 +72,7 @@ function Fixture() {
   const [selected, setSelected] = useState('alpha');
   const [roster, setRoster] = useState([...sessions, worker]);
   const [focus, setFocus] = useState(null);
-  const feed = useTimeline(selected);
+  const feed = useTimeline(useRoom().sessions, selected);
   window.loadingFixture = {
     feed, subscriptions, teams, flush: flushSync, release, releaseTeam,
     select(id, seek = false) { setSelected(id); setFocus(seek ? { sessionId: id, timelineId: `${id}-3` } : null); },
@@ -96,4 +97,4 @@ function Fixture() {
     </div>
   </div></div>;
 }
-createRoot(document.getElementById('root')).render(<Fixture />);
+createRoot(document.getElementById('root')).render(<RoomProvider ports={ports}><Fixture /></RoomProvider>);

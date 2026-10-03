@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import type { CanonicalText, WorkflowRun, WorkflowWorker } from "@rosetta/protocol";
 import { AgentMark } from "../../lib/agents";
 import { clock, tokenText } from "../../lib/format";
-import { client } from "../../lib/rosetta";
+import { useReadingSession, useRoom } from "../../room-context";
 import type {
   PathFact,
   WorkflowAttemptFact,
@@ -291,6 +291,8 @@ function FullResult({ canonical }: { readonly canonical: CanonicalText }) {
     readonly error: string | null;
   } | null>(null);
   const member = canonical.type === "member" ? canonical : null;
+  const { sessions } = useRoom();
+  const readingSession = useReadingSession();
 
   useEffect(() => {
     if (
@@ -301,7 +303,10 @@ function FullResult({ canonical }: { readonly canonical: CanonicalText }) {
     const controller = new AbortController();
     const digest = member.asset.digest;
     setLoaded({ digest, text: null, error: null });
-    void client.readTextAsset(member.asset, controller.signal).then(
+    const read = readingSession === null
+      ? Promise.reject(new Error("No session is open to read the stored result"))
+      : sessions.run(readingSession, (client) => client.readTextAsset(member.asset, controller.signal));
+    void read.then(
       (text) => setLoaded({ digest, text, error: null }),
       (error: unknown) => {
         if (controller.signal.aborted) return;
@@ -313,7 +318,7 @@ function FullResult({ canonical }: { readonly canonical: CanonicalText }) {
       },
     );
     return () => controller.abort();
-  }, [member, open]);
+  }, [member, open, sessions, readingSession]);
 
   const body = canonical.type === "inline"
     ? canonical.text

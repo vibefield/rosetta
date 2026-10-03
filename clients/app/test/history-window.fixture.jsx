@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { TranscriptColumn } from '../renderer/src/components/Transcript';
 import { useTimeline } from '../renderer/src/lib/hooks';
-import { client } from '../renderer/src/lib/rosetta';
+import { RoomProvider, useRoom } from '../renderer/src/room-context';
+import { client, ports } from './support/room-ports.mjs';
 import { entry, inline, shell } from './support/ledger-fixtures.mjs';
 import '../renderer/src/styles/tokens.css';
 import '../renderer/src/styles/room.css';
@@ -75,7 +76,7 @@ window.historyFixture = {
   resetFailure: () => { failReads = 2; requests.length = 0; snapshot(); },
 };
 function Fixture() {
-  const feed = useTimeline('s1');
+  const feed = useTimeline(useRoom().sessions, 's1');
   const [focus, setFocus] = useState(null);
   Object.assign(window.historyFixture, { feed, seek: id => setFocus({ sessionId: id === 'old-team' ? 'earlier-worker' : 'worker', timelineId: id }) });
   return <div className="ah-frame" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -89,4 +90,4 @@ function Fixture() {
     </div>
   </div>;
 }
-createRoot(document.getElementById('root')).render(<Fixture />);
+createRoot(document.getElementById('root')).render(<RoomProvider ports={ports}><Fixture /></RoomProvider>);

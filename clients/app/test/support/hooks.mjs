@@ -3,10 +3,17 @@ import ts from "typescript";
 import { CursorExpiredError } from "../../../ts/client.ts";
 import * as head from "../../renderer/src/lib/transcript/head-state.ts";
 import * as historyWindow from "../../renderer/src/lib/transcript/history-window.ts";
+import { createSessionLeases } from "../../renderer/src/lib/session-leases.ts";
+
+// The hooks that read one session's body take the room's session leases; the
+// rest take the catalog. A fake client stands in for both, as rosetta's app
+// hands one client to both.
+const SESSION_HOOKS = new Set(["useTimeline", "useTeamTimelines"]);
 
 // Run the real data hooks with deterministic React scheduling. No DOM or
 // network is needed to exercise effect cleanup and responses arriving late.
 export function dataHooks(client) {
+  const sessions = createSessionLeases({ open: () => client, close() {} });
   let active;
   const react = {
     useState(initial) {
@@ -53,7 +60,6 @@ export function dataHooks(client) {
   const dependencies = {
     react,
     "@rosetta/protocol": { CursorExpiredError },
-    "./rosetta": { client, desktopDaemonState: () => null, onDesktopDaemonState: () => () => {} },
     "./model": { getActivityGridStartTimestamp: () => 0, getViewerUtcOffsetMinutes: () => 0 },
     "./transcript/head-state": head,
     "./transcript/history-window": historyWindow,
@@ -94,7 +100,7 @@ export function dataHooks(client) {
           runtime.index = 0;
           runtime.dirty = false;
           active = runtime;
-          result = exports[name](...args);
+          result = exports[name](SESSION_HOOKS.has(name) ? sessions : client, ...args);
           renders.push(result);
           active = null;
           for (const effect of runtime.effects.splice(0)) effect();

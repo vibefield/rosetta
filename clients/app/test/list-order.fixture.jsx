@@ -8,7 +8,8 @@ import { useMeta } from '../renderer/src/lib/hooks';
 import { useActivityOrder } from '../renderer/src/lib/use-activity-order';
 import { compareOrderedSessions } from '../renderer/src/lib/activity-order';
 import { buildProjectViewModel } from '../renderer/src/lib/model';
-import { client } from '../renderer/src/lib/rosetta';
+import { RoomProvider } from '../renderer/src/room-context';
+import { client, ports } from './support/room-ports.mjs';
 import '../renderer/src/styles/tokens.css';
 import '../renderer/src/styles/room.css';
 import '../renderer/src/styles/ingest.css';
@@ -46,7 +47,7 @@ const publish = source => {
   handlers.onChange({ projects, sessions: [...rows], runtimes: [{ id: 'codex', kind: 'codex' }] }, source);
 };
 function Fixture() {
-  const { meta, snapshotVersion, status } = useMeta();
+  const { meta, snapshotVersion, status } = useMeta(ports.catalog);
   const [clock, setClock] = useState(start);
   const [selected, select] = useState('parser');
   const [projectId, setProject] = useState('rosetta');
@@ -99,4 +100,4 @@ function Fixture() {
     </div>
   </div></div>;
 }
-createRoot(document.getElementById('root')).render(<StrictMode><Fixture /></StrictMode>);
+createRoot(document.getElementById('root')).render(<RoomProvider ports={ports}><StrictMode><Fixture /></StrictMode></RoomProvider>);

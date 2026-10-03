@@ -1,6 +1,15 @@
 // Production transcript and viewer with synthetic text; no daemon or archive.
-import { client } from "../renderer/src/lib/rosetta";
-client.setBaseUrl(window.location.origin);
+import { RosettaClient } from "@rosetta/protocol";
+import { sameOriginAssetUrl } from "../renderer/src/host/rosetta-host";
+import { RoomProvider } from "../renderer/src/room-context";
+import { client, ports } from "./support/room-ports.mjs";
+// The fixture server stands in for the daemon; every read the room makes
+// reaches it through the ports, as rosetta's app reaches its own daemon.
+const daemon = new RosettaClient({ baseUrl: window.location.origin });
+client.baseUrl = daemon.baseUrl;
+client.attachmentAssetUrl = asset => sameOriginAssetUrl(daemon, asset);
+for (const name of ["readTextAsset", "readFileTarget", "readPlan", "command", "reportWork", "timelineEntry"])
+  client[name] = daemon[name].bind(daemon);
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TranscriptColumn } from "../renderer/src/components/Transcript";
@@ -36,12 +45,12 @@ const markerRanges = (text, marker) => {
 const galleryImages = Array.from({ length: 6 }, (_, index) => image(String(index + 1), index % 2 ? "portrait.png" : "landscape.png"));
 galleryImages[2].source = galleryImages[0].source; // Repeated bytes retain distinct occurrence slots.
 const assetReads = [];
-const readAsset = client.readAsset.bind(client);
+const readAsset = daemon.readAsset.bind(daemon);
 client.readAsset = async (asset, signal) => {
   assetReads.push({ url: asset.url, signal });
   return readAsset(asset, signal);
 };
-const imageAssetUrl = client.imageAssetUrl.bind(client);
+const imageAssetUrl = daemon.imageAssetUrl.bind(daemon);
 client.imageAssetUrl = (asset, variant) => {
   const url = new URL(imageAssetUrl(asset, variant));
   // Fault injection belongs to the fixture transport, never canonical refs.
@@ -155,4 +164,4 @@ function Fixture() {
     </div>
   );
 }
-createRoot(document.getElementById("root")).render(<Fixture />);
+createRoot(document.getElementById("root")).render(<RoomProvider ports={ports}><Fixture /></RoomProvider>);

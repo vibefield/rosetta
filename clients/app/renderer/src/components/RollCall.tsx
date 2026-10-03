@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { DiscoveryRow } from "@rosetta/protocol";
 import { AgentMark } from "../lib/agents";
 import { lastActive } from "../lib/format";
-import { client } from "../lib/rosetta";
+import { useRoom } from "../room-context";
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
@@ -16,6 +16,7 @@ function formatBytes(bytes: number): string {
 }
 
 export function RollCallPanel() {
+  const { catalog: client } = useRoom();
   const [rows, setRows] = useState<DiscoveryRow[] | null>(null);
   const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
@@ -49,7 +50,7 @@ export function RollCallPanel() {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, []);
+  }, [client]);
 
   const installed = useMemo(() => (rows ?? []).filter((row) => row.installed), [rows]);
   const absent = useMemo(() => (rows ?? []).filter((row) => !row.installed), [rows]);

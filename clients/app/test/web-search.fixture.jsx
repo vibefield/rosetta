@@ -1,4 +1,6 @@
 // Production ledger components, deterministic source records, no external requests.
+import { RoomProvider } from "../renderer/src/room-context";
+import { ports } from "./support/room-ports.mjs";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
@@ -62,4 +64,4 @@ function Fixture() {
     </div></div>
   </main>;
 }
-createRoot(document.getElementById("root")).render(<Fixture />);
+createRoot(document.getElementById("root")).render(<RoomProvider ports={ports}><Fixture /></RoomProvider>);
