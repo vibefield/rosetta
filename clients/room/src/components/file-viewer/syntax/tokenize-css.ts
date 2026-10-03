@@ -56,7 +56,7 @@ export function tokenizeCss(text: string): readonly Token[] {
     const char = text[index]!;
 
     if (/[ \t\r\n]/.test(char)) {
-      push("plain", match(WHITESPACE) ?? char!);
+      push("plain", match(WHITESPACE) ?? char);
       continue;
     }
     if (text.startsWith("/*", index)) {

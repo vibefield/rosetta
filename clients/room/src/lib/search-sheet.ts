@@ -183,22 +183,25 @@ export function moveSection(
 ): number {
   if (options.length === 0) return -1;
   const from = active < 0 ? 0 : Math.min(active, options.length - 1);
-  const current = options[from]!.session.id;
+  // Every index read here stays inside options: from is clamped to it, the
+  // walk down stops above 0, and the walk up below options.length.
+  const sessionAt = (index: number): string => options[index]!.session.id;
+  const current = sessionAt(from);
   if (direction === 1) {
     for (let i = from + 1; i < options.length; i += 1) {
-      if (options[i]!.session.id !== current) return i;
+      if (sessionAt(i) !== current) return i;
     }
     return options.length - 1;
   }
   // Up: the head of this session if we are not already on it, else the
   // head of the session before.
   let head = from;
-  while (head > 0 && options[head - 1]!.session.id === current) head -= 1;
+  while (head > 0 && sessionAt(head - 1) === current) head -= 1;
   if (head !== from) return head;
   if (head === 0) return 0;
-  const previous = options[head - 1]!.session.id;
+  const previous = sessionAt(head - 1);
   let start = head - 1;
-  while (start > 0 && options[start - 1]!.session.id === previous) start -= 1;
+  while (start > 0 && sessionAt(start - 1) === previous) start -= 1;
   return start;
 }
 

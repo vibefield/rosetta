@@ -65,15 +65,18 @@ export function useDeferredListOrder(desired: readonly ListPosition[], scope: st
     const elements = container.querySelectorAll<HTMLElement>("[data-motion-key]");
     let low = 0;
     let high = elements.length;
+    // The search keeps low < high <= elements.length, so mid names an
+    // element, and the window below stops at elements.length.
+    const elementAt = (index: number): HTMLElement => elements[index]!;
     while (low < high) {
       const mid = (low + high) >>> 1;
-      const row = elements[mid]!;
+      const row = elementAt(mid);
       if (row.offsetTop + row.offsetHeight <= container.scrollTop) low = mid + 1;
       else high = mid;
     }
     const rows: { id: string; offset: number }[] = [];
     for (let index = low; index < Math.min(low + 3, elements.length); index++) {
-      const row = elements[index]!;
+      const row = elementAt(index);
       rows.push({ id: row.dataset.motionKey!, offset: row.offsetTop - container.scrollTop });
     }
     anchor.current = { scope, rows };

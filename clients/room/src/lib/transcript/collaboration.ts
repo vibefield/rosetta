@@ -446,20 +446,23 @@ export function teamChronology(
     { length: retainedParent.length + 1 },
     () => [] as TimelineEntry[],
   );
+  // One bucket before each retained parent row and one after the last, so
+  // every index from 0 to retainedParent.length names a bucket.
+  const bucketAt = (index: number): TimelineEntry[] => buckets[index]!;
   for (const row of additions) {
     const at = collaborationStamp(row).at;
     const before =
       at === null
         ? -1
         : retainedParent.findIndex((parent) => parent.at !== null && parent.at > at);
-    buckets[before === -1 ? retainedParent.length : before]!.push(row);
+    bucketAt(before === -1 ? retainedParent.length : before).push(row);
   }
 
   const merged: TimelineEntry[] = [];
-  for (let at = 0; at < retainedParent.length; at += 1) {
-    merged.push(...buckets[at]!, retainedParent[at]!);
+  for (const [at, parent] of retainedParent.entries()) {
+    merged.push(...bucketAt(at), parent);
   }
-  merged.push(...buckets[retainedParent.length]!);
+  merged.push(...bucketAt(retainedParent.length));
   return { rows: merged, duplicateRepresentatives };
 }
 

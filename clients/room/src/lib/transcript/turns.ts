@@ -539,20 +539,22 @@ function compactionPairs(
   cutBefore: ReadonlySet<string>,
 ): Map<string, readonly TimelineEntry[]> {
   const pairs = new Map<string, readonly TimelineEntry[]>();
+  // index runs from 1 below rows.length, so index - 1 and index are rows.
+  const rowAt = (index: number): TimelineEntry => rows[index]!;
   for (let index = 1; index < rows.length; index += 1) {
-    const previous = rows[index - 1]!;
-    const current = rows[index]!;
+    const previous = rowAt(index - 1);
+    const current = rowAt(index);
     if (cutBefore.has(current.timeline_id) || previous.session_id !== current.session_id
         || current.ordinal !== previous.ordinal + 1) continue;
     const summary = previous.body.type === "summary" ? previous : current;
     const boundary = summary === previous ? current : previous;
-    if (summary!.body.type !== "summary" || summary!.body.purpose !== "compaction"
-        || boundary!.body.type !== "notice" || boundary!.body.notice.type !== "compaction"
-        || boundary!.native_id === null || summary!.parent_native_id !== boundary!.native_id
-        || pairs.has(summary!.timeline_id) || pairs.has(boundary!.timeline_id)) continue;
+    if (summary.body.type !== "summary" || summary.body.purpose !== "compaction"
+        || boundary.body.type !== "notice" || boundary.body.notice.type !== "compaction"
+        || boundary.native_id === null || summary.parent_native_id !== boundary.native_id
+        || pairs.has(summary.timeline_id) || pairs.has(boundary.timeline_id)) continue;
     const pair = [previous, current];
-    pairs.set(summary!.timeline_id, pair);
-    pairs.set(boundary!.timeline_id, pair);
+    pairs.set(summary.timeline_id, pair);
+    pairs.set(boundary.timeline_id, pair);
   }
   return pairs;
 }
@@ -722,15 +724,17 @@ export function documentTurns(
 
   // The next stamped row, for a reasoning segment's span.
   const nextAt = new Map<string, number | null>();
+  // index and ahead both stay below rows.length.
+  const rowAt = (index: number): TimelineEntry => rows[index]!;
   for (let index = 0; index < rows.length; index += 1) {
     let found: number | null = null;
     for (let ahead = index + 1; ahead < rows.length; ahead += 1) {
-      if (rows[ahead]!.at !== null) {
-        found = rows[ahead]!.at;
+      if (rowAt(ahead).at !== null) {
+        found = rowAt(ahead).at;
         break;
       }
     }
-    nextAt.set(rows[index]!.timeline_id, found);
+    nextAt.set(rowAt(index).timeline_id, found);
   }
   const nextAtOf = (row: TimelineEntry) => nextAt.get(row.timeline_id) ?? null;
 
@@ -841,8 +845,10 @@ function firstStamp(rows: readonly TimelineEntry[]): number | null {
 }
 
 function lastStamp(rows: readonly TimelineEntry[]): number | null {
+  // index walks rows from its last index down to 0.
+  const rowAt = (index: number): TimelineEntry => rows[index]!;
   for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const at = rows[index]!.at;
+    const at = rowAt(index).at;
     if (at !== null) return at;
   }
   return null;

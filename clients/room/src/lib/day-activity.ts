@@ -34,22 +34,28 @@ type Point = readonly [x: number, y: number];
  * Flat end tangents also meet the pending-hours guide without a corner. */
 export function createHourlyCurve(points: readonly Point[]): string {
   if (!points.length) return "";
+  // Every read here exists: the first point is guarded above; slopes has one
+  // entry per gap and is read only at an interior point's two gaps; tangents
+  // has one entry per point; and the loop runs from 1 below points.length.
+  const pointAt = (index: number): Point => points[index]!;
   const slopes = points.slice(1).map((point, index) =>
-    (point[1] - points[index]![1]) / (point[0] - points[index]![0]));
+    (point[1] - pointAt(index)[1]) / (point[0] - pointAt(index)[0]));
+  const slopeAt = (index: number): number => slopes[index]!;
   const tangents = points.map((_, index) => {
     if (index === 0 || index === points.length - 1) return 0;
-    const before = slopes[index - 1]!;
-    const after = slopes[index]!;
+    const before = slopeAt(index - 1);
+    const after = slopeAt(index);
     return before * after > 0
       ? Math.sign(before) * Math.min(Math.abs(before), Math.abs(after)) : 0;
   });
-  let path = `M${points[0]![0]},${points[0]![1]}`;
+  const tangentAt = (index: number): number => tangents[index]!;
+  let path = `M${pointAt(0)[0]},${pointAt(0)[1]}`;
   for (let index = 1; index < points.length; index++) {
-    const [x0, y0] = points[index - 1]!;
-    const [x1, y1] = points[index]!;
+    const [x0, y0] = pointAt(index - 1);
+    const [x1, y1] = pointAt(index);
     const step = (x1 - x0) / 3;
-    path += ` C${x0 + step},${y0 + tangents[index - 1]! * step}`
-      + ` ${x1 - step},${y1 - tangents[index]! * step} ${x1},${y1}`;
+    path += ` C${x0 + step},${y0 + tangentAt(index - 1) * step}`
+      + ` ${x1 - step},${y1 - tangentAt(index) * step} ${x1},${y1}`;
   }
   return path;
 }

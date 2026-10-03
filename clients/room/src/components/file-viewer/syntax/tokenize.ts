@@ -300,11 +300,10 @@ export function splitLines(tokens: readonly Token[]): readonly TokenLine[] {
       continue;
     }
     const pieces = token.text.split("\n");
-    for (let index = 0; index < pieces.length; index += 1) {
+    for (const [index, piece] of pieces.entries()) {
       if (index > 0) lines.push([]);
-      const piece = pieces[index]!;
       const trimmed = piece.endsWith("\r") ? piece.slice(0, -1) : piece;
-      if (trimmed!.length > 0) lines[lines.length - 1]!.push({ kind: token.kind, text: trimmed });
+      if (trimmed.length > 0) lines[lines.length - 1]!.push({ kind: token.kind, text: trimmed });
     }
   }
   return lines;

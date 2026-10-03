@@ -28,19 +28,22 @@ function finiteMagnitude(value: number | undefined): number {
  */
 function createSmoothCurve(points: readonly Point[], initialCommand: "M" | "L"): string {
   if (points.length === 0) return "";
+  // Every point read here exists: the first is guarded above, and the loop
+  // runs while index + 1 < points.length, clamping the previous point at 0.
+  const pointAt = (index: number): Point => points[index]!;
 
-  let path = `${initialCommand}${points[0]![0].toFixed(1)} ${points[0]![1].toFixed(1)}`;
+  let path = `${initialCommand}${pointAt(0)[0].toFixed(1)} ${pointAt(0)[1].toFixed(1)}`;
   for (let index = 0; index < points.length - 1; index += 1) {
-    const previous = points[index > 0 ? index - 1 : 0]!;
-    const current = points[index]!;
-    const next = points[index + 1]!;
+    const previous = pointAt(index > 0 ? index - 1 : 0);
+    const current = pointAt(index);
+    const next = pointAt(index + 1);
     const following = points[index + 2] ?? next;
 
     path +=
       `C${(current[0] + (next[0] - previous[0]) / 6).toFixed(1)} ` +
       `${(current[1] + (next[1] - previous[1]) / 6).toFixed(1)},` +
-      `${(next[0] - (following![0] - current[0]) / 6).toFixed(1)} ` +
-      `${(next[1] - (following![1] - current[1]) / 6).toFixed(1)},` +
+      `${(next[0] - (following[0] - current[0]) / 6).toFixed(1)} ` +
+      `${(next[1] - (following[1] - current[1]) / 6).toFixed(1)},` +
       `${next[0].toFixed(1)} ${next[1].toFixed(1)}`;
   }
   return path;
@@ -50,6 +53,12 @@ function createSmoothCurve(points: readonly Point[], initialCommand: "M" | "L"):
 function calculateWiggleBaseline(layers: readonly (readonly number[])[]): number[] {
   const sampleCount = layers[0]?.length ?? 0;
   if (sampleCount === 0) return [];
+  // Every read here exists: each loop stays below its own bound, every layer
+  // holds sampleCount samples (the layout builds them at one length),
+  // sampleIndex starts at 1, and the baseline has sampleIndex entries by the
+  // time it is read.
+  const layerAt = (index: number): readonly number[] => layers[index]!;
+  const sampleAt = (values: readonly number[], index: number): number => values[index]!;
 
   const baseline = [0];
   for (let sampleIndex = 1; sampleIndex < sampleCount; sampleIndex += 1) {
@@ -57,13 +66,13 @@ function calculateWiggleBaseline(layers: readonly (readonly number[])[]): number
     let weightedSlope = 0;
 
     for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
-      const layer = layers[layerIndex]!;
-      const value = layer[sampleIndex]!;
-      let slope = (value - layer[sampleIndex - 1]!) / 2;
+      const layer = layerAt(layerIndex);
+      const value = sampleAt(layer, sampleIndex);
+      let slope = (value - sampleAt(layer, sampleIndex - 1)) / 2;
 
       for (let earlierLayerIndex = 0; earlierLayerIndex < layerIndex; earlierLayerIndex += 1) {
-        const earlierLayer = layers[earlierLayerIndex]!;
-        slope += earlierLayer[sampleIndex]! - earlierLayer[sampleIndex - 1]!;
+        const earlierLayer = layerAt(earlierLayerIndex);
+        slope += sampleAt(earlierLayer, sampleIndex) - sampleAt(earlierLayer, sampleIndex - 1);
       }
 
       totalAtSample += value;
@@ -71,7 +80,7 @@ function calculateWiggleBaseline(layers: readonly (readonly number[])[]): number
     }
 
     baseline.push(
-      baseline[sampleIndex - 1]! -
+      sampleAt(baseline, sampleIndex - 1) -
         (totalAtSample > 0 ? weightedSlope / totalAtSample : 0),
     );
   }

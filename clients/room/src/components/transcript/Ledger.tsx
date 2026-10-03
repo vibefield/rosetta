@@ -336,8 +336,11 @@ export function Ledger({
   }, [embedded, highlightInside, highlightedTimelineId]);
 
   const drawn: ReactNode[] = [];
+  // Every member read below sits under a bound against members.length: the
+  // loop's own, or the burst's `index + 1 < members.length`.
+  const memberAt = (index: number): LedgerMember => members[index]!;
   for (let index = 0; index < members.length; index += 1) {
-    const member = members[index]!;
+    const member = memberAt(index);
     if (member.kind !== "line") {
       // Inside the ladder every member keeps the form it had as a segment.
       const rowId = member.row.timeline_id;
@@ -385,7 +388,7 @@ export function Ledger({
       const burst = [teamMember];
       if (teamMember.operation === "start" || teamMember.operation === "known") {
         while (index + 1 < members.length) {
-          const next = members[index + 1]!;
+          const next = memberAt(index + 1);
           if (next.kind !== "line") break;
           const candidate = teamMemberFor(next.line);
           if (candidate === null || !sameStartBurst(teamMember, candidate)) break;

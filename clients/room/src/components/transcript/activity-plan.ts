@@ -60,8 +60,10 @@ export function activityCuts(rows: readonly TimelineEntry[], watermark: number |
   if (displayedRows !== rows) {
     const displayed = new Set(displayedRows.map(row => row.timeline_id));
     let next: string | null = null;
+    // i walks rows from its last index down to 0.
+    const rowAt = (index: number): TimelineEntry => rows[index]!;
     for (let i = rows.length - 1; i >= 0; i -= 1) {
-      const id = rows[i]!.timeline_id;
+      const id = rowAt(i).timeline_id;
       if (displayed.has(id)) { next = id; continue; }
       const gap = gaps.get(id);
       if (gap !== undefined) {

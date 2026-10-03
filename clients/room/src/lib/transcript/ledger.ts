@@ -594,7 +594,7 @@ export function ledgerLines(
   let run: LedgerLine[] = [];
   const flush = () => {
     if (run.length === 0) return;
-    out.push(run.length === 1 ? run[0]! : fold(run)!);
+    out.push(run.length === 1 ? run[0]! : fold(run));
     run = [];
   };
   for (const line of singles) {
