@@ -41,29 +41,30 @@ async function run() {
 
     // A host that offers no search of its own kind gets neither strip nor sheet.
     await mount('plain');
-    await until(() => document.querySelectorAll('.ah-project-list-item').length === 2, 'projects through the catalog port');
+    await until(() => document.querySelectorAll('.ah-project-list-item').length === 6, 'projects through the catalog port');
     assert.equal(await check(() => document.querySelector('.ah-searchbar')), null, 'no strip without the search option');
     assert.equal(await check(() => document.querySelector('[data-ah-sheet]')), null, 'no sheet without the search option');
     await click('.ah-project-list-item[data-motion-key="p0"]');
-    await until(() => document.querySelectorAll('.ah-session-list-item').length === 2, 'the project\'s sessions');
+    await until(() => document.querySelectorAll('.ah-session-list-item').length === 8, 'the project\'s sessions');
     await click('.ah-session-list-item[data-motion-key="s0"]');
-    await until(() => document.querySelector('[data-timeline-id="t1"]'), 'the transcript through the session port');
+    await until(() => document.querySelector('[data-timeline-id="s0-t1"]'), 'the transcript through the session port');
     assert.deepEqual(await check(() => window.roomFixture.log.opened), ['s0'], 'one open for the session being read');
     assert.deepEqual(await check(() => window.roomFixture.log.selections), [null,
-      { sessionId: 's0', nativeSessionId: 'native-s0', folder: '/Users/demo/Projects/vibe-field' }], 'the host hears the selection');
+      { sessionId: 's0', nativeSessionId: 'native-claude-0', folder: '/Users/demo/Projects/vibe-field' }], 'the host hears the selection');
     await pause(300);
     writeFileSync(path.join(temporary, 'plain.png'), (await win.webContents.capturePage()).toPNG());
 
     // Every image the room draws is addressed by the host's asset source.
     const tiles = await check(() => [...document.querySelectorAll('.tr-attachments img')].map(img => img.getAttribute('src').slice(0, 19)));
     assert.deepEqual(tiles, ['data:image/svg+xml,', 'data:image/svg+xml,'], 'both tiles load what the source answered');
-    assert.deepEqual(await check(() => [...new Set(window.roomFixture.log.images)].sort()), ['aaaa:tile', 'bbbb:tile'], 'one rendition asked per tile');
-    assert.equal(await check(() => window.roomFixture.log.attachments.includes('aaaa') && window.roomFixture.log.attachments.includes('bbbb')), true, 'attachments named by the source');
+    const { imageA, imageB } = await check(() => ({ imageA: window.roomFixture.imageA, imageB: window.roomFixture.imageB }));
+    assert.deepEqual(await check(() => [...new Set(window.roomFixture.log.images)].sort()), [`${imageA}:tile`, `${imageB}:tile`].sort(), 'one rendition asked per tile');
+    assert.equal(await check((a, b) => window.roomFixture.log.attachments.includes(a) && window.roomFixture.log.attachments.includes(b), imageA, imageB), true, 'attachments named by the source');
     await click('.tr-attachments .tr-att__tile');
     await until(() => document.querySelector('.ah-image img'), 'the viewer\'s image');
     assert.equal(await check(() => document.querySelector('.ah-image img').getAttribute('src').startsWith('data:image/svg+xml,')), true);
     await until(() => document.querySelectorAll('.ah-image-gallery__thumb img').length === 2, 'the gallery\'s thumbnails');
-    assert.deepEqual(await check(() => [...new Set(window.roomFixture.log.images)].sort()), ['aaaa:preview', 'aaaa:rail', 'aaaa:tile', 'bbbb:rail', 'bbbb:tile'], 'the viewer and its rail ask the source too');
+    assert.deepEqual(await check(() => [...new Set(window.roomFixture.log.images)].sort()), [`${imageA}:preview`, `${imageA}:rail`, `${imageA}:tile`, `${imageB}:rail`, `${imageB}:tile`].sort(), 'the viewer and its rail ask the source too');
     assert.equal(await check(() => [...document.querySelectorAll('img')].every(img => /^(data|blob):/.test(img.getAttribute('src')))), true, 'no image the source did not answer');
     // An open dialog marks the room's root, and the stage recedes behind it.
     assert.equal(await check(() => document.querySelector('.ah-frame').hasAttribute('data-ah-overlay')), true, 'the root is marked');
@@ -104,7 +105,7 @@ async function run() {
     await click('.ah-project-list-item[data-motion-key="p0"]');
     await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s0"]'), 'sessions on glass');
     await click('.ah-session-list-item[data-motion-key="s0"]');
-    await until(() => document.querySelector('[data-timeline-id="t1"]'), 'transcript on glass');
+    await until(() => document.querySelector('[data-timeline-id="s0-t1"]'), 'transcript on glass');
     const glass = await check(() => {
       const css = (selector, pseudo) => getComputedStyle(document.querySelector(selector), pseudo);
       return {
@@ -130,11 +131,11 @@ async function run() {
     // openAt before the index has delivered: the room waits, then opens the
     // session's thread in its project and lands on the message.
     await mount('late');
-    await check(() => { window.roomFixture.openAt({ sessionId: 's2', timelineId: 'u2' }); return true; });
+    await check(() => { window.roomFixture.openAt({ sessionId: 's8', timelineId: 's8-t2' }); return true; });
     await until(() => document.querySelector('.ah-project-list-item[data-motion-key="p1"].is-selected'), 'the session\'s project');
-    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s2"].is-selected'), 'the session itself');
-    await until(() => document.querySelector('[data-hit] [data-timeline-id="u2"], [data-hit][data-timeline-id="u2"], [data-timeline-id="u2"] [data-hit]'), 'landed on the message');
-    assert.deepEqual(await check(() => window.roomFixture.log.selections.at(-1)), { sessionId: 's2', nativeSessionId: 'native-s2', folder: '/Users/demo/Projects/rosetta' });
+    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s8"].is-selected'), 'the session itself');
+    await until(() => document.querySelector('[data-hit] [data-timeline-id="s8-t2"], [data-hit][data-timeline-id="s8-t2"], [data-timeline-id="s8-t2"] [data-hit]'), 'landed on the message');
+    assert.deepEqual(await check(() => window.roomFixture.log.selections.at(-1)), { sessionId: 's8', nativeSessionId: 'native-claude-8', folder: '/Users/demo/Projects/rosetta' });
     await click('.ah-project-list-item[data-motion-key="p0"]');
     await until(() => window.roomFixture.log.selections.at(-1) === null, 'a new project clears the selection the host hears');
     await check(() => { window.roomFixture.openAt({ sessionId: 'nope' }); return true; });
@@ -168,24 +169,27 @@ async function run() {
     // store: dealt tints, the fold, the site-icon setting, recent searches.
     const before = await check(() => Object.keys(localStorage).sort());
     await mount('prefixed');
-    await until(() => document.querySelectorAll('.ah-project-list-item').length === 2, 'projects, tints dealt');
+    await until(() => document.querySelectorAll('.ah-project-list-item').length === 6, 'projects, tints dealt');
+    await click('.ah-project-list-item[data-motion-key="p0"]');
+    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s0"]'), 'sessions under a prefix');
+    await click('.ah-session-list-item[data-motion-key="s0"]');
+    await until(() => document.querySelector('.ah-col--measure .ah-iconbtn[aria-pressed]'), 'the activity act');
+    await click('.ah-col--measure .ah-iconbtn[aria-pressed]');
+    await until(() => document.querySelector('.tr-line[data-timeline-id="s0-t5"]'), 'the web line, every run open');
+    await click('.tr-line[data-timeline-id="s0-t5"]');
+    await until(() => document.querySelector('.tr-site-icons input'), 'the site-icon setting');
+    await click('.tr-site-icons input');
     await click('.ah-searchbar .ah-launcher__open');
     await until(() => document.querySelector('.ah-sheet__field input'), 'the sheet');
     await check(() => {
       const input = document.querySelector('.ah-sheet__field input');
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'room');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'package');
       input.dispatchEvent(new Event('input', { bubbles: true }));
       return true;
     });
     await until(() => document.querySelector('.ah-sheet__row'), 'a hit');
     await click('.ah-sheet__row');
-    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s0"].is-selected') && !document.querySelector('.ah-sheet'), 'the hit opens its session');
-    await until(() => document.querySelector('.ah-col--measure .ah-iconbtn[aria-pressed]'), 'the activity act');
-    await click('.ah-col--measure .ah-iconbtn[aria-pressed]');
-    await until(() => document.querySelector('.tr-line[data-timeline-id="t4"]'), 'the web line, every run open');
-    await click('.tr-line[data-timeline-id="t4"]');
-    await until(() => document.querySelector('.tr-site-icons input'), 'the site-icon setting');
-    await click('.tr-site-icons input');
+    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s8"].is-selected') && !document.querySelector('.ah-sheet'), 'the hit opens its session');
     assert.deepEqual(await check(() => window.roomFixture.stored()),
       ['vf.history.search.recent', 'vf.history.siteIcons.v1', 'vf.history.tintSeq.v1', 'vf.history.transcript.fold.v2'], 'four names, one prefix');
     assert.deepEqual(await check(() => Object.keys(localStorage).sort()), before, 'nothing in the page\'s own storage');
@@ -202,7 +206,7 @@ async function run() {
     assert.equal(await check(() => document.querySelector('.tr-att__tile--missing span').textContent), 'Could not load image');
     await click('.tr-att__retry');
     await until(() => document.querySelectorAll('.tr-attachments img').length === 2, 'the retry asks the source again and loads');
-    assert.equal(await check(() => window.roomFixture.log.images.filter(name => name === 'bbbb:tile').length), 2, 'asked once, then once more on retry');
+    assert.equal(await check((b) => window.roomFixture.log.images.filter(name => name === `${b}:tile`).length, imageB), 2, 'asked once, then once more on retry');
 
     // The search option brings the room's strip, with the host's accessory in it.
     await mount('search');
