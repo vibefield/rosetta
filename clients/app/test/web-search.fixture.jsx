@@ -8,7 +8,7 @@ import { Line } from "../renderer/src/components/transcript/Ledger";
 import { Favicon } from "../renderer/src/components/transcript/Favicon";
 import { ledgerLines } from "../renderer/src/lib/transcript/ledger";
 import { line, url } from "./support/ledger-fixtures.mjs";
-import { setSiteIconsEnabled } from "../renderer/src/lib/transcript/favicons";
+import { useSetSiteIconsEnabled } from "../renderer/src/lib/transcript/favicons";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/room.css";
 import "../renderer/src/styles/transcript.css";
@@ -16,7 +16,9 @@ import "../renderer/src/styles/transcript.css";
 const calls = [];
 const pending = [];
 const icon = (color) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="${color}"/><circle cx="8" cy="8" r="4" fill="white"/></svg>`)}`;
-window.agentHistoryHost = {
+// The room's host answers site icons; nothing else of a desktop is needed here.
+ports.host = {
+  homeDir: null, platform: null, openInBrowser: async () => false,
   favicon: async (host) => {
     calls.push(host);
     if (host === "pending.example.org") return new Promise(resolve => pending.push(resolve));
@@ -51,6 +53,7 @@ const cases = [
 
 function Fixture() {
   const [host, setHost] = useState(null);
+  const setSiteIconsEnabled = useSetSiteIconsEnabled();
   window.webFixture = { calls, pending, icon, enable: setSiteIconsEnabled, probe(value) { flushSync(() => setHost(value)); } };
   return <main className="ah-frame" style={{ overflow: "auto" }}>
     <div className="tr-col"><div className="tr">

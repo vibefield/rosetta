@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Entry } from "@vibecook/mille";
-import { desktopHost } from "../../lib/desktop-host";
+import { useRoom } from "../../room-context";
 import { FileViewerDialog } from "../file-viewer";
 import type { FileHandle } from "../file-viewer";
 import { ConfirmDialog, EmptyState, SegmentedControl } from "../ui";
@@ -112,7 +112,12 @@ export function WorktreeColumn({
     [commits],
   );
 
-  const hasShell = desktopHost() !== null;
+  const host = useRoom().host;
+  const hasShell = host?.worktree !== undefined;
+  const openInBrowser = useMemo(
+    () => (host === null ? null : (name: string, bytes: Uint8Array) => host.openInBrowser(name, bytes)),
+    [host],
+  );
   const stale = projectRoot !== null && shownRoot !== null && shownRoot !== projectRoot;
   const hasSiblingWorktrees = facts !== null && facts.worktrees.length > 1;
   const lifecycleError =
@@ -358,7 +363,7 @@ export function WorktreeColumn({
           homeDirectory={homeDirectory}
           onClose={() => setOpen(null)}
           onReceipt={onReceipt}
-          openInBrowser={open?.diff === true ? null : (desktopHost()?.openInBrowser ?? null)}
+          openInBrowser={open?.diff === true ? null : openInBrowser}
           // The Files tab opens a FILE; the other two open a CHANGE. The
           // registry reads kinds off a name, and a name cannot say which.
           asDiff={open?.diff === true}

@@ -21,7 +21,7 @@ import type {
   TimelineMetaWorkflow,
 } from "@rosetta/protocol";
 import { clockShort } from "../lib/format";
-import { desktopHost } from "../lib/desktop-host";
+
 import type { TimelineFeed } from "../lib/hooks";
 import { useHeadOfDocument } from "../lib/transcript/head-of-document";
 import { useTranscriptTail } from "../lib/transcript/use-transcript-tail";
@@ -148,7 +148,11 @@ function SessionTranscript({
   onOpenThread,
   onBackToParent,
 }: TranscriptColumnProps) {
-  const { sessions: leases } = useRoom();
+  const { sessions: leases, host } = useRoom();
+  const openInBrowser = useMemo(
+    () => (host === null ? null : (name: string, bytes: Uint8Array) => host.openInBrowser(name, bytes)),
+    [host],
+  );
   const attachments = useAttachmentReader();
   const gallerySource = useMemo(() => createAttachmentGallerySource(attachments), [attachments]);
   const threadNavigation = useMemo(() => ({ depth: 0, open: onOpenThread ?? null }), [onOpenThread]);
@@ -618,12 +622,12 @@ function SessionTranscript({
           setImageGallery(null);
         }}
         onReceipt={onReceipt}
-        openInBrowser={desktopHost()?.openInBrowser ?? null}
+        openInBrowser={openInBrowser}
       />
       {imageGallery && <ImageGalleryDialog {...imageGallery} source={gallerySource}
         tint={project?.tint ?? null} homeDirectory={homeDirectory}
         onClose={() => setImageGallery(null)} onReceipt={onReceipt}
-        openInBrowser={desktopHost()?.openInBrowser ?? null} />}
+        openInBrowser={openInBrowser} />}
     </div>
     </MessageViewerContext.Provider>
     </ThreadNavigationContext.Provider>

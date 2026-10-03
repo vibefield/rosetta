@@ -42,7 +42,7 @@ import {
   unassignedProject,
 } from "./lib/model";
 import type { ProjectViewModel } from "./lib/model";
-import { desktopHost } from "./lib/desktop-host";
+
 import { compareOrderedSessions } from "./lib/activity-order";
 import { useActivityOrder } from "./lib/use-activity-order";
 import { createSearchResultsViewModel } from "./lib/search-results";
@@ -151,7 +151,7 @@ function RoomBody({
   readonly unavailable: ReactNode;
   readonly consent: ReactNode;
 }) {
-  const { catalog, sessions } = useRoom();
+  const { catalog, sessions, host } = useRoom();
   const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog);
   const nowMs = useNow(meta);
   const daemonStatus = useDaemonStatus(catalog);
@@ -222,12 +222,12 @@ function RoomBody({
     // knows agent data roots, and it now reports them already shortened
     // (`~/.claude`) — a string that names no home — so derive from one only
     // when it is still absolute, and otherwise show paths in full.
-    const fromShell = desktopHost()?.homeDir ?? null;
+    const fromShell = host?.homeDir ?? null;
     if (fromShell !== null) return fromShell;
     const root = meta?.runtimes[0]?.data_root ?? null;
     if (root === null || !root.startsWith("/")) return null;
     return root.replace(/\/\.[^/]+$/, "");
-  }, [meta]);
+  }, [meta, host]);
 
   const projectViewModels: ProjectViewModel[] = useMemo(
     () =>

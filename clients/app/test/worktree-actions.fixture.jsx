@@ -3,6 +3,10 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { createFakeEngine } from "@vibecook/mille-ui/testing";
 import { WorktreeFileTree } from "../renderer/src/components/worktree/WorktreeFileTree";
+import { RoomProvider } from "../renderer/src/room-context";
+import { desktopHost } from "../renderer/src/host/desktop-bridge";
+import { hostPortOver } from "../renderer/src/host/rosetta-host";
+import { ports } from "./support/room-ports.mjs";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/room.css";
 import "@vibecook/mille-ui/tokens.css";
@@ -27,6 +31,8 @@ function makeEngine(root, generation) {
   return { fx, root, generation, dispose() {} };
 }
 const initialRoot = new URL(location.href).searchParams.get("worktree");
+// The real preload's bridge, through the app's own adapter: the room's host.
+ports.host = hostPortOver(desktopHost());
 
 function Fixture() {
   const [engine, setEngine] = useState(() => makeEngine(initialRoot, 1));
@@ -52,4 +58,4 @@ function Fixture() {
     </main>
   );
 }
-createRoot(document.getElementById("root")).render(<Fixture />);
+createRoot(document.getElementById("root")).render(<RoomProvider ports={ports}><Fixture /></RoomProvider>);

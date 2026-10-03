@@ -24,7 +24,7 @@
 
 import { ColumnHeading } from "../ui";
 import { tildePath } from "../../lib/format";
-import type { GitFacts } from "../../lib/desktop-host";
+import type { GitFacts } from "../../ports";
 import type { BranchFacts } from "../git";
 import type { RepoTab } from "./types";
 

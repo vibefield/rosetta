@@ -21,7 +21,6 @@ import type {
   TimelinePage,
   UsageResponse,
 } from "@rosetta/protocol";
-import type { DesktopHost } from "./lib/desktop-host";
 
 /** A live subscription the room can end. */
 export interface Closable {
@@ -107,8 +106,90 @@ export interface SessionPort {
   close(sessionId: string): void;
 }
 
-/** What the room asks a desktop. Absent in a browser tab. */
-export type HostPort = DesktopHost;
+/** One checkout of the repository a root belongs to. */
+export interface GitWorktree {
+  readonly path: string;
+  /** Absent on a detached HEAD. */
+  readonly branch: string | null;
+}
+
+/** Read-only git facts for one root. Every field is nullable because a folder
+ * without a repository is a fact, not a failure: the room says less rather
+ * than something untrue. */
+export interface GitFacts {
+  readonly branch: string | null;
+  readonly dirty: number | null;
+  readonly worktrees: readonly GitWorktree[];
+}
+
+/** An accepted request to start a new worktree engine generation. */
+export type WorktreeOpenResult =
+  | { readonly ok: true; readonly generation: number }
+  | { readonly ok: false; readonly error: string };
+
+export interface WorktreeFileActionRequest {
+  readonly root: string;
+  readonly generation: number;
+  readonly action: "copyPath" | "revealInFileManager";
+  /** POSIX paths below the displayed root; empty string names the root. */
+  readonly paths: readonly string[];
+}
+
+export type WorktreeFileActionResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: string };
+
+/** What the host's worktree engine says, in the order it says it: a
+ * generation starting or failing, and — once it is up — the two transferred
+ * ports for the tree (mille's) and git. A port is a one-owner capability:
+ * the room is its only consumer. */
+export type WorktreeHostEvent =
+  | {
+      readonly type: "ports";
+      readonly root: string;
+      readonly generation: number;
+      readonly treePort: MessagePort;
+      readonly gitPort: MessagePort;
+    }
+  | {
+      readonly type: "status";
+      readonly root: string;
+      readonly generation: number;
+      readonly state: "starting" | "error";
+      readonly message?: string;
+    };
+
+/** The worktree guest's engine, which only a desktop host can run. */
+export interface WorktreeHostPort {
+  /** Point the engine at a project root. Each accepted request starts a fresh
+   * generation, including an explicit retry of the same root. */
+  open(root: string): Promise<WorktreeOpenResult>;
+  /** Branch · dirty count · worktrees for the open root, or null when the
+   * folder is not a repository. */
+  gitFacts(root: string, generation: number): Promise<GitFacts | null>;
+  /** Copy absolute path text or reveal one entry in the native file manager. */
+  fileAction(request: WorktreeFileActionRequest): Promise<WorktreeFileActionResult>;
+  /** The engine's events. A host replays what arrived before the room
+   * listened; the returned function stops listening. */
+  ports(listener: (event: WorktreeHostEvent) => void): () => void;
+}
+
+/** What the room asks a desktop. A browser tab has none, and the room says
+ * so: no worktree guest, a globe for every site icon, no "open in browser". */
+export interface HostPort {
+  /** The user's home directory, for writing paths as `~/…`; null when unknown. */
+  readonly homeDir: string | null;
+  /** The desktop's platform (`darwin`, …), for the names of its own acts. */
+  readonly platform: string | null;
+  /** Hand the exact HTML/SVG bytes the viewer shows to the OS browser. The
+   * host validates them and resolves whether it opened anything. */
+  openInBrowser(name: string, bytes: Uint8Array): Promise<boolean>;
+  /** One site's own icon as an image URL, or null for every honest no — a
+   * refused host, no icon, a timeout. The room draws the globe for all. */
+  favicon(host: string): Promise<string | null>;
+  /** Absent: the worktree guest stays closed and says why. */
+  readonly worktree?: WorktreeHostPort | undefined;
+}
 
 /** Where every stored image and attachment is addressed. */
 export interface AssetSource {

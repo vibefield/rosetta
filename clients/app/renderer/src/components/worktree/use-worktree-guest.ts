@@ -9,7 +9,7 @@
 // for a column nobody can see.
 
 import { useEffect, useRef, useState } from "react";
-import { desktopHost } from "../../lib/desktop-host";
+import { useRoom } from "../../room-context";
 
 /** Below this the guest closes itself (design record H-3). 260 + 300 + 280
  * of columns leaves the transcript its full measure down to ~1100px once the
@@ -17,8 +17,9 @@ import { desktopHost } from "../../lib/desktop-host";
 const GUEST_MIN_FRAME_WIDTH = 1360;
 
 export interface WorktreeGuest {
-  /** Whether a worktree can be shown at all: a browser tab has no engine to
-   * walk one, so the toggle has nothing to offer. */
+  /** Whether a worktree can be shown at all: a host without a worktree
+   * engine (a browser tab) has nothing to walk one with, so the toggle has
+   * nothing to offer. */
   readonly available: boolean;
   /** Whether the column is currently open. */
   readonly visible: boolean;
@@ -45,7 +46,8 @@ function useFrameWiderThan(minimumWidth: number): boolean {
  * instruction to the shell to keep an engine on `projectRoot` while it is.
  */
 export function useWorktreeGuest(projectRoot: string | null): WorktreeGuest {
-  const available = desktopHost() !== null;
+  const engine = useRoom().host?.worktree ?? null;
+  const available = engine !== null;
   const [wanted, setWanted] = useState(true);
   // An explicit choice outranks the automatic close: once the reader has
   // pressed the toggle, the width heuristic stops speaking for them.
@@ -83,13 +85,12 @@ export function useWorktreeGuest(projectRoot: string | null): WorktreeGuest {
   useEffect(() => {
     if (!visible || projectRoot === null) return;
     if (openedRoot.current === projectRoot) return;
-    const host = desktopHost();
-    if (host === null) return;
+    if (engine === null) return;
     const id = (requestId.current += 1);
     openedRoot.current = projectRoot;
     setFailure(null);
-    void host
-      .openWorktree(projectRoot)
+    void engine
+      .open(projectRoot)
       .then((result) => {
         if (requestId.current !== id) return;
         if (result.ok) return;
@@ -104,7 +105,7 @@ export function useWorktreeGuest(projectRoot: string | null): WorktreeGuest {
           message: reason instanceof Error ? reason.message : "Could not open the worktree.",
         });
       });
-  }, [visible, projectRoot, retryRevision]);
+  }, [visible, projectRoot, retryRevision, engine]);
 
   return {
     available,

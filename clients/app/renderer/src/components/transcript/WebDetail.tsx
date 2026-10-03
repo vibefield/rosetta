@@ -1,12 +1,13 @@
 import { useState } from "react";
 import type { FetchFact, SourceFact } from "../../lib/transcript";
-import { setSiteIconsEnabled, useSiteIconsEnabled } from "../../lib/transcript/favicons";
+import { useSetSiteIconsEnabled, useSiteIconsEnabled } from "../../lib/transcript/favicons";
 import { webAddress } from "../../lib/transcript/web-address";
 import { Favicon } from "./Favicon";
 
 /** One shared preference, exposed beside the content it controls. */
 function SiteIconsSetting() {
   const enabled = useSiteIconsEnabled();
+  const setSiteIconsEnabled = useSetSiteIconsEnabled();
   return (
     <label
       className="tr-site-icons"

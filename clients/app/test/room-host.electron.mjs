@@ -52,6 +52,27 @@ async function run() {
     await pause(300);
     writeFileSync(path.join(temporary, 'plain.png'), (await win.webContents.capturePage()).toPNG());
 
+    // No host: the honest faces. No worktree to offer, a closed guest, a
+    // globe for every site, and nobody asked.
+    assert.equal(await check(() => document.querySelector('[aria-label="Toggle the project worktree"]')), null, 'no worktree toggle without a host');
+    assert.equal(await check(() => document.querySelector('.ah-cols')?.dataset.rail), 'off', 'the guest stays closed');
+    await click('.tr-activity__head');
+    await until(() => document.querySelectorAll('.tr-fav').length >= 2, 'the web line\'s icons');
+    assert.equal(await check(() => [...document.querySelectorAll('.tr-fav')].every(icon => icon.classList.contains('tr-fav--globe'))), true, 'a globe for every site');
+    assert.deepEqual(await check(() => window.roomFixture.log.favicons), [], 'no host, no ask');
+
+    // A host without a worktree engine: the room asks it for icons and still
+    // offers no worktree.
+    await mount('host');
+    await click('.ah-project-list-item[data-motion-key="p0"]');
+    await until(() => document.querySelector('.ah-session-list-item[data-motion-key="s0"]'), 'sessions with a host');
+    await click('.ah-session-list-item[data-motion-key="s0"]');
+    await until(() => document.querySelector('.tr-activity__head'), 'transcript with a host');
+    await click('.tr-activity__head');
+    await until(() => document.querySelectorAll('.tr-fav img').length >= 2, 'the host\'s icons');
+    assert.deepEqual(await check(() => [...window.roomFixture.log.favicons].sort()), ['developer.mozilla.org', 'github.com'], 'one ask per site, of the host');
+    assert.equal(await check(() => document.querySelector('[aria-label="Toggle the project worktree"]')), null, 'no worktree engine, no toggle');
+
     // The search option brings the room's strip, with the host's accessory in it.
     await mount('search');
     await until(() => document.querySelector('.ah-searchbar .ah-launcher'), 'the launcher in the strip');

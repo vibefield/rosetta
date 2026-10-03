@@ -2,11 +2,14 @@ import type { EntryId, FileExplorer } from "@vibecook/mille";
 import { fileActionTargetForId } from "@vibecook/mille-ui";
 import { createCommandRegistry } from "@vibecook/mille-ui/commands";
 import type { CommandContext } from "@vibecook/mille-ui/commands";
-import type { DesktopHost, WorktreeFileActionRequest } from "../../lib/desktop-host";
+import type { WorktreeFileActionRequest, WorktreeHostPort } from "../../ports";
 import type { WorktreeEngine } from "./types";
 
 interface FileActionEnvironment {
-  readonly host: DesktopHost | null;
+  /** The host's worktree engine, which performs the acts; null without one. */
+  readonly actions: Pick<WorktreeHostPort, "fileAction"> | null;
+  /** The desktop's platform, for the name of its file manager. */
+  readonly platform: string | null;
   readonly stale: boolean;
   readonly onReceipt: (message: string) => void;
 }
@@ -21,14 +24,14 @@ export function createWorktreeFileCommands(
   let focusedId: EntryId | null = null;
   const emptyIds: ReadonlySet<EntryId> = new Set();
   const available = () => {
-    const { host, stale } = environment();
-    return !stale && typeof host?.worktreeFileAction === "function";
+    const { actions, stale } = environment();
+    return !stale && typeof actions?.fileAction === "function";
   };
   const hasSelection = (ctx: CommandContext) => available() && ctx.selectedIds.size > 0;
 
   async function perform(ctx: CommandContext, action: WorktreeFileActionRequest["action"]) {
-    const { host, onReceipt } = environment();
-    if (!available() || host === null || ctx.selectedIds.size === 0) return;
+    const { actions, platform, onReceipt } = environment();
+    if (!available() || actions === null || ctx.selectedIds.size === 0) return;
     const ids = action === "copyPath"
       ? [...ctx.selectedIds]
       : ctx.focusedId !== null && ctx.selectedIds.has(ctx.focusedId)
@@ -41,7 +44,7 @@ export function createWorktreeFileCommands(
         if (target === null) throw new Error("That file is no longer in the tree. Select it again.");
         return target.rootRelativePath;
       }).sort();
-      const result = await host.worktreeFileAction({
+      const result = await actions.fileAction({
         root: engine.root,
         generation: engine.generation,
         action,
@@ -51,7 +54,7 @@ export function createWorktreeFileCommands(
       if (action === "copyPath") {
         onReceipt(paths.length === 1 ? "Path copied" : `${paths.length} paths copied`);
       } else {
-        onReceipt(host.platform === "darwin" ? "Revealed in Finder" : "Revealed in file manager");
+        onReceipt(platform === "darwin" ? "Revealed in Finder" : "Revealed in file manager");
       }
     } catch (error) {
       onReceipt(error instanceof Error ? error.message : "Could not complete the file action.");
@@ -70,7 +73,7 @@ export function createWorktreeFileCommands(
     },
     {
       id: "file.revealInFileManager",
-      label: () => environment().host?.platform === "darwin"
+      label: () => environment().platform === "darwin"
         ? "Open in Finder"
         : "Open in File Manager",
       group: "path",

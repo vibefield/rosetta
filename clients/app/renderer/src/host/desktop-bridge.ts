@@ -1,33 +1,20 @@
-// The room's one bridge out of the web world, as the renderer sees it.
+// The app's one bridge out of the web world, as the renderer sees it: the
+// Electron preload's `window.agentHistoryHost`. Only the app reads it; the
+// room sees the `HostPort` this app builds over it (`rosetta-host.ts`).
 //
-// Everything here is answered by the Electron main process: the home
-// directory, the act of pointing the worktree engine at a project, read-only
-// git facts for the root it is showing, document previews, and worktree path
-// actions. A browser tab has no bridge at all, which is a state the room
-// states rather than papers over.
+// Everything here is answered by the Electron main process: the daemon's
+// state, the home directory, the act of pointing the worktree engine at a
+// project, read-only git facts for the root it is showing, document previews,
+// and worktree path actions. A browser tab has no bridge at all, which is a
+// state the room states rather than papers over.
 //
 // Actions that leave the app are validated in the main process.
-
-/** One checkout of the repository a root belongs to. */
-export interface GitWorktree {
-  readonly path: string;
-  /** Absent on a detached HEAD. */
-  readonly branch: string | null;
-}
-
-/** Read-only git facts for one root. Every field is nullable because a folder
- * without a repository is a fact, not a failure: the room says less rather
- * than something untrue. */
-export interface GitFacts {
-  readonly branch: string | null;
-  readonly dirty: number | null;
-  readonly worktrees: readonly GitWorktree[];
-}
-
-/** An accepted request to start a new worktree utility-process generation. */
-export type WorktreeOpenResult =
-  | { readonly ok: true; readonly generation: number }
-  | { readonly ok: false; readonly error: string };
+import type {
+  GitFacts,
+  WorktreeFileActionRequest,
+  WorktreeFileActionResult,
+  WorktreeOpenResult,
+} from "../ports";
 
 export interface DesktopDaemonState {
   readonly phase: "starting" | "ready" | "restarting" | "failed" | "stopped" | "external";
@@ -35,18 +22,6 @@ export interface DesktopDaemonState {
   readonly error: string | null;
   readonly revision: number;
 }
-
-export interface WorktreeFileActionRequest {
-  readonly root: string;
-  readonly generation: number;
-  readonly action: "copyPath" | "revealInFileManager";
-  /** POSIX paths below the displayed root; empty string names the root. */
-  readonly paths: readonly string[];
-}
-
-export type WorktreeFileActionResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly error: string };
 
 export interface DesktopHost {
   daemonState?(): Promise<DesktopDaemonState>;

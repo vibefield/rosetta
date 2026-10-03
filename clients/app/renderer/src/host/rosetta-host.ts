@@ -5,9 +5,10 @@
 // when the app owns its daemon.
 import { RosettaClient } from "@rosetta/protocol";
 import type { AssetRef } from "@rosetta/protocol";
-import { desktopHost } from "../lib/desktop-host";
-import type { DesktopDaemonState } from "../lib/desktop-host";
-import type { AssetSource, CatalogPort, RoomPorts, SessionPort } from "../ports";
+import { desktopHost } from "./desktop-bridge";
+import type { DesktopDaemonState, DesktopHost } from "./desktop-bridge";
+import { worktreePorts } from "./worktree-ports";
+import type { AssetSource, CatalogPort, HostPort, RoomPorts, SessionPort } from "../ports";
 
 function baseUrl(): string {
   const fromQuery = new URLSearchParams(window.location.search).get("daemon");
@@ -39,6 +40,25 @@ export function sameOriginAssetUrl(client: RosettaClient, asset: AssetRef): stri
   } catch {
     return null;
   }
+}
+
+/** The room's desktop, over the Electron bridge. */
+export function hostPortOver(bridge: DesktopHost): HostPort {
+  return {
+    homeDir: bridge.homeDir ?? null,
+    platform: bridge.platform ?? null,
+    openInBrowser: (name, bytes) => bridge.openInBrowser(name, bytes),
+    // A shell whose preload predates the method answers every host with the
+    // globe, as before, rather than failing the line.
+    favicon: (host) =>
+      typeof bridge.favicon === "function" ? bridge.favicon(host) : Promise.resolve(null),
+    worktree: {
+      open: (root) => bridge.openWorktree(root),
+      gitFacts: (root, generation) => bridge.gitFacts(root, generation),
+      fileAction: (request) => bridge.worktreeFileAction(request),
+      ports: worktreePorts,
+    },
+  };
 }
 
 export function createRosettaHost(): RosettaHost {
@@ -96,7 +116,7 @@ export function createRosettaHost(): RosettaHost {
   };
   return {
     client,
-    ports: { catalog, sessions, assets, host: bridge },
+    ports: { catalog, sessions, assets, host: bridge === null ? null : hostPortOver(bridge) },
     daemonState: () => daemonState,
     onDaemonState,
   };

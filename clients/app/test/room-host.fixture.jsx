@@ -95,9 +95,19 @@ function sessionClient() {
   };
 }
 
+const icon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#4d79c7"/></svg>')}`;
+/** A desktop without a worktree engine: home, platform, browser, icons. */
+const desktop = {
+  homeDir: "/Users/demo",
+  platform: "darwin",
+  openInBrowser: async () => true,
+  favicon: async (site) => { log.favicons.push(site); return icon; },
+};
+
 function ports(scenario) {
   const connected = scenario !== "disconnected";
   return {
+    ...(scenario === "host" ? { host: desktop } : {}),
     catalog: {
       subscribeMeta(handlers) {
         queueMicrotask(() => {

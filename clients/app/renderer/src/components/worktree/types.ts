@@ -1,5 +1,5 @@
 // What column ③ adds around mille's own types. The git shapes belong to the
-// shell bridge that answers them — see `lib/desktop-host`.
+// host's worktree port that answers them — see `HostPort` in `ports.ts`.
 
 import type { PortFileExplorer } from "@vibecook/mille/port";
 

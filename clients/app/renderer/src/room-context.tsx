@@ -5,6 +5,8 @@ import type { ReactNode } from "react";
 import type { AssetSource, CatalogPort, HostPort, RoomPorts } from "./ports";
 import { createSessionLeases } from "./lib/session-leases";
 import type { SessionLeases } from "./lib/session-leases";
+import { createFaviconStore } from "./lib/transcript/favicons";
+import type { FaviconStore } from "./lib/transcript/favicons";
 
 /** The two faces the project panel's chart can open on. */
 export type SummaryTab = "activity" | "models";
@@ -21,6 +23,8 @@ export interface Room {
   readonly assets: AssetSource;
   readonly host: HostPort | null;
   readonly initialSummaryTab: SummaryTab;
+  /** The room's site icons, asked of its host. */
+  readonly favicons: FaviconStore;
 }
 
 const RoomContext = createContext<Room | null>(null);
@@ -38,9 +42,13 @@ export function RoomProvider({
   const host = ports.host ?? null;
   const initialSummaryTab = options.initialSummaryTab ?? "activity";
   const sessions = useMemo(() => createSessionLeases(sessionPort), [sessionPort]);
+  const favicons = useMemo(
+    () => createFaviconStore(host === null ? null : (site) => host.favicon(site)),
+    [host],
+  );
   const room = useMemo<Room>(
-    () => ({ catalog, sessions, assets, host, initialSummaryTab }),
-    [catalog, sessions, assets, host, initialSummaryTab],
+    () => ({ catalog, sessions, assets, host, initialSummaryTab, favicons }),
+    [catalog, sessions, assets, host, initialSummaryTab, favicons],
   );
   return <RoomContext.Provider value={room}>{children}</RoomContext.Provider>;
 }

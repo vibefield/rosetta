@@ -6,7 +6,7 @@ import type { KeyboardEvent } from "react";
 import type { Entry, FileExplorer } from "@vibecook/mille";
 import { FileTree, FileTreeProvider } from "@vibecook/mille-ui";
 import { vibefieldIconTheme } from "@vibecook/mille-ui/icons/vibefield";
-import { desktopHost } from "../../lib/desktop-host";
+import { useRoom } from "../../room-context";
 import { createWorktreeFileCommands } from "./worktree-file-commands";
 import type { WorktreeEngine } from "./types";
 
@@ -62,8 +62,11 @@ export function WorktreeFileTree({
   openEntryId,
   onReceipt,
 }: WorktreeFileTreeProps) {
-  const environment = useRef({ host: desktopHost(), stale, onReceipt });
-  environment.current = { host: desktopHost(), stale, onReceipt };
+  const host = useRoom().host;
+  const actions = host?.worktree ?? null;
+  const platform = host?.platform ?? null;
+  const environment = useRef({ actions, platform, stale, onReceipt });
+  environment.current = { actions, platform, stale, onReceipt };
   const { commands, onSelectionChange, onFocusedIdChange } = useMemo(
     () => createWorktreeFileCommands(engine, () => environment.current),
     [engine],

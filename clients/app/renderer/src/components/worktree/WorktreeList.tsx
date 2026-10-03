@@ -6,7 +6,7 @@
 // this room reads history — so the row states which checkout is open and how
 // dirty it is, and stops there.
 
-import type { GitFacts } from "../../lib/desktop-host";
+import type { GitFacts } from "../../ports";
 import { tildePath } from "../../lib/format";
 
 export interface WorktreeListProps {
