@@ -71,7 +71,7 @@ function segmentRows(segment: Segment): readonly TimelineEntry[] {
 function turnSitting(turn: Turn, indexOf: (row: TimelineEntry) => number): number {
   if (turn.prompt !== null) return indexOf(turn.prompt.row);
   const first = turn.segments[0];
-  return first === undefined ? 0 : indexOf(segmentRows(first)[0]);
+  return first === undefined ? 0 : indexOf(segmentRows(first)[0]!);
 }
 
 /** Adjacent setting turns that share one compact configuration group. */
@@ -117,7 +117,7 @@ export function documentPlan(
   const parts: TurnPart[] = [];
   for (const group of clusterGroups(turns, sittingOf)) {
     // Only the last turn of a cluster can carry an answer, by construction.
-    const turn = group[group.length - 1];
+    const turn = group[group.length - 1]!;
     const prompts = group
       .map((member) => member.prompt)
       .filter((prompt): prompt is Prompt => prompt !== null);
@@ -126,7 +126,7 @@ export function documentPlan(
     // Cut the segments wherever the sitting changes under them.
     const slices: { index: number; segments: Segment[]; from: number }[] = [];
     turn.segments.forEach((segment, at) => {
-      const index = indexOf(segmentRows(segment)[0]);
+      const index = indexOf(segmentRows(segment)[0]!);
       const last = slices.at(-1);
       if (last !== undefined && last.index === index) last.segments.push(segment);
       else slices.push({ index, segments: [segment], from: at });
@@ -174,7 +174,7 @@ export function documentPlan(
 
     // The prompt fell in an earlier sitting than every segment: it needs its
     // own part so its pill and its panel are not filed under the reply's day.
-    if (openIndex !== null && slices[0].index !== openIndex) {
+    if (openIndex !== null && slices[0]!.index !== openIndex) {
       parts.splice(parts.length - slices.length, 0, {
         key: `${turn.key}:opener`,
         sittingIndex: openIndex,

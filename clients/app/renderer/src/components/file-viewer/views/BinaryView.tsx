@@ -26,10 +26,10 @@ function dump(bytes: Uint8Array): readonly Row[] {
     let text = "";
     for (let column = 0; column < COLUMNS; column += 1) {
       const byte = at + column < end ? bytes[at + column] : null;
-      hex += byte === null ? "   " : `${HEX[byte]} `;
+      hex += byte === null ? "   " : `${HEX[byte!]} `;
       // Printable ASCII only; everything else is a dot, the way every hex
       // dump since 1970 has drawn it.
-      text += byte === null ? " " : byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : ".";
+      text += byte === null ? " " : byte! >= 0x20 && byte! < 0x7f ? String.fromCharCode(byte!) : ".";
     }
     rows.push({ offset: at.toString(16).padStart(8, "0"), hex, text });
   }

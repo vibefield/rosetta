@@ -25,7 +25,7 @@ export interface TreemapLayout {
 export interface TreemapLayoutOptions {
   width: number;
   height: number;
-  minimumVisibleShare?: number;
+  minimumVisibleShare?: number | undefined;
   minimumLabelWidth?: number;
   minimumLabelHeight?: number;
 }
@@ -114,7 +114,7 @@ function squarify(
       rowLength = rowRunsHorizontally ? remainingWidth : remainingHeight;
     }
 
-    const candidate = areas[areaIndex];
+    const candidate = areas[areaIndex]!;
     if (
       currentRow.length === 0 ||
       worstAspectRatio([...currentRow, candidate], rowLength) <=
@@ -192,7 +192,7 @@ export function createTreemapLayout(
   let hiddenLabelCount = 0;
   let minimumSizedItemCount = 0;
   const tiles = rectangles.map((rectangle, index): TreemapTileLayout => {
-    const share = exactShares[index];
+    const share = exactShares[index]!;
     const isMinimumSized = share < safeMinimumShare;
     const canShowLabel =
       rectangle.width >= safeMinimumLabelWidth &&
@@ -201,7 +201,7 @@ export function createTreemapLayout(
     if (!canShowLabel) hiddenLabelCount += 1;
 
     return {
-      item: sortedItems[index],
+      item: sortedItems[index]!,
       rectangle,
       share,
       isMinimumSized,

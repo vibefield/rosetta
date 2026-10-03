@@ -13,7 +13,7 @@
     "dev:web": "vite",
     "build": "tsc --noEmit && vite build",
     "start": "npm run build && electron .",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --import ./test/support/resolve-ts.mjs --test test/*.test.mjs",
     "test:ui-motion": "electron test/ui-motion.electron.mjs",
     "test:list-order": "electron test/list-order.electron.mjs",
     "test:transcript-loading": "electron test/transcript-loading.electron.mjs",

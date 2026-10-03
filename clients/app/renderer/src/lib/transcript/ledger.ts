@@ -37,15 +37,15 @@ import type {
   ToolInteraction,
   ToolStatus,
 } from "@rosetta/protocol";
-import type { CommandFact, LedgerDetail, PathFact } from "./families.ts";
-import { projectAction } from "./families.ts";
+import type { CommandFact, LedgerDetail, PathFact } from "./families";
+import { projectAction } from "./families";
 import type {
   LedgerClass,
   LedgerContext,
   LedgerGlyph,
   ObjectPart,
   ToolFamily,
-} from "./vocabulary.ts";
+} from "./vocabulary";
 import {
   FAMILY_CLASS,
   FOLD_NOUN,
@@ -59,7 +59,7 @@ import {
   spanText,
   stampSpan,
   urlHost,
-} from "./vocabulary.ts";
+} from "./vocabulary";
 
 /** Even a single activity line closes to its head (2026-09-09 amendment). */
 export const RUN_FOLD_THRESHOLD = 1;
@@ -362,11 +362,11 @@ function tokenLabel(token: string): string {
 export function commandName(command: string): string {
   const tokens = firstLine(command, 400).split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return "";
-  const program = tokenLabel(tokens[0]);
+  const program = tokenLabel(tokens[0]!);
   let argument: string | null = null;
   let index = 1;
   while (index < tokens.length) {
-    const token = tokens[index];
+    const token = tokens[index]!;
     if (token === "--" || token.startsWith("--")) {
       index += 1;
       continue;
@@ -517,7 +517,7 @@ function foldable(line: LedgerLine): boolean {
 }
 
 function fold(lines: readonly LedgerLine[]): LedgerLine {
-  const family = lines[0].family;
+  const family = lines[0]!.family;
   const rows = lines.flatMap((line) => [...line.rows]);
   const names: string[] = [];
   for (const row of rows) {
@@ -557,12 +557,12 @@ function fold(lines: readonly LedgerLine[]): LedgerLine {
   }
 
   return {
-    key: lines[0].key,
+    key: lines[0]!.key,
     rows,
     family,
-    cls: lines[0].cls,
-    glyph: lines[0].glyph,
-    verb: lines[0].verb,
+    cls: lines[0]!.cls,
+    glyph: lines[0]!.glyph,
+    verb: lines[0]!.verb,
     object,
     result,
     resultTone: "plain",
@@ -594,7 +594,7 @@ export function ledgerLines(
   let run: LedgerLine[] = [];
   const flush = () => {
     if (run.length === 0) return;
-    out.push(run.length === 1 ? run[0] : fold(run));
+    out.push(run.length === 1 ? run[0]! : fold(run)!);
     run = [];
   };
   for (const line of singles) {
@@ -603,7 +603,7 @@ export function ledgerLines(
       out.push(line);
       continue;
     }
-    if (run.length > 0 && run[0].family !== line.family) flush();
+    if (run.length > 0 && run[0]!.family !== line.family) flush();
     run.push(line);
   }
   flush();

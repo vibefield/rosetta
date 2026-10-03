@@ -52,7 +52,7 @@ function packedPixel(
   context.fillRect(0, 0, 1, 1);
   context.globalAlpha = 1;
   const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
-  return packRgba(red, green, blue, alpha);
+  return packRgba(red!, green!, blue!, alpha!);
 }
 
 export function resolveMinimapPalette(host: HTMLElement): MinimapPalette | null {

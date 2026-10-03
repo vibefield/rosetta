@@ -25,7 +25,7 @@ export interface DialogShellProps {
   /** In fullscreen, the first Escape restores the dialog instead of closing
    * it. */
   readonly onExitFullscreen?: () => void;
-  readonly onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
+  readonly onKeyDown?: KeyboardEventHandler<HTMLDivElement> | undefined;
   readonly children: ReactNode;
 }
 

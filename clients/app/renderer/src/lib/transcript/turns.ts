@@ -36,16 +36,16 @@ import type {
   SummaryPurpose,
   TimelineEntry,
 } from "@rosetta/protocol";
-import type { LedgerLine, RunOther, RunSummary } from "./ledger.ts";
-import { ledgerLines, runSummary } from "./ledger.ts";
-import { withinPromptCluster } from "./sittings.ts";
-import type { LedgerContext } from "./vocabulary.ts";
+import type { LedgerLine, RunOther, RunSummary } from "./ledger";
+import { ledgerLines, runSummary } from "./ledger";
+import { withinPromptCluster } from "./sittings";
+import type { LedgerContext } from "./vocabulary";
 import {
   canonicalText,
   citationLabel,
   noticeText,
   stampSpan,
-} from "./vocabulary.ts";
+} from "./vocabulary";
 
 /* ── attachments ─────────────────────────────────────────────────────────── */
 
@@ -70,7 +70,7 @@ function mediaShortName(mediaType: string | null, name: string | null): string |
   }
   const extension = name === null ? null : /\.([A-Za-z0-9]{1,5})$/.exec(name);
   if (extension === null) return null;
-  const upper = extension[1].toUpperCase();
+  const upper = extension[1]!.toUpperCase();
   return upper === "JPG" ? "JPEG" : upper;
 }
 
@@ -122,7 +122,7 @@ export function attachmentMentions(text: string, attachments: readonly Attachmen
     if (target.kind !== "image") continue;
     for (const range of target.ref?.message_ranges ?? []) {
       if (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end <= range.start || range.end >= offsets.length) continue;
-      mentions.push({ start: offsets[range.start], end: offsets[range.end], target });
+      mentions.push({ start: offsets[range.start]!, end: offsets[range.end]!, target });
     }
   }
   mentions.sort((a, b) => a.start - b.start);
@@ -540,19 +540,19 @@ function compactionPairs(
 ): Map<string, readonly TimelineEntry[]> {
   const pairs = new Map<string, readonly TimelineEntry[]>();
   for (let index = 1; index < rows.length; index += 1) {
-    const previous = rows[index - 1];
-    const current = rows[index];
+    const previous = rows[index - 1]!;
+    const current = rows[index]!;
     if (cutBefore.has(current.timeline_id) || previous.session_id !== current.session_id
         || current.ordinal !== previous.ordinal + 1) continue;
     const summary = previous.body.type === "summary" ? previous : current;
     const boundary = summary === previous ? current : previous;
-    if (summary.body.type !== "summary" || summary.body.purpose !== "compaction"
-        || boundary.body.type !== "notice" || boundary.body.notice.type !== "compaction"
-        || boundary.native_id === null || summary.parent_native_id !== boundary.native_id
-        || pairs.has(summary.timeline_id) || pairs.has(boundary.timeline_id)) continue;
+    if (summary!.body.type !== "summary" || summary!.body.purpose !== "compaction"
+        || boundary!.body.type !== "notice" || boundary!.body.notice.type !== "compaction"
+        || boundary!.native_id === null || summary!.parent_native_id !== boundary!.native_id
+        || pairs.has(summary!.timeline_id) || pairs.has(boundary!.timeline_id)) continue;
     const pair = [previous, current];
-    pairs.set(summary.timeline_id, pair);
-    pairs.set(boundary.timeline_id, pair);
+    pairs.set(summary!.timeline_id, pair);
+    pairs.set(boundary!.timeline_id, pair);
   }
   return pairs;
 }
@@ -590,7 +590,7 @@ function buildSegments(
     flushTools();
     if (members.length === 0) return;
     const folds = members.some((member) => member.kind === "line" || member.kind === "thinking");
-    if (!folds || (members.length === 1 && members[0].kind !== "line")) {
+    if (!folds || (members.length === 1 && members[0]!.kind !== "line")) {
       // R-2: a lone thought stays a thinking segment, and notices or
       // summaries with nothing to fold around stand as their own markers.
       for (const member of members) if (member.kind !== "line") segments.push(member);
@@ -602,7 +602,7 @@ function buildSegments(
       });
       segments.push({
         kind: "ledger",
-        key: runRows[0].timeline_id,
+        key: runRows[0]!.timeline_id,
         at: firstStamp(runRows),
         rows: runRows,
         lines,
@@ -725,12 +725,12 @@ export function documentTurns(
   for (let index = 0; index < rows.length; index += 1) {
     let found: number | null = null;
     for (let ahead = index + 1; ahead < rows.length; ahead += 1) {
-      if (rows[ahead].at !== null) {
-        found = rows[ahead].at;
+      if (rows[ahead]!.at !== null) {
+        found = rows[ahead]!.at;
         break;
       }
     }
-    nextAt.set(rows[index].timeline_id, found);
+    nextAt.set(rows[index]!.timeline_id, found);
   }
   const nextAtOf = (row: TimelineEntry) => nextAt.get(row.timeline_id) ?? null;
 
@@ -842,7 +842,7 @@ function firstStamp(rows: readonly TimelineEntry[]): number | null {
 
 function lastStamp(rows: readonly TimelineEntry[]): number | null {
   for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const at = rows[index].at;
+    const at = rows[index]!.at;
     if (at !== null) return at;
   }
   return null;

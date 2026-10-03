@@ -1,6 +1,6 @@
 import type { TimelineEntry } from "@rosetta/protocol";
-import type { ReadingSitting } from "./activity-plan.ts";
-import { activityRowKey } from "./activity-plan.ts";
+import type { ReadingSitting } from "./activity-plan";
+import { activityRowKey } from "./activity-plan";
 
 type Identity = { readonly key: string; readonly rows: readonly TimelineEntry[] };
 
@@ -45,8 +45,8 @@ export function retainReadingIdentity(previous: readonly ReadingSitting[], next:
     let groupIndex = 0;
     return {
       sitting,
-      renderKey: sittingKeys[index],
-      blocks: blocks.map(block => block.kind === "activity" ? { ...block, key: keys[groupIndex++] } : block),
+      renderKey: sittingKeys[index]!,
+      blocks: blocks.map(block => block.kind === "activity" ? { ...block, key: keys[groupIndex++]! } : block),
     };
   });
 }

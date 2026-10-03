@@ -67,7 +67,7 @@ export interface LineDetailProps {
   readonly workflowAttempts?: readonly import("../../lib/transcript").WorkflowAttemptFact[];
   /** The document owns the viewer; detail rows only report which exact path
    * the reader pressed. */
-  readonly onOpenPath?: (path: PathFact) => void;
+  readonly onOpenPath?: ((path: PathFact) => void) | undefined;
 }
 
 /** The body of one open line. Returns null when the family has nothing honest

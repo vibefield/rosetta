@@ -84,7 +84,7 @@ function namedLanguage(name: string | null): Language | null {
 function heredocLanguage(opener: string): Language | null {
   const redirected = opener.match(/>\s*["']?([^\s"';&|]+)["']?\s+<<-?/);
   if (redirected !== null) {
-    const fromTarget = languageFor(redirected[1]);
+    const fromTarget = languageFor(redirected[1]!);
     if (fromTarget !== null) return fromTarget;
   }
   const interpreter = opener.match(
@@ -108,7 +108,7 @@ function commandHighlight(
   const markerMatch = lines[0]?.match(/<<-?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/);
   const embedded = markerMatch === undefined || markerMatch === null
     ? null
-    : heredocLanguage(lines[0]);
+    : heredocLanguage(lines[0]!);
   if (markerMatch === undefined || markerMatch === null || embedded === null || lines.length < 2) {
     return highlight(text, SHELL);
   }
@@ -116,7 +116,7 @@ function commandHighlight(
   const marker = markerMatch[1] ?? markerMatch[2] ?? markerMatch[3];
   const close = lines.findIndex((line, at) => at > 0 && line.trim() === marker);
   const bodyEnd = close === -1 ? lines.length : close;
-  const out: TokenLine[] = [...highlight(lines[0], SHELL)];
+  const out: TokenLine[] = [...highlight(lines[0]!, SHELL)];
   if (bodyEnd > 1) out.push(...highlight(lines.slice(1, bodyEnd).join("\n"), embedded));
   if (close !== -1) out.push(...highlight(lines.slice(close).join("\n"), SHELL));
   return out;
@@ -163,7 +163,7 @@ export function PathList({
 }: {
   readonly paths: readonly PathFact[];
   readonly total: number;
-  readonly onOpenPath?: (path: PathFact) => void;
+  readonly onOpenPath?: ((path: PathFact) => void) | undefined;
 }) {
   const shown = paths.slice(0, LIST_CAP);
   const hasOpenablePath =

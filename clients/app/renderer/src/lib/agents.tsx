@@ -29,19 +29,19 @@ export function markIdForKind(kind: string): string | null {
 
 export function agentLabel(kind: string): string {
   const id = markIdForKind(kind);
-  if (id) return AGENT_PATHS[id].label;
+  if (id) return AGENT_PATHS[id]!.label;
   return (
     kind
       .split(/[-_]/)
       .filter(Boolean)
-      .map((word) => word[0].toUpperCase() + word.slice(1))
+      .map((word) => word[0]!.toUpperCase() + word.slice(1))
       .join(" ")
   );
 }
 
 function initials(kind: string): string {
   const words = agentLabel(kind).split(/\s+/).filter(Boolean);
-  return (words.length > 1 ? `${words[0][0]}${words.at(-1)?.[0] ?? ""}` : words[0]?.slice(0, 2))
+  return (words.length > 1 ? `${words[0]![0]}${words.at(-1)?.[0] ?? ""}` : words[0]?.slice(0, 2)!)
     .toUpperCase();
 }
 
@@ -70,7 +70,7 @@ export function AgentMark({
       </span>
     );
   }
-  const def = AGENT_PATHS[id];
+  const def = AGENT_PATHS[id]!;
   return (
     <span className="ah-agent" role="img" style={{ opacity }} aria-label={name} title={name}>
       <svg
@@ -93,7 +93,7 @@ export function AgentBadges({ shares, cap = 3 }: { shares: readonly AgentShare[]
   if (shares.length === 0) return <span className="ah-agents" />;
   const shown = shares.slice(0, cap);
   const extra = shares.length - shown.length;
-  const lead = shown[0].pct || 1;
+  const lead = shown[0]!.pct || 1;
   return (
     <span className="ah-agents">
       {shown.map((s) => (

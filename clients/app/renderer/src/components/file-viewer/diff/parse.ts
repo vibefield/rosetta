@@ -35,7 +35,7 @@ function pathOf(raw: string): string | null {
 
 /** The header's path, with the timestamp `--- a/x.ts\t2026-08-30` can carry. */
 function headerPath(line: string, marker: string): string | null {
-  return pathOf(line.slice(marker.length).split("\t")[0]);
+  return pathOf(line.slice(marker.length).split("\t")[0]!);
 }
 
 export function parseDiff(text: string): ParsedDiff {
@@ -78,9 +78,9 @@ export function parseDiff(text: string): ParsedDiff {
     const hunk = HUNK.exec(line);
     if (hunk !== null) {
       close(header, oldStart, newStart);
-      header = hunk[5].trim();
-      oldStart = Number.parseInt(hunk[1], 10);
-      newStart = Number.parseInt(hunk[3], 10);
+      header = hunk[5]!.trim();
+      oldStart = Number.parseInt(hunk[1]!, 10);
+      newStart = Number.parseInt(hunk[3]!, 10);
       oldNumber = oldStart;
       newNumber = newStart;
       current = [];

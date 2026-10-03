@@ -80,7 +80,7 @@ export function tokenizeMarkup(text: string): readonly Token[] {
 
       // Inside the tag until `>`: attribute, `=`, value, repeat.
       while (index < text.length && text[index] !== ">") {
-        const char = text[index];
+        const char = text[index]!;
         if (char === " " || char === "\t" || char === "\n" || char === "\r") {
           push("plain", match(/[ \t\r\n]+/y) ?? char);
           continue;

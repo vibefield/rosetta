@@ -2,8 +2,8 @@
 // model creator's API list price, supplemented by higher reported session
 // totals. A provider-billed amount is a separate, secondary figure; usage the
 // price catalog cannot price is counted and shown, never read as $0.
-import { fmtCompactNumber } from "./format.ts";
-import type { CompactNumberParts } from "./format.ts";
+import { fmtCompactNumber } from "./format";
+import type { CompactNumberParts } from "./format";
 
 /** The wire's spend columns, flattened beside every aggregate `tokens`. */
 export interface SpendFields {

@@ -25,7 +25,7 @@ export interface SessionListProps {
   readonly emptyState?: {
     readonly title: string;
     readonly description: string;
-  };
+  } | undefined;
   readonly onSessionSelect: (session: SessionRow) => void;
 }
 

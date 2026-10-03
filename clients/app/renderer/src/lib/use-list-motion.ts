@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 import type { RefObject } from "react";
-import { ListMotion, REDUCED_MOTION_QUERY } from "./motion.ts";
+import { ListMotion, REDUCED_MOTION_QUERY } from "./motion";
 
 /** Call after rendering stable, sibling rows with data-motion-key identities.
  * `order` includes group labels so crossing a day boundary also moves rows. */

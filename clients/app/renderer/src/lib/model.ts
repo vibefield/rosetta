@@ -7,10 +7,10 @@ import type {
   SessionRow,
 } from "@rosetta/protocol";
 import type { AgentShare } from "./agents";
-import { NO_SPEND, addSpend, spendOf, sumSpend } from "./spend.ts";
-import type { Spend } from "./spend.ts";
-import { projectTint } from "./tint.ts";
-import { sessionLastActive } from "./session-activity.ts";
+import { NO_SPEND, addSpend, spendOf, sumSpend } from "./spend";
+import type { Spend } from "./spend";
+import { projectTint } from "./tint";
+import { sessionLastActive } from "./session-activity";
 
 export interface ProjectStats {
   /** Daily token totals over the heatmap's window (53 Sunday-aligned weeks
@@ -166,7 +166,7 @@ export function buildProjectViewModel(
     Math.max(0, dailyTokens[currentDayIndex - (29 - dayIndex)] ?? 0),
   );
   const recentTokenBuckets = Array.from({ length: 15 }, (_, bucketIndex) =>
-    [dailyTokensLast30Days[bucketIndex * 2], dailyTokensLast30Days[bucketIndex * 2 + 1]].reduce(
+    [dailyTokensLast30Days[bucketIndex * 2], dailyTokensLast30Days[bucketIndex * 2 + 1]].reduce<number>(
       (total, value) => total + (value ?? 0),
       0,
     ),
@@ -255,7 +255,7 @@ export function parseSnippet(snippet: string): SnippetPart[] {
   let at = 0;
   for (let m = re.exec(snippet); m !== null; m = re.exec(snippet)) {
     if (m.index > at) parts.push({ text: snippet.slice(at, m.index), mark: false });
-    parts.push({ text: m[1], mark: true });
+    parts.push({ text: m[1]!, mark: true });
     at = m.index + m[0].length;
   }
   if (at < snippet.length) parts.push({ text: snippet.slice(at), mark: false });

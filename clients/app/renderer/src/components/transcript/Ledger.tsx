@@ -337,7 +337,7 @@ export function Ledger({
 
   const drawn: ReactNode[] = [];
   for (let index = 0; index < members.length; index += 1) {
-    const member = members[index];
+    const member = members[index]!;
     if (member.kind !== "line") {
       // Inside the ladder every member keeps the form it had as a segment.
       const rowId = member.row.timeline_id;
@@ -385,7 +385,7 @@ export function Ledger({
       const burst = [teamMember];
       if (teamMember.operation === "start" || teamMember.operation === "known") {
         while (index + 1 < members.length) {
-          const next = members[index + 1];
+          const next = members[index + 1]!;
           if (next.kind !== "line") break;
           const candidate = teamMemberFor(next.line);
           if (candidate === null || !sameStartBurst(teamMember, candidate)) break;

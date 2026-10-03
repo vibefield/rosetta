@@ -622,7 +622,7 @@ export function TranscriptDocument({
   };
 
   const renderSegment = (segment: Segment, embedded = false): ReactNode => {
-    const rowId = segment.kind === "ledger" ? segment.rows[0].timeline_id : segment.row.timeline_id;
+    const rowId = segment.kind === "ledger" ? segment.rows[0]!.timeline_id : segment.row.timeline_id;
     const hit = highlightedTimelineId === rowId;
     switch (segment.kind) {
       case "ledger":
@@ -636,7 +636,7 @@ export function TranscriptDocument({
               !embedded && segment.summary.closedByDefault ? (
                 <Anchor
                   at={segment.at}
-                  sessionId={segment.rows[0].session_id}
+                  sessionId={segment.rows[0]!.session_id}
                   timelineId={rowId}
                   onReceipt={onReceipt}
                 />
@@ -647,30 +647,30 @@ export function TranscriptDocument({
             focusTimelineId={focusTimelineId}
             alive={(line) =>
               recentActivity &&
-              line.rows[0].session_id === session.id &&
-              feed.watermark !== null && line.rows[0].ordinal > feed.watermark
+              line.rows[0]!.session_id === session.id &&
+              feed.watermark !== null && line.rows[0]!.ordinal > feed.watermark
             }
             hasChildren={(line) =>
-              (workerLinks.childrenByRow.get(line.rows[0].timeline_id) ?? []).length > 0
+              (workerLinks.childrenByRow.get(line.rows[0]!.timeline_id) ?? []).length > 0
             }
             childFocused={(line) =>
               (focus !== null &&
-                (workerLinks.childrenByRow.get(line.rows[0].timeline_id) ?? []).some((child) =>
+                (workerLinks.childrenByRow.get(line.rows[0]!.timeline_id) ?? []).some((child) =>
                   sessionContains(child.id, focus.sessionId, index.byId),
                 )) ||
               (revealedWorker !== null &&
-                (workerLinks.childrenByRow.get(line.rows[0].timeline_id) ?? []).some(
+                (workerLinks.childrenByRow.get(line.rows[0]!.timeline_id) ?? []).some(
                   (child) => child.id === revealedWorker.childId,
                 ))
             }
             subthreadsFor={(line: LedgerLine) =>
-              (workerLinks.childrenByRow.get(line.rows[0].timeline_id) ?? []).map((child) =>
+              (workerLinks.childrenByRow.get(line.rows[0]!.timeline_id) ?? []).map((child) =>
                 ({ childSessionId: child.id, node: renderChild(child, true) }),
               )
             }
-            workflowAttemptsFor={(line) => workflowAttemptsFor(workflowAttempts, line.rows[0])}
+            workflowAttemptsFor={(line) => workflowAttemptsFor(workflowAttempts, line.rows[0]!)}
             linkedChildId={(line) =>
-              workerLinks.referencedChildIdsByRow.get(line.rows[0].timeline_id)?.[0] ?? null
+              workerLinks.referencedChildIdsByRow.get(line.rows[0]!.timeline_id)?.[0] ?? null
             }
             onOpenLinkedChild={revealLinkedWorker}
             teamMemberFor={(line) =>
@@ -804,9 +804,9 @@ export function TranscriptDocument({
     const out: ReactNode[] = [];
     while (
       floatingAt < floating.length &&
-      (until === null || floating[floatingAt].started_at <= until)
+      (until === null || floating[floatingAt]!.started_at <= until)
     ) {
-      out.push(renderChild(floating[floatingAt], false));
+      out.push(renderChild(floating[floatingAt]!, false));
       floatingAt += 1;
     }
     return out;
@@ -815,7 +815,7 @@ export function TranscriptDocument({
   const renderTools = (items: readonly Extract<ActivityItem, { kind: "tool" }>[], embedded: boolean) => {
     const lines = items.map(item => item.line);
     const rows = lines.flatMap(line => line.rows);
-    return renderSegment({ kind: "ledger", key: items[0].key, at: rows[0].at, rows, lines,
+    return renderSegment({ kind: "ledger", key: items[0]!.key, at: rows[0]!.at, rows, lines,
       members: lines.map(line => ({ kind: "line", key: line.key, line })), summary: runSummary(lines) }, embedded);
   };
   const renderItem = (item: ActivityItem): ReactNode => {
@@ -840,7 +840,7 @@ export function TranscriptDocument({
     return nodes;
   };
   const childIsFocused = (item: ActivityItem) => item.kind === "tool" &&
-    (workerLinks.childrenByRow.get(item.line.rows[0].timeline_id) ?? []).some(child =>
+    (workerLinks.childrenByRow.get(item.line.rows[0]!.timeline_id) ?? []).some(child =>
       (focus !== null && sessionContains(child.id, focus.sessionId, index.byId)) || child.id === revealedWorker?.childId);
   const renderBlock = (block: ReadingBlock): ReactNode => {
     switch (block.kind) {

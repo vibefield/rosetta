@@ -21,7 +21,7 @@ export interface ColumnHeadingProps {
    * far end of the band. Omitted when the column has no honest count. */
   readonly count?: number | null;
   /** What the count counts, for its tooltip. */
-  readonly countTitle?: string;
+  readonly countTitle?: string | undefined;
   /** Ids — paths, branches, shas — set in mono. The head keeps its size and
    * weight; only the face changes. */
   readonly mono?: boolean;
@@ -30,7 +30,7 @@ export interface ColumnHeadingProps {
    * name is the whole truth; pass the longer form when the head shows an
    * abbreviation, or `null` for a name that needs no second telling.
    */
-  readonly title?: string | null;
+  readonly title?: string | null | undefined;
 }
 
 export function ColumnHeading({

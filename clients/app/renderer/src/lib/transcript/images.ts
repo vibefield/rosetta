@@ -1,12 +1,12 @@
 // Image occurrences from canonical activity, independent of either fold level.
 // Every displayed image comes from recorded, optimized canonical members.
 import type { ResourceRef, TimelineEntry } from "@rosetta/protocol";
-import { projectAction } from "./families.ts";
-import type { PathFact } from "./families.ts";
-import type { AttachmentFact, LedgerMember } from "./turns.ts";
-import { readAttachments } from "./turns.ts";
-import { resourceLabel, splitPath } from "./vocabulary.ts";
-import { isOptimizedImageAsset } from "../image-media.ts";
+import { projectAction } from "./families";
+import type { PathFact } from "./families";
+import type { AttachmentFact, LedgerMember } from "./turns";
+import { readAttachments } from "./turns";
+import { resourceLabel, splitPath } from "./vocabulary";
+import { isOptimizedImageAsset } from "../image-media";
 
 function resourcePath(resource: ResourceRef): PathFact {
   const label = resourceLabel(resource);

@@ -26,10 +26,10 @@ import type {
   SourceRange,
   UserAnswer,
   UserQuestion,
-} from "./protocol.ts";
-import { clockShort, duration } from "../format.ts";
-import { webAddress } from "./web-address.ts";
-import type { LedgerContext, LedgerGlyph, ObjectPart, ToolFamily } from "./vocabulary.ts";
+} from "./protocol";
+import { clockShort, duration } from "../format";
+import { webAddress } from "./web-address";
+import type { LedgerContext, LedgerGlyph, ObjectPart, ToolFamily } from "./vocabulary";
 import {
   FAMILY_GLYPH,
   canonicalText,
@@ -39,7 +39,7 @@ import {
   resourceDisplay,
   resourceLabel,
   splitPath,
-} from "./vocabulary.ts";
+} from "./vocabulary";
 
 /* ── detail payloads ─────────────────────────────────────────────────────── */
 
@@ -128,7 +128,7 @@ export function commandDirectoryContext(
   const directories = [...new Set(known.map((command) => command.cwd))];
   if (directories.length === 1) {
     return {
-      label: directories[0],
+      label: directories[0]!,
       title: `Working directory: ${directories[0]}`,
     };
   }
@@ -209,14 +209,14 @@ export function taskDisplayRows(
   const ordered =
     currentAt < 0
       ? [...tasks]
-      : [...tasks.slice(0, currentAt), ...tasks.slice(currentAt + 1), tasks[currentAt]];
+      : [...tasks.slice(0, currentAt), ...tasks.slice(currentAt + 1), tasks[currentAt]!];
   if (full || ordered.length <= TASK_PREVIEW_LIMIT) return ordered;
   if (currentAt < 0) return ordered.slice(-TASK_PREVIEW_LIMIT);
 
   const peerLimit = TASK_PREVIEW_LIMIT - 1;
   const before = tasks.slice(Math.max(0, currentAt - peerLimit), currentAt);
   const after = tasks.slice(currentAt + 1, currentAt + 1 + (peerLimit - before.length));
-  return [...before, ...after, tasks[currentAt]];
+  return [...before, ...after, tasks[currentAt]!];
 }
 
 /**
@@ -716,7 +716,7 @@ export function projectAction(
       const only = operations.size === 1 ? [...operations][0] : null;
       // `Changed` is the honest verb when the source could not prove which
       // operation ran, or when one row mixed several.
-      const verb = only === null || only === undefined ? "Changed" : CHANGE_VERB[only];
+      const verb = only === null || only === undefined ? "Changed" : CHANGE_VERB[only]!;
       const added = sumOrNull(changes.map((change) => change.lines_added));
       const removed = sumOrNull(changes.map((change) => change.lines_removed));
       const stat = diffstatText(added, removed);
@@ -807,7 +807,7 @@ export function projectAction(
       const input = action.input === null ? null : canonicalText(action.input);
       return {
         ...base,
-        verb: PROCESS_VERB[action.operation],
+        verb: PROCESS_VERB[action.operation]!,
         object: [part(action.process_id)],
         result: action.outcome?.state ?? null,
         detail: input === null ? NO_DETAIL : { kind: "text", text: input },
@@ -938,7 +938,7 @@ export function projectAction(
       const summary = action.summary ?? (action.body ? firstLine(canonicalText(action.body)) : null);
       return {
         ...base,
-        verb: COLLABORATE_VERB[action.operation],
+        verb: COLLABORATE_VERB[action.operation]!,
         object: [
           ...(target === null ? [] : [part(target)]),
           ...(summary === null
@@ -1030,7 +1030,7 @@ export function projectAction(
     case "schedule":
       return {
         ...base,
-        verb: SCHEDULE_VERB[action.operation],
+        verb: SCHEDULE_VERB[action.operation]!,
         object: [part(action.reason ?? action.schedule_id ?? "a wake-up", "aside")],
         result:
           action.delay_ms !== null
@@ -1049,7 +1049,7 @@ export function projectAction(
       const resources = pathFacts(action.resources, context, source);
       return {
         ...base,
-        verb: ARTIFACT_VERB[action.operation],
+        verb: ARTIFACT_VERB[action.operation]!,
         object: [
           part(action.name ?? action.artifact_kind),
           ...(action.name === null ? [] : [part(` · ${action.artifact_kind}`, "aside")]),

@@ -127,7 +127,7 @@ export function DiffBody({ unified, name }: DiffBodyProps) {
       </p>
       <div className="ah-code__sizer" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((item) => {
-          const row = rows[item.index];
+          const row = rows[item.index]!;
           return (
             <div
               className="ah-code__line"

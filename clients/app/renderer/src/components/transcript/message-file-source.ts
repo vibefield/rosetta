@@ -1,15 +1,15 @@
 import type { CanonicalText } from "@rosetta/protocol";
 import type { AttachmentFact } from "../../lib/transcript";
-import type { FileHandle, FileSource } from "../file-viewer/types.ts";
+import type { FileHandle, FileSource } from "../file-viewer/types";
 
 export interface FullMessage {
   readonly key: string;
   readonly role: "user" | "agent";
   /** Generated context can name its reading view without changing authorship. */
-  readonly title?: string;
+  readonly title?: string | undefined;
   readonly text: string;
-  readonly recordedText?: CanonicalText | null;
-  readonly attachments?: readonly AttachmentFact[];
+  readonly recordedText?: CanonicalText | null | undefined;
+  readonly attachments?: readonly AttachmentFact[] | undefined;
 }
 
 interface MessagePayload {

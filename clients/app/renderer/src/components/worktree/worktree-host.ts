@@ -265,8 +265,8 @@ window.addEventListener("message", (event: MessageEvent) => {
     acceptPorts({
       root: data.root,
       generation: data.generation as number,
-      treePort: event.ports[0],
-      gitPort: event.ports[1],
+      treePort: event.ports[0]!,
+      gitPort: event.ports[1]!,
     });
     return;
   }

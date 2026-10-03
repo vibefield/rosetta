@@ -1,8 +1,8 @@
 // Paging follows visible conversation boundaries. Canonical rows remain in the
 // subscription cache; a clipped leading activity prefix waits for the next page.
 import type { TimelineEntry, TimelinePage } from "@rosetta/protocol";
-import { readAttachments } from "./turns.ts";
-import { canonicalText } from "./vocabulary.ts";
+import { readAttachments } from "./turns";
+import { canonicalText } from "./vocabulary";
 
 export function isPrimaryMessage(row: TimelineEntry): boolean {
   if (row.body.type === "user") return row.group.kind !== "parent_invocation";
@@ -51,11 +51,11 @@ export function withinHistoryWindow(
   hasEarlier: boolean,
 ): boolean {
   if (parents.length === 0) return !hasEarlier;
-  const hasGaps = parents.some((row, i) => i > 0 && row.ordinal > parents[i - 1].ordinal + 1);
+  const hasGaps = parents.some((row, i) => i > 0 && row.ordinal > parents[i - 1]!.ordinal + 1);
   if (at === null) return !hasEarlier && !hasGaps;
   const firstAt = parents.find(row => row.at !== null)?.at;
   if (hasEarlier && (firstAt == null || at < firstAt)) return false;
   const before = parents.findIndex(row => row.at !== null && row.at > at);
-  return before <= 0 || parents[before].ordinal === parents[before - 1].ordinal + 1 ||
-    at === parents[before - 1].at;
+  return before <= 0 || parents[before]!.ordinal === parents[before - 1]!.ordinal + 1 ||
+    at === parents[before - 1]!.at;
 }

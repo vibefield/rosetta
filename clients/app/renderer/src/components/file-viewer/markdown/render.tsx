@@ -39,7 +39,7 @@ function InlineNodes({
   renderText,
 }: {
   readonly nodes: readonly Inline[];
-  readonly renderText?: InlineTextRenderer;
+  readonly renderText?: InlineTextRenderer | undefined;
 }) {
   return (
     <>
@@ -130,7 +130,7 @@ export function MarkdownBlocks({
   readonly blocks: readonly Block[];
   /** Optional decoration for plain text nodes. Code and link targets remain
    * literal, so callers cannot accidentally nest an action inside a link. */
-  readonly renderText?: InlineTextRenderer;
+  readonly renderText?: InlineTextRenderer | undefined;
 }) {
   return (
     <>

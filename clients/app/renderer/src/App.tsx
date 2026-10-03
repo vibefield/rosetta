@@ -304,7 +304,7 @@ export default function App() {
       setStepper((current) => {
         if (current === null || current.hits.length === 0) return current;
         const at = (current.at + delta + current.hits.length) % current.hits.length;
-        const hit = current.hits[at];
+        const hit = current.hits[at]!;
         setInspectedThread(null);
         setFocus({ sessionId: hit.session_id, timelineId: hit.timeline_id });
         return { ...current, at };

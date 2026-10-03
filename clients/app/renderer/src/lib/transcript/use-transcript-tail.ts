@@ -1,9 +1,9 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { TimelineEntry } from "@rosetta/protocol";
-import { REDUCED_MOTION_QUERY, SETTLE_EASING } from "../motion.ts";
-import { TailArrivals } from "./tail-state.ts";
-import { TailScroll } from "./tail-scroll.ts";
-import type { TailState } from "./tail-scroll.ts";
+import { REDUCED_MOTION_QUERY, SETTLE_EASING } from "../motion";
+import { TailArrivals } from "./tail-state";
+import { TailScroll } from "./tail-scroll";
+import type { TailState } from "./tail-scroll";
 
 export interface TimelineLayout {
   readonly sessionId: string;

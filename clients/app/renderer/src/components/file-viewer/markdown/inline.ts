@@ -98,9 +98,9 @@ export function parseInline(text: string, insideLink = false, source?: readonly 
     const rest = text.slice(index);
     const char = text[index];
 
-    if (char === "\\" && index + 1 < text.length && /[\\`*_{}[\]()#+\-.!<>~|]/.test(text[index + 1])) {
+    if (char === "\\" && index + 1 < text.length && /[\\`*_{}[\]()#+\-.!<>~|]/.test(text[index + 1]!)) {
       plain += text[index + 1];
-      if (source !== undefined) positions.push(source[index + 1]);
+      if (source !== undefined) positions.push(source[index + 1]!);
       index += 2;
       continue;
     }
@@ -126,11 +126,11 @@ export function parseInline(text: string, insideLink = false, source?: readonly 
       const found = LINK.exec(rest);
       const isImage = found !== null && found[0].startsWith("!");
       if (found !== null && (isImage || !insideLink)) {
-        const target = found[2].replace(/^<|>$/g, "");
+        const target = found[2]!.replace(/^<|>$/g, "");
         if (isImage) {
-          push({ type: "image", src: target, alt: found[1] });
+          push({ type: "image", src: target, alt: found[1]! });
         } else {
-          push({ type: "link", href: target, children: parseInline(found[1], true) });
+          push({ type: "link", href: target, children: parseInline(found[1]!, true) });
         }
         index += found[0].length;
         continue;
@@ -140,7 +140,7 @@ export function parseInline(text: string, insideLink = false, source?: readonly 
     if (char === "<" && !insideLink) {
       const found = AUTOLINK.exec(rest);
       if (found !== null) {
-        push({ type: "link", href: found[1], children: [{ type: "text", value: found[1] }] });
+        push({ type: "link", href: found[1]!, children: [{ type: "text", value: found[1]! }] });
         index += found[0].length;
         continue;
       }
@@ -175,7 +175,7 @@ export function parseInline(text: string, insideLink = false, source?: readonly 
     }
 
     plain += char;
-    if (source !== undefined) positions.push(source[index]);
+    if (source !== undefined) positions.push(source[index]!);
     index += 1;
   }
 

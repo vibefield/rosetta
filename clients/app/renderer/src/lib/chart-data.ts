@@ -46,7 +46,7 @@ function parseCalendarDayKey(key: string): {
   dayOfMonth: number;
 } {
   const [year, month, day] = key.split("-").map(Number);
-  return { year, monthIndex: month - 1, dayOfMonth: day };
+  return { year: year!, monthIndex: month! - 1, dayOfMonth: day! };
 }
 
 function longCalendarDateLabel(key: string): string {
@@ -184,7 +184,7 @@ export function createModelUsageStreamgraphData(
       return {
         id: modelId,
         label: formatModelLabel(modelId),
-        color: modelColors[modelId],
+        color: modelColors[modelId]!,
         values,
         total: values.reduce((sum, value) => sum + value, 0),
       };
@@ -210,7 +210,7 @@ export function createModelUsageStreamgraphData(
       color: "var(--vf-text-faint)",
       values: domain.map((_, valueIndex) =>
         remainingSeries.reduce(
-          (total, modelSeries) => total + modelSeries.values[valueIndex],
+          (total, modelSeries) => total + modelSeries.values[valueIndex]!,
           0,
         ),
       ),

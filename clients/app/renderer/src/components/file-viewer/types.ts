@@ -37,7 +37,7 @@ export interface FileSource {
   read(handle: FileHandle, signal: AbortSignal): Promise<Uint8Array>;
   /** Sized, browser-cacheable resources. The source owns address validation;
    * a viewer never needs to copy full-image bytes to show a small thumbnail. */
-  image?(handle: FileHandle): ImageResource | null;
+  image?: ((handle: FileHandle) => ImageResource | null) | undefined;
   /**
    * A unified diff of this handle, for a view whose payload is `"compare"`.
    *
@@ -55,8 +55,8 @@ export interface ImageResource {
   readonly rail: string;
   readonly tile: string;
   readonly tile2x: string;
-  readonly width?: number;
-  readonly height?: number;
+  readonly width?: number | undefined;
+  readonly height?: number | undefined;
 }
 
 /** A view's own switch, rendered as the room's one switch shape. */
@@ -112,9 +112,9 @@ export interface OpenFile {
 }
 
 export interface ViewBodyProps {
-  readonly onRetry?: () => void;
+  readonly onRetry?: (() => void) | undefined;
   /** Optional rich Markdown presentation supplied by the content owner. */
-  readonly renderMarkdown?: (text: string) => ReactNode;
+  readonly renderMarkdown?: ((text: string) => ReactNode) | undefined;
   readonly file: OpenFile;
   /** The current mode's id, or `""` for a view with no modes. */
   readonly mode: string;

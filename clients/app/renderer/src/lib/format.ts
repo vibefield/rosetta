@@ -25,7 +25,7 @@ export function fmtCompactNumber(value: number): CompactNumberParts {
     unit += 1;
   }
   const decimals = Math.max(0, 2 - Math.floor(Math.log10(scaled)));
-  return { n: (Math.sign(value) * scaled).toFixed(decimals), u: COMPACT_UNITS[unit] };
+  return { n: (Math.sign(value) * scaled).toFixed(decimals), u: COMPACT_UNITS[unit]! };
 }
 
 export type TokenParts = CompactNumberParts;

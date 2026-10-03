@@ -1,4 +1,4 @@
-import type { FileHandle, FileSource } from "./types.ts";
+import type { FileHandle, FileSource } from "./types";
 
 /** Share thumbnail/main-image reads for one open gallery. Released on close;
  * the byte cache is bounded even when a row contains many large images. */

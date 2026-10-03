@@ -54,9 +54,9 @@ export function DayActivityChart({ rows, lastHour = 23, modelColors }: {
     <div className="ah-daychart__readout" aria-live="polite" aria-atomic="true">
       {futureHour !== null ? <><strong>{hourLabel(futureHour)} – {hourLabel((futureHour + 1) % 24)}</strong>
         <span>Awaiting usage</span></> : inspectedHour !== null ? <><strong>{hourLabel(inspectedHour)} – {hourLabel((inspectedHour + 1) % 24)}</strong>
-        <span title="Tokens across all models">{tokenText(activity.hours[inspectedHour])} tokens</span></>
+        <span title="Tokens across all models">{tokenText(activity.hours[inspectedHour]!)} tokens</span></>
         : <><strong>{activity.peakHour === null ? "No token activity" : `Busiest hour · ${hourLabel(activity.peakHour)}`}</strong>
-          <span title="Tokens across all models">{activity.peakHour === null ? "" : `${tokenText(activity.hours[activity.peakHour])} tokens`}</span></>}
+          <span title="Tokens across all models">{activity.peakHour === null ? "" : `${tokenText(activity.hours[activity.peakHour]!)} tokens`}</span></>}
     </div>
     <div className="ah-daychart__body" ref={bodyRef}>
       <div className="ah-daychart__graph">
@@ -70,7 +70,7 @@ export function DayActivityChart({ rows, lastHour = 23, modelColors }: {
           <svg viewBox="0 0 1000 220" preserveAspectRatio="none" tabIndex={0}
             role="slider" aria-label="Inspect hourly model usage. Use left and right arrow keys."
             aria-valuemin={0} aria-valuemax={lastHour} aria-valuenow={inspectedHour ?? 0}
-            aria-valuetext={`${hourLabel(inspectedHour ?? 0)}: ${tokenText(activity.hours[inspectedHour ?? 0])} tokens`}
+            aria-valuetext={`${hourLabel(inspectedHour ?? 0)}: ${tokenText(activity.hours[inspectedHour ?? 0]!)} tokens`}
             data-hour={inspectedHour ?? undefined}
             data-future-hour={futureHour ?? undefined}
             onMouseMove={event => {
@@ -107,7 +107,7 @@ export function DayActivityChart({ rows, lastHour = 23, modelColors }: {
           {(inspectedHour !== null || lastHour < 23 && futureHour === null) && visibleSeries.map(model => {
             const hour = inspectedHour ?? lastHour;
             return <i key={model.id} className="ah-daychart__point" aria-hidden="true" style={{
-              left: `${hour / 23 * 100}%`, top: `${y(model.values[hour]) / 220 * 100}%`,
+              left: `${hour / 23 * 100}%`, top: `${y(model.values[hour]!) / 220 * 100}%`,
               "--model-color": model.color,
             } as CSSProperties} />;
           })}
@@ -127,7 +127,7 @@ export function DayActivityChart({ rows, lastHour = 23, modelColors }: {
             return next;
           })}>
           <span className="ah-daychart__modelname"><i /><span>{model.label}</span></span>
-          <b>{futureHour !== null ? "—" : tokenText(inspectedHour === null ? model.total : model.values[inspectedHour])}</b>
+          <b>{futureHour !== null ? "—" : tokenText(inspectedHour === null ? model.total : model.values[inspectedHour]!)}</b>
           <span className="ah-daychart__share"><i style={{ width: `${model.total / activity.total * 100}%` }} /></span>
           <small>{(model.total / activity.total * 100).toFixed(0)}%</small>
         </button>)}

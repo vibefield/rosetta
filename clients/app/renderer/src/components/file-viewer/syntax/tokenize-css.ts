@@ -48,15 +48,15 @@ export function tokenizeCss(text: string): readonly Token[] {
 
   const peekNonSpace = (from: number): string => {
     let i = from;
-    while (i < text.length && /[ \t\r\n]/.test(text[i])) i += 1;
+    while (i < text.length && /[ \t\r\n]/.test(text[i]!)) i += 1;
     return text[i] ?? "";
   };
 
   while (index < text.length) {
-    const char = text[index];
+    const char = text[index]!;
 
     if (/[ \t\r\n]/.test(char)) {
-      push("plain", match(WHITESPACE) ?? char);
+      push("plain", match(WHITESPACE) ?? char!);
       continue;
     }
     if (text.startsWith("/*", index)) {

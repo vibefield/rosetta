@@ -99,12 +99,12 @@ export function Streamgraph({
   const pointValues = inspectedIndex === null ? [] : visibleSeries.map(series => ({
     ...series, value: series.values[inspectedIndex],
   }));
-  const pointTotal = pointValues.reduce((total, series) => total + series.value, 0);
+  const pointTotal = pointValues.reduce((total, series) => total + series.value!, 0);
   const inspectedX = inspectedIndex === null ? 0 : inspectedIndex / (data.domain.length - 1) * 100;
   const accessibleIndex = inspectedIndex ?? 0;
   const accessibleTotal = visibleSeries.reduce((total, series) => total + (series.values[accessibleIndex] ?? 0), 0);
-  const accessibleValue = hasData ? `${formatPoint(data.domain[accessibleIndex])}: ${Math.round(accessibleTotal).toLocaleString()} ${valueLabel}. ${visibleSeries.map(series =>
-    `${series.label}: ${Math.round(series.values[accessibleIndex]).toLocaleString()}`,
+  const accessibleValue = hasData ? `${formatPoint(data.domain[accessibleIndex]!)}: ${Math.round(accessibleTotal).toLocaleString()} ${valueLabel}. ${visibleSeries.map(series =>
+    `${series.label}: ${Math.round(series.values[accessibleIndex]!).toLocaleString()}`,
   ).join(", ")}` : undefined;
   const inspectPointer = (svg: SVGSVGElement, clientX: number) => {
     const rect = svg.getBoundingClientRect();
@@ -112,7 +112,7 @@ export function Streamgraph({
     const index = Math.max(0, Math.min(data.domain.length - 1,
       Math.round((clientX - rect.left) / rect.width * (data.domain.length - 1))));
     setFocusedPoint(null);
-    setHoveredPoint(data.domain[index].id);
+    setHoveredPoint(data.domain[index]!.id);
   };
 
   return (
@@ -151,7 +151,7 @@ export function Streamgraph({
             } : undefined}
             onFocus={expanded ? () => {
               setHoveredPoint(null);
-              setFocusedPoint(data.domain[0].id);
+              setFocusedPoint(data.domain[0]!.id);
             } : undefined}
             onBlur={expanded ? () => setFocusedPoint(null) : undefined}
             onKeyDown={expanded ? event => {
@@ -160,7 +160,7 @@ export function Streamgraph({
               const index = event.key === "Home" ? 0 : event.key === "End" ? data.domain.length - 1
                 : Math.max(0, Math.min(data.domain.length - 1, accessibleIndex + (event.key === "ArrowLeft" ? -1 : 1)));
               setHoveredPoint(null);
-              setFocusedPoint(data.domain[index].id);
+              setFocusedPoint(data.domain[index]!.id);
             } : undefined}
           >
             {expanded && (
@@ -202,8 +202,8 @@ export function Streamgraph({
         {inspectedIndex !== null && inspectedPoint && <>
           {layerPaths.map(({ seriesId, samples }) => {
             const series = seriesById.get(seriesId)!;
-            if (series.values[inspectedIndex] <= 0) return null;
-            const [x, y] = samples[inspectedIndex];
+            if (series.values[inspectedIndex]! <= 0) return null;
+            const [x, y] = samples[inspectedIndex]!;
             return <i key={seriesId} className="ah-streamgraph__point" data-streamgraph-point={seriesId}
               aria-hidden="true" style={{ left: `${x / viewBoxWidth * 100}%`, top: `${y / viewBoxHeight * 100}%`,
                 "--series-color": series.color } as SeriesColorStyle} />;
@@ -220,10 +220,10 @@ export function Streamgraph({
               {pointValues.map(series => <div key={series.id} data-point-series={series.id}
                 style={{ "--series-color": series.color } as SeriesColorStyle}>
                 <span className="ah-streamgraph__readout-model"><i aria-hidden="true" />{series.label}</span>
-                <b data-point-value={series.value} title={`${Math.round(series.value).toLocaleString()} ${valueLabel}`}>
-                  {formatValue(Math.round(series.value))}
+                <b data-point-value={series.value} title={`${Math.round(series.value!).toLocaleString()} ${valueLabel}`}>
+                  {formatValue(Math.round(series.value!))}
                 </b>
-                <small>{formatShare(series.value, pointTotal)}</small>
+                <small>{formatShare(series.value!, pointTotal)}</small>
               </div>)}
             </div>
             {pointTotal === 0 && <p>No activity recorded</p>}

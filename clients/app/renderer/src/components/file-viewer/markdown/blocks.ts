@@ -5,7 +5,7 @@
 // is raw HTML: an HTML block is kept as the text it is, because rendering it
 // would be the one thing `types.ts` says this parser must never do.
 
-import { parseInline, parseInlineLines } from "./inline.ts";
+import { parseInline, parseInlineLines } from "./inline";
 import type { Alignment, Block, Inline } from "./types";
 
 const ATX_HEADING = /^ {0,3}(#{1,6})(?:\s+(.*?))?\s*(?:\s#+)?$/;
@@ -45,9 +45,9 @@ function bulletOf(line: string): Bullet | null {
   if (found === null || RULE.test(line)) return null;
   const [whole, lead, marker] = found;
   return {
-    ordered: /\d/.test(marker),
-    start: /\d/.test(marker) ? Number.parseInt(marker, 10) : 1,
-    indent: lead.length,
+    ordered: /\d/.test(marker!),
+    start: /\d/.test(marker!) ? Number.parseInt(marker!, 10) : 1,
+    indent: lead!.length,
     contentIndent: whole.length,
     content: line.slice(whole.length),
   };
@@ -111,7 +111,7 @@ export function parseBlocks(lines: readonly string[], sources?: readonly (readon
   let index = 0;
 
   while (index < lines.length) {
-    const line = lines[index];
+    const line = lines[index]!;
     const source = sources?.[index];
 
     if (isBlank(line)) {
@@ -121,19 +121,19 @@ export function parseBlocks(lines: readonly string[], sources?: readonly (readon
 
     const fence = FENCE.exec(line);
     if (fence !== null) {
-      const marker = fence[1][0];
+      const marker = fence[1]![0];
       const body: string[] = [];
       index += 1;
       while (index < lines.length) {
-        const closing = FENCE.exec(lines[index]);
-        if (closing !== null && closing[1][0] === marker && closing[1].length >= fence[1].length) {
+        const closing = FENCE.exec(lines[index]!);
+        if (closing !== null && closing[1]![0] === marker && closing[1]!.length >= fence[1]!.length) {
           index += 1;
           break;
         }
-        body.push(lines[index]);
+        body.push(lines[index]!);
         index += 1;
       }
-      out.push({ type: "code", language: fence[2] === "" ? null : fence[2], text: body.join("\n") });
+      out.push({ type: "code", language: fence[2] === "" ? null : fence[2]!, text: body.join("\n") });
       continue;
     }
 
@@ -141,8 +141,8 @@ export function parseBlocks(lines: readonly string[], sources?: readonly (readon
     if (heading !== null) {
       out.push({
         type: "heading",
-        level: heading[1].length,
-        children: parseInline(heading[2] ?? "", false, source?.slice(line.indexOf(heading[2] ?? "", (line.length - line.trimStart().length) + heading[1].length))),
+        level: heading[1]!.length,
+        children: parseInline(heading[2] ?? "", false, source?.slice(line.indexOf(heading[2] ?? "", (line.length - line.trimStart().length) + heading[1]!.length))),
       });
       index += 1;
       continue;
@@ -158,16 +158,16 @@ export function parseBlocks(lines: readonly string[], sources?: readonly (readon
       const body: string[] = [];
       const bodySources: (readonly number[])[] = [];
       while (index < lines.length) {
-        if (QUOTE.test(lines[index])) {
-          bodySources.push(sources?.[index].slice(QUOTE.exec(lines[index])![0].length) ?? []);
-          body.push(lines[index].replace(QUOTE, ""));
+        if (QUOTE.test(lines[index]!)) {
+          bodySources.push(sources?.[index]!.slice(QUOTE.exec(lines[index]!)![0].length) ?? []);
+          body.push(lines[index]!.replace(QUOTE, ""));
           index += 1;
           continue;
         }
         // A quote runs on through unmarked lines, the way a paragraph does,
         // and stops at a blank one.
-        if (isBlank(lines[index]) || startsBlock(lines[index])) break;
-        body.push(lines[index]);
+        if (isBlank(lines[index]!) || startsBlock(lines[index]!)) break;
+        body.push(lines[index]!);
         bodySources.push(sources?.[index] ?? []);
         index += 1;
       }
@@ -178,15 +178,15 @@ export function parseBlocks(lines: readonly string[], sources?: readonly (readon
     if (
       line.includes("|") &&
       index + 1 < lines.length &&
-      TABLE_DELIMITER.test(lines[index + 1]) &&
-      splitRow(lines[index]).length === splitRow(lines[index + 1]).length
+      TABLE_DELIMITER.test(lines[index + 1]!) &&
+      splitRow(lines[index]!).length === splitRow(lines[index + 1]!).length
     ) {
-      const head = inlineCells(lines[index], sources?.[index]);
-      const align = splitRow(lines[index + 1]).map(alignmentOf);
+      const head = inlineCells(lines[index]!, sources?.[index]);
+      const align = splitRow(lines[index + 1]!).map(alignmentOf);
       index += 2;
       const rows: (readonly (readonly Inline[])[])[] = [];
-      while (index < lines.length && lines[index].includes("|") && !isBlank(lines[index])) {
-        rows.push(inlineCells(lines[index], sources?.[index]));
+      while (index < lines.length && lines[index]!.includes("|") && !isBlank(lines[index]!)) {
+        rows.push(inlineCells(lines[index]!, sources?.[index]));
         index += 1;
       }
       out.push({ type: "table", head, align, rows });
@@ -200,12 +200,12 @@ export function parseBlocks(lines: readonly string[], sources?: readonly (readon
       let pendingBlank = false;
 
       while (index < lines.length) {
-        if (isBlank(lines[index])) {
+        if (isBlank(lines[index]!)) {
           pendingBlank = true;
           index += 1;
           continue;
         }
-        const next = bulletOf(lines[index]);
+        const next = bulletOf(lines[index]!);
         // A deeper bullet was already swallowed by the item above it, so
         // anything at a different indent here closes this list. So does a
         // change of marker kind: `1.` after `-` is a second list, not a
@@ -217,16 +217,16 @@ export function parseBlocks(lines: readonly string[], sources?: readonly (readon
         pendingBlank = false;
 
         const body: string[] = [next.content];
-        const bodySources: (readonly number[])[] = [sources?.[index].slice(next.contentIndent) ?? []];
+        const bodySources: (readonly number[])[] = [sources?.[index]!.slice(next.contentIndent) ?? []];
         index += 1;
         while (index < lines.length) {
-          if (isBlank(lines[index])) {
+          if (isBlank(lines[index]!)) {
             let lookahead = index;
-            while (lookahead < lines.length && isBlank(lines[lookahead])) lookahead += 1;
+            while (lookahead < lines.length && isBlank(lines[lookahead]!)) lookahead += 1;
             if (
               lookahead < lines.length &&
-              indentOf(lines[lookahead]) >= next.contentIndent &&
-              bulletOf(lines[lookahead])?.indent !== bullet.indent
+              indentOf(lines[lookahead]!) >= next.contentIndent &&
+              bulletOf(lines[lookahead]!)?.indent !== bullet.indent
             ) {
               body.push("");
               bodySources.push([]);
@@ -236,16 +236,16 @@ export function parseBlocks(lines: readonly string[], sources?: readonly (readon
             }
             break;
           }
-          if (indentOf(lines[index]) >= next.contentIndent) {
-            body.push(lines[index].slice(next.contentIndent));
-            bodySources.push(sources?.[index].slice(next.contentIndent) ?? []);
+          if (indentOf(lines[index]!) >= next.contentIndent) {
+            body.push(lines[index]!.slice(next.contentIndent));
+            bodySources.push(sources?.[index]!.slice(next.contentIndent) ?? []);
             index += 1;
             continue;
           }
           // A wrapped line under a bullet needs no indent to belong to it.
-          if (!startsBlock(lines[index])) {
-            body.push(lines[index].trim());
-            bodySources.push(sources?.[index].slice(lines[index].length - lines[index].trimStart().length) ?? []);
+          if (!startsBlock(lines[index]!)) {
+            body.push(lines[index]!.trim());
+            bodySources.push(sources?.[index]!.slice(lines[index]!.length - lines[index]!.trimStart().length) ?? []);
             index += 1;
             continue;
           }
@@ -261,30 +261,30 @@ export function parseBlocks(lines: readonly string[], sources?: readonly (readon
     // Four spaces of indent with no list above it is a code block.
     if (/^ {4}/.test(line)) {
       const body: string[] = [];
-      while (index < lines.length && (/^ {4}/.test(lines[index]) || isBlank(lines[index]))) {
-        body.push(lines[index].slice(4));
+      while (index < lines.length && (/^ {4}/.test(lines[index]!) || isBlank(lines[index]!))) {
+        body.push(lines[index]!.slice(4));
         index += 1;
       }
-      while (body.length > 0 && body[body.length - 1].trim() === "") body.pop();
+      while (body.length > 0 && body[body.length - 1]!.trim() === "") body.pop();
       out.push({ type: "code", language: null, text: body.join("\n") });
       continue;
     }
 
     const paragraph: string[] = [];
     const paragraphSources: (readonly number[])[] = [];
-    while (index < lines.length && !isBlank(lines[index]) && !startsBlock(lines[index])) {
-      paragraph.push(lines[index]);
+    while (index < lines.length && !isBlank(lines[index]!) && !startsBlock(lines[index]!)) {
+      paragraph.push(lines[index]!);
       paragraphSources.push(sources?.[index] ?? []);
       index += 1;
     }
     // A `===` or `---` under a paragraph makes it a heading after the fact,
     // which is why the underline can only be recognised from here.
-    const underline = index < lines.length ? SETEXT.exec(lines[index]) : null;
+    const underline = index < lines.length ? SETEXT.exec(lines[index]!) : null;
     if (underline !== null && paragraph.length > 0) {
       index += 1;
       out.push({
         type: "heading",
-        level: underline[1][0] === "=" ? 1 : 2,
+        level: underline[1]![0] === "=" ? 1 : 2,
         children: parseInlineLines(paragraph, sources === undefined ? undefined : paragraphSources),
       });
       continue;

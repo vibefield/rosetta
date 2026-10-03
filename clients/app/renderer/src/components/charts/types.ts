@@ -19,7 +19,7 @@ export interface CalendarHeatmapWeekData {
   /** Stable key for the column, normally the week's opening date. */
   readonly id: string;
   /** Optional axis label displayed above this column. */
-  readonly label?: string;
+  readonly label?: string | undefined;
   /** Ordered cells within the week. The app supplies Sunday through Saturday. */
   readonly days: readonly CalendarHeatmapCellData[];
 }

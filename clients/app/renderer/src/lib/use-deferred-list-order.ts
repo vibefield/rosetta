@@ -67,13 +67,13 @@ export function useDeferredListOrder(desired: readonly ListPosition[], scope: st
     let high = elements.length;
     while (low < high) {
       const mid = (low + high) >>> 1;
-      const row = elements[mid];
+      const row = elements[mid]!;
       if (row.offsetTop + row.offsetHeight <= container.scrollTop) low = mid + 1;
       else high = mid;
     }
     const rows: { id: string; offset: number }[] = [];
     for (let index = low; index < Math.min(low + 3, elements.length); index++) {
-      const row = elements[index];
+      const row = elements[index]!;
       rows.push({ id: row.dataset.motionKey!, offset: row.offsetTop - container.scrollTop });
     }
     anchor.current = { scope, rows };

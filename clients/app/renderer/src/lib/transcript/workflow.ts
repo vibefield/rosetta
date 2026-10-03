@@ -8,7 +8,7 @@ import type {
   WorkflowRunStatus,
   WorkflowWorker,
 } from "@rosetta/protocol";
-import type { WorkflowAction } from "./families.ts";
+import type { WorkflowAction } from "./families";
 
 export interface WorkflowAttemptFact {
   readonly timelineId: string;

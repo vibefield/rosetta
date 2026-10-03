@@ -167,7 +167,7 @@ export function sampleActivity(previous: ActivitySamples | null, feed: ActivityF
   }
   if (at === last.at || feed.connectionError) return previous;
   const points = [...previous.points.filter((point) => at - point.at <= 8_000), { at, value: phase.current }];
-  const first = points[0];
+  const first = points[0]!;
   const changedAt = phase.current !== last.value ? at : previous.changedAt;
   const rate = at - first.at >= 1_000 && at - changedAt < 4_000
     ? (phase.current - first.value) * 1_000 / (at - first.at) : null;

@@ -183,22 +183,22 @@ export function moveSection(
 ): number {
   if (options.length === 0) return -1;
   const from = active < 0 ? 0 : Math.min(active, options.length - 1);
-  const current = options[from].session.id;
+  const current = options[from]!.session.id;
   if (direction === 1) {
     for (let i = from + 1; i < options.length; i += 1) {
-      if (options[i].session.id !== current) return i;
+      if (options[i]!.session.id !== current) return i;
     }
     return options.length - 1;
   }
   // Up: the head of this session if we are not already on it, else the
   // head of the session before.
   let head = from;
-  while (head > 0 && options[head - 1].session.id === current) head -= 1;
+  while (head > 0 && options[head - 1]!.session.id === current) head -= 1;
   if (head !== from) return head;
   if (head === 0) return 0;
-  const previous = options[head - 1].session.id;
+  const previous = options[head - 1]!.session.id;
   let start = head - 1;
-  while (start > 0 && options[start - 1].session.id === previous) start -= 1;
+  while (start > 0 && options[start - 1]!.session.id === previous) start -= 1;
   return start;
 }
 

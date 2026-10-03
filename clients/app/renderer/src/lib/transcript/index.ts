@@ -17,7 +17,7 @@ export type {
   ObjectPart,
   ObjectTone,
   ToolFamily,
-} from "./vocabulary.ts";
+} from "./vocabulary";
 export {
   FAMILY_CLASS,
   FAMILY_GLYPH,
@@ -38,7 +38,7 @@ export {
   spanText,
   splitPath,
   urlHost,
-} from "./vocabulary.ts";
+} from "./vocabulary";
 
 export type {
   CommandFact,
@@ -54,7 +54,7 @@ export type {
   TaskChange,
   WorkflowAction,
   WorkflowFact,
-} from "./families.ts";
+} from "./families";
 export {
   COMMAND_PREVIEW_CHARACTER_LIMIT,
   TASK_PREVIEW_LIMIT,
@@ -63,7 +63,7 @@ export {
   diffstatText,
   projectAction,
   taskDisplayRows,
-} from "./families.ts";
+} from "./families";
 
 export type {
   LedgerLine,
@@ -72,7 +72,7 @@ export type {
   RunNoun,
   RunOther,
   RunSummary,
-} from "./ledger.ts";
+} from "./ledger";
 export {
   FOLD_NAME_LIMIT,
   RUN_FOLD_THRESHOLD,
@@ -81,7 +81,7 @@ export {
   ledgerLines,
   linkedChildSessionIds,
   runSummary,
-} from "./ledger.ts";
+} from "./ledger";
 
 export type {
   AttachmentFact,
@@ -92,10 +92,10 @@ export type {
   ResponseHead,
   Segment,
   Turn,
-} from "./turns.ts";
-export { documentTurns, attachmentMentions, localSetting, readAttachments } from "./turns.ts";
+} from "./turns";
+export { documentTurns, attachmentMentions, localSetting, readAttachments } from "./turns";
 
-export type { DayEntry, Sitting } from "./sittings.ts";
+export type { DayEntry, Sitting } from "./sittings";
 export {
   PROMPT_CLUSTER_MS,
   SITTING_PAUSE_MS,
@@ -105,7 +105,7 @@ export {
   sittingDayLabel,
   sittings,
   withinPromptCluster,
-} from "./sittings.ts";
+} from "./sittings";
 
 export type {
   CollaborationStamp,
@@ -118,23 +118,23 @@ export type {
   TeamReportWork,
   TeamChronology,
   WorkerThreadLinks,
-} from "./collaboration.ts";
+} from "./collaboration";
 export {
   isWorkflowOwnedSession,
   standaloneWorkerSessions,
-} from "./collaboration.ts";
+} from "./collaboration";
 
 export type {
   WorkflowAttemptFact,
   WorkflowAttemptIndex,
   WorkflowRuntimeFact,
-} from "./workflow.ts";
+} from "./workflow";
 export {
   workflowAttemptIndex,
   workflowAttemptsFor,
   workflowRuntime,
   workflowWorkerState,
-} from "./workflow.ts";
+} from "./workflow";
 export {
   collaborationStamp,
   interleaveTeamCollaboration,
@@ -146,4 +146,4 @@ export {
   taskBoundedReportWork,
   teamSessionIds,
   workerThreadLinks,
-} from "./collaboration.ts";
+} from "./collaboration";

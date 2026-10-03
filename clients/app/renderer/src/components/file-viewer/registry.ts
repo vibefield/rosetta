@@ -182,7 +182,7 @@ export function imageKind(name: string, bytes?: Uint8Array): FileKind {
   if (kind.viewer.id === "image" || kind.viewer.id === "svg") return kind;
   const mime = bytes ? imageMediaTypeFromBytes(bytes) : null;
   if (mime === "image/svg+xml") return resolveKind("image.svg");
-  return { viewer: IMAGE, label: mime?.split("/")[1].toUpperCase() ?? "Image", language: null, mime };
+  return { viewer: IMAGE, label: mime?.split("/")[1]!.toUpperCase() ?? "Image", language: null, mime };
 }
 
 /**

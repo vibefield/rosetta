@@ -11,10 +11,10 @@ import type {
   SessionRow,
   TimelineEntry,
 } from "@rosetta/protocol";
-import type { LedgerLine } from "./ledger.ts";
-import { linkedChildSessionIds } from "./ledger.ts";
-import { canonicalText } from "./vocabulary.ts";
-import { withinHistoryWindow } from "./history-window.ts";
+import type { LedgerLine } from "./ledger";
+import { linkedChildSessionIds } from "./ledger";
+import { canonicalText } from "./vocabulary";
+import { withinHistoryWindow } from "./history-window";
 
 export type RuntimeProfileBasis = "observed" | "varies" | "configured" | "unknown";
 
@@ -452,14 +452,14 @@ export function teamChronology(
       at === null
         ? -1
         : retainedParent.findIndex((parent) => parent.at !== null && parent.at > at);
-    buckets[before === -1 ? retainedParent.length : before].push(row);
+    buckets[before === -1 ? retainedParent.length : before]!.push(row);
   }
 
   const merged: TimelineEntry[] = [];
   for (let at = 0; at < retainedParent.length; at += 1) {
-    merged.push(...buckets[at], retainedParent[at]);
+    merged.push(...buckets[at]!, retainedParent[at]!);
   }
-  merged.push(...buckets[retainedParent.length]);
+  merged.push(...buckets[retainedParent.length]!);
   return { rows: merged, duplicateRepresentatives };
 }
 

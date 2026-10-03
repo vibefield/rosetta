@@ -10,7 +10,7 @@
 //
 // Pure over the ordered entries' `at`. `now` is a parameter, never a clock read.
 import type { TimelineEntry } from "@rosetta/protocol";
-import { dayLabel } from "../format.ts";
+import { dayLabel } from "../format";
 
 /** A silence this long or longer means the reader left and came back. */
 export const SITTING_PAUSE_MS = 15 * 60_000;
@@ -138,7 +138,7 @@ export function sittings(rows: readonly TimelineEntry[], now = Date.now()): Sitt
     const startedAt = stamps.length === 0 ? null : Math.min(...stamps);
     const endedAt = stamps.length === 0 ? null : Math.max(...stamps);
     return {
-      key: sitting.rows[0].timeline_id,
+      key: sitting.rows[0]!.timeline_id,
       dayKey: startedAt === null ? null : calendarDayKey(startedAt),
       dayLabel: startedAt === null ? null : sittingDayLabel(startedAt, now),
       resumedAt: sitting.resumedAt,
@@ -183,7 +183,7 @@ export function dayList(list: readonly Sitting[]): DayEntry[] {
       });
       continue;
     }
-    const existing = days[seen];
+    const existing = days[seen]!;
     days[seen] = { ...existing, sittingCount: existing.sittingCount + 1 };
   }
   return days;

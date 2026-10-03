@@ -28,7 +28,7 @@ export function CodeView({ file }: ViewBodyProps) {
     const highlighted = highlight(source, file.kind.language ?? PLAIN_TEXT);
     // A file that ends in a newline is not a file with a blank last line;
     // every editor counts it the same way.
-    return highlighted.length > 1 && highlighted[highlighted.length - 1].length === 0
+    return highlighted.length > 1 && highlighted[highlighted.length - 1]!.length === 0
       ? highlighted.slice(0, -1)
       : highlighted;
   }, [file]);
@@ -71,7 +71,7 @@ export function CodeView({ file }: ViewBodyProps) {
             >
               <span className="ah-code__num">{row.index + 1}</span>
               <code>
-                {lines[row.index].map((token, at) =>
+                {lines[row.index]!.map((token, at) =>
                   token.kind === "plain" ? (
                     token.text
                   ) : (

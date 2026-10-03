@@ -272,7 +272,7 @@ export function pathParts(label: string): ObjectPart[] {
 /** The host of a url, for a source's caption and its icon's cache key. */
 export function urlHost(url: string): string {
   const match = /^(?:[a-z][a-z0-9+.-]*:\/\/)?([^/?#]+)/i.exec(url);
-  return match ? match[1].replace(/^www\./i, "") : url;
+  return match ? match[1]!.replace(/^www\./i, "") : url;
 }
 
 /** Inline text, or the preview a content-addressed member stands in for. */
@@ -282,7 +282,7 @@ export function canonicalText(text: CanonicalText): string {
 
 /** The first line, clamped — every ledger line is one line by construction. */
 export function firstLine(text: string, max = 120): string {
-  const line = text.split("\n", 1)[0].trim();
+  const line = text.split("\n", 1)[0]!.trim();
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 

@@ -15,7 +15,7 @@ export function MessagePreview({
   recordedText,
   matched = false,
   ...prose
-}: ProseProps & { readonly messageKey: string; readonly role: FullMessage["role"]; readonly title?: string; readonly recordedText?: FullMessage["recordedText"]; readonly matched?: boolean }) {
+}: ProseProps & { readonly messageKey: string; readonly role: FullMessage["role"]; readonly title?: string | undefined; readonly recordedText?: FullMessage["recordedText"] | undefined; readonly matched?: boolean | undefined }) {
   const openMessage = useContext(MessageViewerContext);
   const [matchedKey, setMatchedKey] = useState<string | null>(matched ? messageKey : null);
   useEffect(() => { if (matched) setMatchedKey(messageKey); }, [matched, messageKey]);

@@ -29,18 +29,18 @@ function finiteMagnitude(value: number | undefined): number {
 function createSmoothCurve(points: readonly Point[], initialCommand: "M" | "L"): string {
   if (points.length === 0) return "";
 
-  let path = `${initialCommand}${points[0][0].toFixed(1)} ${points[0][1].toFixed(1)}`;
+  let path = `${initialCommand}${points[0]![0].toFixed(1)} ${points[0]![1].toFixed(1)}`;
   for (let index = 0; index < points.length - 1; index += 1) {
-    const previous = points[index > 0 ? index - 1 : 0];
-    const current = points[index];
-    const next = points[index + 1];
+    const previous = points[index > 0 ? index - 1 : 0]!;
+    const current = points[index]!;
+    const next = points[index + 1]!;
     const following = points[index + 2] ?? next;
 
     path +=
       `C${(current[0] + (next[0] - previous[0]) / 6).toFixed(1)} ` +
       `${(current[1] + (next[1] - previous[1]) / 6).toFixed(1)},` +
-      `${(next[0] - (following[0] - current[0]) / 6).toFixed(1)} ` +
-      `${(next[1] - (following[1] - current[1]) / 6).toFixed(1)},` +
+      `${(next[0] - (following![0] - current[0]) / 6).toFixed(1)} ` +
+      `${(next[1] - (following![1] - current[1]) / 6).toFixed(1)},` +
       `${next[0].toFixed(1)} ${next[1].toFixed(1)}`;
   }
   return path;
@@ -57,13 +57,13 @@ function calculateWiggleBaseline(layers: readonly (readonly number[])[]): number
     let weightedSlope = 0;
 
     for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
-      const layer = layers[layerIndex];
-      const value = layer[sampleIndex];
-      let slope = (value - layer[sampleIndex - 1]) / 2;
+      const layer = layers[layerIndex]!;
+      const value = layer[sampleIndex]!;
+      let slope = (value - layer[sampleIndex - 1]!) / 2;
 
       for (let earlierLayerIndex = 0; earlierLayerIndex < layerIndex; earlierLayerIndex += 1) {
-        const earlierLayer = layers[earlierLayerIndex];
-        slope += earlierLayer[sampleIndex] - earlierLayer[sampleIndex - 1];
+        const earlierLayer = layers[earlierLayerIndex]!;
+        slope += earlierLayer[sampleIndex]! - earlierLayer[sampleIndex - 1]!;
       }
 
       totalAtSample += value;
@@ -71,7 +71,7 @@ function calculateWiggleBaseline(layers: readonly (readonly number[])[]): number
     }
 
     baseline.push(
-      baseline[sampleIndex - 1] -
+      baseline[sampleIndex - 1]! -
         (totalAtSample > 0 ? weightedSlope / totalAtSample : 0),
     );
   }
@@ -109,8 +109,8 @@ export function createStreamgraphLayout(
   const boundaries: number[][] = [baseline];
 
   for (const values of valuesByLayer) {
-    const previousBoundary = boundaries[boundaries.length - 1];
-    boundaries.push(previousBoundary.map((value, index) => value + values[index]));
+    const previousBoundary = boundaries[boundaries.length - 1]!;
+    boundaries.push(previousBoundary.map((value, index) => value + values[index]!));
   }
 
   let minimum = Number.POSITIVE_INFINITY;
@@ -130,11 +130,11 @@ export function createStreamgraphLayout(
     height - ((value - minimum) / span) * drawableHeight - padding;
 
   return layers.map((layer, layerIndex) => {
-    const upperPoints: Point[] = boundaries[layerIndex + 1].map((value, sampleIndex) => [
+    const upperPoints: Point[] = boundaries[layerIndex + 1]!.map((value, sampleIndex) => [
       xPosition(sampleIndex),
       yPosition(value),
     ]);
-    const lowerPoints: Point[] = boundaries[layerIndex]
+    const lowerPoints: Point[] = boundaries[layerIndex]!
       .map(
         (value, sampleIndex): Point => [xPosition(sampleIndex), yPosition(value)],
       )
@@ -144,7 +144,7 @@ export function createStreamgraphLayout(
       seriesId: layer.id,
       path: `${createSmoothCurve(upperPoints, "M")} ${createSmoothCurve(lowerPoints, "L")} Z`,
       samples: upperPoints.map(([x, upperY], index) => [
-        x, (upperY + yPosition(boundaries[layerIndex][index])) / 2,
+        x, (upperY + yPosition(boundaries[layerIndex]![index]!)) / 2,
       ] as const),
     };
   });

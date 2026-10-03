@@ -1,12 +1,12 @@
 // §04B — group the rendered chronology, after native ownership/deduplication.
 // Machine turn boundaries and response metadata are not conversation boundaries.
 import type { TimelineEntry } from "@rosetta/protocol";
-import type { LedgerLine } from "../../lib/transcript/ledger.ts";
-import { runSummary } from "../../lib/transcript/ledger.ts";
-import type { Prompt, ResponseHead, Segment } from "../../lib/transcript/turns.ts";
-import { collaborationStamp } from "../../lib/transcript/collaboration.ts";
-import { noticeText } from "../../lib/transcript/vocabulary.ts";
-import type { PlannedSitting } from "./document-plan.ts";
+import type { LedgerLine } from "../../lib/transcript/ledger";
+import { runSummary } from "../../lib/transcript/ledger";
+import type { Prompt, ResponseHead, Segment } from "../../lib/transcript/turns";
+import { collaborationStamp } from "../../lib/transcript/collaboration";
+import { noticeText } from "../../lib/transcript/vocabulary";
+import type { PlannedSitting } from "./document-plan";
 
 export type ActivityItem =
   | { readonly kind: "tool"; readonly key: string; readonly line: LedgerLine }
@@ -61,7 +61,7 @@ export function activityCuts(rows: readonly TimelineEntry[], watermark: number |
     const displayed = new Set(displayedRows.map(row => row.timeline_id));
     let next: string | null = null;
     for (let i = rows.length - 1; i >= 0; i -= 1) {
-      const id = rows[i].timeline_id;
+      const id = rows[i]!.timeline_id;
       if (displayed.has(id)) { next = id; continue; }
       const gap = gaps.get(id);
       if (gap !== undefined) {
@@ -89,7 +89,7 @@ export function activityPlan(plan: readonly PlannedSitting[], options: {
     const flush = () => {
       if (items.length === 0) return;
       const rows = items.flatMap(activityRows);
-      blocks.push({ kind: "activity", key: `activity:${activityRowKey(rows[0])}`, items, rows, partial, at: eventAt(rows[0]) });
+      blocks.push({ kind: "activity", key: `activity:${activityRowKey(rows[0]!)}`, items, rows, partial, at: eventAt(rows[0]!) });
       items = [];
       partial = false;
     };
@@ -115,7 +115,7 @@ export function activityPlan(plan: readonly PlannedSitting[], options: {
         (item.kind === "marker" && item.notice.type === "permission_requested");
       if (request) {
         flush();
-        blocks.push({ kind: "request", key: item.key, item, at: eventAt(rows[0]) });
+        blocks.push({ kind: "request", key: item.key, item, at: eventAt(rows[0]!) });
       } else {
         if ((firstContent || rows.some(row => options.gaps.has(row.timeline_id))) && options.partial) partial = true;
         items.push(item);
@@ -127,7 +127,7 @@ export function activityPlan(plan: readonly PlannedSitting[], options: {
       const flushPrompts = () => {
         if (human.length === 0) return;
         flush();
-        blocks.push({ kind: "prompt", key: human[0].key, prompts: human.splice(0), at: part.at });
+        blocks.push({ kind: "prompt", key: human[0]!.key, prompts: human.splice(0), at: part.at });
         firstContent = false;
       };
       for (const prompt of part.prompts) {
@@ -191,7 +191,7 @@ export function summarizeActivity(items: readonly ActivityItem[]): ActivitySumma
   const runningRows: TimelineEntry[] = [];
   const count = (name: string) => counts.set(name, (counts.get(name) ?? 0) + 1);
   for (const item of items) {
-    const row = activityRows(item)[0];
+    const row = activityRows(item)[0]!;
     if (item.kind === "tool") {
       if (item.line.state === "running") runningRows.push(...item.line.rows);
       interrupted += item.line.rows.filter(row => row.body.type === "tool_use" && row.body.tool.status.value === "interrupted").length;

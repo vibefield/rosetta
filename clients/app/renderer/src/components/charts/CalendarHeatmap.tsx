@@ -16,7 +16,7 @@ export interface CalendarHeatmapProps {
   readonly lowIntensityLabel?: string;
   readonly highIntensityLabel?: string;
   /** Supplying a selection handler enables keyboard and pointer inspection. */
-  readonly selectedDayId?: string;
+  readonly selectedDayId?: string | undefined;
   readonly onDaySelect?: (day: CalendarHeatmapCellData) => void;
   readonly onDayPreview?: (day: CalendarHeatmapCellData | null) => void;
   readonly dayMarkers?: Readonly<Record<string, "current" | "best" | "both">>;
@@ -122,7 +122,7 @@ export function CalendarHeatmap({
                         ? calendarDays.findIndex((entry) => entry.id === availableDays[0]?.id)
                         : event.key === "End"
                           ? calendarDays.findIndex((entry) => entry.id === availableDays.at(-1)?.id)
-                        : event.key in offsets ? index + offsets[event.key] : null;
+                        : event.key in offsets ? index + offsets[event.key]! : null;
                       if (targetIndex === null) return;
                       event.preventDefault();
                       const direction = targetIndex < index ? -1 : 1;

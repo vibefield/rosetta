@@ -31,7 +31,7 @@ export function messageExcerpt(
   const word = Math.max(prefix.lastIndexOf(" "), prefix.lastIndexOf("\t"));
   const boundary = [paragraph, line, word].find((at) => at >= end * 0.75);
   if (boundary !== undefined) end = boundary;
-  if (end > 0 && /[\uD800-\uDBFF]/.test(text[end - 1])) end -= 1;
+  if (end > 0 && /[\uD800-\uDBFF]/.test(text[end - 1]!)) end -= 1;
   let excerpt = text.slice(0, end).trimEnd();
   // Do not finish on a heading or an empty fence whose content is omitted.
   // Keep a heading-only introduction when it is all that fits.

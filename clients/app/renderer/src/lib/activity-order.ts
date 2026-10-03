@@ -1,5 +1,5 @@
 import type { SessionRow } from "@rosetta/protocol";
-import { sessionLastActive } from "./session-activity.ts";
+import { sessionLastActive } from "./session-activity";
 
 /** A quiet interval rearms promotion. Its expiry never changes the order. */
 export const ACTIVITY_QUIET_MS = 5 * 60_000;

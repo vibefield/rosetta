@@ -1,6 +1,6 @@
 // Markdown, parsed to a tree. See `types.ts` for why it is never a string.
 
-import { parseBlocks } from "./blocks.ts";
+import { parseBlocks } from "./blocks";
 import type { Block } from "./types";
 
 export type { Alignment, Block, Inline } from "./types";
@@ -25,7 +25,7 @@ export function parseMarkdown(text: string, trackSource = false): readonly Block
     } else {
       const value = char === "\t" ? "    " : char;
       line += value;
-      for (let j = 0; j < value.length; j += 1) positions.push(i);
+      for (let j = 0; j < value!.length; j += 1) positions.push(i);
     }
   }
   lines.push(line); sources.push(positions);

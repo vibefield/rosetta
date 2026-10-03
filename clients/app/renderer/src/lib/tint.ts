@@ -41,7 +41,7 @@ let seqs: SeqMap | null = null;
 /** Deal (or recall) the stored sequence number for a project id. */
 export function projectSeq(projectId: string): number {
   if (seqs === null) seqs = load();
-  if (projectId in seqs) return seqs[projectId];
+  if (projectId in seqs) return seqs[projectId]!;
   const used = Object.values(seqs);
   const next = used.length === 0 ? 0 : Math.max(...used) + 1;
   seqs[projectId] = next;

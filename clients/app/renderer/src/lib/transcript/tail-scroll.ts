@@ -1,4 +1,4 @@
-import { tailStep } from "./tail-state.ts";
+import { tailStep } from "./tail-state";
 
 export interface TailState {
   readonly away: boolean;

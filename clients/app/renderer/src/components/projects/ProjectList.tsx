@@ -17,7 +17,7 @@ export interface ProjectListProps {
   readonly currentTimestamp: number;
   /** A backfill is running: unfinished projects cook rather than lie. */
   readonly ingestActive: boolean;
-  readonly runtimes?: readonly RuntimeBackfill[];
+  readonly runtimes?: readonly RuntimeBackfill[] | undefined;
   /** The daemon's per-project backfill fold, keyed by project id. */
   readonly projectBackfills: ReadonlyMap<string, ProjectBackfill>;
   /** The list itself is still being censused — only the ready may claim

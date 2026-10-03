@@ -38,7 +38,7 @@ export function ProjectChartDialog({ initialView, usage, onClose, ...activity }:
       : event.key === "ArrowLeft" ? (index + VIEWS.length - 1) % VIEWS.length : null;
     if (nextIndex === null) return;
     event.preventDefault();
-    const next = VIEWS[nextIndex].value;
+    const next = VIEWS[nextIndex]!.value;
     selectView(next);
     tabs.current[next]?.focus();
   };

@@ -50,7 +50,7 @@ export function buildPathTree(paths: readonly string[]): readonly TreeRow[] {
       }
       current = next;
     }
-    current.files.push(segments[segments.length - 1]);
+    current.files.push(segments[segments.length - 1]!);
   }
 
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -66,7 +66,7 @@ export function buildPathTree(paths: readonly string[]): readonly TreeRow[] {
       let path = prefix === "" ? name : `${prefix}/${name}`;
       let inner = child;
       while (inner.files.length === 0 && inner.children.size === 1) {
-        const [onlyName, onlyChild] = [...inner.children.entries()][0];
+        const [onlyName, onlyChild] = [...inner.children.entries()][0]!;
         label = `${label}/${onlyName}`;
         path = `${path}/${onlyName}`;
         inner = onlyChild;

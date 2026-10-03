@@ -128,9 +128,9 @@ export function ActivityChartDetail({
               : "Activity will appear here when usage is recorded."}</p></div>
           <div className="ah-activity__daynav">
             <button type="button" aria-label="Previous recorded day" disabled={selectedIndex <= 0}
-              onClick={() => selectDay(availableDays[selectedIndex - 1])}>←</button>
+              onClick={() => selectDay(availableDays[selectedIndex - 1]!)}>←</button>
             <button type="button" aria-label="Next recorded day" disabled={selectedIndex < 0 || selectedIndex >= availableDays.length - 1}
-              onClick={() => selectDay(availableDays[selectedIndex + 1])}>→</button>
+              onClick={() => selectDay(availableDays[selectedIndex + 1]!)}>→</button>
           </div>
         </div>
         {!selectedDay ? <div className="ah-activity__empty">Choose a recorded day in the calendar to explore it.</div>

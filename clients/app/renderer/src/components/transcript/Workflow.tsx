@@ -59,7 +59,7 @@ function workerUsage(worker: WorkflowWorker): string | null {
 function friendlyModel(model: string): string {
   const match = /^claude-(opus|sonnet|haiku)-(\d+)(?:[-.](\d+))?(?:-|$)/i.exec(model);
   if (match === null) return model;
-  const family = match[1][0].toUpperCase() + match[1].slice(1).toLowerCase();
+  const family = match[1]![0]!.toUpperCase() + match[1]!.slice(1).toLowerCase();
   return `${family} ${match[2]}${match[3] === undefined ? "" : `.${match[3]}`}`;
 }
 
@@ -333,7 +333,7 @@ function Result({
   onOpenPath,
 }: {
   readonly fact: WorkflowFact;
-  readonly onOpenPath?: (path: PathFact) => void;
+  readonly onOpenPath?: ((path: PathFact) => void) | undefined;
 }) {
   const run = fact.action.run ?? null;
   const canonical = run?.result ?? fact.action.callback_result ?? null;
@@ -402,7 +402,7 @@ export function WorkflowDetail({
   readonly fact: WorkflowFact;
   readonly attempts: readonly WorkflowAttemptFact[];
   readonly children: readonly WorkflowChildThread[];
-  readonly onOpenPath?: (path: PathFact) => void;
+  readonly onOpenPath?: ((path: PathFact) => void) | undefined;
 }) {
   const run = fact.action.run ?? null;
   const childMap = new Map(childThreads.map((child) => [child.childSessionId, child.node]));

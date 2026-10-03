@@ -158,7 +158,7 @@ export function TeamInvocation({
   highlightedTimelineId,
   focusTimelineId,
 }: TeamInvocationProps) {
-  const first = members[0];
+  const first = members[0]!;
   const isRoster = first.operation === "start" || first.operation === "known";
   const forceOpen =
     isRoster && members.some((member) => member.row.timeline_id === focusTimelineId || member.row.timeline_id === highlightedTimelineId);

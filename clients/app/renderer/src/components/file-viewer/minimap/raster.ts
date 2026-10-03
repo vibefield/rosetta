@@ -3,7 +3,7 @@
 // the DOM, so node:test can exercise the exact renderer without a browser.
 
 import type { TokenKind, TokenLine } from "../syntax";
-import { MINIMAP_ROW_DEVICE_PIXELS } from "./layout.ts";
+import { MINIMAP_ROW_DEVICE_PIXELS } from "./layout";
 
 export const MINIMAP_CHARACTER_DEVICE_PIXELS = 1;
 export const MINIMAP_CHARACTER_HEIGHT_DEVICE_PIXELS = 2;
@@ -163,7 +163,7 @@ export function rasterizeMinimap(args: {
 
   for (let row = 0; row < rowCount; row += 1) {
     const lineIndex = args.lineIndexes === null ? row : args.lineIndexes[row];
-    const line = args.lines[lineIndex];
+    const line = args.lines[lineIndex!];
     if (line === undefined) continue;
     rasterLine(
       args.pixels,

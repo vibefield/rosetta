@@ -95,7 +95,7 @@ export function tokenizeConfig(text: string): readonly Token[] {
 
     // Whatever is left of the line is a value.
     while (index < line.length) {
-      const char = line[index];
+      const char = line[index]!;
       if (char === "#" && (index === 0 || /[ \t]/.test(line[index - 1] ?? " "))) {
         emit("comment", line.slice(index));
         break;

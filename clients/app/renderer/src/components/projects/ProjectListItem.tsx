@@ -53,7 +53,7 @@ export interface ProjectListItemProps {
   readonly currentTimestamp: number;
   /** Canonical publication is still pending, so aggregate figures wait. */
   readonly ingestActive: boolean;
-  readonly runtimeStates?: readonly BackfillState[];
+  readonly runtimeStates?: readonly BackfillState[] | undefined;
   /** This project's row in the daemon's per-project backfill fold; null
    * before the plan settles, and on a daemon too old to carry it. */
   readonly backfill: ProjectBackfill | null;
