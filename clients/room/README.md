@@ -58,9 +58,25 @@ portal; their sizes are percentages of what holds them) · `edgeInset`,
 `scrollFoot`, `floatingFoot` · `onSelect` (the selected session's id, native id
 and folder, on mount and on every change) · `storagePrefix` and `storage` ·
 `initialSummaryTab` · `unavailable` and `consent` (the host's words and its
-consent screen) · `search` (the room's own strip and sheet, with the host
-owning the open state; absent, neither is drawn). The ref handle offers
-`openAt({ sessionId, timelineId? })` and `stepMatch(delta)`.
+consent screen) · `emptyPrompt` (the empty transcript's sentence in the host's
+words; absent, the room's own, below) · `search` (the room's own strip and
+sheet, with the host owning the open state; absent, neither is drawn). The ref
+handle offers `openAt({ sessionId, timelineId? })` and `stepMatch(delta)`.
+
+**The search key is the host's (RO-14).** The room binds no key of its own:
+the host's window opens the sheet (rosetta's app binds ⌘K, Ctrl K off a Mac,
+and `/`). So the room prints only a key the host says it binds.
+`search.shortcut` decides the legend:
+
+| `search.shortcut` | The launcher prints | The empty transcript says |
+|---|---|---|
+| absent | the room's own label, ⌘K (Ctrl K off a Mac) | "Pick a session — or press ⌘K to search, which is the front door." |
+| `{ label }` | `label`, as given | the same sentence with `label` |
+| `null` (the host binds no key) | no legend | "Pick a session." |
+
+With no `search` at all there is no launcher and the sentence is "Pick a
+session." A host whose own search has a key of its own (VibeField's Peek)
+names it in `emptyPrompt`.
 
 ## What the package never does
 

@@ -112,6 +112,9 @@ function Fixture() {
     onSelect={(selection) => log.selections.push(selection)}
     {...(name === "sized" ? { edgeInset: { top: 12, right: 8, bottom: 8, left: 8 }, scrollFoot: "48px", floatingFoot: "40px" } : {})}
     {...(name === "search" || name === "prefixed" ? { search: { open: sheetOpen, onOpenChange: setSheetOpen, accessory: <span data-accessory="">host</span> } } : {})}
+    {...(name === "search-unbound" ? { search: { open: sheetOpen, onOpenChange: setSheetOpen, shortcut: null } } : {})}
+    {...(name === "search-host-key" ? { search: { open: sheetOpen, onOpenChange: setSheetOpen, shortcut: { label: "⌥Space" } } } : {})}
+    {...(name === "worded" ? { emptyPrompt: <span data-host-prompt="">Find one from the Peek.</span> } : {})}
     {...(name === "prefixed" ? { storagePrefix: "vf.history.", storage: recordingStore } : {})}
     {...(name === "disconnected" ? { unavailable: <span data-host-words="">The index is resting.</span> } : {})}
     {...(name === "consent" ? { consent: <div data-consent="">Choose your agents</div> } : {})}

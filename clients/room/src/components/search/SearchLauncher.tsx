@@ -6,18 +6,20 @@
 // look like an unfiltered one (design record §09: the scope of a search is
 // not the reader's to guess).
 import { SearchGlyph } from "../../lib/icons";
-import { shortcutLabel } from "./shortcut";
 
 export interface SearchLauncherProps {
   /** The remembered query, or "" when nothing is being searched. */
   readonly query: string;
   /** The honest scope, e.g. `Search 6,720 sessions across 9 agents`. */
   readonly placeholder: string;
+  /** The key the host binds to open the sheet, as printed (`searchKeyLegend`);
+   * null prints none — the room never names a key the host does not bind. */
+  readonly shortcut: string | null;
   readonly onOpen: () => void;
   readonly onClear: () => void;
 }
 
-export function SearchLauncher({ query, placeholder, onOpen, onClear }: SearchLauncherProps) {
+export function SearchLauncher({ query, placeholder, shortcut, onOpen, onClear }: SearchLauncherProps) {
   const active = query !== "";
   return (
     <div className="ah-launcher" data-active={active || undefined}>
@@ -31,9 +33,11 @@ export function SearchLauncher({ query, placeholder, onOpen, onClear }: SearchLa
       >
         <SearchGlyph />
         <span className="ah-launcher__text">{active ? query : placeholder}</span>
-        <kbd className="ah-kbd" aria-hidden="true">
-          {shortcutLabel("K")}
-        </kbd>
+        {shortcut !== null && (
+          <kbd className="ah-kbd" aria-hidden="true">
+            {shortcut}
+          </kbd>
+        )}
       </button>
       {active && (
         <button

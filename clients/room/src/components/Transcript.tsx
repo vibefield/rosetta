@@ -13,6 +13,7 @@
 // relative to the session's cwd, then home-relative — never the eleven leading
 // characters that are the same on every line).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type {
   SessionRow,
   TimelineMetaArtifact,
@@ -110,6 +111,9 @@ export interface TranscriptColumnProps {
   readonly focus: ThreadFocus | null;
   readonly onFocusConsumed: () => void;
   readonly onReceipt: (text: string) => void;
+  /** The sentence under "No session open": the host's, or the room's own,
+   * which names a search key only when the host binds one (RO-14). */
+  readonly emptyPrompt: ReactNode;
   /** The search sheet's tail: this session's matches, walked from the head. */
   readonly stepper: MatchStepperState | null;
   readonly onStepMatch: (delta: 1 | -1) => void;
@@ -140,6 +144,7 @@ function SessionTranscript({
   focus,
   onFocusConsumed,
   onReceipt,
+  emptyPrompt,
   stepper,
   onStepMatch,
   onDismissStepper,
@@ -510,10 +515,7 @@ function SessionTranscript({
             child of the scroller: `useHeadOfDocument` writes `--frost` here. */}
         <TopFade />
         {session === null ? (
-          <EmptyState
-            title="No session open"
-            description="Pick a session — or press ⌘K to search, which is the front door."
-          />
+          <EmptyState title="No session open" description={emptyPrompt} />
         ) : (
           <div className="tr-col">
             <div className="tr">

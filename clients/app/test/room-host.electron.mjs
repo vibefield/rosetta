@@ -44,6 +44,8 @@ async function run() {
     await until(() => document.querySelectorAll('.ah-project-list-item').length === 6, 'projects through the catalog port');
     assert.equal(await check(() => document.querySelector('.ah-searchbar')), null, 'no strip without the search option');
     assert.equal(await check(() => document.querySelector('[data-ah-sheet]')), null, 'no sheet without the search option');
+    // RO-14: and the empty transcript names no key the host does not bind.
+    assert.equal(await check(() => document.querySelector('.tr-scroll .ah-empty p')?.textContent), 'Pick a session.', 'no search, no key named');
     await click('.ah-project-list-item[data-motion-key="p0"]');
     await until(() => document.querySelectorAll('.ah-session-list-item').length === 8, 'the project\'s sessions');
     await click('.ah-session-list-item[data-motion-key="s0"]');
@@ -212,6 +214,28 @@ async function run() {
     await mount('search');
     await until(() => document.querySelector('.ah-searchbar .ah-launcher'), 'the launcher in the strip');
     assert.equal(await check(() => document.querySelector('.ah-searchbar [data-accessory]')?.textContent), 'host');
+    // RO-14: with no word about its key, the room prints its own label for the
+    // key rosetta's app binds, and the empty transcript names that same key.
+    await until(() => document.querySelector('.tr-scroll .ah-empty p'), 'the empty transcript with search');
+    const ownKey = await check(() => document.querySelector('.ah-launcher .ah-kbd')?.textContent);
+    assert.ok(ownKey === '⌘K' || ownKey === 'Ctrl K', `the room's own label: ${ownKey}`);
+    assert.equal(await check(() => document.querySelector('.tr-scroll .ah-empty p').textContent),
+      `Pick a session — or press ${ownKey} to search, which is the front door.`, 'the sentence names the printed key');
+    // A host that binds no key: no legend on the launcher, none in the sentence.
+    await mount('search-unbound');
+    await until(() => document.querySelector('.ah-searchbar .ah-launcher') && document.querySelector('.tr-scroll .ah-empty p'), 'the strip, unbound');
+    assert.equal(await check(() => document.querySelector('.ah-launcher .ah-kbd')), null, 'no legend for a key nobody binds');
+    assert.equal(await check(() => document.querySelector('.tr-scroll .ah-empty p').textContent), 'Pick a session.');
+    // A host that binds its own key: the room prints the host's label, as given.
+    await mount('search-host-key');
+    await until(() => document.querySelector('.ah-launcher .ah-kbd') && document.querySelector('.tr-scroll .ah-empty p'), 'the strip, the host\'s key');
+    assert.equal(await check(() => document.querySelector('.ah-launcher .ah-kbd').textContent), '⌥Space');
+    assert.equal(await check(() => document.querySelector('.tr-scroll .ah-empty p').textContent),
+      'Pick a session — or press ⌥Space to search, which is the front door.');
+    // A host's own sentence stands in for the room's.
+    await mount('worded');
+    await until(() => document.querySelector('.tr-scroll .ah-empty [data-host-prompt]'), 'the host\'s sentence');
+    assert.equal(await check(() => document.querySelector('.tr-scroll .ah-empty p').textContent), 'Find one from the Peek.');
 
     // A catalog that cannot answer: the room's title, the host's words.
     await mount('disconnected');
@@ -226,7 +250,7 @@ async function run() {
 
     writeFileSync(path.join(temporary, 'room.png'), (await win.webContents.capturePage()).toPNG());
     assert.deepEqual(errors, []);
-    console.log(`PASS: the room behind its ports on the demo set — catalog and one session open, every image through the asset source, the overlay mark, its own tokens, no host's honest faces, a host without an engine, a host's surface and container, openAt and the selection, the host's inset and feet, the guest by the room's width, the storage prefix, a fetching and a refusing source, the search option, unavailable words, consent. Screenshot: ${temporary}/room.png`);
+    console.log(`PASS: the room behind its ports on the demo set — catalog and one session open, every image through the asset source, the overlay mark, its own tokens, no host's honest faces, a host without an engine, a host's surface and container, openAt and the selection, the host's inset and feet, the guest by the room's width, the storage prefix, a fetching and a refusing source, the search option, the search key only as the host binds it (RO-14), unavailable words, consent. Screenshot: ${temporary}/room.png`);
   } catch (error) {
     console.error(error);
     process.exitCode = 1;

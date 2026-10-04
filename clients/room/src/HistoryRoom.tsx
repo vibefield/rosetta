@@ -26,7 +26,8 @@ import type { SummaryTab } from "./room-context";
 import { ColdStartPanel } from "./components/ColdStart";
 import { ProjectsColumn } from "./components/projects";
 import type { ProjectSort } from "./components/projects";
-import { SearchLauncher, SearchSheet } from "./components/search";
+import { SearchLauncher, SearchSheet, emptyTranscriptPrompt, searchKeyLegend } from "./components/search";
+import type { SearchShortcut } from "./components/search";
 import { SessionsColumn } from "./components/sessions";
 import type { SessionFacts } from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
@@ -103,6 +104,12 @@ export interface HistoryRoomSearch {
   readonly initialQuery?: string | undefined;
   /** Drawn at the strip's end, after the launcher. */
   readonly accessory?: ReactNode;
+  /** The key the host binds to open the sheet, as the room prints it (the
+   * room binds none itself — `open` is the host's). Absent: the room's own
+   * label for ⌘K (Ctrl K off a Mac), the key rosetta's app binds. A label:
+   * that label, printed as given. null: the host binds no key, so the
+   * launcher prints no legend and the empty transcript names none. */
+  readonly shortcut?: SearchShortcut;
 }
 
 export interface HistoryRoomProps extends RoomPorts {
@@ -130,6 +137,11 @@ export interface HistoryRoomProps extends RoomPorts {
   /** What the room shows while the index waits for consent to read anything.
    * Absent: the room says it is waiting. */
   readonly consent?: ReactNode;
+  /** The empty transcript's sentence, in the host's words (a host whose own
+   * search has its own key names it here). Absent: the room's own sentence,
+   * which names a key only when the launcher prints one — "Pick a session."
+   * with no `search` or with `search.shortcut` null. */
+  readonly emptyPrompt?: ReactNode;
   /** The selected session, or null — on mount and on every change. */
   readonly onSelect?: ((selection: RoomSelection | null) => void) | undefined;
   /** Edges kept clear inside the room's frame for the host's chrome. */
@@ -227,6 +239,7 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
         search={props.search ?? null}
         unavailable={props.unavailable ?? null}
         consent={props.consent ?? null}
+        emptyPrompt={props.emptyPrompt}
         onSelect={props.onSelect}
         frameStyle={{
           ...insetStyle(props.edgeInset),
@@ -244,6 +257,7 @@ function RoomBody({
   search: searchOption,
   unavailable,
   consent,
+  emptyPrompt,
   onSelect,
   frameStyle,
 }: {
@@ -252,6 +266,8 @@ function RoomBody({
   readonly search: HistoryRoomSearch | null;
   readonly unavailable: ReactNode;
   readonly consent: ReactNode;
+  /** undefined: the room's own sentence. */
+  readonly emptyPrompt: ReactNode;
   readonly onSelect: ((selection: RoomSelection | null) => void) | undefined;
   readonly frameStyle: CSSProperties;
 }) {
@@ -274,6 +290,9 @@ function RoomBody({
     canonicalReady !== true || ingestActive, nowMs,
   );
   const [query, setQuery] = useState(() => searchOption?.initialQuery ?? "");
+  // The key the launcher prints and the empty transcript names: only one the
+  // host binds (RO-14).
+  const searchKey = searchKeyLegend(searchOption);
   const sheetOpen = searchOption?.open ?? false;
   const setSheetOpen = (open: boolean) => searchOption?.onOpenChange(open);
   const [filters, setFilters] = useState<SearchFilters>(DEFAULT_SEARCH_FILTERS);
@@ -587,6 +606,7 @@ function RoomBody({
             <SearchLauncher
               query={search.query}
               placeholder={launcherPlaceholder}
+              shortcut={searchKey}
               onOpen={() => setSheetOpen(true)}
               onClear={clearSearch}
             />
@@ -672,6 +692,7 @@ function RoomBody({
               focus={focus}
               onFocusConsumed={() => setFocus(null)}
               onReceipt={showReceipt}
+              emptyPrompt={emptyPrompt === undefined ? emptyTranscriptPrompt(searchKey) : emptyPrompt}
               stepper={stepperState}
               onStepMatch={stepMatch}
               onDismissStepper={() => setStepper(null)}

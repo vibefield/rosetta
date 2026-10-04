@@ -4,4 +4,5 @@ export { SearchLauncher } from "./SearchLauncher";
 export type { SearchLauncherProps } from "./SearchLauncher";
 export { MatchStepper } from "./MatchStepper";
 export type { MatchStepperProps } from "./MatchStepper";
-export { hasPrimaryModifier, shortcutLabel } from "./shortcut";
+export { emptyTranscriptPrompt, hasPrimaryModifier, searchKeyLegend, shortcutLabel } from "./shortcut";
+export type { SearchShortcut } from "./shortcut";
