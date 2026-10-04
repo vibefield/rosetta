@@ -24,6 +24,11 @@ pub const MIN_GRANT_KEY_BYTES: usize = 32;
 pub const MAX_GRANT_BYTES: usize = 4096;
 /// The scope every grant-openable route needs.
 pub const SCOPE_READ: &str = "read";
+/// The recorded-file read (`/read/{target_index}`), which reads a file from
+/// the daemon's disk by the transcript's reference — more than the
+/// transcript, so it is minted separately. The file route needs it beside
+/// [`SCOPE_READ`]; no other route reads it (docs/AUTH.md §5.4).
+pub const SCOPE_FILES: &str = "files";
 /// JavaScript's `Number.MAX_SAFE_INTEGER`: an expiry past it has no exact
 /// canonical spelling on the TypeScript side, so it is malformed here.
 const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
@@ -39,8 +44,9 @@ pub struct GrantClaims {
     pub cid: String,
     /// Expiry in Unix milliseconds; the grant is refused once `exp <= now`.
     pub exp: i64,
-    /// What the grant may do. Routes need [`SCOPE_READ`]; unknown entries
-    /// are carried and ignored.
+    /// What the grant may do. Routes need [`SCOPE_READ`]; the recorded-file
+    /// route needs [`SCOPE_FILES`] as well. Unknown entries are carried and
+    /// ignored.
     pub scope: Vec<String>,
     /// The canonical session id this grant opens.
     pub sid: String,

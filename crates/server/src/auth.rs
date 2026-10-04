@@ -28,7 +28,7 @@ use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-use crate::grant::{self, GrantError, SCOPE_READ};
+use crate::grant::{self, GrantError, SCOPE_FILES, SCOPE_READ};
 
 /// The WebSocket subprotocol a credentialed WebSocket client offers beside
 /// its credential entry. The daemon selects it, so a browser's handshake
@@ -51,9 +51,9 @@ pub const MAX_CREDENTIAL_BYTES: usize = 4096;
 
 /// The session routes a grant can open, by router template. An allow-list:
 /// a route added later needs the bearer until someone decides otherwise.
-/// Deliberately absent: the lists, search, `/ws/meta`, status, the writes,
-/// and the recorded-file route, which reads the file on disk NOW rather than
-/// recorded history.
+/// Deliberately absent: the lists, search, `/ws/meta`, status and the writes.
+/// The recorded-file route is not here either: it is [`GRANT_FILE_ROUTE`],
+/// which needs a second scope.
 pub const GRANT_SESSION_ROUTES: [&str; 10] = [
     "/ws/sessions/{id}",
     "/ws/collaboration/{id}",
@@ -69,6 +69,12 @@ pub const GRANT_SESSION_ROUTES: [&str; 10] = [
 /// Content-addressed transcript images. Any live read grant opens them: the
 /// URL is learned from a timeline, and its digest names bytes, not a session.
 pub const GRANT_ASSET_ROUTE: &str = "/api/assets/{name}";
+/// The recorded-file read (RO-13). It reads a file from the daemon's disk by
+/// the transcript's reference — the file as it is NOW, which is more than the
+/// recorded transcript — so a grant opens it only for its own session and only
+/// when it carries [`SCOPE_FILES`] beside [`SCOPE_READ`]. The minter decides
+/// who holds that scope; a read-only grant here is `wrong-scope`.
+pub const GRANT_FILE_ROUTE: &str = "/api/sessions/{id}/timeline/{timeline_id}/read/{target_index}";
 
 /// Why a request was refused a 401. The spelling is the wire vocabulary of
 /// the [`REASON_HEADER`] header.
@@ -284,11 +290,13 @@ impl AuthPolicy {
         };
         let verdict = if claims.exp <= now_ms {
             Err(Refusal::Expired)
-        } else if let Reach::Session(id) = reach
+        } else if let Some(id) = reach.session()
             && claims.sid != id
         {
             Err(Refusal::WrongSession)
-        } else if !claims.allows(SCOPE_READ) {
+        } else if !claims.allows(SCOPE_READ)
+            || (matches!(reach, Reach::SessionFiles(_)) && !claims.allows(SCOPE_FILES))
+        {
             Err(Refusal::WrongScope)
         } else {
             Ok(())
@@ -380,8 +388,22 @@ fn local_origin(origin: &HeaderValue) -> bool {
 }
 
 enum Reach<'a> {
+    /// One of [`GRANT_SESSION_ROUTES`]: the grant's `sid` must be `id`.
     Session(&'a str),
+    /// [`GRANT_FILE_ROUTE`]: as a session route, and the grant must also
+    /// carry [`SCOPE_FILES`].
+    SessionFiles(&'a str),
     Asset,
+}
+
+impl<'a> Reach<'a> {
+    /// The session the route names, when it names one.
+    fn session(&self) -> Option<&'a str> {
+        match *self {
+            Reach::Session(id) | Reach::SessionFiles(id) => Some(id),
+            Reach::Asset => None,
+        }
+    }
 }
 
 /// What a grant could open on this request, if anything: a read (GET/HEAD)
@@ -398,13 +420,19 @@ fn grant_reach<'a>(
     if route == GRANT_ASSET_ROUTE {
         return Some(Reach::Asset);
     }
-    if !GRANT_SESSION_ROUTES.contains(&route) {
+    let files = route == GRANT_FILE_ROUTE;
+    if !files && !GRANT_SESSION_ROUTES.contains(&route) {
         return None;
     }
-    params?
+    let id = params?
         .iter()
         .find(|(name, _)| *name == "id")
-        .map(|(_, id)| Reach::Session(id))
+        .map(|(_, id)| id)?;
+    Some(if files {
+        Reach::SessionFiles(id)
+    } else {
+        Reach::Session(id)
+    })
 }
 
 enum Credential<'a> {

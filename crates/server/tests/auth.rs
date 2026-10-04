@@ -1,7 +1,8 @@
 //! Access control against a real bound server (docs/AUTH.md): the bearer on
 //! every REST route and WebSocket upgrade, per-session grants in place of it,
-//! the Origin rule as a browser guard that never stands in for a credential,
-//! and the token-less daemon exactly as it was.
+//! the recorded-file read under a grant that carries `files` (RO-13), the
+//! Origin rule as a browser guard that never stands in for a credential, and
+//! the token-less daemon exactly as it was.
 
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
@@ -16,13 +17,17 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
-use rosetta_core::IngestOp;
 use rosetta_core::rows::{
     MessageKind, MessageRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState,
 };
+use rosetta_core::timeline::{ReadTarget, ResourceRef};
+use rosetta_core::{
+    CorrelationDerivation, IngestOp, NativeToolRef, StatusBasis, ToolAction, ToolCorrelation,
+    ToolInteraction, ToolStatus, ToolStatusFact,
+};
 use rosetta_search::{Fts5SidecarSearch, synchronize_fts5_once};
-use rosetta_server::auth::{GRANT_ASSET_ROUTE, GRANT_SESSION_ROUTES};
-use rosetta_server::grant::{self, GrantClaims};
+use rosetta_server::auth::{GRANT_ASSET_ROUTE, GRANT_FILE_ROUTE, GRANT_SESSION_ROUTES};
+use rosetta_server::grant::{self, GrantClaims, SCOPE_FILES, SCOPE_READ};
 use rosetta_server::{AppState, AuthPolicy, GrantEvent, Hub, HubConfig, Refusal, router};
 use rosetta_store::{Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, queries};
 use tempfile::TempDir;
@@ -31,6 +36,10 @@ const TOKEN: &str = "rosetta-test-bearer-0123456789abcdef";
 const KEY: [u8; 32] = *b"grant key: thirty-two bytes long";
 const SHELL: &str = "vibefield-app://shell";
 const FOREIGN: &str = "https://evil.example";
+/// The bytes of the one file s1's transcript records reading (RO-13).
+const RECORDED_FILE: &str = "pub fn recorded() -> u8 {\n    42\n}\n";
+/// s1's recorded read, by the route the room asks it through.
+const FILE_PATH: &str = "/api/sessions/s1/timeline/t-read/read/0";
 
 fn session(id: &str) -> SessionRow {
     SessionRow {
@@ -79,6 +88,48 @@ fn message(content: &str) -> MessageRow {
     }
 }
 
+/// s1's tool row that read `path`: the transcript names the file, and the
+/// file route reads it from disk by that name (never by one the caller sends).
+fn recorded_read(path: &std::path::Path) -> MessageRow {
+    MessageRow {
+        timeline_id: "t-read".into(),
+        ordinal: 1,
+        kind: MessageKind::ToolUse,
+        content: None,
+        tool: Some(ToolInteraction {
+            attachments: Vec::new(),
+            correlation: ToolCorrelation {
+                key: "tool-read".into(),
+                derivation: CorrelationDerivation::NativeId,
+            },
+            native: NativeToolRef {
+                id: Some("tool-read".into()),
+                namespace: None,
+                name: "Read".into(),
+                provider: None,
+            },
+            status: ToolStatusFact {
+                value: ToolStatus::Succeeded,
+                basis: StatusBasis::NativeTerminalRecord,
+            },
+            action: ToolAction::FileRead {
+                targets: vec![ReadTarget {
+                    resource: ResourceRef::File {
+                        path: path.to_string_lossy().into_owned(),
+                        resolved: true,
+                    },
+                    range: None,
+                    media_kind: None,
+                }],
+                outcome: None,
+            },
+            failure: None,
+            timing: None,
+        }),
+        ..message("")
+    }
+}
+
 struct Server {
     addr: SocketAddr,
     task: tokio::task::JoinHandle<()>,
@@ -92,10 +143,12 @@ impl Drop for Server {
     }
 }
 
-/// Two sessions (s1 with one message, s2 empty), served under `policy` on a
-/// real loopback listener.
+/// Two sessions (s1 with one message and one recorded file read, s2 empty),
+/// served under `policy` on a real loopback listener.
 async fn serve(policy: AuthPolicy) -> Server {
     let dir = TempDir::new().unwrap();
+    let recorded = dir.path().join("recorded.rs");
+    std::fs::write(&recorded, RECORDED_FILE).unwrap();
     let db = dir.path().join("projection.sqlite");
     let mut store = Store::open(&db).unwrap();
     store.observe_effects();
@@ -142,7 +195,10 @@ async fn serve(policy: AuthPolicy) -> Server {
         .id;
     store
         .apply(&Batch {
-            ops: IngestOp::project_message(message("hello from s1")),
+            ops: [message("hello from s1"), recorded_read(&recorded)]
+                .into_iter()
+                .flat_map(IngestOp::project_message)
+                .collect(),
             checkpoints: vec![],
             source: Some(SourceWrite {
                 cursor_id: cursor,
@@ -196,6 +252,17 @@ fn grant_for(sid: &str) -> String {
     grant::mint(
         &KEY,
         &GrantClaims::read(sid, "fieldd/w1", now_ms() + 60_000),
+    )
+}
+
+/// A grant whose holder may also read the session's recorded files.
+fn files_grant_for(sid: &str) -> String {
+    grant::mint(
+        &KEY,
+        &GrantClaims {
+            scope: vec![SCOPE_READ.into(), SCOPE_FILES.into()],
+            ..GrantClaims::read(sid, "fieldd/w1", now_ms() + 60_000)
+        },
     )
 }
 
@@ -583,8 +650,8 @@ async fn a_grant_opens_its_own_session_and_nothing_else() {
             "{path}"
         );
     }
-    // Routes a grant never opens: lists, search, meta, status, the live file
-    // read — even for its own session — and writes.
+    // Routes a grant never opens: lists, search, meta, status, the project
+    // aggregates and writes.
     for path in [
         "/api/status",
         "/api/runtimes",
@@ -592,12 +659,15 @@ async fn a_grant_opens_its_own_session_and_nothing_else() {
         "/api/sessions",
         "/api/search?q=hello",
         "/api/search?q=hello&session=s1",
-        "/api/sessions/s1/timeline/t1/read/0",
         "/api/projects/p1/heatmap",
     ] {
         let reply = server.get(path, &[("authorization", &header)]).await;
         assert_eq!(reply.refusal(), (401, Some("wrong-route")), "{path}");
     }
+    // The recorded-file read is its session's route with a second scope
+    // (RO-13): a read grant reaches it and lacks the scope.
+    let file = server.get(FILE_PATH, &[("authorization", &header)]).await;
+    assert_eq!(file.refusal(), (401, Some("wrong-scope")));
     assert_eq!(
         server
             .ws("/ws/meta", &[("authorization", &header)])
@@ -631,6 +701,89 @@ async fn a_grant_opens_its_own_session_and_nothing_else() {
             .map(|(status, _)| status),
         Some(403)
     );
+}
+
+#[tokio::test]
+async fn a_files_grant_reads_its_own_sessions_recorded_file_and_nothing_more() {
+    let server = serve(policy()).await;
+    // The bearer reads it, as it always has.
+    let by_bearer = server.get(FILE_PATH, &[("authorization", &bearer())]).await;
+    assert_eq!(by_bearer.status, 200, "{by_bearer:?}");
+    assert_eq!(by_bearer.body, RECORDED_FILE);
+    // A grant for the session that carries `files` beside `read` reads the
+    // same bytes, by the transcript's reference.
+    let files = authorization(&files_grant_for("s1"));
+    let read = server.get(FILE_PATH, &[("authorization", &files)]).await;
+    assert_eq!(read.status, 200, "{read:?}");
+    assert_eq!(read.body, RECORDED_FILE);
+    assert_eq!(read.header("cache-control"), Some("no-store"));
+    // A target the row does not record is the handler's honest 404, past the
+    // credential check.
+    let unrecorded = server
+        .get(
+            "/api/sessions/s1/timeline/t-read/read/1",
+            &[("authorization", &files)],
+        )
+        .await;
+    assert_eq!(unrecorded.status, 404, "{unrecorded:?}");
+    assert_eq!(unrecorded.header("x-rosetta-auth"), None);
+
+    let files_only = grant::mint(
+        &KEY,
+        &GrantClaims {
+            scope: vec![SCOPE_FILES.into()],
+            ..GrantClaims::read("s1", "fieldd/w1", now_ms() + 60_000)
+        },
+    );
+    let expired = grant::mint(
+        &KEY,
+        &GrantClaims {
+            scope: vec![SCOPE_READ.into(), SCOPE_FILES.into()],
+            ..GrantClaims::read("s1", "fieldd/w1", now_ms() - 1)
+        },
+    );
+    for (grant, reason) in [
+        // a read grant lacks the second scope
+        (grant_for("s1"), Refusal::WrongScope),
+        // `files` alone is not enough either: every grant-openable route needs `read`
+        (files_only, Refusal::WrongScope),
+        // the session is judged before the scope
+        (files_grant_for("s2"), Refusal::WrongSession),
+        (expired, Refusal::Expired),
+    ] {
+        let reply = server
+            .get(FILE_PATH, &[("authorization", &authorization(&grant))])
+            .await;
+        assert_eq!(
+            reply.refusal(),
+            (401, Some(reason.as_str())),
+            "{reason:?}: {reply:?}"
+        );
+    }
+
+    // The scope widens nothing else: the lists, search, status, the
+    // aggregates and the topology stream still need the bearer.
+    for path in [
+        "/api/sessions",
+        "/api/search?q=hello",
+        "/api/status",
+        "/api/projects/p1/heatmap",
+    ] {
+        let reply = server.get(path, &[("authorization", &files)]).await;
+        assert_eq!(reply.refusal(), (401, Some("wrong-route")), "{path}");
+    }
+    assert_eq!(
+        server
+            .ws("/ws/meta", &[("authorization", &files)])
+            .await
+            .err(),
+        Some(refused(Refusal::WrongRoute))
+    );
+    // A foreign page holding a files grant: the Origin rule refuses the read.
+    let foreign = server
+        .get(FILE_PATH, &[("origin", FOREIGN), ("authorization", &files)])
+        .await;
+    assert_eq!(foreign.status, 403, "{foreign:?}");
 }
 
 #[tokio::test]
@@ -710,6 +863,27 @@ async fn every_allow_listed_route_is_a_real_route_a_grant_opens() {
         let foreign = server.get(&path, &[("authorization", &other)]).await;
         assert_eq!(foreign.status, expected, "{template}: {foreign:?}");
     }
+    // The recorded-file route, with the scope it needs: a real route, judged
+    // as its session's.
+    let path = GRANT_FILE_ROUTE
+        .replace("{id}", "s1")
+        .replace("{timeline_id}", "t-read")
+        .replace("{target_index}", "0");
+    assert_eq!(path, FILE_PATH);
+    let own = server
+        .get(
+            &path,
+            &[("authorization", &authorization(&files_grant_for("s1")))],
+        )
+        .await;
+    assert_eq!(own.status, 200, "{own:?}");
+    let foreign = server
+        .get(
+            &path,
+            &[("authorization", &authorization(&files_grant_for("s2")))],
+        )
+        .await;
+    assert_eq!(foreign.refusal(), (401, Some("wrong-session")));
 }
 
 #[tokio::test]
@@ -790,6 +964,7 @@ async fn the_debug_observer_names_the_client_never_the_grant() {
         ("/api/sessions/s1/timeline", &forged),
         ("/api/sessions/s2", &good),
         ("/api/sessions", &good),
+        (FILE_PATH, &good),
     ] {
         server
             .get(path, &[("authorization", &authorization(grant))])
@@ -804,6 +979,7 @@ async fn the_debug_observer_names_the_client_never_the_grant() {
             "None /api/sessions/{id}/timeline Some(BadSignature)",
             r#"Some("fieldd/w1") /api/sessions/{id} Some(WrongSession)"#,
             "None /api/sessions Some(WrongRoute)",
+            r#"Some("fieldd/w1") /api/sessions/{id}/timeline/{timeline_id}/read/{target_index} Some(WrongScope)"#,
         ]
     );
     for grant in [&good, &expired, &forged] {
