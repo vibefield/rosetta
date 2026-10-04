@@ -54,8 +54,10 @@ or swap it later with `setCredential`:
 
 - `{ kind: "bearer", token }` opens every route.
 - `{ kind: "grant", grant }` opens one session's recorded history until the
-  grant's `exp`. The daemon's supervisor mints it with
-  `@rosetta/protocol/grants`; the client carries it as an opaque string.
+  grant's `exp` — and that session's recorded-file read (`readFileTarget`)
+  when it was minted with `SCOPE_FILES` beside `SCOPE_READ`. The daemon's
+  supervisor mints it with `@rosetta/protocol/grants`; the client carries it
+  as an opaque string.
 
 REST requests send it as `Authorization`. WebSocket upgrades send it as the
 subprotocol pair `rosetta` + `rosetta.bearer.<base64url(token)>` or

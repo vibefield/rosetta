@@ -16,6 +16,13 @@ import { base64UrlDecode, base64UrlEncode } from "#base64url";
 export const GRANT_VERSION = 1;
 /** The scope every grant-openable route needs. */
 export const SCOPE_READ = "read";
+/**
+ * The recorded-file read (`/read/{target_index}`), which reads a file from the
+ * daemon's disk by the transcript's reference — more than the transcript, so it
+ * is minted separately: the file route needs it beside {@link SCOPE_READ}, and
+ * the minter decides which principals hold it (docs/AUTH.md §5.4).
+ */
+export const SCOPE_FILES = "files";
 /** A daemon refuses to start with a shorter key. */
 export const MIN_GRANT_KEY_BYTES = 32;
 /** The largest encoded grant a daemon reads. */
@@ -27,7 +34,8 @@ export interface GrantClaims {
   readonly cid: string;
   /** Expiry in Unix milliseconds, a safe integer; refused once `exp <= now`. */
   readonly exp: number;
-  /** What the grant may do; routes need {@link SCOPE_READ}. Unknown entries are carried. */
+  /** What the grant may do; routes need {@link SCOPE_READ}, the recorded-file route
+   * {@link SCOPE_FILES} as well. Unknown entries are carried. */
   readonly scope: readonly string[];
   /** The canonical session id the grant opens. */
   readonly sid: string;

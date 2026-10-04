@@ -48,6 +48,21 @@
       "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDM2MDAwMDAsInNjb3BlIjpbInJlYWQiLCJ4LWxhdGVyIl0sInNpZCI6InMxIiwidiI6MX0.T-VWY0MEgvnC-bddjLyUUD0WS0dNHQ6mFtE2tprPP8s"
     },
     {
+      "name": "a read and files grant",
+      "claims": {
+        "v": 1,
+        "sid": "s1",
+        "cid": "fieldd/window-1",
+        "exp": 1790000060000,
+        "scope": [
+          "read",
+          "files"
+        ]
+      },
+      "payload": "{\"cid\":\"fieldd/window-1\",\"exp\":1790000060000,\"scope\":[\"read\",\"files\"],\"sid\":\"s1\",\"v\":1}",
+      "grant": "eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpbInJlYWQiLCJmaWxlcyJdLCJzaWQiOiJzMSIsInYiOjF9.KKTVfIcOxhBgQwrdiYVGxYThfq0cVUdn1cVBMHYkawc"
+    },
+    {
       "name": "the largest safe expiry",
       "claims": {
         "v": 1,

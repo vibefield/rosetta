@@ -8,6 +8,8 @@ import { test } from "node:test";
 import { base64UrlDecode, base64UrlEncode } from "../base64url.ts";
 import {
   MIN_GRANT_KEY_BYTES,
+  SCOPE_FILES,
+  SCOPE_READ,
   canonicalPayload,
   canonicalize,
   grantAuthorization,
@@ -37,6 +39,21 @@ test("every valid vector is reproduced byte for byte", () => {
       vector.name,
     );
   }
+});
+
+test("a grant that reads recorded files carries both scopes, in the minter's order", () => {
+  assert.equal(SCOPE_READ, "read");
+  assert.equal(SCOPE_FILES, "files");
+  const vector = fixture.valid.find((v) => v.name === "a read and files grant");
+  assert.ok(vector, "the shared vectors carry a read-and-files grant");
+  assert.deepEqual(vector.claims.scope, [SCOPE_READ, SCOPE_FILES]);
+  // The minter's words, not the fixture's object: the constants alone reproduce it.
+  const claims = { cid: vector.claims.cid, exp: vector.claims.exp, scope: [SCOPE_READ, SCOPE_FILES], sid: vector.claims.sid, v: 1 };
+  assert.equal(canonicalPayload(claims), vector.payload);
+  assert.equal(mintGrant(key, claims), vector.grant);
+  assert.deepEqual(verifyGrant(key, vector.grant, fixture.now_ms), { ok: true, claims: vector.claims });
+  // JCS sorts members, never array entries: the other order is another grant.
+  assert.notEqual(mintGrant(key, { ...claims, scope: [SCOPE_FILES, SCOPE_READ] }), vector.grant);
 });
 
 test("every invalid vector is refused for its reason", () => {

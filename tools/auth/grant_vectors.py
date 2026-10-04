@@ -50,6 +50,9 @@ for name, c in [
         ),
     ),
     ("an unknown scope entry is carried", claims(scope=["read", "x-later"], exp=NOW + 3_600_000)),
+    # RO-13: the recorded-file read's scope rides beside `read`, in the minter's order (JCS sorts
+    # members, never array entries).
+    ("a read and files grant", claims(scope=["read", "files"])),
     ("the largest safe expiry", claims(exp=9_007_199_254_740_991)),
 ]:
     payload = canonical(c)
