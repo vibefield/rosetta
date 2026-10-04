@@ -1579,9 +1579,11 @@ tools (sqlite-viewer style), explicitly documented as *unstable internal format*
 --token-file` makes every route and WebSocket upgrade demand a bearer, and
 `--grant-key-file` adds per-session expiring grants: a supervisor-minted capability
 (HMAC-SHA256 over canonical JSON) for one session's recorded history, in place of the
-bearer. The browser Origin rule (loopback origins, the Tauri and Electron shells,
-`--allow-origin`) guards against web pages and is never a credential, since any other
-process can send any Origin. A browser's WebSocket carries the credential as a
+bearer; a grant that also carries the `files` scope reads the session's recorded files
+(`/read/{target_index}`), which its minter grants per principal (2026-10-04). The
+browser Origin rule (loopback origins, the Tauri and Electron shells, `--allow-origin`)
+guards against web pages and is never a credential, since any other process can send
+any Origin. A browser's WebSocket carries the credential as a
 subprotocol pair, because it cannot set `Authorization`. The rule, the grant's canonical
 form and the threat model are in `docs/AUTH.md`.
 

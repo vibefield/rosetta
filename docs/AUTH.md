@@ -2,7 +2,9 @@
 
 **Status:** built 2026-09-30 (RO-1 the bearer, RO-10 per-session grants) on
 `feat/direct-plane-grants`; rebased onto `main` `886baed` and MERGED 2026-10-03 (tip `ee6724e`,
-the branch's five commits intact). This page is the rule; `crates/server/src/auth.rs`
+the branch's five commits intact). The `files` scope (RO-13: a session's recorded-file read
+under a grant, §5.4) built 2026-10-04 on `feat/grant-files-scope`. This page is the rule;
+`crates/server/src/auth.rs`
 and `grant.rs` are its code, `clients/ts/grants.ts` its TypeScript twin, and
 `crates/server/tests/fixtures/grants.json` the vectors both reproduce.
 ARCHITECTURE §5.1 points here.
@@ -103,7 +105,7 @@ string has exactly one spelling.
 |---|---|---|
 | `cid` | non-empty string | the minter's name for the client. Logged with `--debug-auth`; nothing is bound to it |
 | `exp` | integer, `0 ≤ exp ≤ 2^53 − 1` | expiry in Unix milliseconds on the daemon's clock |
-| `scope` | array of strings | what the grant may do. Every grant-openable route needs `"read"`; unknown entries are carried and ignored |
+| `scope` | array of strings | what the grant may do. `"read"` opens the session's recorded history and the assets, and every grant-openable route needs it; `"files"` beside it also opens the session's recorded-file read (§5.4). Unknown entries are carried and ignored |
 | `sid` | non-empty string | the canonical session id the grant opens |
 | `v` | `1` | the payload version |
 
@@ -152,7 +154,8 @@ grant   eyJjaWQiOiJmaWVsZGQvd2luZG93LTEiLCJleHAiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjpb
 5. `exp > now`, in Unix milliseconds on the daemon's clock; otherwise `expired`.
 6. The route's `{id}` equals `sid`; otherwise `wrong-session` (assets are
    exempt, see §5.4).
-7. `scope` contains `"read"`; otherwise `wrong-scope`.
+7. `scope` contains `"read"` — and, on the recorded-file route, `"files"` as
+   well; otherwise `wrong-scope`.
 
 ### 5.4 What a grant opens, and what it never opens
 
@@ -172,12 +175,32 @@ An asset URL is learned from a timeline, and its digest names bytes, not a
 session. The cost is that a grant holder who already knows an image's digest
 can confirm that the projection holds it.
 
+**With `"files"` beside `"read"`** it also opens, when `{id}` = `sid`,
+
+```
+/api/sessions/{id}/timeline/{timeline_id}/read/{target_index}
+```
+
+the recorded-file read (with or without its `?image=` rendering), and nothing
+else: that is the one route the scope opens. The route reads, from the
+daemon's disk, the file the timeline row names — never a path the caller
+sends — as it is NOW, not as the transcript recorded it. A grant with `"read"`
+alone is `wrong-scope` there.
+
+**Why `"files"` is a scope of its own.** A session's recorded history is what
+the agent said and did; the file a row names is whatever that path holds
+today, which can be more than the transcript ever showed (a later edit, a
+secret written since). So reading recorded history does not imply reading
+recorded files, and the minter grants the second separately, per principal:
+the supervisor that holds the key decides which of its clients may read files
+from this machine's disk (VibeField's fieldd, for one, mints it for its own
+desktop window and not for its phone or another desktop). The daemon checks
+only that a grant carries it.
+
 **A grant never opens** the lists (`/api/runtimes`, `/api/projects`,
 `/api/sessions`), search, `/ws/meta`, `/api/status`, `/api/discoveries`,
-`/api/pricing`, the project aggregates, the writes, or
-`/api/sessions/{id}/timeline/{timeline_id}/read/{target_index}`, which reads
-the file on disk NOW rather than recorded history. Those routes need the
-bearer.
+`/api/pricing`, the project aggregates or the writes, whatever its scope.
+Those routes need the bearer.
 
 ### 5.5 What v1 does not do
 
@@ -206,7 +229,7 @@ bearer.
 | `bad-signature` | the grant's MAC does not verify under this daemon's key |
 | `expired` | an authentic grant whose `exp` has passed |
 | `wrong-session` | an authentic grant for another session |
-| `wrong-scope` | an authentic grant without `"read"` |
+| `wrong-scope` | an authentic grant without the scope the route needs: `"read"` everywhere, and `"files"` as well on the recorded-file route |
 | `wrong-route` | a grant on a route grants never open |
 | `grants-disabled` | a grant presented to a daemon started without `--grant-key-file` |
 
@@ -231,7 +254,8 @@ the same credential.
 - **Other devices on a private network**, whose requests reach the loopback
   listener through a forwarding route, arrive with any `Origin` their caller
   chose. The Origin rule cannot hold them; the credential does. A grant
-  narrows a leaked credential to one session's recorded history until `exp`.
+  narrows a leaked credential to one session's recorded history until `exp`
+  — and, if it carries `files`, the files that session's rows name.
 - **Other local accounts** cannot read the `0600` files, but they can still
   connect to the loopback port. The bearer holds them out; the open mode does
   not.
@@ -244,7 +268,9 @@ the same credential.
 - **TypeScript:** `RosettaClient({ credential })` carries either credential
   on both carriers and throws `UnauthorizedError` with the reason.
   `@rosetta/protocol/grants` (Node-only) provides `canonicalize`,
-  `mintGrant`, `verifyGrant` and `parseGrantHeader`, the same rule as §5.
+  `mintGrant`, `verifyGrant` and `parseGrantHeader`, the same rule as §5, and
+  the scope names `SCOPE_READ` and `SCOPE_FILES` (`grant.rs` exports the same
+  two).
 - **Vectors:** `crates/server/tests/fixtures/grants.json` is written by
   `tools/auth/grant_vectors.py`, a stdlib-Python generator independent of both
   implementations (a rerun reproduces it byte for byte). The Rust and
