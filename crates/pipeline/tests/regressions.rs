@@ -1443,6 +1443,74 @@ fn claude_subagent_is_a_child_session_not_a_second_parent_file() {
 }
 
 #[test]
+fn claude_metadata_orders_nested_parents_after_sidecar_refinement() {
+    for warm in [false, true] {
+        let root = TempDir::new().unwrap();
+        write_lines(
+            &root.path().join("projects/p/root.jsonl"),
+            &[claude_user("root", "root-u", "root", "/w/project")],
+        );
+        let mut store = Store::open_in_memory().unwrap();
+        let runtime = runtime(&ClaudeCodeAdapter);
+        let options = opts();
+        if warm {
+            meta_ingest(
+                &ClaudeCodeAdapter,
+                &runtime,
+                root.path(),
+                &mut store,
+                &options,
+                &Instrument::new(),
+            )
+            .unwrap();
+        }
+
+        // The transcript admits the child with its directory's root as a
+        // fallback parent. Later sidecars refine it into a deeper tree, so
+        // first-merge order puts the child before its newly named ancestors.
+        let subagents = root.path().join("projects/p/root/subagents");
+        let mut child = claude_user("root", "child-u", "child", "/w/project");
+        child["agentId"] = json!("a-child");
+        child["isSidechain"] = json!(true);
+        write_lines(&subagents.join("agent-a-child.jsonl"), &[child]);
+        for (id, parent) in [("a-child", "z-parent"), ("z-parent", "zz-grandparent")] {
+            std::fs::write(
+                subagents.join(format!("agent-{id}.meta.json")),
+                json!({"agentType": "Explore", "parentAgentId": parent}).to_string(),
+            )
+            .unwrap();
+        }
+
+        let (meta, _) = meta_ingest(
+            &ClaudeCodeAdapter,
+            &runtime,
+            root.path(),
+            &mut store,
+            &options,
+            &Instrument::new(),
+        )
+        .unwrap_or_else(|error| panic!("warm={warm}: {error}"));
+        assert_eq!(meta.sessions, 4);
+        let root_id = ids::session_id(&runtime.id, "root");
+        for (id, parent) in [
+            ("a-child", "z-parent"),
+            ("z-parent", "zz-grandparent"),
+            ("zz-grandparent", "root"),
+        ] {
+            let row = queries::session(store.conn(), &ids::session_id(&runtime.id, id))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                row.parent_session_id,
+                Some(ids::session_id(&runtime.id, parent))
+            );
+            assert_eq!(row.root_session_id, root_id);
+            assert_eq!(row.role, SessionRole::Subagent);
+        }
+    }
+}
+
+#[test]
 fn rotating_audit_detects_same_size_rewrite_outside_the_tail_anchor() {
     let root = TempDir::new().unwrap();
     let path = root.path().join("projects/p/session-1.jsonl");

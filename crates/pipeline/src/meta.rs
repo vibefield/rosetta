@@ -438,6 +438,7 @@ pub(crate) fn plan_inventory(
         ops: meta_ops,
         ..
     } = output;
+    let sessions = order_session_dependencies(sessions)?;
     // Admission is part of a captured source's durable identity. New policy
     // can exclude a previously projected source from metadata admission, but
     // a re-skim must not turn its existing cursor into a different source.
@@ -460,6 +461,58 @@ pub(crate) fn plan_inventory(
     // Newest sessions stream first.
     files.sort_by_key(|file| std::cmp::Reverse(file.modified_ms));
     Ok((report, files, ops))
+}
+
+/// Sidecars can refine a previously merged child to name a parent first seen
+/// later in the inventory. Main-before-subagent is insufficient for nested
+/// trees: both session foreign keys must precede their dependents. Keep the
+/// original order among ready rows so metadata and ledger output stay stable.
+fn order_session_dependencies(sessions: Vec<SessionRow>) -> Result<Vec<SessionRow>, PipelineError> {
+    let positions: HashMap<&str, usize> = sessions
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (row.id.as_str(), index))
+        .collect();
+    let mut pending = vec![0_usize; sessions.len()];
+    let mut children = vec![Vec::new(); sessions.len()];
+    for (index, row) in sessions.iter().enumerate() {
+        for dependency in [
+            row.parent_session_id.as_deref(),
+            Some(row.root_session_id.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(&parent) = positions.get(dependency)
+                && parent != index
+            {
+                pending[index] += 1;
+                children[parent].push(index);
+            }
+        }
+    }
+    let mut ready: BTreeSet<usize> = pending
+        .iter()
+        .enumerate()
+        .filter_map(|(index, count)| (*count == 0).then_some(index))
+        .collect();
+    let mut rows: Vec<_> = sessions.into_iter().map(Some).collect();
+    let mut ordered = Vec::with_capacity(rows.len());
+    while let Some(index) = ready.pop_first() {
+        ordered.push(rows[index].take().expect("each session is ordered once"));
+        for &child in &children[index] {
+            pending[child] -= 1;
+            if pending[child] == 0 {
+                ready.insert(child);
+            }
+        }
+    }
+    if ordered.len() != rows.len() {
+        return Err(PipelineError::Config(
+            "cyclic session metadata dependencies".into(),
+        ));
+    }
+    Ok(ordered)
 }
 
 impl MetaOutput {

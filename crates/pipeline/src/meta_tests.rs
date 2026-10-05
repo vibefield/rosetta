@@ -36,6 +36,30 @@ fn merged(rows: impl IntoIterator<Item = SessionRow>) -> Vec<SessionRow> {
 }
 
 #[test]
+fn session_order_respects_root_links_and_preserves_ready_order() {
+    let rows = vec![
+        session("child", None, None, "root", SessionRole::Subagent, 10),
+        session("other", None, None, "other", SessionRole::Main, 10),
+        session("root", None, None, "root", SessionRole::Main, 10),
+    ];
+    let ordered = order_session_dependencies(rows).unwrap();
+    let ids: Vec<_> = ordered.iter().map(|row| row.id.as_str()).collect();
+    assert_eq!(ids, ["other", "root", "child"]);
+}
+
+#[test]
+fn cyclic_session_dependencies_fail_before_journaling() {
+    let rows = vec![
+        session("a", None, Some("b"), "a", SessionRole::Subagent, 10),
+        session("b", None, Some("a"), "a", SessionRole::Subagent, 10),
+    ];
+    assert!(matches!(
+        order_session_dependencies(rows),
+        Err(PipelineError::Config(message)) if message.contains("cyclic session metadata")
+    ));
+}
+
+#[test]
 fn metadata_cwd_selection_is_order_independent() {
     let early = session("s", Some("/work/early"), None, "s", SessionRole::Main, 10);
     let late = session("s", Some("/work/late"), None, "s", SessionRole::Main, 20);

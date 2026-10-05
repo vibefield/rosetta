@@ -498,15 +498,43 @@ impl UnstableDocument {
 
 impl Drop for UnstableDocument {
     fn drop(&mut self) {
-        // The writer only ever stops inside an open, so one last reader
-        // releases it.
+        // Keep a reader open until the writer sees the stop flag. Opening
+        // both ends wakes it without waiting for every writer to close.
         self.stop.store(true, Ordering::SeqCst);
-        let _ = std::fs::read(&self.path);
+        let _wake = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.path)
+            .unwrap();
         if let Some(writer) = self.writer.take() {
             writer.join().unwrap();
         }
         std::fs::remove_file(&self.path).unwrap();
     }
+}
+
+#[test]
+fn unstable_document_cleanup_does_not_wait_for_other_writers() {
+    let root = TempDir::new().unwrap();
+    let path = root.path().join("document");
+    let document = UnstableDocument::at(&path);
+    let other_writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    let (done, completion) = std::sync::mpsc::channel();
+    let cleanup = std::thread::spawn(move || {
+        drop(document);
+        done.send(()).unwrap();
+    });
+    let result = completion.recv_timeout(std::time::Duration::from_secs(5));
+    // Release the extra writer even on failure so the old EOF wait can
+    // finish and the regression reports a failure instead of hanging.
+    drop(other_writer);
+    cleanup.join().unwrap();
+    assert!(result.is_ok(), "cleanup waited for another writer to close");
+    assert!(!path.exists());
 }
 
 /// A document whose every read is unstable — its length changes across the
