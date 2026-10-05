@@ -17,6 +17,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Full debug symbols across every test binary exhaust hosted Linux disks.
+  # Disabling debug info keeps assertions and overflow checks enabled.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   workflows:
