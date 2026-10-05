@@ -63,20 +63,24 @@ words; absent, the room's own, below) · `search` (the room's own strip and
 sheet, with the host owning the open state; absent, neither is drawn). The ref
 handle offers `openAt({ sessionId, timelineId? })` and `stepMatch(delta)`.
 
-**The search key is the host's (RO-14).** The room binds no key of its own:
-the host's window opens the sheet (rosetta's app binds ⌘K, Ctrl K off a Mac,
-and `/`). So the room prints only a key the host says it binds.
-`search.shortcut` decides the legend:
+**The search keys are the host's (RO-14).** The room binds no key of its own.
+The host's window opens the sheet and walks the matches: rosetta's app binds
+⌘K (Ctrl K off a Mac) and `/` to the sheet, and ⌘G and ⌘⇧G to the matches. So
+the host binds, and the room prints only the keys the host says it binds:
 
-| `search.shortcut` | The launcher prints | The empty transcript says |
+| The host passes | The launcher prints | The empty transcript says |
 |---|---|---|
-| absent | the room's own label, ⌘K (Ctrl K off a Mac) | "Pick a session — or press ⌘K to search, which is the front door." |
-| `{ label }` | `label`, as given | the same sentence with `label` |
-| `null` (the host binds no key) | no legend | "Pick a session." |
+| `search`, no `shortcut` | the room's own label, ⌘K (Ctrl K off a Mac) | "Pick a session — or press ⌘K to search, which is the front door." |
+| `search.shortcut: { label }` | `label`, as given | the same sentence with `label` |
+| `search.shortcut: null` (it binds no key) | no legend | "Pick a session." |
+| no `search` | no launcher | "Pick a session." |
+| `emptyPrompt`, beside any row above | as that row says | the host's sentence |
 
-With no `search` at all there is no launcher and the sentence is "Pick a
-session." A host whose own search has a key of its own (VibeField's Peek)
-names it in `emptyPrompt`.
+`emptyPrompt` is a prop of the room, not of `search`, so a host that draws no
+room search (VibeField, whose search is its own Peek) can still name its own
+key there. A host that passes `search` binds ⌘G and ⌘⇧G (Ctrl G and Ctrl Shift
+G off a Mac) to the handle's `stepMatch(1)` and `stepMatch(-1)`, because the
+match stepper the sheet leaves in the transcript's head names those keys.
 
 ## What the package never does
 
