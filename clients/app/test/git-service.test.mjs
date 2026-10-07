@@ -140,7 +140,7 @@ test("every git the service starts runs without optional locks or the fsmonitor,
   }
 });
 
-test("a repository's own config cannot make a read run a program", async (t) => {
+test("a read runs none of the fsmonitor hook, external diff or textconv driver a repository's config names", async (t) => {
   const f = repository(t);
   const monitor = marker(f.dir, "fsmonitor", "exit 1\n");
   const external = marker(f.dir, "external");

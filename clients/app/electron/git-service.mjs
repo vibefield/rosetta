@@ -16,10 +16,12 @@
 // positional argument where git still parses options: `--output=<file>` in
 // that slot makes `git show` WRITE the diff wherever the caller says. So an
 // id is admitted only as a hex object id, and it still follows
-// `--end-of-options`. Beyond that, a repository's own config never makes a
-// read run a program of its choosing — no fsmonitor hook, no external diff
-// driver, no textconv filter — and a read never takes `index.lock` from
-// under somebody else's commit (`GIT_OPTIONAL_LOCKS=0`).
+// `--end-of-options`. Beyond that, no read runs the fsmonitor hook, an
+// external diff driver or a textconv filter that the repository's config
+// names, and no read takes `index.lock` from under somebody else's commit
+// (`GIT_OPTIONAL_LOCKS=0`). A `filter.<driver>.clean` still runs when a
+// status or a diff must re-read a file whose stat changed; git has no switch
+// that turns filters off.
 
 import { execFile } from "node:child_process";
 import { assertPathUnderRoot, createShellScmClient } from "@vibecook/mille-ui/git/node";
