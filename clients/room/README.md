@@ -63,6 +63,21 @@ words; absent, the room's own, below) · `search` (the room's own strip and
 sheet, with the host owning the open state; absent, neither is drawn). The ref
 handle offers `openAt({ sessionId, timelineId? })` and `stepMatch(delta)`.
 
+## What a host may add (`RoomHostInputs`)
+
+Beyond its ports, a host may hand the room its own colours, marks, sections,
+acts, folders and filters (`src/host-inputs.ts`). The room DRAWS them in its
+own vocabulary and never interprets them: a host key rides back out
+untouched, a host mark is drawn where it is put, a host act is pressed. Every
+one is optional, and with none of them the room is exactly what rosetta's app
+shows — the reference host passes none. Ids are the room's own
+(`ProjectRow.id`, `SessionRow.id`), as the host's catalog handed them in.
+The callbacks are called while the room renders, so a host keeps them cheap.
+
+- **`projectTint(projectId)`** — the project's colour, any CSS colour. Absent,
+  or null for a project: the room's own dealt tint, which is then the only
+  one the room stores.
+
 **The search keys are the host's (RO-14).** The room binds no key of its own.
 The host's window opens the sheet and walks the matches: rosetta's app binds
 ⌘K (Ctrl K off a Mac) and `/` to the sheet, and ⌘G and ⌘⇧G to the matches. So

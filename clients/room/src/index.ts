@@ -12,6 +12,9 @@ export type {
   RoomTarget,
 } from "./HistoryRoom";
 
+/** What a host may hand the room beyond its ports (all optional). */
+export type { RoomHostInputs } from "./host-inputs";
+
 /** The reader (PK3): one session's transcript, read-only, at a line. */
 export { TranscriptReader } from "./TranscriptReader";
 export type { ReaderAddress, TranscriptReaderProps } from "./TranscriptReader";

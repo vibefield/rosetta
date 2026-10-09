@@ -20,6 +20,8 @@ import {
 import type { CSSProperties, ForwardedRef, ReactNode, RefObject } from "react";
 import type { SearchHit, SessionRow } from "@rosetta/protocol";
 import type { RoomPorts } from "./ports";
+import { HostInputsProvider, hostInputsOf, useHostInputs } from "./host-inputs";
+import type { RoomHostInputs } from "./host-inputs";
 import type { KeyValueStore } from "./lib/room-storage";
 import { RoomProvider, useRoom, useRoomOverlayOpen } from "./room-context";
 import type { SummaryTab } from "./room-context";
@@ -112,7 +114,7 @@ export interface HistoryRoomSearch {
   readonly shortcut?: SearchShortcut;
 }
 
-export interface HistoryRoomProps extends RoomPorts {
+export interface HistoryRoomProps extends RoomPorts, RoomHostInputs {
   /** Who paints beneath the room. `paper` (the default): the room paints its
    * own ground and plate, as rosetta's app shows it. `host`: the host paints
    * its own surface beneath; the room paints neither, and its fades become
@@ -233,6 +235,7 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
         storage: props.storage,
       }}
     >
+      <HostInputsProvider value={hostInputsOf(props)}>
       <RoomBody
         handle={ref}
         surface={props.surface ?? "paper"}
@@ -247,6 +250,7 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
           ...(props.floatingFoot === undefined ? {} : { "--ah-floating-foot": props.floatingFoot }),
         } as CSSProperties}
       />
+      </HostInputsProvider>
     </RoomProvider>
   );
 });
@@ -272,6 +276,7 @@ function RoomBody({
   readonly frameStyle: CSSProperties;
 }) {
   const { catalog, sessions, host, storage, tints } = useRoom();
+  const { projectTint: hostTint } = useHostInputs();
   const overlayOpen = useRoomOverlayOpen();
   const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog);
   const nowMs = useNow(meta);
@@ -353,12 +358,17 @@ function RoomBody({
     return root.replace(/\/\.[^/]+$/, "");
   }, [meta, host]);
 
+  // R1: the host's colour for a project when it gives one, else the dealt one.
+  const tintOf = useMemo(
+    () => (hostTint === undefined ? tints.projectTint : (id: string) => hostTint(id) ?? tints.projectTint(id)),
+    [hostTint, tints],
+  );
   const projectViewModels: ProjectViewModel[] = useMemo(
     () =>
       projectRows.map((p) =>
-        buildProjectViewModel(p, meta?.sessions ?? [], stats.get(p.id), kindOf, nowMs, tints.projectTint),
+        buildProjectViewModel(p, meta?.sessions ?? [], stats.get(p.id), kindOf, nowMs, tintOf),
       ),
-    [projectRows, meta, stats, kindOf, nowMs, tints],
+    [projectRows, meta, stats, kindOf, nowMs, tintOf],
   );
   const projectById = useMemo(
     () => new Map(projectViewModels.map((project) => [project.row.id, project])),
