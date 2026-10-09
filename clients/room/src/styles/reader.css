@@ -1,0 +1,33 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE READER (PK3, `TranscriptReader`) — one session's document, read-only,
+   filling whatever holds it. It wears the room's root (`.ah-frame`) for its
+   tokens and resets, and the transcript column inside it is its only column.
+
+   Its landing stays marked, because there the mark is the point. The mark's
+   look is the host's: three tokens a host sets on any element around the
+   reader. Unset, they are the room's own neutral match — the sheet's word
+   wash and a quiet edge — and never the select hue the room's landing ring
+   wears, which says "here" for a moment rather than "this matched".
+     --ah-match         the wash under a matched word
+     --ah-match-weight  a matched word's weight
+     --ah-match-line    the matched line's edge (a prompt panel's ring)
+   ═══════════════════════════════════════════════════════════════════════ */
+.ah-frame.ah-reader { display: flex; flex-direction: column; }
+.ah-reader > .ah-col { flex: 1; border-right: 0; }
+
+.ah-reader mark.tr-match {
+  padding: 0 1px; margin: 0 -1px; border-radius: 3px;
+  background: var(--ah-match, var(--vf-fill-hover)); color: var(--vf-text-primary);
+  font-weight: var(--ah-match-weight, 500);
+}
+
+.ah-reader :is(.tr-line, .tr-seg, .tr-mark, .tr-summary, .tm-message, .tm-roster__row, .tm-lifecycle)[data-hit="true"] {
+  animation: none;
+  box-shadow: -10px 0 0 -7px var(--ah-match-line, var(--vf-text-tertiary));
+}
+.ah-reader .tr-prompt[data-hit="true"],
+.ah-reader .tr-prompt-message.is-landed > .tr-prompt,
+.ah-reader .tr-prompt-message.is-landed > .tr-attachments .tr-att__tile {
+  animation: none;
+  box-shadow: inset 0 0 0 1.5px var(--ah-match-line, var(--vf-text-tertiary));
+}

@@ -10,6 +10,7 @@
 @import "./ingest.css";
 @import "./transcript.css";
 @import "./search.css";
+@import "./reader.css";
 /* The worktree guest's tree: mille's token surface and the VibeField theme,
    which reads the host's --vf-* tokens live. */
 @import "@vibecook/mille-ui/tokens.css";

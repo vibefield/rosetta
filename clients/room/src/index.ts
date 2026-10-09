@@ -12,6 +12,10 @@ export type {
   RoomTarget,
 } from "./HistoryRoom";
 
+/** The reader (PK3): one session's transcript, read-only, at a line. */
+export { TranscriptReader } from "./TranscriptReader";
+export type { ReaderAddress, TranscriptReaderProps } from "./TranscriptReader";
+
 export type {
   AssetSource,
   AssetUrl,

@@ -18,6 +18,7 @@ import type { MouseEvent, ReactNode } from "react";
 import { useEffect } from "react";
 import { clockShort, duration } from "../../lib/format";
 import type { DayEntry, Sitting as SittingModel } from "../../lib/transcript";
+import { useReaderMode } from "./reader-context";
 
 export interface PillText {
   readonly lead: string;
@@ -47,6 +48,8 @@ export interface DayPillProps {
 }
 
 export function DayPill({ sitting, onPress }: DayPillProps) {
+  // In the reader the day is a label: it opens no menu.
+  const reading = useReaderMode();
   const text = pillText(sitting);
   if (text === null) return null;
   return (
@@ -55,16 +58,23 @@ export function DayPill({ sitting, onPress }: DayPillProps) {
       data-stuck="false"
       data-day-key={sitting.dayKey ?? undefined}
     >
-      <button
-        type="button"
-        className="tr-day__pill"
-        title="Jump to a day"
-        aria-haspopup="menu"
-        onClick={onPress}
-      >
-        {text.lead}
-        {text.after !== null && <span className="after">{text.after}</span>}
-      </button>
+      {reading ? (
+        <span className="tr-day__pill">
+          {text.lead}
+          {text.after !== null && <span className="after">{text.after}</span>}
+        </span>
+      ) : (
+        <button
+          type="button"
+          className="tr-day__pill"
+          title="Jump to a day"
+          aria-haspopup="menu"
+          onClick={onPress}
+        >
+          {text.lead}
+          {text.after !== null && <span className="after">{text.after}</span>}
+        </button>
+      )}
     </div>
   );
 }

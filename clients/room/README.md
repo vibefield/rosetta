@@ -82,6 +82,33 @@ key there. A host that passes `search` binds ⌘G and ⌘⇧G (Ctrl G and Ctrl S
 G off a Mac) to the handle's `stepMatch(1)` and `stepMatch(-1)`, because the
 match stepper the sheet leaves in the transcript's head names those keys.
 
+## The reader (`TranscriptReader`)
+
+One session's transcript, read-only, at a line: what a host shows before it
+opens the room there (VibeField's Peek). It takes the room's ports and an
+address, and draws the room's own document with nothing around it.
+
+```tsx
+<TranscriptReader {...ports} at={{ sessionId, timelineId, query }} />
+```
+
+- **It lands at `timelineId` and keeps the line marked**, and marks the words
+  of `query` in the prose (each word, or a phrase in quotes as one). The
+  address is read by value: a new session or line lands again, a re-render
+  with the same one does not.
+- **It is read-only.** No head band and no acts — no session-work launchers,
+  no day menu, no "Latest" pill, no dialog (a long message shows in full) —
+  no thread navigation, no key bound, and nothing written back to a room. A
+  delegated thread is read inside its root, as the room opens it.
+- **It asks only what reading needs:** one `subscribeMeta` while mounted, and
+  one `open`/`close` of the session it shows. No status, figures or search.
+- **The mark's look is the host's.** Three tokens on any element around the
+  reader: `--ah-match` (the wash under a matched word), `--ah-match-weight`,
+  and `--ah-match-line` (the matched line's edge, a prompt panel's ring).
+  Unset, they are the room's own neutral match — the sheet's
+  `--vf-fill-hover` wash at 500, a `--vf-text-tertiary` edge — and never the
+  select hue the room's landing ring wears for a moment.
+
 ## What the package never does
 
 - **No fetch and no socket.** Every byte arrives through a port.
