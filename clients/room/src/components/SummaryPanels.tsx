@@ -23,6 +23,7 @@ import { NO_SPEND, addSpend, coverage, usdText } from "../lib/spend";
 import type { Spend } from "../lib/spend";
 import { useRoom } from "../room-context";
 import type { RoomAct } from "../host-inputs";
+import { useHostInputs } from "../host-inputs";
 import { HostAct } from "./HostAct";
 
 type TintStyle = CSSProperties & { "--tint": string };
@@ -109,10 +110,14 @@ export function ProjectSummaryPanel({
   const modelColors = useMemo(() => createModelColors(usage?.models.map(row => row.model) ?? []), [usage]);
   // The repo act opens a REMOTE. A git_repo that is a local path is a fact
   // about discovery, not an address anyone can visit — no button for it.
+  // R9: a host that knows the address says it (null: no act).
+  const hostRepositoryUrl = useHostInputs().repositoryUrl?.(project.row.id);
   const repositoryUrl =
-    project.row.git_repo !== null && !project.row.git_repo.startsWith("/")
-      ? project.row.git_repo
-      : null;
+    hostRepositoryUrl !== undefined
+      ? hostRepositoryUrl
+      : project.row.git_repo !== null && !project.row.git_repo.startsWith("/")
+        ? project.row.git_repo
+        : null;
 
   return (
     <div className="ah-meta" style={{ "--tint": project.tint } as TintStyle}>

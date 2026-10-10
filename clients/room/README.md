@@ -146,6 +146,8 @@ The callbacks are called while the room renders, so a host keeps them cheap.
   has chips), each opening its `RoomMenu`. The host filters, through the
   list's sections, and says what is chosen with the chip's words, `set` and
   a checked row. The room's own search sheet keeps its native selects.
+- **`repositoryUrl(projectId)`** — the address ②'s repository act opens.
+  Undefined: the room's own reading of `git_repo`; null: no act.
 
 ## The reader (`TranscriptReader`)
 

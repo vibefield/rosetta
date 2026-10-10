@@ -237,6 +237,9 @@ export interface RoomHostInputs {
   readonly projectFilters?: readonly RoomFilter[] | undefined;
   /** R7 — ②'s chips, per project. */
   readonly sessionFilters?: ((projectId: string) => readonly RoomFilter[] | null | undefined) | undefined;
+  /** R9 — the address ②'s repository act opens. Absent, or undefined for a
+   * project: the room's own reading of `git_repo`; null: no act. */
+  readonly repositoryUrl?: ((projectId: string) => string | null | undefined) | undefined;
 }
 
 /** Only the host's inputs, picked out of the room's props. */
@@ -253,6 +256,7 @@ export function hostInputsOf(props: RoomHostInputs): RoomHostInputs {
     folders: props.folders,
     projectFilters: props.projectFilters,
     sessionFilters: props.sessionFilters,
+    repositoryUrl: props.repositoryUrl,
   };
 }
 
