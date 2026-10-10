@@ -127,9 +127,14 @@ The callbacks are called while the room renders, so a host keeps them cheap.
   or the reason as a caption after the range.
 - An act with a `menu` (`RoomMenu`: groups of rows, each with a mark, words,
   a second line, an aside, a check, a step in) opens the room's popover rows
-  under it. The rows open on the checked one, the arrow keys walk them, a
-  choice or a press outside or Escape closes them; past `filterAfter` rows a
-  filter heads them. They listen only while open.
+  from it. They are drawn above the columns, in the room's root, anchored to
+  their control, flipped above it when there is more room there, and held
+  inside the room's box (no column clips them). Opened by a key they land on
+  the checked row, which wears the ring; opened by a pointer they take focus
+  with no ring until a key walks them. The arrow keys walk them, a choice or a
+  press outside or Escape closes them; past `filterAfter` rows a filter heads
+  them. They listen only while open (and to the window's resize and scroll,
+  to stay on their control).
 - **`folders(projectId)`** → `RoomFolders` — ③'s head becomes a dropdown of
   the host's folders, by group, each keyed by the host (two machines spell a
   path alike, so the check goes by key, never by path), with its mark in

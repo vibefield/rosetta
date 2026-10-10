@@ -103,8 +103,17 @@
   color: var(--vf-text-primary); text-align: left;
   animation: tr-meta-in 180ms var(--vf-ease-pop);
 }
-.ah-menu[data-align="start"] { left: 0; transform-origin: top left; }
-.ah-menu[data-align="end"] { right: 0; transform-origin: top right; }
+/* Outside a room the rows hang from their control; inside one they are drawn
+   in the room's root, over every column, where the room places them. */
+.ah-menu:not([data-layer])[data-align="start"] { left: 0; transform-origin: top left; }
+.ah-menu:not([data-layer])[data-align="end"] { right: 0; transform-origin: top right; }
+.ah-menu[data-layer] { top: 0; left: 0; z-index: 40; display: flex; flex-direction: column; }
+.ah-menu[data-layer][data-align="start"] { transform-origin: top left; }
+.ah-menu[data-layer][data-align="end"] { transform-origin: top right; }
+.ah-menu[data-layer][data-side="above"][data-align="start"] { transform-origin: bottom left; }
+.ah-menu[data-layer][data-side="above"][data-align="end"] { transform-origin: bottom right; }
+.ah-menu[data-layer] .ah-menu__filter { flex: none; }
+.ah-menu[data-layer] .ah-menu__list { flex: 0 1 auto; min-height: 0; }
 .ah-menu__filter {
   display: block; width: calc(100% - 14px); height: 28px; margin: 7px 7px 0; padding: 0 10px;
   border: 0; border-radius: 8px; outline: none; background: var(--vf-fill);
@@ -112,6 +121,7 @@
 }
 .ah-menu__filter:focus-visible { box-shadow: inset 0 0 0 1.5px var(--vf-select); }
 .ah-menu__list { max-height: min(360px, 60vh); overflow-y: auto; padding: 5px; scrollbar-width: thin; }
+.ah-menu__list:focus { outline: none; }
 .ah-menu__group + .ah-menu__group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--vf-hairline); }
 .ah-menu__title {
   display: flex; align-items: center; gap: 6px; padding: 6px 8px 4px;
@@ -125,7 +135,11 @@
   font-size: 11.5px; text-align: left; transition: background-color 120ms ease;
 }
 .ah-menu__item[data-depth="1"] { padding-left: 26px; }
-.ah-menu__item:hover, .ah-menu__item:focus-visible { outline: none; background: var(--vf-fill); }
+/* The ring is a key's, never a pointer's: a row a pointer opened onto is
+   focused without one. */
+.ah-menu__item:focus { outline: none; }
+.ah-menu__item:hover { background: var(--vf-fill); }
+.ah-menu__item:focus-visible { background: var(--vf-fill); box-shadow: inset 0 0 0 1.5px var(--vf-select); }
 .ah-menu__item:disabled { opacity: 0.55; cursor: default; }
 .ah-menu__item:disabled:hover { background: none; }
 .ah-menu__check { flex: none; display: inline-flex; width: 14px; height: 14px; color: var(--vf-text-primary); }

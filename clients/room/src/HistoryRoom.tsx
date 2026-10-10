@@ -23,6 +23,7 @@ import type { RoomPorts } from "./ports";
 import { HostInputsProvider, hostInputsOf, useHostInputs } from "./host-inputs";
 import type { RoomHostInputs, RoomMenu } from "./host-inputs";
 import { tildePath } from "./lib/format";
+import { MenuLayerProvider } from "./components/HostMenu";
 import type { KeyValueStore } from "./lib/room-storage";
 import { RoomProvider, useRoom, useRoomOverlayOpen } from "./room-context";
 import type { SummaryTab } from "./room-context";
@@ -289,6 +290,8 @@ function RoomBody({
     folders: hostFoldersOf,
   } = useHostInputs();
   const overlayOpen = useRoomOverlayOpen();
+  // The room's root, where a host's menus are drawn over every column.
+  const [frameElement, setFrameElement] = useState<HTMLDivElement | null>(null);
   const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog);
   const nowMs = useNow(meta);
   const daemonStatus = useDaemonStatus(catalog);
@@ -693,7 +696,9 @@ function RoomBody({
       data-ah-surface={surface}
       data-ah-overlay={overlayOpen ? "" : undefined}
       style={frameStyle}
+      ref={setFrameElement}
     >
+      <MenuLayerProvider value={frameElement}>
       <div className="ah-room" ref={roomRef}>
         {searchOption !== null && (
           <div className="ah-searchbar">
@@ -827,6 +832,7 @@ function RoomBody({
         onOpenHit={openHit}
       />}
       {receipt !== null && <div className="ah-receipt">{receipt}</div>}
+      </MenuLayerProvider>
     </div>
   );
 }
