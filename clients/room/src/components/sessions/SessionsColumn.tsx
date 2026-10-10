@@ -1,5 +1,7 @@
 import { useMemo } from "react";
+import type { ReactNode } from "react";
 import type { IngestProgress, SessionRow, UsageResponse } from "@rosetta/protocol";
+import type { RoomAct } from "../../host-inputs";
 import { useHostInputs } from "../../host-inputs";
 import { arrangeSections } from "../../lib/sections";
 import { isCensusRunning, isIngestActive } from "../../lib/ingest";
@@ -25,6 +27,9 @@ export interface SessionsColumnProps {
   readonly isWorktreeVisible: boolean | null;
   readonly onToggleWorktree: () => void;
   readonly onSessionSelect: (session: SessionRow) => void;
+  /** R5: the host's acts after the head's own, and its card under the head. */
+  readonly hostActs?: readonly RoomAct[] | null | undefined;
+  readonly hostCard?: ReactNode;
 }
 
 export function SessionsColumn({
@@ -40,6 +45,8 @@ export function SessionsColumn({
   isWorktreeVisible,
   onToggleWorktree,
   onSessionSelect,
+  hostActs = null,
+  hostCard = null,
 }: SessionsColumnProps) {
   const ingestActive = isIngestActive(ingest);
   const censusRunning = isCensusRunning(ingest);
@@ -70,7 +77,11 @@ export function SessionsColumn({
           censusRunning={censusRunning}
           isWorktreeVisible={isWorktreeVisible}
           onToggleWorktree={onToggleWorktree}
+          hostActs={hostActs}
         />
+      )}
+      {project !== null && hostCard !== null && hostCard !== undefined && hostCard !== false && (
+        <div className="ah-hostcard">{hostCard}</div>
       )}
       {censusRunning && <p className="ah-ingest-note">More conversations will appear as discovery finishes.</p>}
       <div className="ah-veilhost">

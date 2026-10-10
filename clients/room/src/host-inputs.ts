@@ -133,6 +133,21 @@ export interface RoomSessionRow {
   readonly reason?: ReactNode;
 }
 
+/* ── R5: the heads ② ④ ─────────────────────────────────────────────────── */
+
+/** What ② knows when it asks for its head's acts. */
+export interface RoomProjectContext {
+  /** The folder ③ shows, by the host's key (R6), or null. */
+  readonly folder: string | null;
+}
+
+/** ④'s head: the host's acts, before the room's activity act, or the reason
+ * after the range. */
+export interface RoomHeadActs {
+  readonly acts?: readonly RoomAct[] | undefined;
+  readonly reason?: ReactNode;
+}
+
 /* ── everything, as `HistoryRoomProps` carries it ───────────────────────── */
 
 export interface RoomHostInputs {
@@ -147,6 +162,14 @@ export interface RoomHostInputs {
   readonly sessionSections?: ((projectId: string) => readonly RoomSection[] | null | undefined) | undefined;
   /** R4 — a session row's decorations and host key. */
   readonly sessionRow?: ((session: SessionRow) => RoomSessionRow | null | undefined) | undefined;
+  /** R5 — ②'s head acts, after the room's own; one may be `primary`. */
+  readonly projectActs?:
+    | ((projectId: string, context: RoomProjectContext) => readonly RoomAct[] | null | undefined)
+    | undefined;
+  /** R5 — a card under ②'s head, above its list (suggestions). */
+  readonly projectCard?: ((projectId: string) => ReactNode) | undefined;
+  /** R5 — ④'s head, for the session it names. */
+  readonly sessionActs?: ((session: SessionRow) => RoomHeadActs | null | undefined) | undefined;
 }
 
 /** Only the host's inputs, picked out of the room's props. */
@@ -157,6 +180,9 @@ export function hostInputsOf(props: RoomHostInputs): RoomHostInputs {
     projectSections: props.projectSections,
     sessionSections: props.sessionSections,
     sessionRow: props.sessionRow,
+    projectActs: props.projectActs,
+    projectCard: props.projectCard,
+    sessionActs: props.sessionActs,
   };
 }
 

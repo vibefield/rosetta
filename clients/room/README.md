@@ -118,6 +118,18 @@ The callbacks are called while the room renders, so a host keeps them cheap.
   act is a box under one covering button (the selection, named as the row
   always was) with the act above it, because a button cannot hold another;
   the act is pressed, never a menu, and pressing it leaves the selection.
+- **`projectActs(projectId, { folder })`** → `RoomAct[]` — ②'s head acts,
+  drawn as the head's own icon buttons after the room's (one may be
+  `primary`, on the go fill); `folder` is the folder ③ shows, by the host's
+  key (`folders`, below). **`projectCard(projectId)`** — a card under ②'s
+  head, above its list. **`sessionActs(session)`** → `{ acts?, reason? }` —
+  ④'s head, for the session it names: acts as pills before the activity act,
+  or the reason as a caption after the range.
+- An act with a `menu` (`RoomMenu`: groups of rows, each with a mark, words,
+  a second line, an aside, a check, a step in) opens the room's popover rows
+  under it. The rows open on the checked one, the arrow keys walk them, a
+  choice or a press outside or Escape closes them; past `filterAfter` rows a
+  filter heads them. They listen only while open.
 
 ## The reader (`TranscriptReader`)
 

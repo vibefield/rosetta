@@ -22,6 +22,8 @@ import type { ProjectViewModel } from "../lib/model";
 import { NO_SPEND, addSpend, coverage, usdText } from "../lib/spend";
 import type { Spend } from "../lib/spend";
 import { useRoom } from "../room-context";
+import type { RoomAct } from "../host-inputs";
+import { HostAct } from "./HostAct";
 
 type TintStyle = CSSProperties & { "--tint": string };
 const MAX_TREEMAP_PROJECT_COUNT = 10;
@@ -58,6 +60,8 @@ export interface ProjectSummaryPanelProps {
   /** `null` means the browser build has no desktop worktree integration. */
   readonly isWorktreeVisible: boolean | null;
   readonly onToggleWorktree: () => void;
+  /** R5: the host's acts, after the head's own (New agent, the primary, last). */
+  readonly hostActs?: readonly RoomAct[] | null | undefined;
 }
 
 export function ProjectSummaryPanel({
@@ -70,6 +74,7 @@ export function ProjectSummaryPanel({
   censusRunning,
   isWorktreeVisible,
   onToggleWorktree,
+  hostActs = null,
 }: ProjectSummaryPanelProps) {
   // Aggregate figures become available after canonical publication and
   // their own requests finish, independently of transcript readiness.
@@ -162,6 +167,7 @@ export function ProjectSummaryPanel({
               <GitHubGlyph />
             </button>
           )}
+          {hostActs?.map((act) => <HostAct key={act.key} act={act} place="head" />)}
         </span>
       </div>
       {isExpanded && (

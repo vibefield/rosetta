@@ -69,6 +69,8 @@ import {
 } from "./transcript/timeline-meta-file-source";
 
 import { scrollRowTo } from "./transcript/scroll-to-row";
+import type { RoomHeadActs } from "../host-inputs";
+import { HostAct } from "./HostAct";
 import { activityCuts } from "./transcript/activity-plan";
 import { ReadingSessionProvider, useRoom } from "../room-context";
 
@@ -127,6 +129,9 @@ export interface TranscriptColumnProps {
    * acts — no session work, no day menu, no "Latest", no dialog — and a
    * landing stays marked rather than fading. */
   readonly reader?: boolean | undefined;
+  /** R5: the host's acts in the head, before the activity act, or its reason
+   * after the range. */
+  readonly headActs?: RoomHeadActs | null | undefined;
 }
 
 export function TranscriptColumn(props: TranscriptColumnProps) {
@@ -157,6 +162,7 @@ function SessionTranscript({
   onOpenThread,
   onBackToParent,
   reader = false,
+  headActs = null,
 }: TranscriptColumnProps) {
   const { sessions: leases, host } = useRoom();
   const openInBrowser = useMemo(
@@ -478,6 +484,10 @@ function SessionTranscript({
           ) : (
             <span className="ah-caption tnum">{range}</span>
           )}
+          {session !== null && headActs !== null && headActs.reason !== undefined && headActs.reason !== null && (
+            <span className="ah-caption ah-headreason">{headActs.reason}</span>
+          )}
+          {session !== null && headActs?.acts?.map((act) => <HostAct key={act.key} act={act} place="pill" />)}
           {session !== null && (
             // §05 — the activity act, beside the range. Folded is the default;
             // the reader who wants the build log gets it in one press, and the

@@ -279,7 +279,13 @@ function RoomBody({
   readonly frameStyle: CSSProperties;
 }) {
   const { catalog, sessions, host, storage, tints } = useRoom();
-  const { projectTint: hostTint, sessionRow: hostSessionRow } = useHostInputs();
+  const {
+    projectTint: hostTint,
+    sessionRow: hostSessionRow,
+    projectActs: hostProjectActs,
+    projectCard: hostProjectCard,
+    sessionActs: hostSessionActs,
+  } = useHostInputs();
   const overlayOpen = useRoomOverlayOpen();
   const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog);
   const nowMs = useNow(meta);
@@ -692,6 +698,8 @@ function RoomBody({
               }
               onToggleWorktree={worktree.toggle}
               onSessionSelect={(selectedSession) => { setSessionId(selectedSession.id); setInspectedThread(null); }}
+              hostActs={projectId === null ? null : (hostProjectActs?.(projectId, { folder: null }) ?? null)}
+              hostCard={projectId === null || hostProjectCard === undefined ? null : hostProjectCard(projectId)}
             />
             {/* Always in the grid — a closed guest is a 0px track, and the
                 measure takes back whatever it gives up. */}
@@ -722,6 +730,7 @@ function RoomBody({
               homeDirectory={home}
               onOpenThread={openThread}
               onBackToParent={session?.parent_session_id == null ? null : () => openThread(session.parent_session_id!)}
+              headActs={session === null ? null : (hostSessionActs?.(session) ?? null)}
             />
           </div>
         )}
