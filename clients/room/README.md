@@ -130,6 +130,16 @@ The callbacks are called while the room renders, so a host keeps them cheap.
   under it. The rows open on the checked one, the arrow keys walk them, a
   choice or a press outside or Escape closes them; past `filterAfter` rows a
   filter heads them. They listen only while open.
+- **`folders(projectId)`** → `RoomFolders` — ③'s head becomes a dropdown of
+  the host's folders, by group, each keyed by the host (two machines spell a
+  path alike, so the check goes by key, never by path), with its mark in
+  front of the name. ③ shows the reader's pick while the session stays, else
+  the folder `of(session)` names for the selected session, else `initial`
+  (the usual place), else the folder at the room's own root — and tells the
+  host which through `onShow(key)`; `projectActs` hears it as `folder`. A
+  folder with `elsewhere` is never opened: ③ draws the host's honest state
+  in its place. `caption` replaces git's caption while it is shown.
+  `WorktreeList` is untouched.
 
 ## The reader (`TranscriptReader`)
 

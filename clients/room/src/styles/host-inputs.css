@@ -143,3 +143,29 @@
 }
 .ah-menu__aside { flex: none; color: var(--vf-text-faint); font-size: 10px; font-variant-numeric: tabular-nums; }
 .ah-menu__empty { margin: 0; padding: 18px 12px; color: var(--vf-text-faint); font-size: 11px; text-align: center; }
+
+/* R6 — ③'s head as the folder list: the column head's marker, the folder's
+   mark and name (an id, in mono), the count, and a caret — one button. A
+   folder the host marks elsewhere puts the host's honest state where the
+   worktree would be. */
+.ah-col > header > .ah-menuhost { flex: 0 1 auto; min-width: 0; }
+.ah-folderpick {
+  display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%;
+  height: 30px; margin: 0 -6px; padding: 0 6px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--vf-text-primary);
+  transition: background-color 140ms ease;
+}
+.ah-folderpick:hover, .ah-folderpick[aria-expanded="true"] { background: var(--vf-fill); }
+.ah-folderpick:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 0; }
+.ah-folderpick > i { flex: none; width: 3px; height: 14px; border-radius: 999px; background: var(--tint); }
+.ah-folderpick__mark { flex: none; display: inline-flex; color: var(--vf-text-secondary); }
+.ah-folderpick__mark svg { width: 12px; height: 12px; }
+.ah-folderpick > strong {
+  min-width: 0; font-family: var(--vf-font-mono); font-size: 11px; font-weight: 500; letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-folderpick > svg { flex: none; width: 11px; height: 11px; color: var(--vf-text-tertiary); }
+.ah-elsewhere {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 24px 20px; color: var(--vf-text-tertiary); font-size: 12px; line-height: 1.5; text-align: center;
+}

@@ -148,6 +148,53 @@ export interface RoomHeadActs {
   readonly reason?: ReactNode;
 }
 
+/* ── R6: ③'s folder ─────────────────────────────────────────────────────── */
+
+/** One folder the host offers ③. */
+export interface RoomFolder {
+  /** The host's key — never a path: two machines spell paths alike. */
+  readonly key: string;
+  /** The folder: what the head names and what the worktree opens. */
+  readonly path: string;
+  /** In front of the path, in the head and in its row. */
+  readonly mark?: ReactNode;
+  /** Its row's words. Absent: the path, home-abbreviated. */
+  readonly label?: ReactNode;
+  /** Its row's second line (the branch, who works there). */
+  readonly detail?: ReactNode;
+  readonly aside?: ReactNode;
+  /** One step in, under the folder above it (a linked worktree). */
+  readonly depth?: 0 | 1 | undefined;
+  /** The head's caption while it is shown ("Studio · main"). Absent: git's. */
+  readonly caption?: string | undefined;
+  /** This folder cannot be opened here: ③ draws this, the host's honest
+   * state, instead of opening it. */
+  readonly elsewhere?: ReactNode;
+}
+
+export interface RoomFolderGroup {
+  readonly key: string;
+  readonly title?: ReactNode;
+  readonly folders: readonly RoomFolder[];
+}
+
+/** ③'s folder list for one project: its head becomes the dropdown. */
+export interface RoomFolders {
+  readonly groups: readonly RoomFolderGroup[];
+  /** The folder ③ opens on while no session is chosen (the usual place).
+   * Absent: the room's own root. */
+  readonly initial?: string | undefined;
+  /** The folder a session ran in: ③ follows it when the session is chosen.
+   * Absent, or null for a session: the room's own root for its folder. */
+  readonly of?: ((session: SessionRow) => string | null | undefined) | undefined;
+  /** Past this many folders a filter heads the list. */
+  readonly filterAfter?: number | undefined;
+  readonly filterPlaceholder?: string | undefined;
+  /** ③ shows this folder now — the reader's pick or the session followed;
+   * null when it shows none of the host's. */
+  readonly onShow?: ((key: string | null) => void) | undefined;
+}
+
 /* ── everything, as `HistoryRoomProps` carries it ───────────────────────── */
 
 export interface RoomHostInputs {
@@ -170,6 +217,8 @@ export interface RoomHostInputs {
   readonly projectCard?: ((projectId: string) => ReactNode) | undefined;
   /** R5 — ④'s head, for the session it names. */
   readonly sessionActs?: ((session: SessionRow) => RoomHeadActs | null | undefined) | undefined;
+  /** R6 — ③'s folders, per project. */
+  readonly folders?: ((projectId: string) => RoomFolders | null | undefined) | undefined;
 }
 
 /** Only the host's inputs, picked out of the room's props. */
@@ -183,6 +232,7 @@ export function hostInputsOf(props: RoomHostInputs): RoomHostInputs {
     projectActs: props.projectActs,
     projectCard: props.projectCard,
     sessionActs: props.sessionActs,
+    folders: props.folders,
   };
 }
 
