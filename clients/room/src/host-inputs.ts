@@ -10,6 +10,69 @@
 // `SessionRow.id`, as the host's catalog handed them in.
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
+import type { SessionRow } from "@rosetta/protocol";
+
+/* ── the room's popover rows, as a host fills them ──────────────────────── */
+
+/** One row of a menu the room draws for its host. */
+export interface RoomMenuItem {
+  readonly key: string;
+  /** What leads the row — a mark the host draws. Never interactive. */
+  readonly mark?: ReactNode;
+  readonly label: ReactNode;
+  /** A second line under the label (a path, "asleep · 2 h"). */
+  readonly detail?: ReactNode;
+  /** At the row's right end ("here", a count, "last used"). */
+  readonly aside?: ReactNode;
+  /** The chosen one: drawn with the check. */
+  readonly checked?: boolean | undefined;
+  /** Drawn, not choosable; its `detail` says why. */
+  readonly disabled?: boolean | undefined;
+  /** One step in, under the row above it (a worktree under its checkout). */
+  readonly depth?: 0 | 1 | undefined;
+  /** The words a menu's filter matches. Absent: the row always shows. */
+  readonly filterText?: string | undefined;
+  readonly onSelect?: (() => void) | undefined;
+}
+
+export interface RoomMenuGroup {
+  readonly key: string;
+  /** The group's head ("Starts in", a desktop's mark and name). */
+  readonly title?: ReactNode;
+  readonly items: readonly RoomMenuItem[];
+}
+
+/** A menu: groups of rows. The room opens it under the control that owns it,
+ * closes it on a choice, a press outside or Escape, and moves through its
+ * rows with the arrow keys while it is open. */
+export interface RoomMenu {
+  /** Its accessible name. */
+  readonly label: string;
+  readonly groups: readonly RoomMenuGroup[];
+  /** Past this many rows a filter heads the menu; its placeholder is
+   * `filterPlaceholder` ("Filter 34 folders"). Absent: never. */
+  readonly filterAfter?: number | undefined;
+  readonly filterPlaceholder?: string | undefined;
+  /** What the menu says with no rows to show. */
+  readonly empty?: ReactNode;
+}
+
+/** A host act, drawn as one of the room's own buttons in the slot that holds
+ * it. The room presses it and draws nothing about what it means. */
+export interface RoomAct {
+  readonly key: string;
+  /** Its accessible name and its tooltip. */
+  readonly label: string;
+  /** What the button shows: the host's glyph, its word, or both. */
+  readonly content: ReactNode;
+  /** The slot's one primary act, on the room's primary fill (② head only). */
+  readonly primary?: boolean | undefined;
+  readonly disabled?: boolean | undefined;
+  readonly onPress?: (() => void) | undefined;
+  /** The act opens these rows instead of pressing (② and ④ heads only; a
+   * session row's act is pressed, never a menu). */
+  readonly menu?: RoomMenu | undefined;
+}
 
 /* ── R2–R3: the ledger ① and the lists ─────────────────────────────────── */
 
@@ -51,6 +114,25 @@ export interface RoomSection {
   } | undefined;
 }
 
+/* ── R4: a session row ② ───────────────────────────────────────────────── */
+
+/** A session row's host decorations. */
+export interface RoomSessionRow {
+  /** The host's own key for the session. The room never reads it: it rides
+   * the selection (`RoomSelection.hostKey`) back out, untouched. */
+  readonly hostKey?: string | undefined;
+  /** Drawn in the row's id slot in place of the native id (the host's mark
+   * and the folder's path). Never interactive. */
+  readonly id?: ReactNode;
+  /** The id slot's tooltip. Absent with `id`: none. */
+  readonly idTitle?: string | undefined;
+  /** At the row's right end, before its time (Resume, Jump to). Pressed,
+   * never a menu; the row itself stays the selection. */
+  readonly act?: RoomAct | undefined;
+  /** Where the act would be, when there is none: the reason, quiet. */
+  readonly reason?: ReactNode;
+}
+
 /* ── everything, as `HistoryRoomProps` carries it ───────────────────────── */
 
 export interface RoomHostInputs {
@@ -63,6 +145,8 @@ export interface RoomHostInputs {
   readonly projectSections?: readonly RoomSection[] | undefined;
   /** R3 — ②'s sections, per project. */
   readonly sessionSections?: ((projectId: string) => readonly RoomSection[] | null | undefined) | undefined;
+  /** R4 — a session row's decorations and host key. */
+  readonly sessionRow?: ((session: SessionRow) => RoomSessionRow | null | undefined) | undefined;
 }
 
 /** Only the host's inputs, picked out of the room's props. */
@@ -72,6 +156,7 @@ export function hostInputsOf(props: RoomHostInputs): RoomHostInputs {
     projectRow: props.projectRow,
     projectSections: props.projectSections,
     sessionSections: props.sessionSections,
+    sessionRow: props.sessionRow,
   };
 }
 

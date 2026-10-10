@@ -51,17 +51,36 @@ of figures, two transcripts with images and web lines, all relative to now).
 
 ## What a host decides (`HistoryRoomProps`)
 
-`surface` (`"paper"`, the default, paints the room's own ground and plate;
+Its host inputs (below), and: `surface` (`"paper"`, the default, paints the room's own ground and plate;
 `"host"` paints neither and turns the paper fades into frost over whatever the
 host paints) · `portalContainer` (where the dialogs and the search sheet
 portal; their sizes are percentages of what holds them) · `edgeInset`,
-`scrollFoot`, `floatingFoot` · `onSelect` (the selected session's id, native id
-and folder, on mount and on every change) · `storagePrefix` and `storage` ·
+`scrollFoot`, `floatingFoot` · `onSelect` (the selected session's id, native id,
+folder and the host's key when it gave one, on mount and on every change) · `storagePrefix` and `storage` ·
 `initialSummaryTab` · `unavailable` and `consent` (the host's words and its
 consent screen) · `emptyPrompt` (the empty transcript's sentence in the host's
 words; absent, the room's own, below) · `search` (the room's own strip and
 sheet, with the host owning the open state; absent, neither is drawn). The ref
 handle offers `openAt({ sessionId, timelineId? })` and `stepMatch(delta)`.
+
+**The search keys are the host's (RO-14).** The room binds no key of its own.
+The host's window opens the sheet and walks the matches: rosetta's app binds
+⌘K (Ctrl K off a Mac) and `/` to the sheet, and ⌘G and ⌘⇧G to the matches. So
+the host binds, and the room prints only the keys the host says it binds:
+
+| The host passes | The launcher prints | The empty transcript says |
+|---|---|---|
+| `search`, no `shortcut` | the room's own label, ⌘K (Ctrl K off a Mac) | "Pick a session — or press ⌘K to search, which is the front door." |
+| `search.shortcut: { label }` | `label`, as given | the same sentence with `label` |
+| `search.shortcut: null` (it binds no key) | no legend | "Pick a session." |
+| no `search` | no launcher | "Pick a session." |
+| `emptyPrompt`, beside any row above | as that row says | the host's sentence |
+
+`emptyPrompt` is a prop of the room, not of `search`, so a host that draws no
+room search (VibeField, whose search is its own Peek) can still name its own
+key there. A host that passes `search` binds ⌘G and ⌘⇧G (Ctrl G and Ctrl Shift
+G off a Mac) to the handle's `stepMatch(1)` and `stepMatch(-1)`, because the
+match stepper the sheet leaves in the transcript's head names those keys.
 
 ## What a host may add (`RoomHostInputs`)
 
@@ -91,25 +110,14 @@ The callbacks are called while the room renders, so a host keeps them cheap.
   draws a foot section as one line (its words, its count, its act, such as
   "Show older") that opens in place, and opens by itself when it holds the
   selected row. ②'s head counts what its sections draw.
-
-**The search keys are the host's (RO-14).** The room binds no key of its own.
-The host's window opens the sheet and walks the matches: rosetta's app binds
-⌘K (Ctrl K off a Mac) and `/` to the sheet, and ⌘G and ⌘⇧G to the matches. So
-the host binds, and the room prints only the keys the host says it binds:
-
-| The host passes | The launcher prints | The empty transcript says |
-|---|---|---|
-| `search`, no `shortcut` | the room's own label, ⌘K (Ctrl K off a Mac) | "Pick a session — or press ⌘K to search, which is the front door." |
-| `search.shortcut: { label }` | `label`, as given | the same sentence with `label` |
-| `search.shortcut: null` (it binds no key) | no legend | "Pick a session." |
-| no `search` | no launcher | "Pick a session." |
-| `emptyPrompt`, beside any row above | as that row says | the host's sentence |
-
-`emptyPrompt` is a prop of the room, not of `search`, so a host that draws no
-room search (VibeField, whose search is its own Peek) can still name its own
-key there. A host that passes `search` binds ⌘G and ⌘⇧G (Ctrl G and Ctrl Shift
-G off a Mac) to the handle's `stepMatch(1)` and `stepMatch(-1)`, because the
-match stepper the sheet leaves in the transcript's head names those keys.
+- **`sessionRow(session)`** → `{ hostKey?, id?, idTitle?, act?, reason? }` — a
+  session row's id slot drawn by the host (its mark and the folder, in the
+  id's face), its act (`RoomAct`: Resume, Jump to) or the reason where the
+  act would be, before the row's time; and the host's own key, which rides
+  the selection back out as `RoomSelection.hostKey`, untouched. A row with an
+  act is a box under one covering button (the selection, named as the row
+  always was) with the act above it, because a button cannot hold another;
+  the act is pressed, never a menu, and pressing it leaves the selection.
 
 ## The reader (`TranscriptReader`)
 

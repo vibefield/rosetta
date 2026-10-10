@@ -161,6 +161,9 @@ export interface RoomSelection {
   readonly nativeSessionId: string;
   /** Where the session ran; null when the index does not know. */
   readonly folder: string | null;
+  /** The host's own key for the session (`RoomSessionRow.hostKey`), passed
+   * through untouched. Absent when the host gives none. */
+  readonly hostKey?: string | undefined;
 }
 
 /** A place in the record: a session, and optionally one of its messages. */
@@ -276,7 +279,7 @@ function RoomBody({
   readonly frameStyle: CSSProperties;
 }) {
   const { catalog, sessions, host, storage, tints } = useRoom();
-  const { projectTint: hostTint } = useHostInputs();
+  const { projectTint: hostTint, sessionRow: hostSessionRow } = useHostInputs();
   const overlayOpen = useRoomOverlayOpen();
   const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog);
   const nowMs = useNow(meta);
@@ -476,12 +479,21 @@ function RoomBody({
   );
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
-  const selectionKey = selected === null ? null : `${selected.id}\u0000${selected.native_session_id}\u0000${selected.cwd ?? ""}`;
+  // R4: the host's key rides out with the selection, never read here.
+  const hostKey = selected === null ? undefined : hostSessionRow?.(selected)?.hostKey;
+  const selectionKey = selected === null
+    ? null
+    : `${selected.id}\u0000${selected.native_session_id}\u0000${selected.cwd ?? ""}${hostKey === undefined ? "" : `\u0000${hostKey}`}`;
   useEffect(() => {
     onSelectRef.current?.(
       selected === null
         ? null
-        : { sessionId: selected.id, nativeSessionId: selected.native_session_id, folder: selected.cwd },
+        : {
+            sessionId: selected.id,
+            nativeSessionId: selected.native_session_id,
+            folder: selected.cwd,
+            ...(hostKey === undefined ? {} : { hostKey }),
+          },
     );
     // `selectionKey` is the selection's identity; `selected` is read with it.
   }, [selectionKey]);

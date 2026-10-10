@@ -37,3 +37,34 @@
 .ah-fold__count { font-size: 9.5px; font-variant-numeric: tabular-nums; }
 .ah-fold__act { margin-left: auto; color: var(--vf-text-secondary); font-size: 10.5px; }
 .ah-fold:hover .ah-fold__act { color: var(--vf-text-primary); }
+
+/* R4 — a session row's id slot holds the host's mark and folder in the id's
+   own face; its end holds the host's act (or the reason) before the time. */
+.ah-session-list-item__native-id[data-host] { overflow: hidden; }
+.ah-session-list-item__native-id[data-host] svg { flex: none; width: 11px; height: 11px; }
+.ah-session-list-item__end { flex: none; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.ah-session-list-item__reason {
+  color: var(--vf-text-faint); font-size: 9.5px; white-space: nowrap;
+}
+/* With an act the row is a box: one button covers it (the selection), the
+   drawing passes the pointer through to it, and the act sits above. */
+.ah-session-list-item[data-host-act] { position: relative; }
+.ah-session-list-item[data-host-act] > :not(.ah-session-list-item__hit) { pointer-events: none; }
+.ah-session-list-item__hit {
+  position: absolute; inset: 0; z-index: 0; padding: 0; border: 0; border-radius: inherit;
+  background: transparent; cursor: pointer;
+}
+.ah-session-list-item__hit:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
+.ah-session-list-item[data-host-act] > :not(.ah-session-list-item__hit) { position: relative; z-index: 1; }
+/* the act: quiet at rest, a 20px pill under the pointer */
+.ah-hostact[data-place="row"] {
+  pointer-events: auto;
+  display: inline-flex; align-items: center; gap: 4px; height: 20px; margin: -3px 0; padding: 0 7px;
+  border: 0; border-radius: 999px; background: transparent;
+  color: var(--vf-text-tertiary); font-size: 10px; font-weight: 500; white-space: nowrap;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+.ah-hostact[data-place="row"]:hover { background: var(--vf-fill-hover); color: var(--vf-text-primary); }
+.ah-hostact[data-place="row"]:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; }
+.ah-hostact[data-place="row"]:disabled { opacity: 0.5; cursor: default; }
+.ah-hostact[data-place="row"] svg { flex: none; width: 12px; height: 12px; }
