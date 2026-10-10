@@ -481,6 +481,8 @@ function RoomBody({
   const [pickedFolder, setPickedFolder] = useState<
     { readonly projectId: string; readonly sessionId: string | null; readonly key: string } | null
   >(null);
+  // A pick lasts while its session does: choosing a session again follows it.
+  useEffect(() => setPickedFolder(null), [projectId, sessionId]);
   const shownFolder = useMemo(() => {
     if (hostFolders === null) return null;
     const all = hostFolders.groups.flatMap((group) => group.folders);
