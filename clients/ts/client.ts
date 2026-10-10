@@ -41,6 +41,7 @@ import type { TimelineMetaPlanSource } from "./generated/TimelineMetaPlanSource"
 import type { ToolInteraction } from "./generated/ToolInteraction";
 import type { PricingResponse } from "./generated/PricingResponse";
 import type { UsageResponse } from "./generated/UsageResponse";
+import type { ActivityResponse } from "./generated/ActivityResponse";
 import type { DayUsageResponse } from "./generated/DayUsageResponse";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
@@ -593,6 +594,32 @@ export class RosettaClient {
     return this.request(
       `/api/projects/${encodeURIComponent(projectId)}/usage/day${queryString({
         day, offset_minutes: offsetMinutes,
+      })}`,
+      withSignal(signal),
+    );
+  }
+
+  /** Which top-level sessions were active in a window of at most seven days,
+   * newest recorded activity first, each with its tree's turns and the gaps
+   * inside them longer than `gapMs` (15 minutes unless asked). It spans
+   * sessions, so it needs the bearer. */
+  activity(
+    window: {
+      sinceMs: number;
+      untilMs?: number;
+      sessions?: readonly string[];
+      gapMs?: number;
+      limit?: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<ActivityResponse> {
+    return this.request(
+      `/api/activity${queryString({
+        since_ms: window.sinceMs,
+        until_ms: window.untilMs,
+        sessions: window.sessions === undefined ? undefined : window.sessions.join(","),
+        gap_ms: window.gapMs,
+        limit: window.limit,
       })}`,
       withSignal(signal),
     );

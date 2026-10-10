@@ -31,6 +31,7 @@ pub use rosetta_store::timeline_meta::{
     TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource, TimelineMetaPlan,
     TimelineMetaPlanSource, TimelineMetaTask, TimelineMetaWorkflow,
 };
+pub use rosetta_store::turns::{TurnGap, TurnSpan};
 
 /// Bumped on any breaking change to routes or frame shapes.
 /// 21 (2026-09-22): usage facts, read-time response cost, spend beside every
@@ -40,7 +41,9 @@ pub use rosetta_store::timeline_meta::{
 /// unpriced-model coverage report on `/api/pricing`.
 /// 24 (2026-09-30): cumulative reported-cost adjustment beside aggregate spend.
 /// 25 (2026-10-01): WebP image renditions on asset and canonical file-read URLs.
-pub const PROTOCOL_VERSION: u32 = 26;
+/// 27 (2026-10-09): `/api/activity`, every top-level session's turn spans in
+/// a time window (ARCHITECTURE §5).
+pub const PROTOCOL_VERSION: u32 = 27;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -497,6 +500,34 @@ pub struct UsageResponse {
 pub struct DayUsageResponse {
     pub day: String,
     pub models: Vec<ModelHour>,
+}
+
+/// One top-level session with recorded activity in an `/api/activity`
+/// window: its row as `/api/sessions` serves it, and its tree's turns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ActivitySession {
+    pub session: SessionRow,
+    /// The session tree's turns touching the window, oldest first.
+    pub turns: Vec<TurnSpan>,
+    /// True while the session's rows are behind the cold admission barrier:
+    /// its turns are not public yet, so `turns` is empty without meaning
+    /// "no turns".
+    pub turns_withheld: bool,
+}
+
+/// `GET /api/activity`: which top-level sessions were active in a window and
+/// when, newest recorded activity first. `truncated` says sessions beyond
+/// the limit were left out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ActivityResponse {
+    pub since_ms: Ms,
+    pub until_ms: Ms,
+    /// The threshold a silence inside a turn passed to be reported as a gap.
+    pub gap_ms: Ms,
+    pub sessions: Vec<ActivitySession>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -199,7 +199,7 @@ only that a grant carries it.
 
 **A grant never opens** the lists (`/api/runtimes`, `/api/projects`,
 `/api/sessions`), search, `/ws/meta`, `/api/status`, `/api/discoveries`,
-`/api/pricing`, the project aggregates or the writes, whatever its scope.
+`/api/pricing`, `/api/activity`, the project aggregates or the writes, whatever its scope.
 Those routes need the bearer.
 
 ### 5.5 What v1 does not do

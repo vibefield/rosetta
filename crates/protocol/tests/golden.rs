@@ -14,6 +14,10 @@ use rosetta_core::timeline::{
     ToolInteraction, ToolStatus, ToolStatusFact, WorkflowRunStatus,
 };
 use rosetta_protocol::{
+    ActivityResponse, ActivitySession, DayUsageResponse, ModelHour, PricingResponse, PricingSource,
+    SessionActivity, Spend, TurnGap, TurnSpan, UnpricedModel, UsageCost,
+};
+use rosetta_protocol::{
     ApiError, BackfillState, BoostRequest, BoostResponse, CollaborationTimeline, CommandResponse,
     ContributionResponse, ContributionRow, DaemonStatus, DiscoveriesResponse, DiscoveryRow,
     EnableRequest, EnableResponse, ErrorCode, HeatmapDay, HeatmapResponse, HourTotal, HubStatus,
@@ -24,9 +28,6 @@ use rosetta_protocol::{
     StatusResponse, StreamState, TimelineEntryResponse, TimelineMeta, TimelineMetaArtifact,
     TimelineMetaArtifactSource, TimelineMetaPlan, TimelineMetaPlanSource, TimelineMetaTask,
     TimelineMetaWorkflow, TimelinePage, TokenSnapshot, UsageResponse,
-};
-use rosetta_protocol::{
-    DayUsageResponse, ModelHour, PricingResponse, PricingSource, Spend, UnpricedModel, UsageCost,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -686,6 +687,45 @@ fn exemplars() -> serde_json::Value {
         "day_usage": DayUsageResponse {
             day: "2026-09-30".into(),
             models: vec![ModelHour { hour: 16, model: "claude-opus-5-5".into(), tokens: 123 }],
+        },
+        "activity": ActivityResponse {
+            since_ms: 1_791_460_800_000,
+            until_ms: 1_791_547_200_000,
+            gap_ms: 900_000,
+            sessions: vec![ActivitySession {
+                // a top-level session: the route answers roots only
+                session: SessionRow {
+                    parent_session_id: None,
+                    root_session_id: "s1".into(),
+                    role: SessionRole::Main,
+                    activity: Some(SessionActivity {
+                        first_at: 1_791_536_400_000,
+                        last_at: 1_791_545_400_000,
+                    }),
+                    ..session_row()
+                },
+                turns: vec![
+                    TurnSpan {
+                        group_id: "g1".into(),
+                        kind: GroupKind::HumanTurn,
+                        first_at: 1_791_536_400_000,
+                        last_at: 1_791_540_000_000,
+                        gaps: vec![TurnGap {
+                            from_ms: 1_791_537_000_000,
+                            to_ms: 1_791_539_400_000,
+                        }],
+                    },
+                    TurnSpan {
+                        group_id: "g2".into(),
+                        kind: GroupKind::AgentCycle,
+                        first_at: 1_791_544_000_000,
+                        last_at: 1_791_545_400_000,
+                        gaps: vec![],
+                    },
+                ],
+                turns_withheld: false,
+            }],
+            truncated: false,
         },
         "ingest_phases": [
             IngestPhase::Discovering,
