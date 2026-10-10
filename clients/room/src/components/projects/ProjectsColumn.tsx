@@ -10,6 +10,8 @@ import { ListSummaryHeader, ListToolbar, SegmentedControl } from "../ui";
 import { IngestStatus } from "../IngestStatus";
 import type { IngestActivity } from "../../lib/ingest-activity";
 import { ProjectList } from "./ProjectList";
+import { useHostInputs } from "../../host-inputs";
+import { arrangeSections } from "../../lib/sections";
 
 export type ProjectSort = "recent" | "token";
 
@@ -75,6 +77,13 @@ export function ProjectsColumn({
     [projects, sort, activityOrder],
   );
 
+  // R3: the host's sections over the room's own order.
+  const { projectSections } = useHostInputs();
+  const sections = useMemo(
+    () => (projectSections === undefined ? null : arrangeSections(projectSections, visibleProjects, (p) => p.row.id)),
+    [projectSections, visibleProjects],
+  );
+
   return (
     <div className="ah-col">
       {activity !== null ? (
@@ -111,6 +120,7 @@ export function ProjectsColumn({
           projectBackfills={backfills}
           pending={censusRunning}
           onProjectSelect={onProjectSelect}
+          sections={sections}
         />
       </div>
     </div>

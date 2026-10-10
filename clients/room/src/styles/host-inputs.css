@@ -1,0 +1,39 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   WHAT A HOST ADDS (`RoomHostInputs`). Every rule here dresses an element the
+   room draws only when its host hands it something — a mark, a section, an
+   act — so a room given nothing (rosetta's app) never matches one. The host's
+   own drawings sit inside in the room's faces: ink, sizes, the list's breaks.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* R2 — a project row's marks lead its path line; its second line sits under
+   it in the path's quiet ink; the accent spans the extra row. */
+.ah-project-list-item__path[data-marks] { display: flex; align-items: center; gap: 5px; }
+.ah-project-list-item__marks {
+  flex: none; display: inline-flex; align-items: center; gap: 3px;
+  color: var(--vf-text-tertiary); line-height: 0;
+}
+.ah-project-list-item__marks svg { width: 11px; height: 11px; }
+.ah-project-list-item__line {
+  grid-column: 2; min-width: 0; margin-top: 2px;
+  color: var(--vf-text-tertiary); font-size: 10px; line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ah-project-list-item[data-line] .ah-project-list-item__accent { grid-row: 1 / span 4; }
+
+/* R3 — a section's head is the list's own break (`.ah-day`); a foot section
+   folds into one line of the same face, its act at the end. */
+.ah-scroll > .ah-section:first-child { margin-top: 0; }
+.ah-fold {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  margin-top: 6px; padding: 9px 10px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--vf-text-faint); text-align: left;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.ah-fold:hover { background: var(--vf-fill); color: var(--vf-text-tertiary); }
+.ah-fold:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
+.ah-fold__label {
+  font-size: 9.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em;
+}
+.ah-fold__count { font-size: 9.5px; font-variant-numeric: tabular-nums; }
+.ah-fold__act { margin-left: auto; color: var(--vf-text-secondary); font-size: 10.5px; }
+.ah-fold:hover .ah-fold__act { color: var(--vf-text-primary); }

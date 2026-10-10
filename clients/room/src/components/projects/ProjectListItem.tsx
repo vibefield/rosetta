@@ -7,6 +7,7 @@ import { lastActive, tildePath, tokenText } from "../../lib/format";
 import type { ProjectViewModel } from "../../lib/model";
 import { coverage, fmtUsd, spendDescription } from "../../lib/spend";
 import type { Spend } from "../../lib/spend";
+import { useHostInputs } from "../../host-inputs";
 import { ProjectActivitySparkline } from "./ProjectActivitySparkline";
 
 type ProjectListItemStyle = CSSProperties & {
@@ -102,6 +103,11 @@ export function ProjectListItem({
   const workspacePath = project.row.root_paths[0]
     ? tildePath(project.row.root_paths[0], homeDirectory)
     : "No workspace recorded";
+  // R2: the host's marks, second line and live count, drawn and never read.
+  const decoration = useHostInputs().projectRow?.(project.row.id) ?? null;
+  const marks = decoration?.marks ?? null;
+  const line = decoration?.line ?? null;
+  const live = decoration?.live !== undefined && decoration.live > 0 ? decoration.live : null;
   return (
     <button
       type="button"
@@ -109,6 +115,7 @@ export function ProjectListItem({
       data-motion-key={project.row.id}
       data-cooking={isCooking ? "" : undefined}
       data-fill={ingestFill !== null ? "" : undefined}
+      data-line={line !== null ? "" : undefined}
       style={{
         "--project-color": project.tint,
         "--spend-share": `${spendShare.toFixed(2)}%`,
@@ -121,7 +128,7 @@ export function ProjectListItem({
         ? "activity summaries pending"
         : `${spendLabel} · ${tokenText(project.lifetimeTokens)} lifetime tokens`}${
         lastActiveLabel ? ` · last active ${lastActiveLabel}` : ""
-      }${cookingLabel ? ` · ${cookingLabel}` : ""}`}
+      }${live !== null ? ` · ${live} live` : ""}${cookingLabel ? ` · ${cookingLabel}` : ""}`}
       onClick={() => onProjectSelect(project.row.id)}
     >
       <i className="ah-project-list-item__accent" />
@@ -129,9 +136,11 @@ export function ProjectListItem({
         <strong title={project.row.name}>{project.row.name}</strong>
         <AgentBadges shares={project.agents} />
       </span>
-      <span className="ah-project-list-item__path">
+      <span className="ah-project-list-item__path" data-marks={marks !== null ? "" : undefined}>
+        {marks !== null && <span className="ah-project-list-item__marks">{marks}</span>}
         <small title={workspacePath}>{workspacePath}</small>
       </span>
+      {line !== null && <span className="ah-project-list-item__line">{line}</span>}
       {cookingLabel && <span className="ah-project-list-item__progress">{cookingLabel}</span>}
       <span className="ah-project-list-item__footer">
         <span
@@ -146,7 +155,11 @@ export function ProjectListItem({
             description={`${spendLabel} · ${tokenText(project.lifetimeTokens)} tokens`}
           />
         </span>
-        {lastActiveLabel !== null && (
+        {live !== null ? (
+          <span className="ah-last" data-live="" title={`${live} live now`}>
+            {live} live
+          </span>
+        ) : lastActiveLabel !== null && (
           <span
             className="ah-last"
             data-live={lastActiveLabel === "now" ? "" : undefined}

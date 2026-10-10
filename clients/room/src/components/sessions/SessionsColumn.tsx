@@ -1,4 +1,7 @@
+import { useMemo } from "react";
 import type { IngestProgress, SessionRow, UsageResponse } from "@rosetta/protocol";
+import { useHostInputs } from "../../host-inputs";
+import { arrangeSections } from "../../lib/sections";
 import { isCensusRunning, isIngestActive } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import { ProjectSummaryPanel } from "../SummaryPanels";
@@ -40,7 +43,17 @@ export function SessionsColumn({
 }: SessionsColumnProps) {
   const ingestActive = isIngestActive(ingest);
   const censusRunning = isCensusRunning(ingest);
-  const visibleSessionCount = sessions.length;
+  // R3: the host's sections over this project's sessions, in the room's order.
+  const { sessionSections } = useHostInputs();
+  const projectId = project?.row.id ?? null;
+  const sections = useMemo(() => {
+    const given = projectId === null ? null : (sessionSections?.(projectId) ?? null);
+    return given === null ? null : arrangeSections(given, sessions, (session) => session.id);
+  }, [sessionSections, projectId, sessions]);
+  // The head counts what the list holds: with sections, what they draw.
+  const visibleSessionCount = sections === null
+    ? sessions.length
+    : sections.reduce((total, entry) => total + entry.rows.length, 0);
 
   return (
     <div className="ah-col">
@@ -78,6 +91,7 @@ export function SessionsColumn({
               : undefined
           }
           onSessionSelect={onSessionSelect}
+          sections={sections}
         />
       </div>
     </div>

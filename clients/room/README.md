@@ -77,6 +77,20 @@ The callbacks are called while the room renders, so a host keeps them cheap.
 - **`projectTint(projectId)`** — the project's colour, any CSS colour. Absent,
   or null for a project: the room's own dealt tint, which is then the only
   one the room stores.
+- **`projectRow(projectId)`** → `{ marks?, line?, live? }` — a ledger row's
+  decorations: marks drawn at the start of its path line, a second line
+  under the path, and a live count (above zero, the time slot says "n live"
+  in the live ink). None is interactive: the row is one button.
+- **`projectSections`** (①) and **`sessionSections(projectId)`** (②) →
+  `RoomSection[]` — the list in sections, drawn in the order given. A section
+  names its rows (`ids`, in the host's order, or `order: "room"` for the
+  room's), or names none and takes every row no other section names, in the
+  room's order (② with its day heads). A row named twice is drawn in the
+  first; when every section names its rows, the rest are not drawn, which is
+  how a host filters. `title` draws a head in the list's own break; `fold`
+  draws a foot section as one line (its words, its count, its act, such as
+  "Show older") that opens in place, and opens by itself when it holds the
+  selected row. ②'s head counts what its sections draw.
 
 **The search keys are the host's (RO-14).** The room binds no key of its own.
 The host's window opens the sheet and walks the matches: rosetta's app binds
