@@ -25,6 +25,7 @@ import { useRoom } from "../room-context";
 import type { RoomAct } from "../host-inputs";
 import { useHostInputs } from "../host-inputs";
 import { HostAct } from "./HostAct";
+import { RenameHeading } from "./RenameHeading";
 
 type TintStyle = CSSProperties & { "--tint": string };
 const MAX_TREEMAP_PROJECT_COUNT = 10;
@@ -111,7 +112,10 @@ export function ProjectSummaryPanel({
   // The repo act opens a REMOTE. A git_repo that is a local path is a fact
   // about discovery, not an address anyone can visit — no button for it.
   // R9: a host that knows the address says it (null: no act).
-  const hostRepositoryUrl = useHostInputs().repositoryUrl?.(project.row.id);
+  const { repositoryUrl: hostRepositoryUrlOf, projectRename } = useHostInputs();
+  const hostRepositoryUrl = hostRepositoryUrlOf?.(project.row.id);
+  // H4: the host renames the project where its name is.
+  const rename = projectRename?.(project.row.id) ?? null;
   const repositoryUrl =
     hostRepositoryUrl !== undefined
       ? hostRepositoryUrl
@@ -122,12 +126,23 @@ export function ProjectSummaryPanel({
   return (
     <div className="ah-meta" style={{ "--tint": project.tint } as TintStyle}>
       <div className="ah-meta__head">
-        <ColumnHeading
-          name={project.row.name}
-          tint={project.tint}
-          count={visibleSessionCount}
-          countTitle={`${visibleSessionCount} sessions in this list`}
-        />
+        {rename === null ? (
+          <ColumnHeading
+            name={project.row.name}
+            tint={project.tint}
+            count={visibleSessionCount}
+            countTitle={`${visibleSessionCount} sessions in this list`}
+          />
+        ) : (
+          <RenameHeading
+            key={project.row.id}
+            name={project.row.name}
+            tint={project.tint}
+            count={visibleSessionCount}
+            countTitle={`${visibleSessionCount} sessions in this list`}
+            rename={rename}
+          />
+        )}
         <span className="ah-meta__acts">
           {/* the two toggles sit together and the one act sits last, so a
               project with no remote never moves a control that has one */}

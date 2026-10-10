@@ -1,8 +1,8 @@
 // A host's menu (`RoomMenu`), drawn as the room's popover rows from the
 // control that opens it: a head's act (R5), ③'s folder (R6), a list's chip
-// (R7). The rows are the host's; their faces — the check, the
-// mark, the second line, the group heads, the filter past a count — are the
-// room's.
+// (R7), a row's act. The rows are the host's; their faces — the check, the
+// mark, the second line, the group heads, the filter past a count, a row's
+// own act — are the room's.
 //
 // The rows are drawn ABOVE the columns, in the room's root (`MenuLayer`):
 // every column clips what overflows it, so rows hung inside one lost whichever
@@ -267,11 +267,28 @@ function HostMenuRows({
 
   const walk = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
+    // A row's own act is beside it: → reaches it, ← comes back.
+    if (event.key === "ArrowRight" && target.classList.contains("ah-menu__item")) {
+      const act = target.parentElement?.querySelector<HTMLButtonElement>(":scope > .ah-menu__act:not(:disabled)");
+      if (act) {
+        event.preventDefault();
+        act.focus();
+      }
+      return;
+    }
+    if (event.key === "ArrowLeft" && target.classList.contains("ah-menu__act")) {
+      event.preventDefault();
+      target.parentElement?.querySelector<HTMLButtonElement>(":scope > .ah-menu__item")?.focus();
+      return;
+    }
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     const all = rows();
     if (all.length === 0) return;
     event.preventDefault();
-    const at = all.indexOf(target as HTMLButtonElement);
+    const from = target.classList.contains("ah-menu__act")
+      ? target.parentElement?.querySelector<HTMLButtonElement>(":scope > .ah-menu__item") ?? null
+      : target;
+    const at = all.indexOf(from as HTMLButtonElement);
     const next =
       event.key === "Home" ? 0
       : event.key === "End" ? all.length - 1
@@ -306,7 +323,30 @@ function HostMenuRows({
         {row.aside !== undefined && <span className="ah-menu__aside">{row.aside}</span>}
       </button>
     );
-    return choice;
+    const act = row.act;
+    if (act === undefined) return choice;
+    // A row with its own act holds two buttons side by side, never one in another.
+    return (
+      <div key={row.key} className="ah-menu__row" role="none" data-key={row.key}>
+        {choice}
+        <button
+          type="button"
+          className="ah-menu__act"
+          role="menuitem"
+          data-act={act.key}
+          title={act.label}
+          aria-label={act.label}
+          disabled={act.disabled === true}
+          tabIndex={-1}
+          onClick={() => {
+            act.onPress?.();
+            onChosen();
+          }}
+        >
+          {act.content}
+        </button>
+      </div>
+    );
   };
 
   return (

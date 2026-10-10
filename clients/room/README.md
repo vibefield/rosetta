@@ -117,7 +117,7 @@ The callbacks are called while the room renders, so a host keeps them cheap.
   the selection back out as `RoomSelection.hostKey`, untouched. A row with an
   act is a box under one covering button (the selection, named as the row
   always was) with the act above it, because a button cannot hold another;
-  the act is pressed, never a menu, and pressing it leaves the selection.
+  pressing the act (or opening its rows) leaves the selection.
 - **`projectActs(projectId, { folder })`** → `RoomAct[]` — ②'s head acts,
   drawn as the head's own icon buttons after the room's (one may be
   `primary`, on the go fill); `folder` is the folder ③ shows, by the host's
@@ -144,7 +144,19 @@ The callbacks are called while the room renders, so a host keeps them cheap.
   host which through `onShow(key)`; `projectActs` hears it as `folder`. A
   folder with `elsewhere` is never opened: ③ draws the host's honest state
   in its place. `caption` replaces git's caption while it is shown.
-  `WorktreeList` is untouched.
+  `WorktreeList` is untouched. A folder's `act` (H4: "Not part of this
+  project") sits beside its row in the list, pressed, never a menu; → from
+  the row reaches it, ← comes back, and the list closes after it.
+- **`projectRow(projectId).act`** (H4) — an act at a ledger row's end,
+  before its time (pin, hide), or its rows. The row becomes the same box as
+  a session row with an act: one covering button (the selection), the act
+  above it.
+- **`projectRename(projectId)`** → `{ onRename(name), label? }` (H4) — ②'s
+  head name is the control: pressed, it becomes a field holding the name.
+  Enter commits the trimmed, changed, non-empty name; Escape or leaving the
+  field cancels. A rejected `onRename` keeps the field open and says why
+  under it ("Could not rename — <the error's words>"). The head names the
+  project as the host's catalog last said, until it says otherwise.
 - **`projectFilters`** (①) and **`sessionFilters(projectId)`** (②) →
   `RoomFilter[]` — chips drawn as buttons in the room's chip pill, leading
   the list's bar (① before the rank switch; ② gets a bar only when a project

@@ -529,6 +529,7 @@ function RoomBody({
           checked: folder.key === shownFolderKey,
           filterText: folder.path,
           onSelect: () => setPickedFolder({ projectId, sessionId, key: folder.key }),
+          act: folder.act,
         })),
       })),
     };

@@ -26,6 +26,7 @@ export type {
   RoomMenuItem,
   RoomProjectContext,
   RoomProjectRow,
+  RoomRename,
   RoomSection,
   RoomSessionRow,
 } from "./host-inputs";

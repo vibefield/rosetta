@@ -13,8 +13,9 @@ export type HostActPlace = "row" | "head" | "pill";
 export function HostAct({ act, place }: { readonly act: RoomAct; readonly place: HostActPlace }) {
   const className = place === "head" ? "ah-iconbtn ah-hostact" : "ah-hostact";
   const primary = place === "head" && act.primary === true ? "" : undefined;
-  // A row's act is pressed, never a menu: its rows would hang inside a list.
-  if (act.menu !== undefined && place !== "row") {
+  // Its rows are drawn over the columns (`HostMenu`), so a row's act may open
+  // them as well as a head's.
+  if (act.menu !== undefined) {
     return (
       <HostMenuButton
         menu={act.menu}

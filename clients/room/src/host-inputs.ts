@@ -33,6 +33,9 @@ export interface RoomMenuItem {
   /** The words a menu's filter matches. Absent: the row always shows. */
   readonly filterText?: string | undefined;
   readonly onSelect?: (() => void) | undefined;
+  /** The row's own act, drawn beside it (→ reaches it from the row): pressed,
+   * never a menu, and the rows close after it. */
+  readonly act?: RoomAct | undefined;
 }
 
 export interface RoomMenuGroup {
@@ -69,8 +72,9 @@ export interface RoomAct {
   readonly primary?: boolean | undefined;
   readonly disabled?: boolean | undefined;
   readonly onPress?: (() => void) | undefined;
-  /** The act opens these rows instead of pressing (② and ④ heads only; a
-   * session row's act is pressed, never a menu). */
+  /** The act opens these rows instead of pressing, wherever it sits (a
+   * menu row's own act excepted): drawn over the columns, so a row's act may
+   * open them as well as a head's. */
   readonly menu?: RoomMenu | undefined;
 }
 
@@ -86,6 +90,10 @@ export interface RoomProjectRow {
   /** How many of the project's sessions are live now: above zero, the row's
    * time slot says "n live" in the room's live ink. */
   readonly live?: number | undefined;
+  /** H4 — an act at the row's end, before its time (pin, hide), or its rows.
+   * The row stays the selection: it becomes a box under one covering button,
+   * the act above it. */
+  readonly act?: RoomAct | undefined;
 }
 
 /** A section of a list (R3). Given a list's sections, the room draws them in
@@ -140,8 +148,8 @@ export interface RoomSessionRow {
   readonly id?: ReactNode;
   /** The id slot's tooltip. Absent with `id`: none. */
   readonly idTitle?: string | undefined;
-  /** At the row's right end, before its time (Resume, Jump to). Pressed,
-   * never a menu; the row itself stays the selection. */
+  /** At the row's right end, before its time (Resume, Jump to): pressed, or
+   * opening its rows; the row itself stays the selection. */
   readonly act?: RoomAct | undefined;
   /** Where the act would be, when there is none: the reason, quiet. */
   readonly reason?: ReactNode;
@@ -184,6 +192,9 @@ export interface RoomFolder {
   /** This folder cannot be opened here: ③ draws this, the host's honest
    * state, instead of opening it. */
   readonly elsewhere?: ReactNode;
+  /** H4 — an act on the folder's row, beside it ("Not part of this project"):
+   * pressed, never a menu; the list closes after it. */
+  readonly act?: RoomAct | undefined;
 }
 
 export interface RoomFolderGroup {
@@ -209,6 +220,17 @@ export interface RoomFolders {
   readonly onShow?: ((key: string | null) => void) | undefined;
 }
 
+/* ── H4: renaming a project where its name is ────────────────────────── */
+
+/** ②'s head name, editable in place. */
+export interface RoomRename {
+  /** Commit a new name (trimmed, changed, not empty). A rejection keeps the
+   * field open and says why, in the error's own words. */
+  onRename(name: string): void | PromiseLike<void>;
+  /** The name's accessible name and tooltip as a control. Default: "Rename". */
+  readonly label?: string | undefined;
+}
+
 /* ── everything, as `HistoryRoomProps` carries it ───────────────────────── */
 
 export interface RoomHostInputs {
@@ -227,6 +249,9 @@ export interface RoomHostInputs {
   readonly projectActs?:
     | ((projectId: string, context: RoomProjectContext) => readonly RoomAct[] | null | undefined)
     | undefined;
+  /** H4 — ②'s head name becomes editable on press: Enter commits, Escape (or
+   * leaving it) cancels, a failure is said where the name is. */
+  readonly projectRename?: ((projectId: string) => RoomRename | null | undefined) | undefined;
   /** R5 — a card under ②'s head, above its list (suggestions). */
   readonly projectCard?: ((projectId: string) => ReactNode) | undefined;
   /** R5 — ④'s head, for the session it names. */
@@ -252,6 +277,7 @@ export function hostInputsOf(props: RoomHostInputs): RoomHostInputs {
     sessionRow: props.sessionRow,
     projectActs: props.projectActs,
     projectCard: props.projectCard,
+    projectRename: props.projectRename,
     sessionActs: props.sessionActs,
     folders: props.folders,
     projectFilters: props.projectFilters,

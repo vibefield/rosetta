@@ -56,6 +56,15 @@
 }
 .ah-session-list-item__hit:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
 .ah-session-list-item[data-host-act] > :not(.ah-session-list-item__hit) { position: relative; z-index: 1; }
+/* H4 — a ledger row with an act is the same box: one covering button, the
+   drawing passing the pointer to it, the act (and its rows) above. */
+.ah-project-list-item[data-host-act] > :not(.ah-project-list-item__hit) { pointer-events: none; }
+.ah-project-list-item > .ah-project-list-item__hit {
+  position: absolute; inset: 0; z-index: 0; padding: 0; border: 0; border-radius: inherit;
+  background: transparent; cursor: pointer;
+}
+.ah-project-list-item__hit:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
+.ah-project-list-item__end { flex: none; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 /* the act: quiet at rest, a 20px pill under the pointer */
 .ah-hostact[data-place="row"] {
   pointer-events: auto;
@@ -64,7 +73,8 @@
   color: var(--vf-text-tertiary); font-size: 10px; font-weight: 500; white-space: nowrap;
   transition: background-color 140ms ease, color 140ms ease;
 }
-.ah-hostact[data-place="row"]:hover { background: var(--vf-fill-hover); color: var(--vf-text-primary); }
+.ah-hostact[data-place="row"]:hover,
+.ah-hostact[data-place="row"][aria-expanded="true"] { background: var(--vf-fill-hover); color: var(--vf-text-primary); }
 .ah-hostact[data-place="row"]:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 1px; }
 .ah-hostact[data-place="row"]:disabled { opacity: 0.5; cursor: default; }
 .ah-hostact[data-place="row"] svg { flex: none; width: 12px; height: 12px; }
@@ -137,7 +147,7 @@
 .ah-menu__item[data-depth="1"] { padding-left: 26px; }
 /* The ring is a key's, never a pointer's: a row a pointer opened onto is
    focused without one. */
-.ah-menu__item:focus { outline: none; }
+.ah-menu__item:focus, .ah-menu__act:focus { outline: none; }
 .ah-menu__item:hover { background: var(--vf-fill); }
 .ah-menu__item:focus-visible { background: var(--vf-fill); box-shadow: inset 0 0 0 1.5px var(--vf-select); }
 .ah-menu__item:disabled { opacity: 0.55; cursor: default; }
@@ -156,6 +166,21 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .ah-menu__aside { flex: none; color: var(--vf-text-faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* A row with its own act (a folder's "Not part of this project"): the row
+   and its act side by side, the act quiet until the row is under the pointer. */
+.ah-menu__row { display: flex; align-items: center; gap: 2px; }
+.ah-menu__row > .ah-menu__item { flex: 1; min-width: 0; }
+.ah-menu__act {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px;
+  border: 0; border-radius: 7px; background: transparent;
+  color: var(--vf-text-faint); font-size: 10.5px; white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.ah-menu__row:hover > .ah-menu__act { color: var(--vf-text-tertiary); }
+.ah-menu__act:hover { background: var(--vf-fill-hover); color: var(--vf-text-primary); }
+.ah-menu__act:focus-visible { box-shadow: inset 0 0 0 1.5px var(--vf-select); color: var(--vf-text-primary); }
+.ah-menu__act:disabled { opacity: 0.5; cursor: default; }
+.ah-menu__act svg { width: 12px; height: 12px; }
 .ah-menu__empty { margin: 0; padding: 18px 12px; color: var(--vf-text-faint); font-size: 11px; text-align: center; }
 
 /* R6 — ③'s head as the folder list: the column head's marker, the folder's
@@ -195,3 +220,31 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .ah-chip__label svg { flex: none; width: 11px; height: 11px; }
+
+/* H4 — ②'s name as its rename: the head's own name, a control on press; the
+   field takes the name's face; a refusal stands where the count was. */
+.ah-colhead > .ah-rename {
+  min-width: 0; max-width: 100%; margin: 0 -4px; padding: 2px 4px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--vf-text-primary); font-size: 11.5px; font-weight: 500;
+  text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text;
+}
+.ah-colhead > .ah-rename:hover { background: var(--vf-fill); }
+.ah-colhead > .ah-rename:focus { outline: none; }
+.ah-colhead > .ah-rename:focus-visible { box-shadow: inset 0 0 0 1.5px var(--vf-select); }
+.ah-rename__field {
+  flex: 1; min-width: 60px; height: 24px; margin: 0 -4px; padding: 0 6px;
+  border: 0; border-radius: 6px; outline: none;
+  background: var(--vf-fill); color: var(--vf-text-primary); font-size: 11.5px; font-weight: 500;
+  box-shadow: inset 0 0 0 1.5px var(--vf-select);
+}
+.ah-rename__field[aria-invalid="true"] { box-shadow: inset 0 0 0 1.5px var(--vf-red); }
+.ah-rename__field[aria-busy="true"] { opacity: 0.6; }
+/* editing, the head's name takes the band; a refusal hangs under it, whole,
+   over the panel beneath — the band has no room for a sentence beside six acts */
+.ah-colhead[data-rename="editing"], .ah-colhead[data-rename="saving"] { position: relative; flex: 1; }
+.ah-rename__failure {
+  position: absolute; top: calc(100% + 6px); left: 7px; z-index: 6;
+  width: max-content; max-width: 270px; padding: 6px 9px; border-radius: 8px;
+  background: var(--vf-chrome-solid); box-shadow: var(--vf-shadow-island), 0 0 0 1px var(--vf-hairline-strong);
+  color: var(--vf-red); font-size: 10.5px; line-height: 1.4; white-space: normal;
+}
