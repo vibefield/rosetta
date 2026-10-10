@@ -75,6 +75,15 @@ export interface CatalogPort {
   unavailable?(): string | null;
   /** One project's per-day heat over the window, and its sessions' facts. */
   projectStats(projectId: string, window: FigureWindow, signal?: AbortSignal): Promise<ProjectStats>;
+  /** Every listed project's figures in one ask, for a host whose figures
+   * fan out per call or that already holds them. Optional: present, the
+   * room asks this once per refresh instead of `projectStats` per project;
+   * a project missing from the answer counts as failed and is asked again. */
+  projectStatsBatch?(
+    projectIds: readonly string[],
+    window: FigureWindow,
+    signal?: AbortSignal,
+  ): Promise<ReadonlyMap<string, ProjectStats>>;
   /** The selected project's usage by model and hour over the same window. */
   usage(projectId: string, window: FigureWindow, signal?: AbortSignal): Promise<UsageResponse>;
   /** One day of that project, hour by hour. */
