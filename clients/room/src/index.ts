@@ -15,6 +15,7 @@ export type {
 /** What a host may hand the room beyond its ports (all optional). */
 export type {
   RoomAct,
+  RoomFilter,
   RoomFolder,
   RoomFolderGroup,
   RoomFolders,

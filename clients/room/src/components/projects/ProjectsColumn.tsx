@@ -12,6 +12,7 @@ import type { IngestActivity } from "../../lib/ingest-activity";
 import { ProjectList } from "./ProjectList";
 import { useHostInputs } from "../../host-inputs";
 import { arrangeSections } from "../../lib/sections";
+import { FilterChips } from "../FilterChips";
 
 export type ProjectSort = "recent" | "token";
 
@@ -78,7 +79,7 @@ export function ProjectsColumn({
   );
 
   // R3: the host's sections over the room's own order.
-  const { projectSections } = useHostInputs();
+  const { projectSections, projectFilters } = useHostInputs();
   const sections = useMemo(
     () => (projectSections === undefined ? null : arrangeSections(projectSections, visibleProjects, (p) => p.row.id)),
     [projectSections, visibleProjects],
@@ -99,6 +100,7 @@ export function ProjectsColumn({
       )}
       <IngestStatus activity={activity} />
       <ListToolbar>
+        {projectFilters !== undefined && projectFilters.length > 0 && <FilterChips filters={projectFilters} />}
         <SegmentedControl
           value={sort}
           options={PROJECT_SORT_OPTIONS}

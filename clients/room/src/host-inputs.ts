@@ -74,7 +74,7 @@ export interface RoomAct {
   readonly menu?: RoomMenu | undefined;
 }
 
-/* ── R2–R3: the ledger ① and the lists ─────────────────────────────────── */
+/* ── R2, R3, R7: the ledger ① and the lists ─────────────────────────────────── */
 
 /** A project row's host decorations (R2). None of them is interactive: the
  * row is one button. */
@@ -112,6 +112,20 @@ export interface RoomSection {
     /** Absent: how many rows the section holds. */
     readonly count?: number | undefined;
   } | undefined;
+}
+
+/** A filter chip in a list's bar (R7): drawn as a button that opens its
+ * rows. The host filters — through the list's sections — and says what is
+ * chosen with `label`, `set` and a checked row. */
+export interface RoomFilter {
+  readonly key: string;
+  /** The chip at rest ("any desktop", or the chosen one's mark and name). */
+  readonly label: ReactNode;
+  /** Its accessible name ("Filter by desktop"). */
+  readonly accessibleLabel: string;
+  /** A choice is made: the chip wears the room's set look. */
+  readonly set?: boolean | undefined;
+  readonly menu: RoomMenu;
 }
 
 /* ── R4: a session row ② ───────────────────────────────────────────────── */
@@ -219,6 +233,10 @@ export interface RoomHostInputs {
   readonly sessionActs?: ((session: SessionRow) => RoomHeadActs | null | undefined) | undefined;
   /** R6 — ③'s folders, per project. */
   readonly folders?: ((projectId: string) => RoomFolders | null | undefined) | undefined;
+  /** R7 — ①'s chips, before the rank switch. */
+  readonly projectFilters?: readonly RoomFilter[] | undefined;
+  /** R7 — ②'s chips, per project. */
+  readonly sessionFilters?: ((projectId: string) => readonly RoomFilter[] | null | undefined) | undefined;
 }
 
 /** Only the host's inputs, picked out of the room's props. */
@@ -233,6 +251,8 @@ export function hostInputsOf(props: RoomHostInputs): RoomHostInputs {
     projectCard: props.projectCard,
     sessionActs: props.sessionActs,
     folders: props.folders,
+    projectFilters: props.projectFilters,
+    sessionFilters: props.sessionFilters,
   };
 }
 

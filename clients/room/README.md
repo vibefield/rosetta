@@ -140,6 +140,12 @@ The callbacks are called while the room renders, so a host keeps them cheap.
   folder with `elsewhere` is never opened: ③ draws the host's honest state
   in its place. `caption` replaces git's caption while it is shown.
   `WorktreeList` is untouched.
+- **`projectFilters`** (①) and **`sessionFilters(projectId)`** (②) →
+  `RoomFilter[]` — chips drawn as buttons in the room's chip pill, leading
+  the list's bar (① before the rank switch; ② gets a bar only when a project
+  has chips), each opening its `RoomMenu`. The host filters, through the
+  list's sections, and says what is chosen with the chip's words, `set` and
+  a checked row. The room's own search sheet keeps its native selects.
 
 ## The reader (`TranscriptReader`)
 
