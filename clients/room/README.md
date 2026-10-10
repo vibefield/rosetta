@@ -198,8 +198,12 @@ address, and draws the room's own document with nothing around it.
 
 The room reads the VibeField design kit's `--vf-*` tokens (the host defines
 them) and brings its own: `--ah-*` (`--ah-plate`, `--ah-scroll-foot`,
-`--ah-floating-foot`, `--ah-inset-*`), `--tr-*`, and the project tint band
-`--tint-l`/`--tint-c`. The root carries `data-ah-surface`, and
+`--ah-floating-foot`, `--ah-inset-*`, and the reader's match look
+`--ah-match`, `--ah-match-weight`, `--ah-match-line`, read with neutral
+fallbacks so a host sets them on any element around the room), `--tr-*`, and
+the project tint band `--tint-l`/`--tint-c`. What a host adds is styled in
+`styles/host-inputs.css`, whose every rule matches only an element drawn for
+a host input. The root carries `data-ah-surface`, and
 `data-ah-overlay` while one of its dialogs or the sheet is open, so a host can
 stop its own chrome (a drag region, say) under it.
 
