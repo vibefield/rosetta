@@ -42,10 +42,12 @@ contextBridge.exposeInMainWorld("agentHistoryHost", {
   gitFacts: (root, generation) =>
     ipcRenderer.invoke("ah-worktree-git-facts", root, generation),
   worktreeFileAction: (request) => ipcRenderer.invoke("ah-worktree-file-action", request),
-  /** Open the exact HTML/SVG bytes shown by the viewer in the default
-   * browser. Main validates and materializes its own private snapshot. */
-  openInBrowser: (name, bytes) =>
-    ipcRenderer.invoke("ah-file-open-browser-preview", { name, bytes }),
+  /** Installed browsers, with their native icons and no executable paths. */
+  browsers: () => ipcRenderer.invoke("ah-file-browsers"),
+  /** Open the exact HTML/SVG bytes in an installed browser selected by id.
+   * Main validates and materializes its own private snapshot. */
+  openInBrowser: (name, bytes, browserId) =>
+    ipcRenderer.invoke("ah-file-open-browser-preview", { name, bytes, browserId }),
   /** One site's own icon as a `data:` URL, or null. Main validates the host
    * and fetches from the site itself — never a favicon service. */
   favicon: (host) => ipcRenderer.invoke("ah-favicon", host),

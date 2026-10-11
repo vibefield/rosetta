@@ -840,6 +840,18 @@
   font-size: 9.5px; letter-spacing: 0.02em; white-space: nowrap;
 }
 .ah-fileview__acts { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 4px; }
+.ah-fileview__browsers {
+  display: flex; align-items: center; gap: 3px; flex: none;
+  padding-right: 7px; margin-right: 3px; border-right: 1px solid var(--vf-hairline);
+}
+.ah-fileview__browser img { display: block; width: 20px; height: 20px; object-fit: contain; }
+.ah-fileview__browser[aria-busy="true"] { opacity: .55; }
+.ah-fileview__browser-fallback { font-size: 12px; font-weight: 600; }
+.ah-fileview__browser-status { color: var(--vf-text-faint); font-size: 10px; white-space: nowrap; padding: 0 4px; }
+@media (max-width: 680px) {
+  .ah-fileview__acts { grid-column: 1 / -1; grid-row: 3; justify-content: flex-end; flex-wrap: wrap; padding-top: 6px; }
+  .ah-fileview__browsers { flex-wrap: wrap; max-width: 100%; }
+}
 .ah-fileview__acts .ah-seg { margin: 0 6px 0 0; }
 .ah-fileview__acts .ah-iconbtn:disabled {
   cursor: default; opacity: .38; color: var(--vf-text-tertiary); background: var(--vf-fill);

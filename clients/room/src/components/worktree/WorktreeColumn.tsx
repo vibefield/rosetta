@@ -120,8 +120,9 @@ export function WorktreeColumn({
 
   const host = useRoom().host;
   const hasShell = host?.worktree !== undefined;
+  const listBrowsers = useMemo(() => host?.browsers?.bind(host), [host]);
   const openInBrowser = useMemo(
-    () => (host === null ? null : (name: string, bytes: Uint8Array) => host.openInBrowser(name, bytes)),
+    () => (host === null ? null : (name: string, bytes: Uint8Array, browserId?: string) => host.openInBrowser(name, bytes, browserId)),
     [host],
   );
   const stale = projectRoot !== null && shownRoot !== null && shownRoot !== projectRoot;
@@ -372,6 +373,7 @@ export function WorktreeColumn({
           homeDirectory={homeDirectory}
           onClose={() => setOpen(null)}
           onReceipt={onReceipt}
+          listBrowsers={listBrowsers}
           openInBrowser={open?.diff === true ? null : openInBrowser}
           // The Files tab opens a FILE; the other two open a CHANGE. The
           // registry reads kinds off a name, and a name cannot say which.

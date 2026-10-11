@@ -212,6 +212,14 @@ export interface WorktreeHostPort {
   ports(listener: (event: WorktreeHostEvent) => void): () => void;
 }
 
+/** An installed browser offered by the host. The id is opaque to the room;
+ * executable paths and launch arguments stay inside the desktop host. */
+export interface InstalledBrowser {
+  readonly id: string;
+  readonly name: string;
+  readonly icon: string | null;
+}
+
 /** What the room asks a desktop. A browser tab has none, and the room says
  * so: no worktree guest, a globe for every site icon, no "open in browser". */
 export interface HostPort {
@@ -219,9 +227,11 @@ export interface HostPort {
   readonly homeDir: string | null;
   /** The desktop's platform (`darwin`, …), for the names of its own acts. */
   readonly platform: string | null;
-  /** Hand the exact HTML/SVG bytes the viewer shows to the OS browser. The
-   * host validates them and resolves whether it opened anything. */
-  openInBrowser(name: string, bytes: Uint8Array): Promise<boolean>;
+  /** Hand the exact HTML/SVG bytes to the chosen installed browser. Omitting
+   * the id retains the default-browser action for hosts without discovery. */
+  openInBrowser(name: string, bytes: Uint8Array, browserId?: string): Promise<boolean>;
+  /** Re-read installed browsers. Absent on hosts with only a default action. */
+  browsers?(): Promise<readonly InstalledBrowser[]>;
   /** One site's own icon as an image URL, or null for every honest no — a
    * refused host, no icon, a timeout. The room draws the globe for all. */
   favicon(host: string): Promise<string | null>;

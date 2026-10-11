@@ -8,11 +8,12 @@ import {
   createBrowserPreviewService,
 } from "../electron/browser-preview.mjs";
 
-function fixture(openPath = async () => "") {
+function fixture(openPath = async () => "", browsers) {
   const parent = mkdtempSync(path.join(tmpdir(), "rosetta-preview-test-"));
   const opened = [];
   const service = createBrowserPreviewService({
     tempDirectory: parent,
+    browsers,
     openPath: async (target) => {
       opened.push(target);
       return openPath(target);
@@ -47,6 +48,39 @@ test("opens an exact private snapshot, independent of the supplied path", async 
   } finally {
     scope.dispose();
   }
+});
+
+test("selected browsers receive the same exact snapshot and never fall back to the default handler", async () => {
+  const launches = [];
+  const chrome = { id: "chrome" };
+  const firefox = { id: "firefox" };
+  const scope = fixture(async () => "", {
+    resolve: async id => ({ chrome, firefox })[id] ?? null,
+    open: async (browser, target) => { launches.push({ browser, target }); return browser === chrome; },
+  });
+  try {
+    const bytes = new TextEncoder().encode("<!doctype html><p>browser preview</p>");
+    assert.equal(await scope.service.open({ name: "report.html", bytes, browserId: "chrome" }), true);
+    assert.equal(await scope.service.open({ name: "report.html", bytes, browserId: "firefox" }), false);
+    assert.equal(launches[0].browser, chrome);
+    assert.equal(launches[1].browser, firefox);
+    assert.equal(launches[0].target, launches[1].target);
+    assert.deepEqual(readFileSync(launches[0].target), Buffer.from(bytes));
+    assert.deepEqual(scope.opened, []);
+    for (const browserId of [null, "unknown", "/usr/bin/open", "chrome;touch /tmp/no", {}]) {
+      assert.equal(await scope.service.open({ name: "report.html", bytes, browserId }), false);
+    }
+    assert.equal(launches.length, 2);
+  } finally { scope.dispose(); }
+});
+
+test("a missing temporary directory is reported as a failed open", async () => {
+  const scope = fixture();
+  try {
+    rmSync(scope.parent, { recursive: true });
+    assert.equal(await scope.service.open({ name: "page.html", bytes: new Uint8Array(0) }), false);
+    assert.deepEqual(scope.opened, []);
+  } finally { scope.dispose(); }
 });
 
 test("supports pathless HTML, HTM, SVG, and empty documents", async () => {

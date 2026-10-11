@@ -165,8 +165,9 @@ function SessionTranscript({
   headActs = null,
 }: TranscriptColumnProps) {
   const { sessions: leases, host } = useRoom();
+  const listBrowsers = useMemo(() => host?.browsers?.bind(host), [host]);
   const openInBrowser = useMemo(
-    () => (host === null ? null : (name: string, bytes: Uint8Array) => host.openInBrowser(name, bytes)),
+    () => (host === null ? null : (name: string, bytes: Uint8Array, browserId?: string) => host.openInBrowser(name, bytes, browserId)),
     [host],
   );
   const attachments = useAttachmentReader();
@@ -642,11 +643,13 @@ function SessionTranscript({
           setImageGallery(null);
         }}
         onReceipt={onReceipt}
+        listBrowsers={listBrowsers}
         openInBrowser={openInBrowser}
       />}
       {!reader && imageGallery && <ImageGalleryDialog {...imageGallery} source={gallerySource}
         tint={project?.tint ?? null} homeDirectory={homeDirectory}
         onClose={() => setImageGallery(null)} onReceipt={onReceipt}
+        listBrowsers={listBrowsers}
         openInBrowser={openInBrowser} />}
     </div>
     </MessageViewerContext.Provider>

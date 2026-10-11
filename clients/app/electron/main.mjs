@@ -34,6 +34,8 @@ import {
 import { createDaemonService } from "./daemon-service.mjs";
 import { APP_SCHEME, APP_ORIGIN, APP_PRIVILEGES, rendererFileUrl } from "./app-protocol.mjs";
 import { createBrowserPreviewService } from "./browser-preview.mjs";
+import { createInstalledBrowserService } from "./installed-browsers.mjs";
+import { installedBrowserIcon } from "./browser-icons.mjs";
 import { createFaviconService } from "./favicon-service.mjs";
 import { createWorktreeFileActionHandler } from "./worktree-file-actions.mjs";
 
@@ -430,14 +432,17 @@ app.whenReady().then(async () => {
 
   // The file viewer's one outward act. Main writes the exact HTML or SVG
   // bytes already shown into a private, app-owned temporary directory, then
-  // asks the OS to open that snapshot. This works for transcript resources
+  // opens that snapshot in the selected installed browser. This works for transcript resources
   // with no usable local path and prevents a changed path from opening bytes
   // other than the ones the reader chose. The service independently limits
   // the extension and byte count; the renderer's registry is presentation,
   // not a security boundary.
+  const browsers = createInstalledBrowserService({ getIcon: installedBrowserIcon });
+  ipcMain.handle("ah-file-browsers", () => browsers.list());
   browserPreviews = createBrowserPreviewService({
     tempDirectory: app.getPath("temp"),
     openPath: (target) => shell.openPath(target),
+    browsers,
   });
   ipcMain.handle(
     "ah-file-open-browser-preview",

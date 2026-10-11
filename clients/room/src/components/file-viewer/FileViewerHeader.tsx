@@ -6,6 +6,7 @@
 // The name is a file name and the second line is a path, so both set in mono:
 // the design record's rule that an id is mono, applied one level down.
 
+import type { ReactNode } from "react";
 import { ColumnHeading } from "../ui";
 import { SegmentedControl } from "../ui";
 import {
@@ -37,6 +38,7 @@ export interface FileViewerHeaderProps {
   readonly mode: string;
   readonly onModeChange: (mode: string) => void;
   readonly actions: readonly HeaderAction[];
+  readonly browserActions?: ReactNode;
   readonly fullscreen: boolean;
   readonly onToggleFullscreen: () => void;
   readonly onClose: () => void;
@@ -59,6 +61,7 @@ export function FileViewerHeader({
   mode,
   onModeChange,
   actions,
+  browserActions,
   fullscreen,
   onToggleFullscreen,
   onClose,
@@ -88,6 +91,7 @@ export function FileViewerHeader({
             onValueChange={onModeChange}
           />
         )}
+        {browserActions}
         {actions.map((action) => (
           <button
             className="ah-iconbtn"

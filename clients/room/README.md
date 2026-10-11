@@ -25,7 +25,7 @@ of figures, two transcripts with images and web lines, all relative to now).
 | `CatalogPort` | `subscribeMeta` (runtimes, projects, every session row, live: one snapshot then mutations) · `status` → `CatalogStatus` · `projectStats(projectId, window)` → `ProjectStats` (per-day heat and per-session facts) · `usage` · `dayUsage` · `search(CatalogSearch)` · optional `onConnectionChange`, `unavailable` (the host's own words for why the index cannot answer), `boost` and `projectStatsBatch` (every listed project's figures in one ask; present, the room asks it once per refresh instead of `projectStats` per project) | its client's REST and `/ws/meta` (`catalogOver`) |
 | `SessionPort` | `open(sessionId)` → a `SessionClient` bound to that session (its live subscription, child threads and team members each open their own; entries, report work, commands, plans, file targets, stored members), or a promise of one; `close(sessionId)` | the one client for every session; close is nothing |
 | `AssetSource` | `imageAssetUrl(asset, variant)` → a URL, null, or a promise of either · `attachmentAssetUrl(asset)` → the attachment's address, for identity and can-open only | the daemon's own URLs |
-| `HostPort` (optional) | `homeDir` · `platform` · `openInBrowser(name, bytes)` · `favicon(site)` · optional `worktree: { open, gitFacts, fileAction, ports }` | the Electron bridge (`hostPortOver`) |
+| `HostPort` (optional) | `homeDir` · `platform` · `openInBrowser(name, bytes, browserId?)` · optional `browsers()` · `favicon(site)` · optional `worktree: { open, gitFacts, fileAction, ports }` | the Electron bridge (`hostPortOver`) |
 
 - **The room opens a session at most once at a time and follows every `open`
   with exactly one `close`**, when nothing in it reads that session any more.
@@ -41,6 +41,11 @@ of figures, two transcripts with images and web lines, all relative to now).
   image's "could not load" face with Retry.
 - **`boost` is optional** because a grant never opens a write: only a host
   holding the daemon's bearer offers it. Without it the index keeps its order.
+- **`browsers()`** returns installed browser ids, names and icon URLs. HTML
+  and SVG viewers show one launch icon per browser, refreshing when opened or
+  the window regains focus. The host owns executable discovery and launch;
+  the room sends back only an id and the exact displayed bytes. Hosts without
+  discovery retain their existing default-browser action.
 - **Without a host** the room states what a browser tab is: no worktree guest,
   a globe for every site icon, no "open in browser". With a host but no
   `worktree`, the guest stays closed.

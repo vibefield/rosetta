@@ -1,4 +1,4 @@
-// Materialize one viewed HTML or SVG document for the user's default browser.
+// Materialize one viewed HTML or SVG document for the user's chosen browser.
 //
 // The renderer may have read the bytes from a worktree, a transcript
 // attachment, or a canonical timeline resource. Some of those have no local
@@ -37,7 +37,7 @@ function bytesOf(raw) {
  * anybody's browser. It follows Electron's `shell.openPath` contract: an
  * empty string is success and any other string is the reason it failed.
  */
-export function createBrowserPreviewService({ tempDirectory, openPath }) {
+export function createBrowserPreviewService({ tempDirectory, openPath, browsers }) {
   if (typeof tempDirectory !== "string" || tempDirectory.length === 0) {
     throw new TypeError("browser preview needs a temporary directory");
   }
@@ -60,12 +60,17 @@ export function createBrowserPreviewService({ tempDirectory, openPath }) {
     const bytes = bytesOf(raw.bytes);
     if (extension === null || bytes === null) return false;
 
+    // Resolve an installed browser in main before creating any file. A
+    // renderer-supplied id is never a path or an argument to a shell command.
+    const browser = raw.browserId === undefined ? null : await browsers?.resolve(raw.browserId);
+    if (raw.browserId !== undefined && !browser) return false;
+
     // The renderer controls neither the directory nor the stem. A digest
-    // deduplicates repeated opens while the extension tells the OS which safe
-    // default handler to use.
+    // deduplicates repeated opens, including opens in different browsers.
     const digest = createHash("sha256").update(bytes).digest("hex");
-    const target = path.join(ensureSessionDirectory(), `${digest}${extension}`);
+    let target;
     try {
+      target = path.join(ensureSessionDirectory(), `${digest}${extension}`);
       writeFileSync(target, bytes, { flag: "wx", mode: 0o600 });
     } catch (error) {
       if (error?.code !== "EEXIST") return false;
@@ -80,6 +85,8 @@ export function createBrowserPreviewService({ tempDirectory, openPath }) {
     }
 
     try {
+      if (browser) return await browsers.open(browser, target);
+      // Older room hosts can still request their default handler.
       return (await openPath(target)) === "";
     } catch {
       return false;

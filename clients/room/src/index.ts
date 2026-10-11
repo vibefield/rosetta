@@ -47,6 +47,7 @@ export type {
   GitFacts,
   GitWorktree,
   HostPort,
+  InstalledBrowser,
   RoomPorts,
   SessionClient,
   SessionFeed,
