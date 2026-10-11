@@ -1,0 +1,14 @@
+{
+  "name": "@rosetta/docs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Source-checked API documentation for Rosetta. No install step or runtime dependencies.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "node scripts/serve.mjs --watch",
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/build.mjs --check",
+    "preview": "node scripts/serve.mjs"
+  }
+}
