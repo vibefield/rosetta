@@ -99,6 +99,8 @@ jobs:
           node-version: '22'
       - run: npx --yes --package typescript@5.9.2 tsc -p clients/ts
       - run: node --test clients/ts/test/*.test.mjs
+      - name: Check API documentation against the service contract
+        run: node docs/site/scripts/build.mjs --check
       - name: Check live list ordering and subscription recovery
         run: node --experimental-strip-types --import ./clients/app/test/support/resolve-ts.mjs --test clients/app/test/activity-order.test.mjs clients/app/test/protocol-recovery.test.mjs
 

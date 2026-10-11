@@ -1565,6 +1565,12 @@ recomputed from the stored usage facts when it changes (§4.1.3).
 
 ### 5.1 Transport decision: one daemon, localhost HTTP/WS
 
+**Proposed lifecycle extension (2026-10-05):**
+[Daemon ownership, control, and recovery](DAEMON_LIFECYCLE_PROPOSAL.md) specifies
+host supervision, private process shutdown, and HTTP ingestion control. It is a
+design proposal; the current transport and access behavior below remains the
+implemented contract.
+
 `rosettad` is a single daemon owning the store (single writer). Consumers connect over
 `127.0.0.1` (axum: REST for queries, WebSocket for streams) — optionally a Unix domain
 socket for the latency-obsessed. Why not NAPI like spaghetti: multiple consumer apps

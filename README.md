@@ -51,6 +51,17 @@ Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before writing code. The 2026-
 adapter and client-visibility closure is recorded in
 [docs/ADAPTER_AUDIT.md](docs/ADAPTER_AUDIT.md).
 
+The [API documentation website](docs/site/README.md) covers onboarding, every
+HTTP/WebSocket route, the TypeScript client, and generated wire types. Run
+`npm --prefix docs/site run dev` to open it at `http://127.0.0.1:5190` (Node 22+;
+no dependency installation required). Build static output with
+`npm --prefix docs/site run build`.
+
+Proposed lifecycle contracts are documented separately: [daemon ownership and
+recovery](docs/DAEMON_LIFECYCLE_PROPOSAL.md), [cold/live ingestion
+controls](docs/INGESTION_API_PROPOSAL.md), and the [desktop/Vibefield integration
+review](docs/INGESTION_API_REVIEW.md). These additions are not implemented routes.
+
 ```sh
 # Verify the data/tool boundary and generated artifacts.
 python3 -m tools.groundtruth check
