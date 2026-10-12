@@ -111,7 +111,9 @@ jobs:
       - name: Install Electron for room integration tests
         run: node -p 'require("electron")'
       - name: Exercise room host in Electron
-        run: xvfb-run --auto-servernum npm run test:room-host -w @vibefield/rosetta-agent-history
+        # The hosted runner cannot use Chromium's unconfigured SUID helper.
+        # This flag applies only to this local fixture on the disposable CI VM.
+        run: xvfb-run --auto-servernum npm run test:room-host -w @vibefield/rosetta-agent-history -- --no-sandbox
 
   check:
     name: CI passed

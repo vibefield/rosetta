@@ -8,12 +8,14 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const output = path.join(root, "dist/npm");
 const packages = ["clients/ts", "clients/room"];
 const manifests = packages.map((dir) => JSON.parse(readFileSync(path.join(root, dir, "package.json"), "utf8")));
+const app = JSON.parse(readFileSync(path.join(root, "clients/app/package.json"), "utf8"));
 assert.equal(manifests[0].version, manifests[1].version, "Rosetta npm packages release together");
 assert.equal(manifests[1].dependencies[manifests[0].name], `^${manifests[0].version}`);
 if (process.env.NPM_RELEASE_TAG) {
   assert.equal(process.env.NPM_RELEASE_TAG, `npm-v${manifests[0].version}`, "Tag must match both npm versions");
 }
 for (const manifest of manifests) {
+  assert.equal(app.dependencies[manifest.name], `^${manifest.version}`, "App dependencies must track the workspace release");
   assert.equal(manifest.private, undefined);
   assert.equal(manifest.publishConfig.access, "public");
   for (const version of Object.values(manifest.dependencies ?? {})) {

@@ -138,8 +138,9 @@ a complete dry run. It checks main ancestry, stable tag/version agreement, all C
 and the exact tarballs before publishing protocol first and room second. Reruns skip
 only versions whose registry integrity exactly matches the verified artifact.
 
-For the next version, update both library manifests and the protocol dependency in
-the room, refresh the root lockfile, and merge through **CI passed**. Tag that main
+For the next version, update both library manifests, the protocol dependency in the
+room, and both Rosetta dependencies in the app. Refresh the root lockfile and merge
+through **CI passed**. Tag that main
 commit, using its version (for example):
 
 ```sh
