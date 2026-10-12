@@ -89,12 +89,67 @@ The canonical repository is the private [`vibefield/rosetta`](https://github.com
 Use a feature branch and pull request, then squash merge after **CI passed** succeeds.
 CI runs on pull requests and `main`, and can be started manually. It checks workflow
 syntax, the committed ground-truth artifacts, Python tests, Rust formatting, Clippy
-with warnings denied, and workspace tests on Linux and Apple Silicon macOS.
+with warnings denied, and workspace tests on Linux and Apple Silicon macOS. The npm
+job builds both libraries and the app, runs the SDK and complete app unit suites,
+checks documentation, tests the packed libraries in a clean consumer, and exercises
+the room host in Electron.
 Rust comes from `rust-toolchain.toml`; builds use the committed `Cargo.lock` with
 `--locked`. The evidence tools require Python 3.12 or newer; CI uses Python 3.13.
 External actions are pinned to commit SHAs. Workflow tokens default to read-only;
-only the draft-release job receives contents-write permission. Dependabot proposes
-weekly grouped Rust and GitHub Actions updates. Review and merge those through CI.
+only the draft-release job receives contents-write permission, and only the npm
+publish job receives an OIDC identity. Dependabot proposes weekly grouped Rust,
+npm, and GitHub Actions updates. Review and merge those through CI.
+
+### npm packages
+
+The public packages are `@vibefield/rosetta-protocol` (SDK and wire types) and
+`@vibefield/rosetta-room` (React room, fixtures, and styles). Both ship compiled ESM
+and declarations. React 19 is supplied by the room's host. Package versions move
+together; the wire protocol version remains independent. Publishing does not grant
+an open-source license: the manifests retain `UNLICENSED` until a license is chosen.
+
+Use Node 24 and npm 12.0.1 for development and releases:
+
+```sh
+npm ci
+npm run build
+npm test
+npm run check:packages
+```
+
+One root lockfile covers the protocol, room, and private app. Mille dependencies
+come from npm; no sibling checkout is required. `check:packages` builds tarballs in
+`dist/npm`, installs them in a temporary consumer, tests ESM and shared grant vectors,
+checks NodeNext declarations and the DOM-free version export, then bundles the room
+and its CSS. The tarballs include only `dist`, package metadata, and the README.
+
+The first publish uses an authenticated maintainer, after the checks above:
+
+```sh
+node tools/npm/publish.mjs
+npm trust github @vibefield/rosetta-protocol --repo vibefield/rosetta --file npm-release.yml --allow-publish --yes
+npm trust github @vibefield/rosetta-room --repo vibefield/rosetta --file npm-release.yml --allow-publish --yes
+```
+
+Trust setup may require account 2FA. Future releases use GitHub-hosted OIDC without
+an npm token secret. The source repository is private, so npm provenance is disabled.
+The **npm release** workflow publishes only on `npm-v*` tag pushes; a manual run is
+a complete dry run. It checks main ancestry, stable tag/version agreement, all CI,
+and the exact tarballs before publishing protocol first and room second. Reruns skip
+only versions whose registry integrity exactly matches the verified artifact.
+
+For the next version, update both library manifests and the protocol dependency in
+the room, refresh the root lockfile, and merge through **CI passed**. Tag that main
+commit, using its version (for example):
+
+```sh
+git tag -a npm-v0.1.1 -m 'Rosetta npm 0.1.1'
+git push origin npm-v0.1.1
+```
+
+Use `gh workflow run npm-release.yml --ref main` to verify a release without publishing.
+
+### Daemon archives
 
 The **Release** workflow builds native `rosettad` archives for Linux x64/ARM64 and
 macOS Intel/Apple Silicon. Linux archives target Ubuntu 24.04's glibc environment;

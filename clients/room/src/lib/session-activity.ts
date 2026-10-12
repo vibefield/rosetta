@@ -1,4 +1,4 @@
-import type { SessionRow } from "@rosetta/protocol";
+import type { SessionRow } from "@vibefield/rosetta-protocol";
 
 /** Recorded conversation time; metadata/file timestamps are never a fallback. */
 export function sessionLastActive(session: SessionRow): number | null {

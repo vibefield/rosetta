@@ -10,7 +10,7 @@
 // `SessionRow.id`, as the host's catalog handed them in.
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
-import type { SessionRow } from "@rosetta/protocol";
+import type { SessionRow } from "@vibefield/rosetta-protocol";
 
 /* ── the room's popover rows, as a host fills them ──────────────────────── */
 

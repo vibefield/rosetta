@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { IngestProgress } from "@rosetta/protocol";
+import type { IngestProgress } from "@vibefield/rosetta-protocol";
 import { isCensusRunning, isIngestActive, projectBackfills } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import { UNASSIGNED_PROJECT_ID } from "../../lib/model";

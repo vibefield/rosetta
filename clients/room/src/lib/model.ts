@@ -5,7 +5,7 @@ import type {
   HeatmapDay,
   ProjectRow,
   SessionRow,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import type { AgentShare } from "./agents";
 import { NO_SPEND, addSpend, spendOf, sumSpend } from "./spend";
 import type { Spend } from "./spend";

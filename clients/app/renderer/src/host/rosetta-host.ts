@@ -3,12 +3,12 @@
 // The address comes from `?daemon=`, then `localStorage["ah.daemon"]`, then
 // the development default; the Electron shell's daemon-state pushes repoint it
 // when the app owns its daemon.
-import { RosettaClient } from "@rosetta/protocol";
+import { RosettaClient } from "@vibefield/rosetta-protocol";
 import { desktopHost } from "./desktop-bridge";
 import type { DesktopDaemonState, DesktopHost } from "./desktop-bridge";
 import { worktreePorts } from "./worktree-ports";
 import { assetsOver, catalogOver, sessionsOver } from "./rosetta-ports";
-import type { HostPort, RoomPorts } from "@rosetta/room";
+import type { HostPort, RoomPorts } from "@vibefield/rosetta-room";
 
 function baseUrl(): string {
   const fromQuery = new URLSearchParams(window.location.search).get("daemon");

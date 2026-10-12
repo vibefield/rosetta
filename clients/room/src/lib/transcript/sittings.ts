@@ -9,7 +9,7 @@
 // a session mid-reply; iMessage's hour would miss every lunch.
 //
 // Pure over the ordered entries' `at`. `now` is a parameter, never a clock read.
-import type { TimelineEntry } from "@rosetta/protocol";
+import type { TimelineEntry } from "@vibefield/rosetta-protocol";
 import { dayLabel } from "../format";
 
 /** A silence this long or longer means the reader left and came back. */

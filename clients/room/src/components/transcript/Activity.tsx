@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
-import type { TimelineEntry } from "@rosetta/protocol";
+import type { TimelineEntry } from "@vibefield/rosetta-protocol";
 import { clock } from "../../lib/format";
 import type { ActivityItem } from "./activity-plan";
 import { activityRowKey, summarizeActivity } from "./activity-plan";

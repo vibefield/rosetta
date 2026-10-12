@@ -1,5 +1,5 @@
 // Production transcript and viewer with synthetic text; no daemon or archive.
-import { RosettaClient } from "@rosetta/protocol";
+import { RosettaClient } from "@vibefield/rosetta-protocol";
 import { sameOriginAssetUrl } from "../renderer/src/host/rosetta-ports";
 import { RoomProvider } from "../../room/src/room-context";
 import { client, ports } from "./support/room-ports.mjs";

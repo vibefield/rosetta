@@ -86,28 +86,37 @@ jobs:
       - uses: ./.github/actions/rust
       - run: cargo test --workspace --all-features --locked
 
-  protocol-ts:
-    name: TypeScript client
+  npm:
+    name: npm packages and app
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'
-      - run: npx --yes --package typescript@5.9.2 tsc -p clients/ts
-      - run: node --test clients/ts/test/*.test.mjs
+          node-version: '24'
+          cache: npm
+      - run: npm install --global npm@12.0.1
+      - run: npm ci --ignore-scripts
+      - name: Typecheck and build packages and app
+        run: npm run build
+      - name: SDK and complete app unit suite
+        run: npm test
       - name: Check API documentation against the service contract
         run: node docs/site/scripts/build.mjs --check
-      - name: Check live list ordering and subscription recovery
-        run: node --experimental-strip-types --import ./clients/app/test/support/resolve-ts.mjs --test clients/app/test/activity-order.test.mjs clients/app/test/protocol-recovery.test.mjs
+      - name: Verify tarballs in a clean consumer
+        run: npm run check:packages
+      - name: Install Electron for room integration tests
+        run: node -p 'require("electron")'
+      - name: Exercise room host in Electron
+        run: xvfb-run --auto-servernum npm run test:room-host -w @vibefield/rosetta-agent-history
 
   check:
     name: CI passed
     if: always()
-    needs: [workflows, groundtruth, quality, test, protocol-ts]
+    needs: [workflows, groundtruth, quality, test, npm]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

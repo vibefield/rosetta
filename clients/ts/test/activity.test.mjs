@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { PROTOCOL_VERSION, RosettaClient } from "../client.ts";
+import { PROTOCOL_VERSION, RosettaClient } from "../dist/client.js";
 
 const BASE = "http://127.0.0.1:4641";
 

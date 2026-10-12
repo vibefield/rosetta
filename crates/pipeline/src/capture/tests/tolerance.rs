@@ -484,6 +484,19 @@ impl UnstableDocument {
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
+                    // A fresh FIFO for the next read prevents it from
+                    // opening this pipe while the previous writer closes:
+                    // that race can deliver an empty, apparently stable file.
+                    // Install the replacement before allowing this read's EOF.
+                    let next = path.with_extension("next-fifo");
+                    assert!(
+                        std::process::Command::new("mkfifo")
+                            .arg(&next)
+                            .status()
+                            .unwrap()
+                            .success()
+                    );
+                    std::fs::rename(&next, &path).unwrap();
                     let _ = std::io::Write::write_all(&mut fifo, b"x");
                 }
             })
@@ -498,18 +511,35 @@ impl UnstableDocument {
 
 impl Drop for UnstableDocument {
     fn drop(&mut self) {
-        // Keep a reader open until the writer sees the stop flag. Opening
-        // both ends wakes it without waiting for every writer to close.
+        // Wake whichever FIFO the writer is opening. It may replace the
+        // path after our first wake, so repeat until it sees the stop flag.
+        // Opening both ends never waits for an unrelated writer to close.
         self.stop.store(true, Ordering::SeqCst);
-        let _wake = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&self.path)
-            .unwrap();
         if let Some(writer) = self.writer.take() {
+            while !writer.is_finished() {
+                let _wake = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&self.path)
+                    .unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
             writer.join().unwrap();
         }
         std::fs::remove_file(&self.path).unwrap();
+    }
+}
+
+#[test]
+fn unstable_document_never_delivers_an_empty_stable_read() {
+    let root = TempDir::new().unwrap();
+    let path = root.path().join("document");
+    let _document = UnstableDocument::at(&path);
+    for _ in 0..128 {
+        assert!(matches!(
+            rosetta_capture::document::snapshot(&path, 1024).unwrap(),
+            rosetta_capture::document::DocumentOutcome::Unstable
+        ));
     }
 }
 

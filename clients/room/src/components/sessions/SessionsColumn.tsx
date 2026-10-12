@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { ReactNode } from "react";
-import type { IngestProgress, SessionRow, UsageResponse } from "@rosetta/protocol";
+import type { IngestProgress, SessionRow, UsageResponse } from "@vibefield/rosetta-protocol";
 import type { RoomAct } from "../../host-inputs";
 import { useHostInputs } from "../../host-inputs";
 import { arrangeSections } from "../../lib/sections";

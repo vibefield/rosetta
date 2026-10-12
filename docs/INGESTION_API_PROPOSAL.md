@@ -638,7 +638,7 @@ respecting desired state, and search continuing safely over committed data.
 
 ### 11.1 Host-owned control access
 
-The shared `@rosetta/room` consumes injected ports. Add an optional
+The shared `@vibefield/rosetta-room` consumes injected ports. Add an optional
 `RoomPorts.ingestion` control port, using generated lifecycle request/response
 types; its absence means observation only. Keep lifecycle observations in the
 catalog status, so a read-only host can still explain paused or failed ingestion.

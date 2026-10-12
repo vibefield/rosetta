@@ -1,4 +1,4 @@
-import { MoonGlyph, SunGlyph } from "@rosetta/room";
+import { MoonGlyph, SunGlyph } from "@vibefield/rosetta-room";
 import { useTheme } from "../lib/theme";
 
 export function ThemeToggle() {

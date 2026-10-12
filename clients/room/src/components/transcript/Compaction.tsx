@@ -1,6 +1,6 @@
 // §03 G — generated continuation context belongs to the system marker.
 import { useEffect, useState } from "react";
-import type { CanonicalText } from "@rosetta/protocol";
+import type { CanonicalText } from "@vibefield/rosetta-protocol";
 import { useReadingSession, useRoom } from "../../room-context";
 import { MessagePreview } from "./MessagePreview";
 import { LineChevron } from "./glyphs";

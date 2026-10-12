@@ -19,7 +19,7 @@ import type {
   TimelineMetaPlanSource,
   TimelinePage,
   UsageResponse,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import type { ProjectStats } from "./lib/model";
 
 /** A live subscription the room can end. */

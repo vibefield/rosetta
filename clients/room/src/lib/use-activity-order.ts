@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { MetaState } from "@rosetta/protocol";
+import type { MetaState } from "@vibefield/rosetta-protocol";
 import { advanceActivityOrder } from "./activity-order";
 
 export function useActivityOrder(

@@ -267,7 +267,7 @@ the same credential.
 
 - **TypeScript:** `RosettaClient({ credential })` carries either credential
   on both carriers and throws `UnauthorizedError` with the reason.
-  `@rosetta/protocol/grants` (Node-only) provides `canonicalize`,
+  `@vibefield/rosetta-protocol/grants` (Node-only) provides `canonicalize`,
   `mintGrant`, `verifyGrant` and `parseGrantHeader`, the same rule as §5, and
   the scope names `SCOPE_READ` and `SCOPE_FILES` (`grant.rs` exports the same
   two).

@@ -8,7 +8,7 @@
 // with nine delegations does not open nine websockets to draw nothing; the
 // component mounts when the line opens, and that is the subscription.
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { SessionRow } from "@rosetta/protocol";
+import type { SessionRow } from "@vibefield/rosetta-protocol";
 import { activityCuts } from "./activity-plan";
 import { revealActivityTarget } from "./Activity";
 import type { TimelineLayout } from "../../lib/transcript/use-transcript-tail";

@@ -14,7 +14,7 @@
 //     so a jump is a real absence — D33's data gap, stated rather than
 //     silently closed over.
 import { useMemo } from "react";
-import type { SessionRow, TimelineEntry } from "@rosetta/protocol";
+import type { SessionRow, TimelineEntry } from "@vibefield/rosetta-protocol";
 import type { DayEntry, DocumentOptions, Sitting, Turn } from "../../lib/transcript";
 import { dayList, documentTurns, sittings } from "../../lib/transcript";
 import type { PlannedSitting } from "./document-plan";

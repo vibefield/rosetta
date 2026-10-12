@@ -1,4 +1,4 @@
-// @rosetta/room — rosetta's History room behind injected ports. A host hands
+// @vibefield/rosetta-room — rosetta's History room behind injected ports. A host hands
 // it a catalog, a way to open one session's body, an asset source and, on a
 // desktop, a host port; the room dials nothing itself. See README.md.
 

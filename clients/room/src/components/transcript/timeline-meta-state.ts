@@ -1,4 +1,4 @@
-import type { TimelineMeta, TimelineMetaTask, TimelineMetaWorkflow } from "@rosetta/protocol";
+import type { TimelineMeta, TimelineMetaTask, TimelineMetaWorkflow } from "@vibefield/rosetta-protocol";
 
 export const TIMELINE_META_KINDS = ["tasks", "workflows", "plans", "artifacts"] as const;
 export type TimelineMetaKind = (typeof TIMELINE_META_KINDS)[number];

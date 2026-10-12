@@ -2,7 +2,7 @@
 // daemon's own `StatusResponse` hands it through this; a host with its own
 // status doors builds a `CatalogStatus` from them instead. Tolerant: an older
 // daemon's missing blocks read as absent, never as a failure.
-import type { StatusResponse } from "@rosetta/protocol";
+import type { StatusResponse } from "@vibefield/rosetta-protocol";
 import type { CatalogStatus } from "../ports";
 
 export function catalogStatusOf(status: StatusResponse): CatalogStatus {

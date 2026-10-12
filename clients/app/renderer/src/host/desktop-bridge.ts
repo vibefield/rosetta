@@ -15,7 +15,7 @@ import type {
   WorktreeFileActionRequest,
   WorktreeFileActionResult,
   WorktreeOpenResult,
-} from "@rosetta/room";
+} from "@vibefield/rosetta-room";
 
 export interface DesktopDaemonState {
   readonly phase: "starting" | "ready" | "restarting" | "failed" | "stopped" | "external";

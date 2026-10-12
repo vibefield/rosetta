@@ -1,6 +1,6 @@
 // Image occurrences from canonical activity, independent of either fold level.
 // Every displayed image comes from recorded, optimized canonical members.
-import type { ResourceRef, TimelineEntry } from "@rosetta/protocol";
+import type { ResourceRef, TimelineEntry } from "@vibefield/rosetta-protocol";
 import { projectAction } from "./families";
 import type { PathFact } from "./families";
 import type { AttachmentFact, LedgerMember } from "./turns";

@@ -1,4 +1,4 @@
-import type { SessionRow } from "@rosetta/protocol";
+import type { SessionRow } from "@vibefield/rosetta-protocol";
 import { dayLabel } from "../../lib/format";
 import { sessionLastActive } from "../../lib/session-activity";
 import { useListMotion } from "../../lib/use-list-motion";

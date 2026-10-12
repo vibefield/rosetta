@@ -12,7 +12,7 @@
 // is proven, and the honest states for a session the daemon has not reached.
 import { Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
-import type { ParticipantColor, SessionRow, TimelineEntry } from "@rosetta/protocol";
+import type { ParticipantColor, SessionRow, TimelineEntry } from "@vibefield/rosetta-protocol";
 import type {
   AttachmentFact,
   LedgerLine,

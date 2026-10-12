@@ -11,7 +11,7 @@ import type {
   ResourceRef,
   TaskSnapshotItem,
   ToolAction,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import type {
   CanonicalDocument,
   CollaboratorRef,

@@ -15,8 +15,8 @@ import type {
   TimelineEntry,
   TimelineMeta,
   UsageResponse,
-} from "@rosetta/protocol";
-import { CursorExpiredError } from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
+import { CursorExpiredError } from "@vibefield/rosetta-protocol";
 import type { ProjectStats } from "./model";
 import { getActivityGridStartTimestamp, getViewerUtcOffsetMinutes } from "./model";
 import type { CatalogPort, CollaborationFeed, SessionClient, SessionFeed } from "../ports";

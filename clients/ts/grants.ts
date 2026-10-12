@@ -1,7 +1,7 @@
 // Per-session expiring grants (docs/AUTH.md): the TypeScript twin of
 // `crates/server/src/grant.rs`, for the supervisor that mints them (fieldd)
 // and for its tests. Node-only — it signs with `node:crypto` — so it is its
-// own package entry, `@rosetta/protocol/grants`, never part of the browser
+// own package entry, `@vibefield/rosetta-protocol/grants`, never part of the browser
 // client. A browser carries a grant as an opaque string (the client's
 // `credential` option); only the key's holder mints or verifies one.
 //
@@ -10,7 +10,7 @@
 // Both sides read `crates/server/tests/fixtures/grants.json`.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { base64UrlDecode, base64UrlEncode } from "#base64url";
+import { base64UrlDecode, base64UrlEncode } from "./base64url.js";
 
 /** The only payload version a daemon accepts. */
 export const GRANT_VERSION = 1;

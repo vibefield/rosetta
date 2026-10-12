@@ -1,4 +1,4 @@
-# @rosetta/room
+# @vibefield/rosetta-room
 
 rosetta's History room as a package: the projects, sessions and worktree
 columns, the summary panels and charts, and the transcript with its folds,
@@ -7,14 +7,18 @@ way to open one session's body, an asset source and, on a desktop, a host
 port; each host writes its own adapters. rosetta's own app
 (`clients/app/renderer/src/host`) is the reference host.
 
+```sh
+npm install @vibefield/rosetta-room react@19 react-dom@19
+```
+
 ```tsx
-import { HistoryRoom } from "@rosetta/room";
-import "@rosetta/room/styles/room.css"; // after the host's --vf-* tokens
+import { HistoryRoom } from "@vibefield/rosetta-room";
+import "@vibefield/rosetta-room/styles/room.css"; // after the host's --vf-* tokens
 
 <HistoryRoom catalog={catalog} sessions={sessions} assets={assets} host={host} />;
 ```
 
-`@rosetta/room/fixtures` renders the room with no daemon at all:
+`@vibefield/rosetta-room/fixtures` renders the room with no daemon at all:
 `<HistoryRoom {...createDemoPorts()} />` (six projects, eleven sessions, a year
 of figures, two transcripts with images and web lines, all relative to now).
 
@@ -231,23 +235,14 @@ stop its own chrome (a drag region, say) under it.
 
 ## Building against it
 
-The package ships TypeScript source. It compiles under `strict` with
-`exactOptionalPropertyTypes`, `noUncheckedIndexedAccess` and
-`verbatimModuleSyntax` (`pnpm typecheck` here), and its relative imports carry
-no extension, so a host's compiler needs no `allowImportingTsExtensions`.
-`pnpm install` in this folder brings its dependencies; `@vibecook/mille` and
-`mille-ui` are `link:` rows into a sibling mille checkout, as in the app, and
-the two Radix menus are there as mille-ui's peers (the room's tree uses them).
-React is a peer at `>=19 <20` (the dev and test React is pinned to 19.2.7 — the version
-the package's first host, VibeField, resolves; its dependency check requires one React across
-its linked siblings, so the pin moves only with that host's): `@vibecook/mille-ui` itself wants React 19, and
-the room uses React 19's boolean `inert`, so 19 is the floor.
+The npm package ships ESM JavaScript, TypeScript declarations, and its stylesheets.
+Its three exports are the room, fixtures, and `styles/room.css`. React and React DOM
+are peers at `>=19 <20`; the host supplies one copy of each. Mille and Mille UI are
+registry dependencies, so installing Rosetta needs no sibling checkout.
 
-This folder's install carries a development React and its types, for the
-package's own typecheck. A host that links the folder rather than installing
-the package resolves `react` and `react-dom` to its own single copy (Vite's
-`resolve.dedupe`, as `clients/app` does). Its TypeScript treats two
-`@types/react` installs as one only when their versions match. The pins here
-follow VibeField's, so rosetta's own app (React 19.2.8, types 19.2.18)
-typechecks against a second copy of the types: the two agree today, and the
-app's typecheck is where a drift would show.
+For development, run `npm ci` at the repository root, then `npm run build:packages`.
+`npm run typecheck -w @vibefield/rosetta-room` checks the room under `strict`,
+`exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, and `verbatimModuleSyntax`.
+The workspace app aliases the room's source for live development and deduplicates
+React. `npm run check:packages` verifies the packed exports, declarations, and CSS
+in an independent consumer before release.

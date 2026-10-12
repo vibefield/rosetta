@@ -3,7 +3,7 @@
 // after the reader presses a plan or artifact row and then ride on the handle
 // so the viewer never repeats a mutable filesystem read.
 
-import type { TimelineMetaArtifact, TimelineMetaPlan } from "@rosetta/protocol";
+import type { TimelineMetaArtifact, TimelineMetaPlan } from "@vibefield/rosetta-protocol";
 import type { SessionLeases } from "../../lib/session-leases";
 import { resolveKind } from "../file-viewer";
 import type { FileHandle, FileSource } from "../file-viewer";

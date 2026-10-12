@@ -12,7 +12,7 @@ import {
   UnauthorizedError,
   authorizationHeader,
   webSocketProtocols,
-} from "../client.ts";
+} from "../dist/client.js";
 
 const BASE = "http://127.0.0.1:4641";
 

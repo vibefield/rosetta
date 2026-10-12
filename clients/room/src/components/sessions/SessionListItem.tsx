@@ -1,4 +1,4 @@
-import type { SessionRow } from "@rosetta/protocol";
+import type { SessionRow } from "@vibefield/rosetta-protocol";
 import { AgentMark } from "../../lib/agents";
 import { duration, lastActive, tokenText } from "../../lib/format";
 import { isSessionCooking } from "../../lib/ingest";

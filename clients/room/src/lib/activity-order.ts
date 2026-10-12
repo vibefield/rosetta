@@ -1,4 +1,4 @@
-import type { SessionRow } from "@rosetta/protocol";
+import type { SessionRow } from "@vibefield/rosetta-protocol";
 import { sessionLastActive } from "./session-activity";
 
 /** A quiet interval rearms promotion. Its expiry never changes the order. */

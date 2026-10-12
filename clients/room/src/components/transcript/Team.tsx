@@ -10,7 +10,7 @@ import type {
   ResponseRuntime,
   SessionRow,
   TimelineEntry,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import { AgentMark } from "../../lib/agents";
 import { clock } from "../../lib/format";
 import type {

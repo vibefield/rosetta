@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useContext } from "react";
-import type { CanonicalText } from "@rosetta/protocol";
+import type { CanonicalText } from "@vibefield/rosetta-protocol";
 import type { AttachmentFact } from "../../lib/transcript";
 import { ActivityImagesContext, Attachments, useAttachmentActions } from "./Attachments";
 import { MessagePreview } from "./MessagePreview";

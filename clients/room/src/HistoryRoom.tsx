@@ -18,7 +18,7 @@ import {
   useState,
 } from "react";
 import type { CSSProperties, ForwardedRef, ReactNode, RefObject } from "react";
-import type { SearchHit, SessionRow } from "@rosetta/protocol";
+import type { SearchHit, SessionRow } from "@vibefield/rosetta-protocol";
 import type { RoomPorts } from "./ports";
 import { HostInputsProvider, hostInputsOf, useHostInputs } from "./host-inputs";
 import type { RoomHostInputs, RoomMenu } from "./host-inputs";

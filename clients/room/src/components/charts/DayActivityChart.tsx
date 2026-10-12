@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import type { ModelHour } from "@rosetta/protocol";
+import type { ModelHour } from "@vibefield/rosetta-protocol";
 import { createDayActivity, createHourlyCurve, hourLabel } from "../../lib/day-activity";
 import { tokenText } from "../../lib/format";
 

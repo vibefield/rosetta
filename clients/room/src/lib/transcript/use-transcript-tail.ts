@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import type { TimelineEntry } from "@rosetta/protocol";
+import type { TimelineEntry } from "@vibefield/rosetta-protocol";
 import { REDUCED_MOTION_QUERY, SETTLE_EASING } from "../motion";
 import { TailArrivals } from "./tail-state";
 import { TailScroll } from "./tail-scroll";

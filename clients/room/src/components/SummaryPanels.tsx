@@ -4,7 +4,7 @@
 // cannot disagree. When collapsed, each panel becomes its column header.
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import type { UsageResponse } from "@rosetta/protocol";
+import type { UsageResponse } from "@vibefield/rosetta-protocol";
 import { CalendarHeatmap, ProjectChartDialog, Streamgraph, Treemap } from "./charts";
 import type { ProjectChartView, TreemapData } from "./charts";
 import { ColumnHeading, SegmentedControl, Veil } from "./ui";

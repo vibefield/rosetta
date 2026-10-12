@@ -1,4 +1,4 @@
-import type { ProjectBackfill, RuntimeBackfill } from "@rosetta/protocol";
+import type { ProjectBackfill, RuntimeBackfill } from "@vibefield/rosetta-protocol";
 import type { ProjectViewModel } from "../../lib/model";
 import { useListMotion } from "../../lib/use-list-motion";
 import { useDeferredListOrder } from "../../lib/use-deferred-list-order";

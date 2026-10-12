@@ -17,7 +17,7 @@ supervision, platform shutdown, verified exit, and safe connection replacement.
   It does not consume edits from the working Rosetta checkout.
 
 The standalone app's Electron main owns its daemon. Its renderer uses one
-`RosettaClient`, wrapped by catalog/session/asset ports for `@rosetta/room`.
+`RosettaClient`, wrapped by catalog/session/asset ports for `@vibefield/rosetta-room`.
 Vibefield's fieldd owns the daemon, enrollment record, bearer, and grant key.
 Its History catalog uses fieldd RPCs; transcript bodies use a separate direct
 connection carrying a per-session grant. The shared room owns neither transport

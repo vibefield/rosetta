@@ -4,8 +4,8 @@
 // Begin, and the reassurance line is the literal truth of the
 // localhost-only daemon, stated exactly once, here.
 import { useEffect, useMemo, useState } from "react";
-import type { DiscoveryRow, RosettaClient } from "@rosetta/protocol";
-import { AgentMark, lastActive } from "@rosetta/room";
+import type { DiscoveryRow, RosettaClient } from "@vibefield/rosetta-protocol";
+import { AgentMark, lastActive } from "@vibefield/rosetta-room";
 
 
 function formatBytes(bytes: number): string {

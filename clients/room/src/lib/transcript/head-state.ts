@@ -7,7 +7,7 @@
 // no React, no DOM, no clock of its own — so the transitions can be proven in
 // `test/transcript-head.test.mjs` and the hook that owns the listeners stays
 // thin.
-import type { TimelineEntry } from "@rosetta/protocol";
+import type { TimelineEntry } from "@vibefield/rosetta-protocol";
 
 /** One backward page. The daemon's limit and the record's figure. */
 export const EARLIER_PAGE_SIZE = 200;

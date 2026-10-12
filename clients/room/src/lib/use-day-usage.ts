@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { DayUsageResponse } from "@rosetta/protocol";
+import type { DayUsageResponse } from "@vibefield/rosetta-protocol";
 import { useRoom } from "../room-context";
 
 type Result = { key: string; status: "loading" | "ready" | "error"; data: DayUsageResponse | null };

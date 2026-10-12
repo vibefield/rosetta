@@ -3,7 +3,7 @@
 // window messages); this module listens from load, because a transferred port
 // is a one-owner capability that must survive an arrival before the room
 // listens. What arrives early waits here, in order, for the one listener.
-import type { WorktreeHostEvent } from "@rosetta/room";
+import type { WorktreeHostEvent } from "@vibefield/rosetta-room";
 
 type Listener = (event: WorktreeHostEvent) => void;
 

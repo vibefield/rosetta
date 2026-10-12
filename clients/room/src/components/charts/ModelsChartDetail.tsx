@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { UsageResponse } from "@rosetta/protocol";
+import type { UsageResponse } from "@vibefield/rosetta-protocol";
 import { tokenText } from "../../lib/format";
 import { createModelUsageStreamgraphData } from "../../lib/chart-data";
 import { Streamgraph } from "./Streamgraph";

@@ -8,7 +8,7 @@
 // session's client.
 
 import { useMemo } from "react";
-import type { AssetRef } from "@rosetta/protocol";
+import type { AssetRef } from "@vibefield/rosetta-protocol";
 import type { AttachmentFact } from "../../lib/transcript";
 import type { AssetSource } from "../../ports";
 import { useReadingSession, useRoom } from "../../room-context";

@@ -1,4 +1,4 @@
-import type { CanonicalText } from "@rosetta/protocol";
+import type { CanonicalText } from "@vibefield/rosetta-protocol";
 import type { AttachmentFact } from "../../lib/transcript";
 import type { FileHandle, FileSource } from "../file-viewer/types";
 

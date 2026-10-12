@@ -4,8 +4,8 @@
 // earlier rows), obey Resync barriers, and reconnect with a resume stamp.
 // Consumers render; they never re-implement protocol semantics.
 
-import { utf8Base64UrlEncode } from "#base64url";
-import { OrderedCache } from "#ordered-cache";
+import { utf8Base64UrlEncode } from "./base64url.js";
+import { OrderedCache } from "./ordered-cache.js";
 import { PROTOCOL_VERSION } from "./protocol-version.mjs";
 export { PROTOCOL_VERSION } from "./protocol-version.mjs";
 import type { TimelineEntryResponse } from "./generated/TimelineEntryResponse";
@@ -50,7 +50,7 @@ export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
  * How a client proves itself to a daemon started with `--token-file`
  * (docs/AUTH.md). A bearer opens every route; a grant opens one session's
  * recorded history until its `exp`. The client only carries a grant, as an
- * opaque string: minting needs the key (`@rosetta/protocol/grants`).
+ * opaque string: minting needs the key (`@vibefield/rosetta-protocol/grants`).
  */
 export type RosettaCredential =
   | { readonly kind: "bearer"; readonly token: string }

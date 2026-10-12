@@ -6,7 +6,7 @@ import "./styles/app.css";
 // The room's own stylesheet, scoped to its root: its sheets and, for column
 // ③'s tree, mille's token surface and the VibeField theme, which reads this
 // app's --vf-* tokens live.
-import "@rosetta/room/styles/room.css";
+import "@vibefield/rosetta-room/styles/room.css";
 
 // No StrictMode: mille's port handshake is single-consumer (a MessagePort,
 // once claimed, cannot be re-claimed by a double-invoked effect), and the

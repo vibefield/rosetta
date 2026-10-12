@@ -7,6 +7,9 @@ __pycache__/
 
 # Release output and local credentials.
 /dist/
+node_modules/
+/clients/ts/dist/
+/clients/room/dist/
 .env
 .env.*
 !.env.example

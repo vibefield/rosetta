@@ -11,7 +11,7 @@
 // ledger line — which needs no special case here, because the notice row
 // already follows the tool row it decided about.
 
-import type { SummaryPurpose } from "@rosetta/protocol";
+import type { SummaryPurpose } from "@vibefield/rosetta-protocol";
 
 export interface MarkerProps {
   readonly text: string;

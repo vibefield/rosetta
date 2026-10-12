@@ -1,20 +1,49 @@
 {
-  "name": "@rosetta/protocol",
+  "name": "@vibefield/rosetta-protocol",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
-  "main": "./index.ts",
-  "types": "./index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./index.ts",
-    "./protocol-version": "./protocol-version.mjs",
-    "./grants": "./grants.ts"
-  },
-  "imports": {
-    "#base64url": "./base64url.ts",
-    "#ordered-cache": "./ordered-cache.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./protocol-version": {
+      "types": "./dist/protocol-version.d.mts",
+      "import": "./dist/protocol-version.mjs"
+    },
+    "./grants": {
+      "types": "./dist/grants.d.ts",
+      "import": "./dist/grants.js"
+    }
   },
   "scripts": {
+    "build": "node ../../tools/npm/build.mjs",
+    "prepack": "npm run build",
+    "typecheck": "tsc -p tsconfig.json",
+    "pretest": "npm run build",
     "test": "node --test test/*.test.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vibefield/rosetta.git",
+    "directory": "clients/ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "description": "Rosetta protocol types, transport client, subscriptions, and session grants.",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }

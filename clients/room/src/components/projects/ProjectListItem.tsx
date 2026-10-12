@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import type { ProjectBackfill, BackfillState } from "@rosetta/protocol";
+import type { ProjectBackfill, BackfillState } from "@vibefield/rosetta-protocol";
 import { AgentBadges } from "../../lib/agents";
 import { progressBytes } from "../../lib/ingest-activity";
 import { projectBackfillProgress } from "../../lib/ingest";

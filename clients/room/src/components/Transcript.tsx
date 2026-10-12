@@ -20,7 +20,7 @@ import type {
   TimelineMetaPlan,
   TimelineMetaTask,
   TimelineMetaWorkflow,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import { clockShort } from "../lib/format";
 
 import type { TimelineFeed } from "../lib/hooks";

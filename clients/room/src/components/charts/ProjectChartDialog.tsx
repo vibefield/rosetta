@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import type { UsageResponse } from "@rosetta/protocol";
+import type { UsageResponse } from "@vibefield/rosetta-protocol";
 import { ColumnHeading, DialogShell } from "../ui";
 import { CloseGlyph, ExitFullscreenGlyph, FullscreenGlyph } from "../../lib/icons";
 import { ActivityChartDetail } from "./ActivityChartDetail";
