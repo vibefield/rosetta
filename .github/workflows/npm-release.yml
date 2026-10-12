@@ -67,7 +67,7 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/npm-v')
     needs: [ci, package]
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
