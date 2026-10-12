@@ -8,6 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow } from 'electron';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temporary = mkdtempSync(path.join(os.tmpdir(), 'rosetta-room-host-'));
+// The hosted Linux VM has no GPU. Map a software-rendered window into Xvfb
+// so capturePage has an actual compositor surface, even without a desktop.
+const headlessCi = process.platform === 'linux' && Boolean(process.env.CI);
+if (headlessCi) app.disableHardwareAcceleration();
 app.setPath('userData', path.join(temporary, 'profile'));
 app.on('window-all-closed', () => {});
 const pulse = setInterval(() => {}, 100);
@@ -33,7 +37,7 @@ async function run() {
     server = await createServer({ configFile: path.join(root, 'vite.config.ts'), root, logLevel: 'error',
       server: { host: '127.0.0.1', port: 0, strictPort: false, open: false, hmr: false, watch: null } });
     await server.listen();
-    win = new BrowserWindow({ width: 1440, height: 900, show: false,
+    win = new BrowserWindow({ width: 1440, height: 900, show: headlessCi,
       webPreferences: { backgroundThrottling: false, contextIsolation: true, nodeIntegration: false } });
     win.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message); });
     await win.loadURL(`http://127.0.0.1:${server.httpServer.address().port}/test/room-host.html`);

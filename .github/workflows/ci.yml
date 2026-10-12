@@ -113,7 +113,7 @@ jobs:
       - name: Exercise room host in Electron
         # The hosted runner cannot use Chromium's unconfigured SUID helper.
         # This flag applies only to this local fixture on the disposable CI VM.
-        run: xvfb-run --auto-servernum npm run test:room-host -w @vibefield/rosetta-agent-history -- --no-sandbox
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' npm run test:room-host -w @vibefield/rosetta-agent-history -- --no-sandbox
 
   check:
     name: CI passed
