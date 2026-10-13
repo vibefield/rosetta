@@ -85,7 +85,7 @@ with `--allow-host-execution` on a disposable research machine.
 
 ## Development and delivery
 
-The canonical repository is the private [`vibefield/rosetta`](https://github.com/vibefield/rosetta).
+The canonical repository is the public [`vibefield/rosetta`](https://github.com/vibefield/rosetta).
 Use a feature branch and pull request, then squash merge after **CI passed** succeeds.
 CI runs on pull requests and `main`, and can be started manually. It checks workflow
 syntax, the committed ground-truth artifacts, Python tests, Rust formatting, Clippy
@@ -131,8 +131,11 @@ npm trust github @vibefield/rosetta-protocol --repo vibefield/rosetta --file npm
 npm trust github @vibefield/rosetta-room --repo vibefield/rosetta --file npm-release.yml --allow-publish --yes
 ```
 
-Trust setup may require account 2FA. Future releases use GitHub-hosted OIDC without
-an npm token secret. The source repository is private, so npm provenance is disabled.
+Trust setup may require account 2FA. A new trusted publisher must complete its first
+successful publish within two days or it expires; a manual dry run does not activate
+it. See [npm's trusted-publisher requirements](https://docs.npmjs.com/trusted-publishers/#trusted-publisher-configuration-expiry).
+Future releases use GitHub-hosted OIDC without an npm token secret. The public source
+repository supports npm provenance, which the publish job explicitly enables.
 The **npm release** workflow publishes only on `npm-v*` tag pushes; a manual run is
 a complete dry run. It checks main ancestry, stable tag/version agreement, all CI,
 and the exact tarballs before publishing protocol first and room second. Reruns skip
@@ -144,8 +147,8 @@ through **CI passed**. Tag that main
 commit, using its version (for example):
 
 ```sh
-git tag -a npm-v0.1.1 -m 'Rosetta npm 0.1.1'
-git push origin npm-v0.1.1
+git tag -a npm-v0.1.2 -m 'Rosetta npm 0.1.2'
+git push origin npm-v0.1.2
 ```
 
 Use `gh workflow run npm-release.yml --ref main` to verify a release without publishing.
@@ -185,9 +188,9 @@ if a draft needs correction, delete only that unpublished draft before rerunning
 Manual workflow runs never publish, even when dispatched against a tag. No cloud
 account, deployment secrets, or automatic desktop updater is configured here.
 
-Private-repository branch protection requires GitHub Team for the organization.
-On the current Free plan, **CI passed is visible but not enforced**: users with write
-access can still push or merge directly. After upgrading, apply the prepared policy:
+The public repository enforces **CI passed** and pull requests on `main`, including
+for administrators. The policy is recorded in `.github/main-protection.json`; to
+reapply it:
 
 ```sh
 gh api --method PUT repos/vibefield/rosetta/branches/main/protection \

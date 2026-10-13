@@ -41,7 +41,7 @@ for (const pkg of packages) {
   }
 }
 for (const pkg of pending) {
-  execFileSync("npm", ["publish", pkg.tarball, "--access=public", "--ignore-scripts", "--workspaces=false", "--provenance=false", registry], { stdio: "inherit" });
+  execFileSync("npm", ["publish", pkg.tarball, "--access=public", "--ignore-scripts", "--workspaces=false", registry], { stdio: "inherit" });
   let verified = false;
   for (let attempt = 0; attempt < 60; attempt++) {
     const integrity = await publishedIntegrity(pkg);
