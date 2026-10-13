@@ -37,14 +37,14 @@
     "@tanstack/react-virtual": "^3.14.10",
     "@vibecook/mille": "^0.3.4",
     "@vibecook/mille-ui": "^0.3.4",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "@vibefield/rosetta-protocol": "^0.1.1",
     "@vibefield/rosetta-room": "^0.1.1"
   },
   "devDependencies": {
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.0.2",
     "electron": "^43.1.1",
     "typescript": "~5.9.3",
