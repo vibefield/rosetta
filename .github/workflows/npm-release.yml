@@ -84,6 +84,8 @@ jobs:
           name: npm-packages
           path: dist/npm/
       # npm exchanges GitHub's identity for a short-lived publish token.
-      # No NPM_TOKEN or NODE_AUTH_TOKEN. Private source repos cannot attest provenance.
+      # Public source and packages support attestations without an npm token secret.
       - name: Publish verified artifacts in dependency order
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
         run: node tools/npm/publish.mjs

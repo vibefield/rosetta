@@ -39,8 +39,8 @@
     "@vibecook/mille-ui": "^0.3.4",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "@vibefield/rosetta-protocol": "^0.1.0",
-    "@vibefield/rosetta-room": "^0.1.0"
+    "@vibefield/rosetta-protocol": "^0.1.1",
+    "@vibefield/rosetta-room": "^0.1.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",
