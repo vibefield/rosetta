@@ -1,4 +1,4 @@
-import type { SessionRow } from "@rosetta/protocol";
+import type { SessionRow } from "@vibefield/rosetta-protocol";
 import { AgentMark } from "../../lib/agents";
 import { duration, lastActive, tokenText } from "../../lib/format";
 import { isSessionCooking } from "../../lib/ingest";
@@ -6,6 +6,8 @@ import { sessionLastActive } from "../../lib/session-activity";
 import { spendDescription, spendText } from "../../lib/spend";
 import { getSessionStatus, getSessionTitle } from "./session-display";
 import type { SessionFacts } from "./types";
+import { useHostInputs } from "../../host-inputs";
+import { HostAct } from "../HostAct";
 
 export interface SessionListItemProps {
   readonly session: SessionRow;
@@ -51,23 +53,41 @@ export function SessionListItem({
   const spendFigure = landedFacts !== null && landedFacts.tokens > 0
     ? spendText(landedFacts.spend)
     : null;
-
-  return (
-    <button
-      type="button"
-      className={`ah-session-list-item${isSelected ? " is-selected" : ""}`}
-      data-motion-key={session.id}
-      data-role={session.role}
-      data-cooking={isCooking ? "" : undefined}
-      aria-current={isSelected ? "true" : undefined}
-      aria-label={[
-        title,
-        status.label,
-        ...accessibleMetadata,
-        `last active ${lastActiveLabel}`,
-      ].join(" · ")}
-      onClick={() => onSessionSelect(session)}
+  // R4: the host's id slot, and its act or the reason at the row's end.
+  const decoration = useHostInputs().sessionRow?.(session) ?? null;
+  const hostId = decoration?.id ?? null;
+  const act = decoration?.act ?? null;
+  const reason = act === null ? (decoration?.reason ?? null) : null;
+  const className = `ah-session-list-item${isSelected ? " is-selected" : ""}`;
+  const accessibleName = [
+    title,
+    status.label,
+    ...accessibleMetadata,
+    `last active ${lastActiveLabel}`,
+  ].join(" · ");
+  // With an act the row holds two buttons, and a button cannot hold another:
+  // the row becomes a box, one button covers it (the selection, named as the
+  // row always was), and the act sits above it. The rest is drawn for the eye.
+  const shown = act === null ? undefined : true;
+  const last = (
+    <span className="ah-last" data-live={lastActiveLabel === "now" ? "" : undefined} aria-hidden={shown}>
+      {lastActiveLabel}
+    </span>
+  );
+  const idSlot = hostId === null ? (
+    <span
+      className="ah-session-list-item__native-id"
+      title={`Native session ${session.native_session_id}`}
     >
+      <span>{session.native_session_id.slice(0, 18)}</span>
+    </span>
+  ) : (
+    <span className="ah-session-list-item__native-id" data-host="" title={decoration?.idTitle} aria-hidden={shown}>
+      {hostId}
+    </span>
+  );
+  const body = (
+    <>
       <i
         className="ah-session-list-item__status"
         data-tone={status.tone ?? undefined}
@@ -75,11 +95,11 @@ export function SessionListItem({
         title={status.label}
         aria-hidden="true"
       />
-      <span className="ah-session-list-item__header">
+      <span className="ah-session-list-item__header" aria-hidden={shown}>
         <strong title={title}>{title}</strong>
         <AgentMark kind={runtimeKind} />
       </span>
-      <span className="ah-session-list-item__metadata">
+      <span className="ah-session-list-item__metadata" aria-hidden={shown}>
         {roleLabel !== null && (
           <>
             <span>{roleLabel}</span>
@@ -117,16 +137,51 @@ export function SessionListItem({
         )}
       </span>
       <span className="ah-session-list-item__footer">
-        <span
-          className="ah-session-list-item__native-id"
-          title={`Native session ${session.native_session_id}`}
-        >
-          <span>{session.native_session_id.slice(0, 18)}</span>
-        </span>
-        <span className="ah-last" data-live={lastActiveLabel === "now" ? "" : undefined}>
-          {lastActiveLabel}
-        </span>
+        {idSlot}
+        {act === null && reason === null ? last : (
+          <span className="ah-session-list-item__end">
+            {act !== null ? <HostAct act={act} place="row" /> : (
+              <span className="ah-session-list-item__reason">{reason}</span>
+            )}
+            {last}
+          </span>
+        )}
       </span>
-    </button>
+    </>
+  );
+
+  if (act === null) {
+    return (
+      <button
+        type="button"
+        className={className}
+        data-motion-key={session.id}
+        data-role={session.role}
+        data-cooking={isCooking ? "" : undefined}
+        aria-current={isSelected ? "true" : undefined}
+        aria-label={accessibleName}
+        onClick={() => onSessionSelect(session)}
+      >
+        {body}
+      </button>
+    );
+  }
+  return (
+    <div
+      className={className}
+      data-motion-key={session.id}
+      data-role={session.role}
+      data-cooking={isCooking ? "" : undefined}
+      data-host-act=""
+    >
+      <button
+        type="button"
+        className="ah-session-list-item__hit"
+        aria-current={isSelected ? "true" : undefined}
+        aria-label={accessibleName}
+        onClick={() => onSessionSelect(session)}
+      />
+      {body}
+    </div>
   );
 }

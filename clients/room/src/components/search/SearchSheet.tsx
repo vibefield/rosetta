@@ -16,7 +16,7 @@ import type {
   SearchHit,
   SearchReadiness,
   SessionRow,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import { AgentMark, agentLabel } from "../../lib/agents";
 import { dayLabel } from "../../lib/format";
 import { sessionLastActive } from "../../lib/session-activity";

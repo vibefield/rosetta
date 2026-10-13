@@ -1,9 +1,9 @@
 {
-  "name": "@rosetta/agent-history",
+  "name": "@vibefield/rosetta-agent-history",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "rosetta's agent-view app: the Electron host of the History room, which lives in clients/room as @rosetta/room.",
+  "description": "rosetta's agent-view app: the Electron host of the History room, which lives in clients/room as @vibefield/rosetta-room.",
   "main": "electron/main.mjs",
   "engines": {
     "node": ">=22"
@@ -24,6 +24,7 @@
     "test:activity-fold": "electron test/activity-fold.electron.mjs",
     "test:history-window": "electron test/history-window.electron.mjs",
     "test:worktree-actions": "electron test/worktree-actions.electron.mjs",
+    "test:file-viewer-browsers": "electron test/file-viewer-browsers.electron.mjs",
     "test:activity-chart": "electron test/activity-chart.electron.mjs",
     "test:models-chart": "electron test/models-chart.electron.mjs",
     "test:room-host": "electron test/room-host.electron.mjs",
@@ -34,10 +35,12 @@
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-tooltip": "^1.2.16",
     "@tanstack/react-virtual": "^3.14.10",
-    "@vibecook/mille": "link:../../../mille/packages/mille",
-    "@vibecook/mille-ui": "link:../../../mille/packages/mille-ui",
+    "@vibecook/mille": "^0.3.4",
+    "@vibecook/mille-ui": "^0.3.4",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "@vibefield/rosetta-protocol": "^0.1.0",
+    "@vibefield/rosetta-room": "^0.1.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",
@@ -46,8 +49,5 @@
     "electron": "^43.1.1",
     "typescript": "~5.9.3",
     "vite": "^8.0.13"
-  },
-  "allowScripts": {
-    "electron@43.4.1": true
   }
 }

@@ -36,7 +36,7 @@ import type {
   ToolAction,
   ToolInteraction,
   ToolStatus,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import type { CommandFact, LedgerDetail, PathFact } from "./families";
 import { projectAction } from "./families";
 import type {

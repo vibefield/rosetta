@@ -1,4 +1,4 @@
-import type { AssetRef } from "@rosetta/protocol";
+import type { AssetRef } from "@vibefield/rosetta-protocol";
 
 /** File-format hints for image targets without a filename extension or MIME type.
  * This only selects the existing viewer; the browser still validates/decodes it. */

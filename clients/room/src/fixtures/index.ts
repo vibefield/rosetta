@@ -26,7 +26,7 @@ import type {
   ToolAction,
   ToolStatus,
   UsageResponse,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import type { AssetSource, CatalogPort, CatalogStatus, RoomPorts, SessionClient, SessionFeed, SessionPort } from "../ports";
 import { advanceActivityOrder } from "../lib/activity-order";
 import type { ActivityOrder } from "../lib/activity-order";

@@ -4,6 +4,8 @@ import type { FocusEvent, PointerEvent, UIEvent } from "react";
 export interface ListPosition {
   readonly id: string;
   readonly day: number | null;
+  /** Which of a host's sections the row is drawn in (R3); absent without them. */
+  readonly section?: number;
 }
 
 interface Interaction {

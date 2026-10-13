@@ -3,9 +3,9 @@
 // keys, the URL's parameters, the theme, the consent screen, and the words for
 // a daemon that is not there — and hands the room its ports.
 import { useEffect, useRef, useState } from "react";
-import type { RosettaClient } from "@rosetta/protocol";
-import { HistoryRoom, hasPrimaryModifier } from "@rosetta/room";
-import type { HistoryRoomHandle } from "@rosetta/room";
+import type { RosettaClient } from "@vibefield/rosetta-protocol";
+import { HistoryRoom, hasPrimaryModifier } from "@vibefield/rosetta-room";
+import type { HistoryRoomHandle } from "@vibefield/rosetta-room";
 import { RollCallPanel } from "./components/RollCall";
 import { ThemeToggle } from "./components/ThemeToggle";
 import type { RosettaHost } from "./host/rosetta-host";

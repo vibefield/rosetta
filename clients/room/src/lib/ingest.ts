@@ -3,7 +3,7 @@
 // every veil and cooking affordance keys off these derivations plus
 // SessionRow.stream_state, and nothing else. A daemon too old to carry the
 // block yields null throughout, which degrades to today's behavior.
-import type { IngestProgress, ProjectBackfill, SessionRow } from "@rosetta/protocol";
+import type { IngestProgress, ProjectBackfill, SessionRow } from "@vibefield/rosetta-protocol";
 import { UNASSIGNED_PROJECT_ID } from "./model";
 
 /** The backfill is still running: veils may be down, cards may cook. */

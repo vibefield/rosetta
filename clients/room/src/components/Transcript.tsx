@@ -20,7 +20,7 @@ import type {
   TimelineMetaPlan,
   TimelineMetaTask,
   TimelineMetaWorkflow,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import { clockShort } from "../lib/format";
 
 import type { TimelineFeed } from "../lib/hooks";
@@ -69,6 +69,8 @@ import {
 } from "./transcript/timeline-meta-file-source";
 
 import { scrollRowTo } from "./transcript/scroll-to-row";
+import type { RoomHeadActs } from "../host-inputs";
+import { HostAct } from "./HostAct";
 import { activityCuts } from "./transcript/activity-plan";
 import { ReadingSessionProvider, useRoom } from "../room-context";
 
@@ -123,6 +125,13 @@ export interface TranscriptColumnProps {
   readonly homeDirectory: string | null;
   readonly onOpenThread?: (sessionId: string) => void;
   readonly onBackToParent?: (() => void) | null;
+  /** The reader (PK3): the document alone, read-only. No head band and no
+   * acts — no session work, no day menu, no "Latest", no dialog — and a
+   * landing stays marked rather than fading. */
+  readonly reader?: boolean | undefined;
+  /** R5: the host's acts in the head, before the activity act, or its reason
+   * after the range. */
+  readonly headActs?: RoomHeadActs | null | undefined;
 }
 
 export function TranscriptColumn(props: TranscriptColumnProps) {
@@ -152,10 +161,13 @@ function SessionTranscript({
   homeDirectory,
   onOpenThread,
   onBackToParent,
+  reader = false,
+  headActs = null,
 }: TranscriptColumnProps) {
   const { sessions: leases, host } = useRoom();
+  const listBrowsers = useMemo(() => host?.browsers?.bind(host), [host]);
   const openInBrowser = useMemo(
-    () => (host === null ? null : (name: string, bytes: Uint8Array) => host.openInBrowser(name, bytes)),
+    () => (host === null ? null : (name: string, bytes: Uint8Array, browserId?: string) => host.openInBrowser(name, bytes, browserId)),
     [host],
   );
   const attachments = useAttachmentReader();
@@ -219,6 +231,8 @@ function SessionTranscript({
   }, []);
 
   const openAttachment: AttachmentOpener = (fact, row) => {
+    // The reader opens nothing over its host: it shows the document as it is.
+    if (reader) return;
     viewerRequest.current += 1;
     if (!attachments.canOpen(fact)) {
       onReceipt(attachmentStatus(fact));
@@ -235,6 +249,7 @@ function SessionTranscript({
   }, [attachments]);
 
   const openReadPath = (path: PathFact, previewBytes?: Uint8Array, name?: string) => {
+    if (reader) return;
     const request = (viewerRequest.current += 1);
     void handleForReadPath(leases, path, previewBytes, name)
       .then((handle) => {
@@ -363,7 +378,7 @@ function SessionTranscript({
         } else {
           onFocusConsumed();
         }
-        window.setTimeout(() => setHighlightedTimelineId(null), 1500);
+        if (!reader) window.setTimeout(() => setHighlightedTimelineId(null), 1500);
       }
       return;
     }
@@ -401,7 +416,7 @@ function SessionTranscript({
       else onFocusConsumed();
       onReceipt("That message is older than the loaded history");
     }
-  }, [targetTimelineId, targetIsMeta, metaFocus, session, feed, model, onFocusConsumed, onReceipt]);
+  }, [targetTimelineId, targetIsMeta, metaFocus, session, feed, model, onFocusConsumed, onReceipt, reader]);
 
   // The pill pins while the reader is inside its day, and returns to its
   // hairline the moment that day scrolls back into view.
@@ -437,13 +452,13 @@ function SessionTranscript({
 
   return (
     <ThreadNavigationContext.Provider value={threadNavigation}>
-    <MessageViewerContext.Provider value={openMessage}>
+    <MessageViewerContext.Provider value={reader ? null : openMessage}>
     <div
       className="ah-col ah-col--measure"
       style={{ position: "relative" }}
       data-fold={fold.folded ? "on" : "off"}
     >
-      <header>
+      {!reader && <header>
         {onBackToParent && <button type="button" className="tr-parent-link" title="Back to parent transcript"
           aria-label="Back to parent transcript" onClick={onBackToParent}>←</button>}
         {session === null ? (
@@ -470,6 +485,10 @@ function SessionTranscript({
           ) : (
             <span className="ah-caption tnum">{range}</span>
           )}
+          {session !== null && headActs !== null && headActs.reason !== undefined && headActs.reason !== null && (
+            <span className="ah-caption ah-headreason">{headActs.reason}</span>
+          )}
+          {session !== null && headActs?.acts?.map((act) => <HostAct key={act.key} act={act} place="pill" />)}
           {session !== null && (
             // §05 — the activity act, beside the range. Folded is the default;
             // the reader who wants the build log gets it in one press, and the
@@ -489,10 +508,10 @@ function SessionTranscript({
             </button>
           )}
         </span>
-      </header>
+      </header>}
       <div className="tr-stage" data-ready={!loading || undefined}>
       <div className="tr-surface" inert={loading} aria-hidden={loading || undefined}>
-      {session !== null && feed.timelineMeta !== null && (
+      {!reader && session !== null && feed.timelineMeta !== null && (
         <TimelineMeta
           meta={feed.timelineMeta}
           onOpenTask={openMetaTask}
@@ -534,7 +553,7 @@ function SessionTranscript({
                 getRuntimeKind={getRuntimeKind}
                 homeDirectory={homeDirectory}
                 onTimelineLayout={onTimelineLayout}
-                onPillPress={(element: HTMLElement, dayKey: string | null) => {
+                onPillPress={reader ? null : (element: HTMLElement, dayKey: string | null) => {
                   const frame = element.closest(".ah-col");
                   if (frame === null) return;
                   const top =
@@ -580,7 +599,7 @@ function SessionTranscript({
         />
       )}
       <ReceiptPill receipt={headOfDocument.receipt} top={RECEIPT_TOP} />
-      {session !== null && (
+      {!reader && session !== null && (
         <button
           type="button"
           className="ah-newpill"
@@ -605,12 +624,12 @@ function SessionTranscript({
           {tail.unseen > 0 && <i aria-hidden="true" />}
         </button>
       )}
-      <span className="ah-tail-announcement" role="status" aria-live="polite" aria-atomic="true">
+      {!reader && <span className="ah-tail-announcement" role="status" aria-live="polite" aria-atomic="true">
         {tail.away && tail.unseen > 0
           ? `${tail.unseen} new ${tail.unseen === 1 ? "message" : "messages"}. Scroll to latest to read.`
           : ""}
-      </span>
-      <FileViewerDialog
+      </span>}
+      {!reader && <FileViewerDialog
         renderMarkdown={viewerTarget?.message === undefined ? undefined : (text) => <AuthoredMessage text={text}
           messageKey={viewerTarget.message!.key} role={viewerTarget.message!.role} preview={false}
           attachments={viewerTarget.message!.attachments ?? []} onOpenAttachment={openAttachment} onReceipt={onReceipt} />}
@@ -624,11 +643,13 @@ function SessionTranscript({
           setImageGallery(null);
         }}
         onReceipt={onReceipt}
+        listBrowsers={listBrowsers}
         openInBrowser={openInBrowser}
-      />
-      {imageGallery && <ImageGalleryDialog {...imageGallery} source={gallerySource}
+      />}
+      {!reader && imageGallery && <ImageGalleryDialog {...imageGallery} source={gallerySource}
         tint={project?.tint ?? null} homeDirectory={homeDirectory}
         onClose={() => setImageGallery(null)} onReceipt={onReceipt}
+        listBrowsers={listBrowsers}
         openInBrowser={openInBrowser} />}
     </div>
     </MessageViewerContext.Provider>

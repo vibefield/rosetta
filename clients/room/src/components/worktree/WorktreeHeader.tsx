@@ -27,6 +27,15 @@ import { tildePath } from "../../lib/format";
 import type { GitFacts } from "../../ports";
 import type { BranchFacts } from "../git";
 import type { RepoTab } from "./types";
+import type { CSSProperties } from "react";
+import type { RoomFolder, RoomMenu } from "../../host-inputs";
+import { HostMenuButton } from "../HostMenu";
+
+const CARET = (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="m4.5 6.5 3.5 3.5 3.5-3.5" />
+  </svg>
+);
 
 export interface WorktreeHeaderProps {
   /** The root the tree is actually showing, or null before one opens. */
@@ -42,6 +51,8 @@ export interface WorktreeHeaderProps {
   readonly count: number | null;
   readonly changeShape: string;
   readonly unpushed: number | null;
+  /** R6: the host's folders; the name becomes their dropdown, its mark in front. */
+  readonly folders?: { readonly menu: RoomMenu; readonly shown: RoomFolder | null } | null | undefined;
 }
 
 /** `branch · n dirty` — and nothing at all without a branch to hang it on.
@@ -75,19 +86,47 @@ export function WorktreeHeader({
   count,
   changeShape,
   unpushed,
+  folders = null,
 }: WorktreeHeaderProps) {
+  const shown = folders?.shown ?? null;
   const caption =
-    tab === "history"
-      ? formatSync(branch, unpushed)
-      : tab === "changes"
-        ? changeShape
-        : (formatGitFacts(facts) ?? "");
+    shown?.caption !== undefined
+      ? shown.caption
+      : tab === "history"
+        ? formatSync(branch, unpushed)
+        : tab === "changes"
+          ? changeShape
+          : (formatGitFacts(facts) ?? "");
 
   const onFiles = tab === "files";
   const path = root === null ? "—" : tildePath(root, homeDirectory);
   // A detached HEAD has no branch name; the checkout it is in is the honest
   // fallback, and it is the same object either way.
   const ref = branch?.name ?? facts?.branch ?? path;
+
+  if (folders !== null) {
+    // The head is the folder list: the shown folder's mark and name, one button.
+    const folderPath = shown === null ? path : tildePath(shown.path, homeDirectory);
+    const name = onFiles ? folderPath : ref;
+    return (
+      <header>
+        <HostMenuButton
+          menu={folders.menu}
+          className="ah-folderpick"
+          label={`Folder: ${shown?.path ?? root ?? "none"}`}
+          title={shown?.path ?? root ?? undefined}
+          align="start"
+        >
+          <i style={tint !== null ? ({ "--tint": tint } as CSSProperties) : undefined} />
+          {shown?.mark !== undefined && shown.mark !== null && <span className="ah-folderpick__mark">{shown.mark}</span>}
+          <strong className="ah-idname">{name}</strong>
+          {count !== null && <span className="ah-bubble">{count}</span>}
+          {CARET}
+        </HostMenuButton>
+        {caption !== "" && <span className="ah-caption tnum">{caption}</span>}
+      </header>
+    );
+  }
 
   return (
     <header>

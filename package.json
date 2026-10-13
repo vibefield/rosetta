@@ -1,0 +1,21 @@
+{
+  "name": "rosetta-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "clients/ts",
+    "clients/room",
+    "clients/app"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "packageManager": "npm@12.0.1",
+  "scripts": {
+    "build:packages": "npm run build -w @vibefield/rosetta-protocol && npm run build -w @vibefield/rosetta-room",
+    "build": "npm run build:packages && npm run build -w @vibefield/rosetta-agent-history",
+    "test": "node --test tools/npm/*.test.mjs && npm test -w @vibefield/rosetta-protocol && npm test -w @vibefield/rosetta-agent-history",
+    "check:packages": "node tools/npm/check-packages.mjs",
+    "pack:packages": "node tools/npm/pack.mjs"
+  }
+}

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { IngestProgress } from "@rosetta/protocol";
+import type { IngestProgress } from "@vibefield/rosetta-protocol";
 import { isCensusRunning, isIngestActive, projectBackfills } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import { UNASSIGNED_PROJECT_ID } from "../../lib/model";
@@ -10,6 +10,9 @@ import { ListSummaryHeader, ListToolbar, SegmentedControl } from "../ui";
 import { IngestStatus } from "../IngestStatus";
 import type { IngestActivity } from "../../lib/ingest-activity";
 import { ProjectList } from "./ProjectList";
+import { useHostInputs } from "../../host-inputs";
+import { arrangeSections } from "../../lib/sections";
+import { FilterChips } from "../FilterChips";
 
 export type ProjectSort = "recent" | "token";
 
@@ -75,6 +78,13 @@ export function ProjectsColumn({
     [projects, sort, activityOrder],
   );
 
+  // R3: the host's sections over the room's own order.
+  const { projectSections, projectFilters } = useHostInputs();
+  const sections = useMemo(
+    () => (projectSections === undefined ? null : arrangeSections(projectSections, visibleProjects, (p) => p.row.id)),
+    [projectSections, visibleProjects],
+  );
+
   return (
     <div className="ah-col">
       {activity !== null ? (
@@ -90,6 +100,7 @@ export function ProjectsColumn({
       )}
       <IngestStatus activity={activity} />
       <ListToolbar>
+        {projectFilters !== undefined && projectFilters.length > 0 && <FilterChips filters={projectFilters} />}
         <SegmentedControl
           value={sort}
           options={PROJECT_SORT_OPTIONS}
@@ -111,6 +122,7 @@ export function ProjectsColumn({
           projectBackfills={backfills}
           pending={censusRunning}
           onProjectSelect={onProjectSelect}
+          sections={sections}
         />
       </div>
     </div>

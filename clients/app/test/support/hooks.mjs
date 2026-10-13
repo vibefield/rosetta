@@ -65,7 +65,7 @@ export function dataHooks(client) {
   };
   const dependencies = {
     react,
-    "@rosetta/protocol": { CursorExpiredError },
+    "@vibefield/rosetta-protocol": { CursorExpiredError },
     "./model": { getActivityGridStartTimestamp: () => 0, getViewerUtcOffsetMinutes: () => 0 },
     "./transcript/head-state": head,
     "./transcript/history-window": historyWindow,

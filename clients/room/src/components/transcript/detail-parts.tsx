@@ -11,7 +11,7 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { FileIcon } from "@vibecook/mille-ui/icons";
 import { vibefieldIconTheme } from "@vibecook/mille-ui/icons/vibefield";
-import type { TaskSnapshotItem } from "@rosetta/protocol";
+import type { TaskSnapshotItem } from "@vibefield/rosetta-protocol";
 import type { CommandFact, Diffstat, PathFact, TaskChange } from "../../lib/transcript";
 import {
   canonicalText,

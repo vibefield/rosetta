@@ -18,8 +18,12 @@ import {
   useState,
 } from "react";
 import type { CSSProperties, ForwardedRef, ReactNode, RefObject } from "react";
-import type { SearchHit, SessionRow } from "@rosetta/protocol";
+import type { SearchHit, SessionRow } from "@vibefield/rosetta-protocol";
 import type { RoomPorts } from "./ports";
+import { HostInputsProvider, hostInputsOf, useHostInputs } from "./host-inputs";
+import type { RoomHostInputs, RoomMenu } from "./host-inputs";
+import { tildePath } from "./lib/format";
+import { MenuLayerProvider } from "./components/HostMenu";
 import type { KeyValueStore } from "./lib/room-storage";
 import { RoomProvider, useRoom, useRoomOverlayOpen } from "./room-context";
 import type { SummaryTab } from "./room-context";
@@ -112,7 +116,7 @@ export interface HistoryRoomSearch {
   readonly shortcut?: SearchShortcut;
 }
 
-export interface HistoryRoomProps extends RoomPorts {
+export interface HistoryRoomProps extends RoomPorts, RoomHostInputs {
   /** Who paints beneath the room. `paper` (the default): the room paints its
    * own ground and plate, as rosetta's app shows it. `host`: the host paints
    * its own surface beneath; the room paints neither, and its fades become
@@ -159,6 +163,9 @@ export interface RoomSelection {
   readonly nativeSessionId: string;
   /** Where the session ran; null when the index does not know. */
   readonly folder: string | null;
+  /** The host's own key for the session (`RoomSessionRow.hostKey`), passed
+   * through untouched. Absent when the host gives none. */
+  readonly hostKey?: string | undefined;
 }
 
 /** A place in the record: a session, and optionally one of its messages. */
@@ -233,6 +240,7 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
         storage: props.storage,
       }}
     >
+      <HostInputsProvider value={hostInputsOf(props)}>
       <RoomBody
         handle={ref}
         surface={props.surface ?? "paper"}
@@ -247,6 +255,7 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
           ...(props.floatingFoot === undefined ? {} : { "--ah-floating-foot": props.floatingFoot }),
         } as CSSProperties}
       />
+      </HostInputsProvider>
     </RoomProvider>
   );
 });
@@ -272,7 +281,17 @@ function RoomBody({
   readonly frameStyle: CSSProperties;
 }) {
   const { catalog, sessions, host, storage, tints } = useRoom();
+  const {
+    projectTint: hostTint,
+    sessionRow: hostSessionRow,
+    projectActs: hostProjectActs,
+    projectCard: hostProjectCard,
+    sessionActs: hostSessionActs,
+    folders: hostFoldersOf,
+  } = useHostInputs();
   const overlayOpen = useRoomOverlayOpen();
+  // The room's root, where a host's menus are drawn over every column.
+  const [frameElement, setFrameElement] = useState<HTMLDivElement | null>(null);
   const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog);
   const nowMs = useNow(meta);
   const daemonStatus = useDaemonStatus(catalog);
@@ -353,12 +372,17 @@ function RoomBody({
     return root.replace(/\/\.[^/]+$/, "");
   }, [meta, host]);
 
+  // R1: the host's colour for a project when it gives one, else the dealt one.
+  const tintOf = useMemo(
+    () => (hostTint === undefined ? tints.projectTint : (id: string) => hostTint(id) ?? tints.projectTint(id)),
+    [hostTint, tints],
+  );
   const projectViewModels: ProjectViewModel[] = useMemo(
     () =>
       projectRows.map((p) =>
-        buildProjectViewModel(p, meta?.sessions ?? [], stats.get(p.id), kindOf, nowMs, tints.projectTint),
+        buildProjectViewModel(p, meta?.sessions ?? [], stats.get(p.id), kindOf, nowMs, tintOf),
       ),
-    [projectRows, meta, stats, kindOf, nowMs, tints],
+    [projectRows, meta, stats, kindOf, nowMs, tintOf],
   );
   const projectById = useMemo(
     () => new Map(projectViewModels.map((project) => [project.row.id, project])),
@@ -430,6 +454,12 @@ function RoomBody({
   const feed = useTimeline(sessions, viewedSessionId);
   const usage = useProjectUsage(catalog, projectId, canonicalReady === true);
 
+  // The selected thread (its root), as a host's acts would continue it.
+  const selected = useMemo(
+    () => (sessionId === null ? null : ((meta?.sessions ?? []).find((s) => s.id === sessionId) ?? null)),
+    [meta, sessionId],
+  );
+
   const projectRoot = useMemo(() => {
     if (projectId === null) return null;
     const roots = projectById.get(projectId)?.row.root_paths ?? [];
@@ -442,12 +472,75 @@ function RoomBody({
     return roots[0] ?? null;
   }, [projectId, projectById, session]);
 
+  /* ── R6: ③'s folder, when the host lists the project's folders ───────
+     The host keys them (two machines spell paths alike). ③ shows the
+     reader's pick while the session stays, else the folder the selected
+     session ran in, else the host's usual place, else the folder at the
+     room's own root; one the host marks elsewhere is never opened here. */
+  const hostFolders = useMemo(
+    () => (projectId === null || hostFoldersOf === undefined ? null : (hostFoldersOf(projectId) ?? null)),
+    [projectId, hostFoldersOf],
+  );
+  const [pickedFolder, setPickedFolder] = useState<
+    { readonly projectId: string; readonly sessionId: string | null; readonly key: string } | null
+  >(null);
+  // A pick lasts while its session does: choosing a session again follows it.
+  useEffect(() => setPickedFolder(null), [projectId, sessionId]);
+  const shownFolder = useMemo(() => {
+    if (hostFolders === null) return null;
+    const all = hostFolders.groups.flatMap((group) => group.folders);
+    const byKey = (key: string | null | undefined) =>
+      key === null || key === undefined ? null : (all.find((folder) => folder.key === key) ?? null);
+    const picked =
+      pickedFolder !== null && pickedFolder.projectId === projectId && pickedFolder.sessionId === sessionId
+        ? byKey(pickedFolder.key)
+        : null;
+    return picked
+      ?? (selected !== null ? byKey(hostFolders.of?.(selected)) : byKey(hostFolders.initial))
+      ?? all.find((folder) => folder.path === projectRoot && folder.elsewhere === undefined)
+      ?? null;
+  }, [hostFolders, pickedFolder, projectId, sessionId, selected, projectRoot]);
+  const shownFolderKey = shownFolder?.key ?? null;
+  // The root ③ reads: the shown folder's, none for one elsewhere, else the room's.
+  const worktreeRoot =
+    shownFolder === null ? projectRoot : shownFolder.elsewhere === undefined ? shownFolder.path : null;
+  const onShowFolder = useRef(hostFolders?.onShow);
+  onShowFolder.current = hostFolders?.onShow;
+  const listsFolders = hostFolders !== null;
+  useEffect(() => {
+    if (listsFolders) onShowFolder.current?.(shownFolderKey);
+  }, [listsFolders, projectId, shownFolderKey]);
+  const folderMenu = useMemo<RoomMenu | null>(() => {
+    if (hostFolders === null || projectId === null) return null;
+    return {
+      label: "Folders",
+      filterAfter: hostFolders.filterAfter,
+      filterPlaceholder: hostFolders.filterPlaceholder,
+      groups: hostFolders.groups.map((group) => ({
+        key: group.key,
+        title: group.title,
+        items: group.folders.map((folder) => ({
+          key: folder.key,
+          mark: folder.mark,
+          label: folder.label ?? tildePath(folder.path, home),
+          detail: folder.detail,
+          aside: folder.aside,
+          depth: folder.depth,
+          checked: folder.key === shownFolderKey,
+          filterText: folder.path,
+          onSelect: () => setPickedFolder({ projectId, sessionId, key: folder.key }),
+          act: folder.act,
+        })),
+      })),
+    };
+  }, [hostFolders, projectId, sessionId, shownFolderKey, home]);
+
   // Which files this session touched — the one fact a git client cannot show.
   // Empty until the typed tool projection ships `file_change` actions, which
   // draws no marks rather than guessing at them.
   const sessionPaths = useMemo(
-    () => sessionFilePaths(feed.rows, projectRoot),
-    [feed.rows, projectRoot],
+    () => sessionFilePaths(feed.rows, worktreeRoot),
+    [feed.rows, worktreeRoot],
   );
 
   /* ── column ③, a guest per H-3 ──────────────────────────────────────────
@@ -456,22 +549,27 @@ function RoomBody({
      1360px frame it closes rather than squeeze the transcript. */
   const roomRef = useRef<HTMLDivElement | null>(null);
   const roomWidth = useLayoutWidth(roomRef);
-  const worktree = useWorktreeGuest(projectRoot, roomWidth);
+  const worktree = useWorktreeGuest(worktreeRoot, roomWidth);
 
   // The host hears which session is selected — what its own acts (Resume)
   // would continue — on mount and whenever it changes.
-  const selected = useMemo(
-    () => (sessionId === null ? null : ((meta?.sessions ?? []).find((s) => s.id === sessionId) ?? null)),
-    [meta, sessionId],
-  );
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
-  const selectionKey = selected === null ? null : `${selected.id}\u0000${selected.native_session_id}\u0000${selected.cwd ?? ""}`;
+  // R4: the host's key rides out with the selection, never read here.
+  const hostKey = selected === null ? undefined : hostSessionRow?.(selected)?.hostKey;
+  const selectionKey = selected === null
+    ? null
+    : `${selected.id}\u0000${selected.native_session_id}\u0000${selected.cwd ?? ""}${hostKey === undefined ? "" : `\u0000${hostKey}`}`;
   useEffect(() => {
     onSelectRef.current?.(
       selected === null
         ? null
-        : { sessionId: selected.id, nativeSessionId: selected.native_session_id, folder: selected.cwd },
+        : {
+            sessionId: selected.id,
+            nativeSessionId: selected.native_session_id,
+            folder: selected.cwd,
+            ...(hostKey === undefined ? {} : { hostKey }),
+          },
     );
     // `selectionKey` is the selection's identity; `selected` is read with it.
   }, [selectionKey]);
@@ -599,7 +697,9 @@ function RoomBody({
       data-ah-surface={surface}
       data-ah-overlay={overlayOpen ? "" : undefined}
       style={frameStyle}
+      ref={setFrameElement}
     >
+      <MenuLayerProvider value={frameElement}>
       <div className="ah-room" ref={roomRef}>
         {searchOption !== null && (
           <div className="ah-searchbar">
@@ -670,11 +770,14 @@ function RoomBody({
               }
               onToggleWorktree={worktree.toggle}
               onSessionSelect={(selectedSession) => { setSessionId(selectedSession.id); setInspectedThread(null); }}
+              hostActs={projectId === null ? null : (hostProjectActs?.(projectId, { folder: shownFolderKey }) ?? null)}
+              hostCard={projectId === null || hostProjectCard === undefined ? null : hostProjectCard(projectId)}
             />
             {/* Always in the grid — a closed guest is a 0px track, and the
                 measure takes back whatever it gives up. */}
             <WorktreeColumn
-              projectRoot={projectRoot}
+              projectRoot={worktreeRoot}
+              folders={folderMenu === null ? null : { menu: folderMenu, shown: shownFolder }}
               tint={projectId ? (projectById.get(projectId)?.tint ?? null) : null}
               homeDirectory={home}
               sessionPaths={sessionPaths}
@@ -700,6 +803,7 @@ function RoomBody({
               homeDirectory={home}
               onOpenThread={openThread}
               onBackToParent={session?.parent_session_id == null ? null : () => openThread(session.parent_session_id!)}
+              headActs={session === null ? null : (hostSessionActs?.(session) ?? null)}
             />
           </div>
         )}
@@ -729,6 +833,7 @@ function RoomBody({
         onOpenHit={openHit}
       />}
       {receipt !== null && <div className="ah-receipt">{receipt}</div>}
+      </MenuLayerProvider>
     </div>
   );
 }

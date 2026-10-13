@@ -1,15 +1,20 @@
 {
-  "name": "@rosetta/room",
+  "name": "@vibefield/rosetta-room",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "rosetta's History room as a package: the projects, sessions and worktree columns, the panels and charts, and the transcript, behind injected ports. It dials nothing.",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./fixtures": "./src/fixtures/index.ts",
-    "./styles/room.css": "./src/styles/history-room.css"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./fixtures": {
+      "types": "./dist/fixtures/index.d.ts",
+      "import": "./dist/fixtures/index.js"
+    },
+    "./styles/room.css": "./dist/styles/history-room.css"
   },
   "sideEffects": [
     "*.css"
@@ -18,7 +23,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "node ../../tools/npm/build.mjs",
+    "prepack": "npm run build"
   },
   "peerDependencies": {
     "react": ">=19 <20",
@@ -28,10 +35,10 @@
     "@radix-ui/react-context-menu": "^2.3.7",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-tooltip": "^1.2.16",
-    "@rosetta/protocol": "link:../ts",
+    "@vibefield/rosetta-protocol": "^0.1.0",
     "@tanstack/react-virtual": "^3.14.10",
-    "@vibecook/mille": "link:../../../mille/packages/mille",
-    "@vibecook/mille-ui": "link:../../../mille/packages/mille-ui"
+    "@vibecook/mille": "^0.3.4",
+    "@vibecook/mille-ui": "^0.3.4"
   },
   "devDependencies": {
     "@types/react": "19.2.17",
@@ -39,5 +46,18 @@
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "typescript": "5.9.3"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vibefield/rosetta.git",
+    "directory": "clients/room"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

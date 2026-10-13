@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import type { ProjectBackfill, BackfillState } from "@rosetta/protocol";
+import type { ProjectBackfill, BackfillState } from "@vibefield/rosetta-protocol";
 import { AgentBadges } from "../../lib/agents";
 import { progressBytes } from "../../lib/ingest-activity";
 import { projectBackfillProgress } from "../../lib/ingest";
@@ -7,6 +7,8 @@ import { lastActive, tildePath, tokenText } from "../../lib/format";
 import type { ProjectViewModel } from "../../lib/model";
 import { coverage, fmtUsd, spendDescription } from "../../lib/spend";
 import type { Spend } from "../../lib/spend";
+import { useHostInputs } from "../../host-inputs";
+import { HostAct } from "../HostAct";
 import { ProjectActivitySparkline } from "./ProjectActivitySparkline";
 
 type ProjectListItemStyle = CSSProperties & {
@@ -102,42 +104,63 @@ export function ProjectListItem({
   const workspacePath = project.row.root_paths[0]
     ? tildePath(project.row.root_paths[0], homeDirectory)
     : "No workspace recorded";
-  return (
-    <button
-      type="button"
-      className={`ah-project-list-item${isSelected ? " is-selected" : ""}`}
-      data-motion-key={project.row.id}
-      data-cooking={isCooking ? "" : undefined}
-      data-fill={ingestFill !== null ? "" : undefined}
-      style={{
-        "--project-color": project.tint,
-        "--spend-share": `${spendShare.toFixed(2)}%`,
-        ...(ingestFill !== null
-          ? { "--ingest-fill": `${(ingestFill * 100).toFixed(1)}%` }
-          : {}),
-      } as ProjectListItemStyle}
-      aria-current={isSelected ? "true" : undefined}
-      aria-label={`${project.row.name} · ${isCooking && project.lifetimeTokens === 0
-        ? "activity summaries pending"
-        : `${spendLabel} · ${tokenText(project.lifetimeTokens)} lifetime tokens`}${
-        lastActiveLabel ? ` · last active ${lastActiveLabel}` : ""
-      }${cookingLabel ? ` · ${cookingLabel}` : ""}`}
-      onClick={() => onProjectSelect(project.row.id)}
+  // R2: the host's marks, second line and live count, drawn and never read.
+  const decoration = useHostInputs().projectRow?.(project.row.id) ?? null;
+  const marks = decoration?.marks ?? null;
+  const line = decoration?.line ?? null;
+  const live = decoration?.live !== undefined && decoration.live > 0 ? decoration.live : null;
+  // H4: the host's act at the row's end (pin, hide), or its rows.
+  const act = decoration?.act ?? null;
+  const className = `ah-project-list-item${isSelected ? " is-selected" : ""}`;
+  const style = {
+    "--project-color": project.tint,
+    "--spend-share": `${spendShare.toFixed(2)}%`,
+    ...(ingestFill !== null
+      ? { "--ingest-fill": `${(ingestFill * 100).toFixed(1)}%` }
+      : {}),
+  } as ProjectListItemStyle;
+  const accessibleName = `${project.row.name} · ${isCooking && project.lifetimeTokens === 0
+    ? "activity summaries pending"
+    : `${spendLabel} · ${tokenText(project.lifetimeTokens)} lifetime tokens`}${
+    lastActiveLabel ? ` · last active ${lastActiveLabel}` : ""
+  }${live !== null ? ` · ${live} live` : ""}${cookingLabel ? ` · ${cookingLabel}` : ""}`;
+  // With an act the row holds two buttons, and a button cannot hold another:
+  // the row becomes a box, one button covers it (the selection, named as the
+  // row always was), and the act sits above it. The rest is drawn for the eye.
+  const shown = act === null ? undefined : true;
+  const time = live !== null ? (
+    <span className="ah-last" data-live="" title={`${live} live now`} aria-hidden={shown}>
+      {live} live
+    </span>
+  ) : lastActiveLabel !== null && (
+    <span
+      className="ah-last"
+      data-live={lastActiveLabel === "now" ? "" : undefined}
+      title={`Last active ${lastActiveLabel}`}
+      aria-hidden={shown}
     >
+      {lastActiveLabel}
+    </span>
+  );
+  const body = (
+    <>
       <i className="ah-project-list-item__accent" />
-      <span className="ah-project-list-item__header">
+      <span className="ah-project-list-item__header" aria-hidden={shown}>
         <strong title={project.row.name}>{project.row.name}</strong>
         <AgentBadges shares={project.agents} />
       </span>
-      <span className="ah-project-list-item__path">
+      <span className="ah-project-list-item__path" data-marks={marks !== null ? "" : undefined} aria-hidden={shown}>
+        {marks !== null && <span className="ah-project-list-item__marks">{marks}</span>}
         <small title={workspacePath}>{workspacePath}</small>
       </span>
-      {cookingLabel && <span className="ah-project-list-item__progress">{cookingLabel}</span>}
+      {line !== null && <span className="ah-project-list-item__line" aria-hidden={shown}>{line}</span>}
+      {cookingLabel && <span className="ah-project-list-item__progress" aria-hidden={shown}>{cookingLabel}</span>}
       <span className="ah-project-list-item__footer">
         <span
           className="ah-project-list-item__metrics"
           data-cooking={isCooking ? "" : undefined}
           title={cookingLabel ?? undefined}
+          aria-hidden={shown}
         >
           <ProjectActivitySparkline values={project.recentTokenBuckets} />
           <SpendFigure
@@ -146,16 +169,52 @@ export function ProjectListItem({
             description={`${spendLabel} · ${tokenText(project.lifetimeTokens)} tokens`}
           />
         </span>
-        {lastActiveLabel !== null && (
-          <span
-            className="ah-last"
-            data-live={lastActiveLabel === "now" ? "" : undefined}
-            title={`Last active ${lastActiveLabel}`}
-          >
-            {lastActiveLabel}
+        {act === null ? time : (
+          <span className="ah-project-list-item__end">
+            <HostAct act={act} place="row" />
+            {time}
           </span>
         )}
       </span>
-    </button>
+    </>
+  );
+
+  if (act === null) {
+    return (
+      <button
+        type="button"
+        className={className}
+        data-motion-key={project.row.id}
+        data-cooking={isCooking ? "" : undefined}
+        data-fill={ingestFill !== null ? "" : undefined}
+        data-line={line !== null ? "" : undefined}
+        style={style}
+        aria-current={isSelected ? "true" : undefined}
+        aria-label={accessibleName}
+        onClick={() => onProjectSelect(project.row.id)}
+      >
+        {body}
+      </button>
+    );
+  }
+  return (
+    <div
+      className={className}
+      data-motion-key={project.row.id}
+      data-cooking={isCooking ? "" : undefined}
+      data-fill={ingestFill !== null ? "" : undefined}
+      data-line={line !== null ? "" : undefined}
+      data-host-act=""
+      style={style}
+    >
+      <button
+        type="button"
+        className="ah-project-list-item__hit"
+        aria-current={isSelected ? "true" : undefined}
+        aria-label={accessibleName}
+        onClick={() => onProjectSelect(project.row.id)}
+      />
+      {body}
+    </div>
   );
 }

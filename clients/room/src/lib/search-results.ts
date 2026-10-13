@@ -1,4 +1,4 @@
-import type { SearchHit, SessionRow } from "@rosetta/protocol";
+import type { SearchHit, SessionRow } from "@vibefield/rosetta-protocol";
 import type { ProjectViewModel } from "./model";
 import { projectKey } from "./model";
 import { compareSessionActivity } from "./session-activity";

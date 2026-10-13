@@ -1,4 +1,4 @@
-import type { IngestProgress, RuntimeBackfill, SearchBuildProgress, SearchReadiness } from "@rosetta/protocol";
+import type { IngestProgress, RuntimeBackfill, SearchBuildProgress, SearchReadiness } from "@vibefield/rosetta-protocol";
 
 export interface ActivityFeed {
   readonly ingest: IngestProgress | null;

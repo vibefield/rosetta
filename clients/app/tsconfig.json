@@ -22,9 +22,9 @@
     // `test/support/resolve-ts.mjs`.
     "useDefineForClassFields": true,
     "paths": {
-      "@rosetta/protocol": ["../ts/index.ts"],
-      "@rosetta/room": ["../room/src/index.ts"],
-      "@rosetta/room/fixtures": ["../room/src/fixtures/index.ts"]
+      "@vibefield/rosetta-protocol": ["../ts/index.ts"],
+      "@vibefield/rosetta-room": ["../room/src/index.ts"],
+      "@vibefield/rosetta-room/fixtures": ["../room/src/fixtures/index.ts"]
     }
   },
   "include": ["renderer/src", "vite.config.ts", "../ts/index.ts", "../ts/client.ts", "../ts/generated"]

@@ -16,7 +16,7 @@ import type {
   ResourceRef,
   TimelineEntry,
   ToolAction,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 
 /* ── families, classes and nouns ─────────────────────────────────────────── */
 

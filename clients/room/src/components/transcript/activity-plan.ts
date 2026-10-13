@@ -1,6 +1,6 @@
 // §04B — group the rendered chronology, after native ownership/deduplication.
 // Machine turn boundaries and response metadata are not conversation boundaries.
-import type { TimelineEntry } from "@rosetta/protocol";
+import type { TimelineEntry } from "@vibefield/rosetta-protocol";
 import type { LedgerLine } from "../../lib/transcript/ledger";
 import { runSummary } from "../../lib/transcript/ledger";
 import type { Prompt, ResponseHead, Segment } from "../../lib/transcript/turns";

@@ -1,4 +1,4 @@
-import type { TimelineEntry } from "@rosetta/protocol";
+import type { TimelineEntry } from "@vibefield/rosetta-protocol";
 import type { ReadingSitting } from "./activity-plan";
 import { activityRowKey } from "./activity-plan";
 

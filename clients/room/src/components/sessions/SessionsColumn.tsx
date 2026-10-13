@@ -1,8 +1,14 @@
-import type { IngestProgress, SessionRow, UsageResponse } from "@rosetta/protocol";
+import { useMemo } from "react";
+import type { ReactNode } from "react";
+import type { IngestProgress, SessionRow, UsageResponse } from "@vibefield/rosetta-protocol";
+import type { RoomAct } from "../../host-inputs";
+import { useHostInputs } from "../../host-inputs";
+import { arrangeSections } from "../../lib/sections";
+import { FilterChips } from "../FilterChips";
 import { isCensusRunning, isIngestActive } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import { ProjectSummaryPanel } from "../SummaryPanels";
-import { ListSummaryHeader } from "../ui";
+import { ListSummaryHeader, ListToolbar } from "../ui";
 import { SessionList } from "./SessionList";
 import type { SessionFacts } from "./types";
 
@@ -22,6 +28,9 @@ export interface SessionsColumnProps {
   readonly isWorktreeVisible: boolean | null;
   readonly onToggleWorktree: () => void;
   readonly onSessionSelect: (session: SessionRow) => void;
+  /** R5: the host's acts after the head's own, and its card under the head. */
+  readonly hostActs?: readonly RoomAct[] | null | undefined;
+  readonly hostCard?: ReactNode;
 }
 
 export function SessionsColumn({
@@ -37,10 +46,24 @@ export function SessionsColumn({
   isWorktreeVisible,
   onToggleWorktree,
   onSessionSelect,
+  hostActs = null,
+  hostCard = null,
 }: SessionsColumnProps) {
   const ingestActive = isIngestActive(ingest);
   const censusRunning = isCensusRunning(ingest);
-  const visibleSessionCount = sessions.length;
+  // R3: the host's sections over this project's sessions, in the room's order.
+  const { sessionSections, sessionFilters } = useHostInputs();
+  const projectId = project?.row.id ?? null;
+  const sections = useMemo(() => {
+    const given = projectId === null ? null : (sessionSections?.(projectId) ?? null);
+    return given === null ? null : arrangeSections(given, sessions, (session) => session.id);
+  }, [sessionSections, projectId, sessions]);
+  // R7: the host's chips over this project's list.
+  const filters = projectId === null ? null : (sessionFilters?.(projectId) ?? null);
+  // The head counts what the list holds: with sections, what they draw.
+  const visibleSessionCount = sections === null
+    ? sessions.length
+    : sections.reduce((total, entry) => total + entry.rows.length, 0);
 
   return (
     <div className="ah-col">
@@ -57,7 +80,16 @@ export function SessionsColumn({
           censusRunning={censusRunning}
           isWorktreeVisible={isWorktreeVisible}
           onToggleWorktree={onToggleWorktree}
+          hostActs={hostActs}
         />
+      )}
+      {project !== null && hostCard !== null && hostCard !== undefined && hostCard !== false && (
+        <div className="ah-hostcard">{hostCard}</div>
+      )}
+      {filters !== null && filters.length > 0 && (
+        <ListToolbar>
+          <FilterChips filters={filters} />
+        </ListToolbar>
       )}
       {censusRunning && <p className="ah-ingest-note">More conversations will appear as discovery finishes.</p>}
       <div className="ah-veilhost">
@@ -78,6 +110,7 @@ export function SessionsColumn({
               : undefined
           }
           onSessionSelect={onSessionSelect}
+          sections={sections}
         />
       </div>
     </div>

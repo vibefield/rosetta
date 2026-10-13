@@ -1,4 +1,4 @@
-import type { SessionRow } from "@rosetta/protocol";
+import type { SessionRow } from "@vibefield/rosetta-protocol";
 
 export interface SessionStatus {
   readonly tone: "green" | "orange" | null;

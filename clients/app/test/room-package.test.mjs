@@ -1,4 +1,4 @@
-// @rosetta/room keeps its promises: its exports exist, its entry loads, its
+// @vibefield/rosetta-room keeps its promises: its exports exist, its entry loads, its
 // imports stay inside it, and its source dials nothing and keeps nothing
 // outside its prefix (README, "What the package never does").
 import assert from "node:assert/strict";
@@ -20,18 +20,22 @@ const DEPENDENCIES = new Set([...Object.keys(manifest.dependencies), ...Object.k
 
 test("every export the manifest names is there, and the css is a side effect", () => {
   assert.deepEqual(Object.keys(manifest.exports), [".", "./fixtures", "./styles/room.css"]);
-  for (const target of Object.values(manifest.exports)) assert.equal(existsSync(path.join(ROOM, target)), true, target);
+  for (const entry of Object.values(manifest.exports)) {
+    for (const target of typeof entry === "string" ? [entry] : Object.values(entry)) {
+      assert.equal(existsSync(path.join(ROOM, target)), true, target);
+    }
+  }
   assert.deepEqual(manifest.peerDependencies, { react: ">=19 <20", "react-dom": ">=19 <20" });
   assert.deepEqual(manifest.sideEffects, ["*.css"]);
 });
 
 test("the entry loads and names the room, its helper and the parts a shell reuses", async () => {
-  const room = await import("@rosetta/room");
+  const room = await import("@vibefield/rosetta-room");
   for (const name of ["HistoryRoom", "catalogStatusOf", "AgentMark", "agentLabel", "lastActive", "hasPrimaryModifier", "shortcutLabel", "MoonGlyph", "SunGlyph"]) {
     assert.ok(room[name], name);
   }
   assert.equal(room.DEFAULT_STORAGE_PREFIX, "ah.");
-  const fixtures = await import("@rosetta/room/fixtures");
+  const fixtures = await import("@vibefield/rosetta-room/fixtures");
   assert.equal(typeof fixtures.createDemoPorts, "function");
 });
 

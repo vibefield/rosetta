@@ -1565,6 +1565,12 @@ recomputed from the stored usage facts when it changes (§4.1.3).
 
 ### 5.1 Transport decision: one daemon, localhost HTTP/WS
 
+**Proposed lifecycle extension (2026-10-05):**
+[Daemon ownership, control, and recovery](DAEMON_LIFECYCLE_PROPOSAL.md) specifies
+host supervision, private process shutdown, and HTTP ingestion control. It is a
+design proposal; the current transport and access behavior below remains the
+implemented contract.
+
 `rosettad` is a single daemon owning the store (single writer). Consumers connect over
 `127.0.0.1` (axum: REST for queries, WebSocket for streams) — optionally a Unix domain
 socket for the latency-obsessed. Why not NAPI like spaghetti: multiple consumer apps
@@ -1659,6 +1665,19 @@ requests and ignores their late results.
 streams the complete topology so descendant timelines can be embedded recursively.
 `GET /api/sessions/{id}/timeline/{timeline_id}` resolves one exact canonical landing row;
 scoped plan and file routes resolve bytes only after an explicit open action.
+
+`GET /api/activity?since_ms=&until_ms=&sessions=&gap_ms=&limit=` (protocol 27, 2026-10-09)
+answers which top-level sessions were active in a window of at most seven days, newest
+recorded activity first, each with its tree's turns: one span per message group that touches
+the window, its first and last activity, and its gaps — stretches between consecutive activity
+instants longer than `gap_ms` (15 minutes unless asked; at least one minute). Instants rather
+than merged row bounds: a tool row's bounds are its request and its completion, so a wait
+inside it is a gap, never presumed work. Sessions come from the mirror's activity bounds; turns
+from one read per tree over `message`'s existing activity indexes, so the route adds no
+schema and reads no payload. A monitor (VibeField's Godview timeline) draws a day of lanes
+from one ask instead of paging every timeline. A Pending session's turns are withheld before
+publication (`turns_withheld`), as its timeline is. The route spans sessions, so a grant never
+opens it.
 
 The expanded project activity calendar (2026-09-30) selects a recorded day, then
 reads `GET /api/projects/{id}/usage/day?day=YYYY-MM-DD&offset_minutes=N` for its

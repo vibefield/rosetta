@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import { createDaemonService } from "../electron/daemon-service.mjs";
 import { APP_PRIVILEGES, rendererFileUrl } from "../electron/app-protocol.mjs";
@@ -8,11 +11,12 @@ import { fakeClock } from "./support/protocol.mjs";
 
 function harness(t) {
   const clock = fakeClock(t);
+  const temporary = mkdtempSync(path.join(tmpdir(), "rosetta-service-test-"));
   const children = [];
   const states = [];
   const service = createDaemonService({
     bin: "/unused/rosettad",
-    dbPath: "/private/tmp/rosetta-service-test.sqlite",
+    dbPath: path.join(temporary, "rosetta.sqlite"),
     onState: (state) => states.push(state),
     stdout: () => {},
     stderr: () => {},
@@ -43,6 +47,7 @@ function harness(t) {
     const stopped = service.stop();
     for (const child of children) child.emit("exit", 0, null);
     await stopped;
+    rmSync(temporary, { recursive: true, force: true });
   });
   return { clock, children, states, service };
 }

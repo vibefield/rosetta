@@ -21,7 +21,7 @@
 //     configuration group.
 //
 // Pure: no clock, no DOM, no React.
-import type { TimelineEntry } from "@rosetta/protocol";
+import type { TimelineEntry } from "@vibefield/rosetta-protocol";
 import type { Prompt, Segment, Sitting, Turn } from "../../lib/transcript";
 
 /** One drawn block: a slice of one turn, inside exactly one sitting. */

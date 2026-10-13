@@ -10,7 +10,7 @@ import type {
   TimelineMetaPlan,
   TimelineMetaTask,
   TimelineMetaWorkflow,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import { clockShort, fmtBytes } from "../../lib/format";
 import { FamilyGlyph, LineChevron } from "./glyphs";
 import {

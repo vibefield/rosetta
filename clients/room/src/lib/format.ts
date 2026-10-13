@@ -93,9 +93,14 @@ export function dayLabel(ms: number | null, nowMs: number): string {
   return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 }
 
-/** Home-relative form of a path, the way the ledger row prints one. */
+/** Home-relative form of a path, the way the ledger row prints one. The
+ * home is a folder, so only the home itself and what is under it shorten:
+ * `/Users/ab` is not under `/Users/a`. A root home shortens nothing. */
 export function tildePath(path: string, home: string | null): string {
-  if (home && path.startsWith(home)) return `~${path.slice(home.length)}`;
+  const root = home?.replace(/\/+$/, "") ?? "";
+  if (root === "") return path;
+  if (path === root) return "~";
+  if (path.startsWith(`${root}/`)) return `~${path.slice(root.length)}`;
   return path;
 }
 

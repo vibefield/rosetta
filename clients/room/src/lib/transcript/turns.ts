@@ -35,7 +35,7 @@ import type {
   Notice,
   SummaryPurpose,
   TimelineEntry,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import type { LedgerLine, RunOther, RunSummary } from "./ledger";
 import { ledgerLines, runSummary } from "./ledger";
 import { withinPromptCluster } from "./sittings";

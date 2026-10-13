@@ -10,7 +10,7 @@
 // the honest state: "we cannot say" and "this session touched nothing" look
 // the same here, and neither of them is a lie about a file.
 
-import type { TimelineEntry } from "@rosetta/protocol";
+import type { TimelineEntry } from "@vibefield/rosetta-protocol";
 
 /** `path` on a `ResourceRef`, if that is what this value is. */
 function refPath(value: unknown): string | null {

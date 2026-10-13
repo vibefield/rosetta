@@ -19,6 +19,7 @@ import { parseMarkdown } from "../file-viewer/markdown";
 import type { Block } from "../file-viewer/markdown";
 import { MarkdownBlocks } from "../file-viewer/markdown/render";
 import { highlight, languageFor, PLAIN_TEXT } from "../file-viewer/syntax";
+import { markTerms, useMatchTerms } from "./reader-context";
 
 /** The hover acts. Today the room has exactly one honest act on a segment —
  * copy — so that is what it draws; the record's chip and canvas belong to
@@ -181,10 +182,16 @@ export function Prose({
     () => attachmentMentions(imageMarkerSource, imageAttachments ?? []),
     [imageMarkerSource, imageAttachments],
   );
-  const renderText =
+  const linked =
     imageTargets.length > 0 && onOpenAttachment !== undefined
       ? (value: string, source?: readonly number[]) => linkedAttachments(value, source, imageTargets, onOpenAttachment)
       : undefined;
+  // A reader marks the words its search matched; anywhere else there are none.
+  const terms = useMatchTerms();
+  const renderText = terms.length === 0
+    ? linked
+    : (value: string, source?: readonly number[]) =>
+        markTerms(linked === undefined ? value : linked(value, source), terms);
   return (
     <>
       {parts.map((part, at) =>

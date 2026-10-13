@@ -418,7 +418,7 @@ pub(crate) const fn derivation_name(value: GroupDerivation) -> &'static str {
     }
 }
 
-fn parse_group_kind(value: &str) -> rusqlite::Result<GroupKind> {
+pub(crate) fn parse_group_kind(value: &str) -> rusqlite::Result<GroupKind> {
     match value {
         "human_turn" => Ok(GroupKind::HumanTurn),
         "agent_cycle" => Ok(GroupKind::AgentCycle),

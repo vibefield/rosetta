@@ -1,4 +1,4 @@
-// @rosetta/room — rosetta's History room behind injected ports. A host hands
+// @vibefield/rosetta-room — rosetta's History room behind injected ports. A host hands
 // it a catalog, a way to open one session's body, an asset source and, on a
 // desktop, a host port; the room dials nothing itself. See README.md.
 
@@ -12,6 +12,29 @@ export type {
   RoomTarget,
 } from "./HistoryRoom";
 
+/** What a host may hand the room beyond its ports (all optional). */
+export type {
+  RoomAct,
+  RoomFilter,
+  RoomFolder,
+  RoomFolderGroup,
+  RoomFolders,
+  RoomHeadActs,
+  RoomHostInputs,
+  RoomMenu,
+  RoomMenuGroup,
+  RoomMenuItem,
+  RoomProjectContext,
+  RoomProjectRow,
+  RoomRename,
+  RoomSection,
+  RoomSessionRow,
+} from "./host-inputs";
+
+/** The reader (PK3): one session's transcript, read-only, at a line. */
+export { TranscriptReader } from "./TranscriptReader";
+export type { ReaderAddress, TranscriptReaderProps } from "./TranscriptReader";
+
 export type {
   AssetSource,
   AssetUrl,
@@ -24,6 +47,7 @@ export type {
   GitFacts,
   GitWorktree,
   HostPort,
+  InstalledBrowser,
   RoomPorts,
   SessionClient,
   SessionFeed,

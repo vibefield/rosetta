@@ -4,7 +4,7 @@
 // cannot disagree. When collapsed, each panel becomes its column header.
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import type { UsageResponse } from "@rosetta/protocol";
+import type { UsageResponse } from "@vibefield/rosetta-protocol";
 import { CalendarHeatmap, ProjectChartDialog, Streamgraph, Treemap } from "./charts";
 import type { ProjectChartView, TreemapData } from "./charts";
 import { ColumnHeading, SegmentedControl, Veil } from "./ui";
@@ -22,6 +22,10 @@ import type { ProjectViewModel } from "../lib/model";
 import { NO_SPEND, addSpend, coverage, usdText } from "../lib/spend";
 import type { Spend } from "../lib/spend";
 import { useRoom } from "../room-context";
+import type { RoomAct } from "../host-inputs";
+import { useHostInputs } from "../host-inputs";
+import { HostAct } from "./HostAct";
+import { RenameHeading } from "./RenameHeading";
 
 type TintStyle = CSSProperties & { "--tint": string };
 const MAX_TREEMAP_PROJECT_COUNT = 10;
@@ -58,6 +62,8 @@ export interface ProjectSummaryPanelProps {
   /** `null` means the browser build has no desktop worktree integration. */
   readonly isWorktreeVisible: boolean | null;
   readonly onToggleWorktree: () => void;
+  /** R5: the host's acts, after the head's own (New agent, the primary, last). */
+  readonly hostActs?: readonly RoomAct[] | null | undefined;
 }
 
 export function ProjectSummaryPanel({
@@ -70,6 +76,7 @@ export function ProjectSummaryPanel({
   censusRunning,
   isWorktreeVisible,
   onToggleWorktree,
+  hostActs = null,
 }: ProjectSummaryPanelProps) {
   // Aggregate figures become available after canonical publication and
   // their own requests finish, independently of transcript readiness.
@@ -104,20 +111,38 @@ export function ProjectSummaryPanel({
   const modelColors = useMemo(() => createModelColors(usage?.models.map(row => row.model) ?? []), [usage]);
   // The repo act opens a REMOTE. A git_repo that is a local path is a fact
   // about discovery, not an address anyone can visit — no button for it.
+  // R9: a host that knows the address says it (null: no act).
+  const { repositoryUrl: hostRepositoryUrlOf, projectRename } = useHostInputs();
+  const hostRepositoryUrl = hostRepositoryUrlOf?.(project.row.id);
+  // H4: the host renames the project where its name is.
+  const rename = projectRename?.(project.row.id) ?? null;
   const repositoryUrl =
-    project.row.git_repo !== null && !project.row.git_repo.startsWith("/")
-      ? project.row.git_repo
-      : null;
+    hostRepositoryUrl !== undefined
+      ? hostRepositoryUrl
+      : project.row.git_repo !== null && !project.row.git_repo.startsWith("/")
+        ? project.row.git_repo
+        : null;
 
   return (
     <div className="ah-meta" style={{ "--tint": project.tint } as TintStyle}>
       <div className="ah-meta__head">
-        <ColumnHeading
-          name={project.row.name}
-          tint={project.tint}
-          count={visibleSessionCount}
-          countTitle={`${visibleSessionCount} sessions in this list`}
-        />
+        {rename === null ? (
+          <ColumnHeading
+            name={project.row.name}
+            tint={project.tint}
+            count={visibleSessionCount}
+            countTitle={`${visibleSessionCount} sessions in this list`}
+          />
+        ) : (
+          <RenameHeading
+            key={project.row.id}
+            name={project.row.name}
+            tint={project.tint}
+            count={visibleSessionCount}
+            countTitle={`${visibleSessionCount} sessions in this list`}
+            rename={rename}
+          />
+        )}
         <span className="ah-meta__acts">
           {/* the two toggles sit together and the one act sits last, so a
               project with no remote never moves a control that has one */}
@@ -162,6 +187,7 @@ export function ProjectSummaryPanel({
               <GitHubGlyph />
             </button>
           )}
+          {hostActs?.map((act) => <HostAct key={act.key} act={act} place="head" />)}
         </span>
       </div>
       {isExpanded && (

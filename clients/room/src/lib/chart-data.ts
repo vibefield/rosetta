@@ -1,4 +1,4 @@
-import type { UsageResponse } from "@rosetta/protocol";
+import type { UsageResponse } from "@vibefield/rosetta-protocol";
 import type {
   CalendarHeatmapData,
   StreamgraphData,

@@ -1,4 +1,4 @@
-import type { ModelHour } from "@rosetta/protocol";
+import type { ModelHour } from "@vibefield/rosetta-protocol";
 import { createModelColors, formatModelLabel } from "./model-labels";
 
 /** Recorded hourly buckets, never estimated by distributing a day's total. */

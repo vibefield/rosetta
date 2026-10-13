@@ -37,6 +37,7 @@ use rosetta_store::{assets, queries, timeline_meta};
 
 use crate::hub::Hub;
 
+mod activity;
 mod images;
 
 const DEFAULT_LIST_LIMIT: i64 = 100;
@@ -273,6 +274,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects/{id}/usage/day", get(day_usage))
         .route("/api/projects/{id}/contribution", get(contribution))
         .route("/api/pricing", get(pricing))
+        .route("/api/activity", get(activity::activity))
         .route("/api/sessions", get(sessions))
         .route("/api/sessions/{id}", get(session))
         .route(

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import type { CanonicalText, WorkflowRun, WorkflowWorker } from "@rosetta/protocol";
+import type { CanonicalText, WorkflowRun, WorkflowWorker } from "@vibefield/rosetta-protocol";
 import { AgentMark } from "../../lib/agents";
 import { clock, tokenText } from "../../lib/format";
 import { useReadingSession, useRoom } from "../../room-context";

@@ -1,6 +1,8 @@
-# rosetta protocol — generated TypeScript types
+# @vibefield/rosetta-protocol
 
-Generated from `crates/protocol` (ts-rs). Do not edit by hand — regenerate with:
+Install with `npm install @vibefield/rosetta-protocol`. The package ships ESM JavaScript and TypeScript declarations. Its npm version is independent of the wire protocol version.
+
+The wire types are generated from `crates/protocol` (ts-rs). Do not edit by hand — regenerate with:
 
 ```sh
 TS_RS_EXPORT_DIR=$PWD/clients/ts/generated TS_RS_LARGE_INT=number \
@@ -41,8 +43,7 @@ announce the same version in `hello`. Mismatches fail with an actionable error.
   declares the two functions it uses, so `tsc -p clients/ts` needs no
   `@types/node`.
 
-`imports["#ordered-cache"]` and `imports["#base64url"]` are internal to the
-package. Everything else is encapsulated by `exports`: there are no deep
+Everything else is encapsulated by `exports`: there are no deep
 imports of `./client` or `./generated/*`, and adding one is a change to this
 file, not to a consumer.
 
@@ -56,7 +57,7 @@ or swap it later with `setCredential`:
 - `{ kind: "grant", grant }` opens one session's recorded history until the
   grant's `exp` — and that session's recorded-file read (`readFileTarget`)
   when it was minted with `SCOPE_FILES` beside `SCOPE_READ`. The daemon's
-  supervisor mints it with `@rosetta/protocol/grants`; the client carries it
+  supervisor mints it with `@vibefield/rosetta-protocol/grants`; the client carries it
   as an opaque string.
 
 REST requests send it as `Authorization`. WebSocket upgrades send it as the
@@ -67,6 +68,7 @@ the daemon selects `rosetta`. A 401 throws `UnauthorizedError`, whose
 re-checked, so a subscription outlives its grant's expiry until it
 reconnects.
 
-`npm test` in this directory runs `test/*.test.mjs` with Node's test runner;
+`npm ci` at the repository root installs the workspaces. `npm test` in this
+directory builds the SDK and runs `test/*.test.mjs` against its emitted JavaScript;
 the grant tests read the shared vectors in
 `crates/server/tests/fixtures/grants.json`.

@@ -18,6 +18,7 @@ pub mod schema;
 mod search_sync;
 pub mod timeline_meta;
 mod tool_codec;
+pub mod turns;
 mod usage_sql;
 mod usage_totals;
 

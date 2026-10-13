@@ -7,7 +7,7 @@ import type {
   WorkflowAttempt,
   WorkflowRunStatus,
   WorkflowWorker,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import type { WorkflowAction } from "./families";
 
 export interface WorkflowAttemptFact {

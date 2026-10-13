@@ -199,7 +199,7 @@ only that a grant carries it.
 
 **A grant never opens** the lists (`/api/runtimes`, `/api/projects`,
 `/api/sessions`), search, `/ws/meta`, `/api/status`, `/api/discoveries`,
-`/api/pricing`, the project aggregates or the writes, whatever its scope.
+`/api/pricing`, `/api/activity`, the project aggregates or the writes, whatever its scope.
 Those routes need the bearer.
 
 ### 5.5 What v1 does not do
@@ -267,7 +267,7 @@ the same credential.
 
 - **TypeScript:** `RosettaClient({ credential })` carries either credential
   on both carriers and throws `UnauthorizedError` with the reason.
-  `@rosetta/protocol/grants` (Node-only) provides `canonicalize`,
+  `@vibefield/rosetta-protocol/grants` (Node-only) provides `canonicalize`,
   `mintGrant`, `verifyGrant` and `parseGrantHeader`, the same rule as §5, and
   the scope names `SCOPE_READ` and `SCOPE_FILES` (`grant.rs` exports the same
   two).

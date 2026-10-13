@@ -15,8 +15,8 @@ import type {
   TimelineEntry,
   TimelineMeta,
   UsageResponse,
-} from "@rosetta/protocol";
-import { CursorExpiredError } from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
+import { CursorExpiredError } from "@vibefield/rosetta-protocol";
 import type { ProjectStats } from "./model";
 import { getActivityGridStartTimestamp, getViewerUtcOffsetMinutes } from "./model";
 import type { CatalogPort, CollaborationFeed, SessionClient, SessionFeed } from "../ports";
@@ -183,6 +183,29 @@ export function useProjectStats(
     async function loadAll() {
       const sinceMs = getActivityGridStartTimestamp(Date.now());
       const offsetMinutes = getViewerUtcOffsetMinutes();
+      // A host that answers every project at once is asked once.
+      if (catalog.projectStatsBatch !== undefined) {
+        let missing = true;
+        try {
+          const answer = await catalog.projectStatsBatch(ids, { sinceMs, offsetMinutes }, controller.signal);
+          missing = ids.some((id) => !answer.has(id));
+          if (!cancelled) {
+            setStats((current) => {
+              const next = new Map(current);
+              for (const id of ids) {
+                const figures = answer.get(id);
+                if (figures !== undefined) next.set(id, figures);
+              }
+              return next;
+            });
+          }
+        } catch {
+          // as below: unfigured projects degrade honestly and earn a retry
+        }
+        if (cancelled) return;
+        timer = window.setTimeout(loadAll, missing ? 8_000 : 5 * 60_000);
+        return;
+      }
       const queue = [...ids];
       let failed = false;
       async function worker() {

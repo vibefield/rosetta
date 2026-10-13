@@ -179,7 +179,7 @@ in RAM so source retries allocate strictly above it, finishes from the current s
 same generation. The recovery marker survives ledger promotion and is removed only
 after SQLite installation. The app does not pass `--restart-incomplete`; that flag remains an
 explicit legacy archive/restart operation for old incomplete projection sets. A complete projection
-is never moved. `pnpm dev` builds `rosettad --release` and
+is never moved. `npm run dev -w @vibefield/rosetta-agent-history` builds `rosettad --release` and
 passes that exact binary to Electron; mtime-based debug/release selection is forbidden.
 
 Projection schema 13 keeps user-facing canonical rows, rollups, and joins in SQLite while
@@ -230,7 +230,7 @@ crates/                    all Rust crates
   search-bench/            frozen-input FTS percentile campaign harness
 clients/                   TypeScript consumers                       [Phase 4]
   ts/                      generated protocol types + RosettaClient SDK
-  room/                    @rosetta/room — the History room as a package behind
+  room/                    @vibefield/rosetta-room — the History room as a package behind
                            injected ports (catalog, sessions, assets, host); it
                            dials nothing; ./fixtures renders it with no daemon
   app/                     agent-history app — the Electron host of the History

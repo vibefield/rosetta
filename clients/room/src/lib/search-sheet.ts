@@ -6,7 +6,7 @@
 // the flat line list a listbox walks, the keyboard cursor's arithmetic, the
 // snippet cleaned the way the ledger prints a path, the honest count sentence,
 // and the memory of what was searched before. Rendering is `SearchSheet.tsx`.
-import type { SearchHit, SearchReadiness, SessionRow } from "@rosetta/protocol";
+import type { SearchHit, SearchReadiness, SessionRow } from "@vibefield/rosetta-protocol";
 import type { ProjectViewModel } from "./model";
 import type {
   SearchResultCounts,

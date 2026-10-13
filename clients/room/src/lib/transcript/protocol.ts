@@ -1,4 +1,4 @@
-// Protocol types the `@rosetta/protocol` barrel does not re-export yet.
+// Protocol types the `@vibefield/rosetta-protocol` barrel does not re-export yet.
 //
 // Every alias here is DERIVED from a union the barrel does export, never
 // hand-written: `FileDelta` is literally the element type of the `file_change`
@@ -7,8 +7,8 @@
 // in Rust; consumers get generated types.
 //
 // If `clients/ts/index.ts` grows these exports, delete the matching lines here
-// and import them from `@rosetta/protocol` instead. Nothing else changes.
-import type { ToolAction, ToolInteraction } from "@rosetta/protocol";
+// and import them from `@vibefield/rosetta-protocol` instead. Nothing else changes.
+import type { ToolAction, ToolInteraction } from "@vibefield/rosetta-protocol";
 
 type Family<K extends ToolAction["type"]> = Extract<ToolAction, { type: K }>;
 

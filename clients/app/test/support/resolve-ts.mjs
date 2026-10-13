@@ -5,7 +5,7 @@
 //
 // - Relative specifiers that name no file of their own are retried with the
 //   extensions the room's sources use.
-// - `@rosetta/room` is the package's source, as the app's Vite alias and
+// - `@vibefield/rosetta-room` is the package's source, as the app's Vite alias and
 //   tsconfig paths resolve it; its `.tsx` modules are transpiled (type
 //   stripping takes no JSX) and its stylesheets load as nothing.
 import { readFileSync } from "node:fs";
@@ -15,8 +15,9 @@ import { fileURLToPath } from "node:url";
 const CANDIDATES = [".ts", ".tsx", "/index.ts"];
 const NAMED = /\.(?:[cm]?[jt]sx?|json|css)$/;
 const PACKAGE = {
-  "@rosetta/room": new URL("../../../room/src/index.ts", import.meta.url).href,
-  "@rosetta/room/fixtures": new URL("../../../room/src/fixtures/index.ts", import.meta.url).href,
+  "@vibefield/rosetta-protocol": new URL("../../../ts/index.ts", import.meta.url).href,
+  "@vibefield/rosetta-room": new URL("../../../room/src/index.ts", import.meta.url).href,
+  "@vibefield/rosetta-room/fixtures": new URL("../../../room/src/fixtures/index.ts", import.meta.url).href,
 };
 let typescript = null;
 const ts = () => (typescript ??= createRequire(import.meta.url)("typescript"));
@@ -24,15 +25,16 @@ const ts = () => (typescript ??= createRequire(import.meta.url)("typescript"));
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier in PACKAGE) return { url: PACKAGE[specifier], shortCircuit: true };
-    if (!/^\.{1,2}\//.test(specifier) || NAMED.test(specifier)) return nextResolve(specifier, context);
+    if (!/^\.{1,2}\//.test(specifier) || (NAMED.test(specifier) && !specifier.endsWith(".js"))) return nextResolve(specifier, context);
     try {
       return nextResolve(specifier, context);
     } catch (error) {
       const code = /** @type {{ code?: string }} */ (error).code;
       if (code !== "ERR_MODULE_NOT_FOUND" && code !== "ERR_UNSUPPORTED_DIR_IMPORT") throw error;
+      const base = specifier.endsWith(".js") ? specifier.slice(0, -3) : specifier;
       for (const suffix of CANDIDATES) {
         try {
-          return nextResolve(`${specifier}${suffix}`, context);
+          return nextResolve(`${base}${suffix}`, context);
         } catch {
           // try the next spelling
         }

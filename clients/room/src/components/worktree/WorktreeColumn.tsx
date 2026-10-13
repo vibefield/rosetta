@@ -34,6 +34,7 @@ import { WorktreeFileTree } from "./WorktreeFileTree";
 import { WorktreeHeader } from "./WorktreeHeader";
 import { WorktreeList } from "./WorktreeList";
 import type { RepoTab } from "./types";
+import type { RoomFolder, RoomMenu } from "../../host-inputs";
 
 export interface WorktreeColumnProps {
   /** The selected project's first root path, from rosettad. */
@@ -48,6 +49,9 @@ export interface WorktreeColumnProps {
   readonly onReceipt: (text: string) => void;
   readonly requestError: string | null;
   readonly onRetry: () => void;
+  /** R6: the host's folders — the head becomes their dropdown, and a folder
+   * the host marks elsewhere draws its honest state instead of opening. */
+  readonly folders?: { readonly menu: RoomMenu; readonly shown: RoomFolder | null } | null | undefined;
 }
 
 const TABS = [
@@ -76,7 +80,9 @@ export function WorktreeColumn({
   onReceipt,
   requestError,
   onRetry,
+  folders = null,
 }: WorktreeColumnProps) {
+  const elsewhere = folders?.shown?.elsewhere;
   const lifecycle = useWorktreeConnection();
   const live = lifecycle.status === "ready" ? lifecycle.connection : null;
   const engine = live?.engine ?? null;
@@ -114,8 +120,9 @@ export function WorktreeColumn({
 
   const host = useRoom().host;
   const hasShell = host?.worktree !== undefined;
+  const listBrowsers = useMemo(() => host?.browsers?.bind(host), [host]);
   const openInBrowser = useMemo(
-    () => (host === null ? null : (name: string, bytes: Uint8Array) => host.openInBrowser(name, bytes)),
+    () => (host === null ? null : (name: string, bytes: Uint8Array, browserId?: string) => host.openInBrowser(name, bytes, browserId)),
     [host],
   );
   const stale = projectRoot !== null && shownRoot !== null && shownRoot !== projectRoot;
@@ -213,6 +220,7 @@ export function WorktreeColumn({
         count={count}
         changeShape={changeShapeOf(entries)}
         unpushed={unpushed}
+        folders={folders}
       />
 
       <div className="ah-listbar">
@@ -228,7 +236,9 @@ export function WorktreeColumn({
         />
       </div>
 
-      {!hasShell ? (
+      {elsewhere !== undefined && elsewhere !== null ? (
+        <div className="ah-elsewhere">{elsewhere}</div>
+      ) : !hasShell ? (
         <EmptyState
           title="No repository here"
           description="This column needs the desktop shell — a browser tab has no worktree to read."
@@ -363,6 +373,7 @@ export function WorktreeColumn({
           homeDirectory={homeDirectory}
           onClose={() => setOpen(null)}
           onReceipt={onReceipt}
+          listBrowsers={listBrowsers}
           openInBrowser={open?.diff === true ? null : openInBrowser}
           // The Files tab opens a FILE; the other two open a CHANGE. The
           // registry reads kinds off a name, and a name cannot say which.

@@ -10,11 +10,12 @@
 //
 // Actions that leave the app are validated in the main process.
 import type {
+  InstalledBrowser,
   GitFacts,
   WorktreeFileActionRequest,
   WorktreeFileActionResult,
   WorktreeOpenResult,
-} from "@rosetta/room";
+} from "@vibefield/rosetta-room";
 
 export interface DesktopDaemonState {
   readonly phase: "starting" | "ready" | "restarting" | "failed" | "stopped" | "external";
@@ -38,14 +39,16 @@ export interface DesktopHost {
   /** Copy absolute path text or reveal one entry in the native file manager. */
   worktreeFileAction(request: WorktreeFileActionRequest): Promise<WorktreeFileActionResult>;
   /**
-   * Hand the exact HTML/SVG bytes shown by the viewer to the OS browser.
+   * Hand the exact HTML/SVG bytes shown by the viewer to the selected browser.
    *
    * The shell validates the extension and byte limit, writes an app-owned
    * private snapshot, and opens that path. Supplying bytes rather than a path
    * makes this work for transcript resources and prevents a changed source
    * file from becoming a different document between reading and opening.
    */
-  openInBrowser(name: string, bytes: Uint8Array): Promise<boolean>;
+  openInBrowser(name: string, bytes: Uint8Array, browserId?: string): Promise<boolean>;
+  /** Installed browsers. Optional for a preload from an older app version. */
+  browsers?(): Promise<readonly InstalledBrowser[]>;
   /**
    * One site's own icon, for a web line in the transcript.
    *

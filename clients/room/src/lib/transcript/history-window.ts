@@ -1,6 +1,6 @@
 // Paging follows visible conversation boundaries. Canonical rows remain in the
 // subscription cache; a clipped leading activity prefix waits for the next page.
-import type { TimelineEntry, TimelinePage } from "@rosetta/protocol";
+import type { TimelineEntry, TimelinePage } from "@vibefield/rosetta-protocol";
 import { readAttachments } from "./turns";
 import { canonicalText } from "./vocabulary";
 

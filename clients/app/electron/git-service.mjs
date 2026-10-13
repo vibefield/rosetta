@@ -9,7 +9,19 @@
 //
 // Every path that reaches a git invocation goes through mille's
 // `assertPathUnderRoot`, which rejects `..`, absolute paths and drive
-// letters. The root itself is fixed at fork time and is never a parameter.
+// letters, and reaches git after `--`. The root itself is fixed at fork time
+// and is never a parameter.
+//
+// The one other value the renderer hands git is a commit id, and it is a
+// positional argument where git still parses options: `--output=<file>` in
+// that slot makes `git show` WRITE the diff wherever the caller says. So an
+// id is admitted only as a hex object id, and it still follows
+// `--end-of-options`. Beyond that, no read runs the fsmonitor hook, an
+// external diff driver or a textconv filter that the repository's config
+// names, and no read takes `index.lock` from under somebody else's commit
+// (`GIT_OPTIONAL_LOCKS=0`). A `filter.<driver>.clean` still runs when a
+// status or a diff must re-read a file whose stat changed; git has no switch
+// that turns filters off.
 
 import { execFile } from "node:child_process";
 import { assertPathUnderRoot, createShellScmClient } from "@vibecook/mille-ui/git/node";
@@ -23,12 +35,33 @@ const MAX_DIFF_BYTES = 8 * 1024 * 1024;
  * an archive: a reader who needs the four-hundredth commit wants a terminal. */
 const LOG_LIMIT = 200;
 
-function git(root, args, options = {}) {
+/** Ahead of every subcommand: the repository's fsmonitor hook is a program
+ * its config names, and git would run it on a status or a diff. */
+const GIT_FLAGS = ["-c", "core.fsmonitor=false"];
+/** On every read that diffs: the answer is git's own, never a driver's. */
+const PLAIN = ["--no-ext-diff", "--no-textconv"];
+/** A commit id as the column admits it: a full or abbreviated hex object id.
+ * Never an option, never a revision expression. */
+const COMMIT_ID = /^[0-9a-f]{4,64}$/;
+
+function isCommitId(value) {
+  return typeof value === "string" && COMMIT_ID.test(value);
+}
+
+function notACommit(value) {
+  return `not a commit id: ${String(value).slice(0, 80)}`;
+}
+
+function runGit(execGit, root, args, options = {}) {
   return new Promise((resolve) => {
-    execFile(
+    execGit(
       "git",
-      ["-C", root, ...args],
-      { timeout: TIMEOUT_MS, maxBuffer: options.maxBuffer ?? MAX_DIFF_BYTES },
+      [...GIT_FLAGS, "-C", root, ...args],
+      {
+        timeout: TIMEOUT_MS,
+        maxBuffer: options.maxBuffer ?? MAX_DIFF_BYTES,
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+      },
       (error, stdout, stderr) => {
         resolve({
           ok: !error,
@@ -171,8 +204,11 @@ function applyNumstat(commits, raw) {
   }
 }
 
-export function createGitService(root) {
+/** `execFile` is the seam the tests record git through; the host passes
+ * nothing. */
+export function createGitService(root, { execFile: execGit = execFile } = {}) {
   const scm = createShellScmClient({ rootPath: root });
+  const git = (args, options) => runGit(execGit, root, args, options);
 
   /** Reject anything that is not a path inside this root, before git sees it. */
   const safe = (paths) => {
@@ -187,15 +223,15 @@ export function createGitService(root) {
      * nullable: a detached HEAD has no branch, and a branch with no
      * upstream has no counts. */
     async branch() {
-      const head = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+      const head = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
       const name = head.ok ? head.stdout.trim() : null;
-      const upstream = await git(root, [
+      const upstream = await git([
         "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
       ]);
       if (!upstream.ok) {
         return { name, upstream: null, ahead: null, behind: null };
       }
-      const counts = await git(root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
+      const counts = await git(["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
       const [behind, ahead] = counts.ok
         ? counts.stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10))
         : [null, null];
@@ -208,7 +244,7 @@ export function createGitService(root) {
     },
 
     async status() {
-      const result = await git(root, [
+      const result = await git([
         "status", "--porcelain=v2", "-z", "--untracked-files=all",
       ]);
       if (!result.ok) return { entries: [], error: result.stderr };
@@ -216,19 +252,19 @@ export function createGitService(root) {
     },
 
     async log() {
-      const unpushedResult = await git(root, ["rev-list", "@{u}..HEAD"]);
+      const unpushedResult = await git(["rev-list", "@{u}..HEAD"]);
       const unpushed = unpushedResult.ok
         ? new Set(unpushedResult.stdout.split("\n").map((s) => s.trim()).filter(Boolean))
         : null;
 
-      const result = await git(root, [
+      const result = await git([
         "log", `--max-count=${LOG_LIMIT}`, `--format=${LOG_FORMAT}`,
       ]);
       if (!result.ok) return { commits: [], error: result.stderr };
       const commits = parseLog(result.stdout, unpushed);
 
-      const stat = await git(root, [
-        "log", `--max-count=${LOG_LIMIT}`, "--format=%H", "--numstat", "--no-renames",
+      const stat = await git([
+        "log", `--max-count=${LOG_LIMIT}`, "--format=%H", "--numstat", "--no-renames", ...PLAIN,
       ]);
       if (stat.ok) applyNumstat(commits, stat.stdout);
       return { commits, error: null };
@@ -241,18 +277,22 @@ export function createGitService(root) {
      */
     async diff({ path: relative, staged, sha }) {
       const [only] = safe([relative]);
-      const args = sha
-        ? ["show", "--format=", "-M", `${sha}`, "--", only]
+      // No id at all is the working tree's diff; any id is a commit's, and
+      // only a real one reaches git.
+      const commit = sha !== undefined && sha !== null;
+      if (commit && !isCommitId(sha)) return { text: "", error: notACommit(sha) };
+      const args = commit
+        ? ["show", "--format=", ...PLAIN, "-M", "--end-of-options", sha, "--", only]
         : staged
-          ? ["diff", "--cached", "-M", "--", only]
-          : ["diff", "-M", "--", only];
-      const result = await git(root, args);
+          ? ["diff", "--cached", ...PLAIN, "-M", "--", only]
+          : ["diff", ...PLAIN, "-M", "--", only];
+      const result = await git(args);
       if (!result.ok) return { text: "", error: result.stderr };
       // An untracked file has no diff at all; `--no-index` against /dev/null
       // is how git will show one, and it exits 1 by design when they differ.
-      if (result.stdout === "" && !staged && !sha) {
-        const untracked = await git(root, [
-          "diff", "--no-index", "--", "/dev/null", only,
+      if (result.stdout === "" && !staged && !commit) {
+        const untracked = await git([
+          "diff", ...PLAIN, "--no-index", "--", "/dev/null", only,
         ]);
         return { text: untracked.stdout, error: null };
       }
@@ -267,9 +307,12 @@ export function createGitService(root) {
      * counts. The letter is the half a reader scans by, so it leads.
      */
     async commitFiles(sha) {
+      if (!isCommitId(sha)) return { files: [], error: notACommit(sha) };
+      // The trailing `--` keeps a short id that is also a file's name a
+      // revision, where git would otherwise refuse it as ambiguous.
       const [status, stat] = await Promise.all([
-        git(root, ["show", "--format=", "--name-status", "-M", sha]),
-        git(root, ["show", "--format=", "--numstat", "-M", sha]),
+        git(["show", "--format=", ...PLAIN, "--name-status", "-M", "--end-of-options", sha, "--"]),
+        git(["show", "--format=", ...PLAIN, "--numstat", "-M", "--end-of-options", sha, "--"]),
       ]);
       if (!status.ok) return { files: [], error: status.stderr };
 
@@ -324,7 +367,7 @@ export function createGitService(root) {
      */
     async discard(paths) {
       const checked = safe(paths);
-      const status = await git(root, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
+      const status = await git(["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
       const untracked = new Set(
         status.ok
           ? parseStatus(status.stdout).filter((e) => e.worktree === "?").map((e) => e.path)
@@ -336,11 +379,11 @@ export function createGitService(root) {
         // Unstage first: `git restore --worktree` leaves a staged change in
         // the index, and a file that came back on the next status read is
         // not what "discard" promised.
-        await git(root, ["restore", "--staged", "--", ...tracked]);
+        await git(["restore", "--staged", "--", ...tracked]);
         await scm.revert(tracked);
       }
       if (newFiles.length > 0) {
-        const removed = await git(root, ["clean", "-f", "--", ...newFiles]);
+        const removed = await git(["clean", "-f", "--", ...newFiles]);
         if (!removed.ok) throw new Error(removed.stderr || "could not remove untracked files");
       }
     },

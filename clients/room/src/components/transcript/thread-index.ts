@@ -4,7 +4,7 @@
 // `Delegate` link places a subthread beneath its own ledger line, and a
 // parent-only link is interleaved by session start time without pretending
 // that timestamp proximity proves cause.
-import type { SessionRow } from "@rosetta/protocol";
+import type { SessionRow } from "@vibefield/rosetta-protocol";
 
 export interface ThreadFocus {
   readonly sessionId: string;

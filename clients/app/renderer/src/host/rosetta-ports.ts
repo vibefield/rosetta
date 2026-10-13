@@ -2,9 +2,9 @@
 // that holds the daemon's address and needs no per-session credential) hands
 // the room its catalog, its sessions and its assets. Pure: no window, no
 // bridge — `rosetta-host.ts` does the wiring.
-import type { AssetRef, RosettaClient } from "@rosetta/protocol";
-import type { AssetSource, CatalogPort, SessionPort } from "@rosetta/room";
-import { catalogStatusOf } from "@rosetta/room";
+import type { AssetRef, RosettaClient } from "@vibefield/rosetta-protocol";
+import type { AssetSource, CatalogPort, SessionPort } from "@vibefield/rosetta-room";
+import { catalogStatusOf } from "@vibefield/rosetta-room";
 
 /** What the host knows about its daemon beyond the client: its own words for
  * why the daemon cannot answer, and when its route to it changes. */

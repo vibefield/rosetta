@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { base64UrlDecode, base64UrlEncode } from "../base64url.ts";
+import { base64UrlDecode, base64UrlEncode } from "../dist/base64url.js";
 import {
   MIN_GRANT_KEY_BYTES,
   SCOPE_FILES,
@@ -16,7 +16,7 @@ import {
   mintGrant,
   parseGrantHeader,
   verifyGrant,
-} from "../grants.ts";
+} from "../dist/grants.js";
 
 const fixture = JSON.parse(
   readFileSync(new URL("../../../crates/server/tests/fixtures/grants.json", import.meta.url), "utf8"),

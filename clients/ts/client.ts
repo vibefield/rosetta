@@ -4,8 +4,8 @@
 // earlier rows), obey Resync barriers, and reconnect with a resume stamp.
 // Consumers render; they never re-implement protocol semantics.
 
-import { utf8Base64UrlEncode } from "#base64url";
-import { OrderedCache } from "#ordered-cache";
+import { utf8Base64UrlEncode } from "./base64url.js";
+import { OrderedCache } from "./ordered-cache.js";
 import { PROTOCOL_VERSION } from "./protocol-version.mjs";
 export { PROTOCOL_VERSION } from "./protocol-version.mjs";
 import type { TimelineEntryResponse } from "./generated/TimelineEntryResponse";
@@ -41,6 +41,7 @@ import type { TimelineMetaPlanSource } from "./generated/TimelineMetaPlanSource"
 import type { ToolInteraction } from "./generated/ToolInteraction";
 import type { PricingResponse } from "./generated/PricingResponse";
 import type { UsageResponse } from "./generated/UsageResponse";
+import type { ActivityResponse } from "./generated/ActivityResponse";
 import type { DayUsageResponse } from "./generated/DayUsageResponse";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
@@ -49,7 +50,7 @@ export const DEFAULT_BASE_URL = "http://127.0.0.1:4640";
  * How a client proves itself to a daemon started with `--token-file`
  * (docs/AUTH.md). A bearer opens every route; a grant opens one session's
  * recorded history until its `exp`. The client only carries a grant, as an
- * opaque string: minting needs the key (`@rosetta/protocol/grants`).
+ * opaque string: minting needs the key (`@vibefield/rosetta-protocol/grants`).
  */
 export type RosettaCredential =
   | { readonly kind: "bearer"; readonly token: string }
@@ -593,6 +594,32 @@ export class RosettaClient {
     return this.request(
       `/api/projects/${encodeURIComponent(projectId)}/usage/day${queryString({
         day, offset_minutes: offsetMinutes,
+      })}`,
+      withSignal(signal),
+    );
+  }
+
+  /** Which top-level sessions were active in a window of at most seven days,
+   * newest recorded activity first, each with its tree's turns and the gaps
+   * inside them longer than `gapMs` (15 minutes unless asked). It spans
+   * sessions, so it needs the bearer. */
+  activity(
+    window: {
+      sinceMs: number;
+      untilMs?: number;
+      sessions?: readonly string[];
+      gapMs?: number;
+      limit?: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<ActivityResponse> {
+    return this.request(
+      `/api/activity${queryString({
+        since_ms: window.sinceMs,
+        until_ms: window.untilMs,
+        sessions: window.sessions === undefined ? undefined : window.sessions.join(","),
+        gap_ms: window.gapMs,
+        limit: window.limit,
       })}`,
       withSignal(signal),
     );

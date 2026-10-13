@@ -23,7 +23,7 @@
 //        it reads muted rather than pretending to be alive.
 import type { ReactNode } from "react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { TimelineEntry } from "@rosetta/protocol";
+import type { TimelineEntry } from "@vibefield/rosetta-protocol";
 import { clock } from "../../lib/format";
 import type {
   AttachmentFact,

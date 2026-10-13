@@ -10,7 +10,7 @@ import type {
   ResponseRuntime,
   SessionRow,
   TimelineEntry,
-} from "@rosetta/protocol";
+} from "@vibefield/rosetta-protocol";
 import type { LedgerLine } from "./ledger";
 import { linkedChildSessionIds } from "./ledger";
 import { canonicalText } from "./vocabulary";
