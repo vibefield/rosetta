@@ -378,6 +378,7 @@ impl Tailer {
         Ok(Self { config })
     }
 
+    // @atlas step live.read
     pub fn read(
         &self,
         path: &Path,

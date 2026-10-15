@@ -326,6 +326,7 @@ export interface TimelineFeed {
   loadAnchor: (timelineId: string) => Promise<boolean>;
 }
 
+// @atlas step live.render
 export function useTimeline(sessions: SessionLeases, sessionId: string | null): TimelineFeed {
   const [owner, setOwner] = useState(sessionId);
   const [attempt, setAttempt] = useState(0);
@@ -693,6 +694,7 @@ export interface SearchFacets {
 
 export const SEARCH_LIMIT = 200;
 
+// @atlas step search-query.feed
 /**
  * One ranked search per settled query. The previous response stays on screen
  * while its successor is in flight — a list that blanks on every keystroke

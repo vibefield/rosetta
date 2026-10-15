@@ -1,6 +1,11 @@
 // @vibefield/rosetta-room — rosetta's History room behind injected ports. A host hands
 // it a catalog, a way to open one session's body, an asset source and, on a
 // desktop, a host port; the room dials nothing itself. See README.md.
+//
+// @atlas rule room-dials-nothing "The room dials nothing: every byte arrives through a port" {
+//   forbid text "fetch(", "new WebSocket(", "new EventSource(", "XMLHttpRequest" in pkg:@vibefield/rosetta-room
+//   see "clients/room/README.md#what-the-package-never-does"
+// }
 
 export { HistoryRoom } from "./HistoryRoom";
 export type {

@@ -2,6 +2,12 @@
 //! the [`IngestOp`] stream every adapter normalizes into, deterministic ids,
 //! and the pure fold helpers. Zero IO dependencies by design; every function
 //! here benches and tests in isolation (docs/ingest-engine.html).
+//!
+//! @atlas layer model · domain normalize
+//! @atlas rule core-is-a-leaf "core depends on nothing internal" {
+//!   only this -> nothing
+//!   see "docs/ARCHITECTURE.md#8-workspace-layout"
+//! }
 
 pub mod assets;
 pub mod fold;

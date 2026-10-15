@@ -481,6 +481,7 @@ impl SearchBackend for Fts5SidecarSearch {
         state
     }
 
+    // @atlas step search-query.sidecar
     fn search(&self, query: SearchQuery) -> Result<SearchOutput, SearchError> {
         query.validate()?;
         let before = canonical_state(&self.canonical)?;

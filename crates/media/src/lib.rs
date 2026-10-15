@@ -1,5 +1,7 @@
 //! One bounded, vendor-neutral WebP pipeline. Original bytes remain ledger-only.
 //! No filesystem, network, clock or vendor knowledge enters image preparation.
+//!
+//! @atlas layer kernels · domain media
 
 mod animation;
 mod pixels;

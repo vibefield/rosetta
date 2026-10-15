@@ -6,6 +6,8 @@
 //! reads no clock, and allocates only to remember a new model id per thread.
 //! Adapters never call it: the store prices usage records inside the hourly
 //! rollup, and the server prices one response at read time.
+//!
+//! @atlas layer kernels · domain usage
 
 mod catalog;
 // Generator output is committed byte-exact (`tools/pricing generate --check`).

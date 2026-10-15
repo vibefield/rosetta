@@ -9,6 +9,8 @@
 //! siblings remain layout inventory. `conversations/<id>.db` owns usage: the
 //! transcript carries no token counts, while the store's protobuf step
 //! metadata records every model request (see [`usage`]).
+//!
+//! @atlas layer agents · domain normalize
 
 pub mod adapter;
 pub mod normalize;

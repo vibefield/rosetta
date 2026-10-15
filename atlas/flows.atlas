@@ -1,0 +1,35 @@
+// Two hot paths. A step done by a function is bound in-code (`// @atlas step <flow>.<step>` above it; list them
+// with `grep -rn '@atlas step' crates clients`); a step anchored on a type keeps its `at` here. A step with no
+// anchor at all grades `asserted`, not dangling: after deleting or renaming a step's function, re-bind it.
+// A hop is verified by an edge between its steps, one shared unit, or a `by` orchestrator reaching both;
+// `via` marks a runtime hop (asserted).
+
+flow live "Live file change → client update" {
+  intent "The observe hot path; the budget is watch event → subscriber frame p99 < 20 ms."
+  by mod:rosettad::serve, mod:rosetta_pipeline::stream
+  step wake   "notify event wakes the shared SourceWake"      at sym:rosetta_capture::watch::NotifyEvents
+  step tick   "writer thread ticks each live runner"
+  step map    "runner maps the hint to changed sources"        direct
+  step read   "tailer reads complete records only"
+  step parse  "adapter turns each record into IngestOps"
+  step ledger "ledger first: append, then durable flush"
+  step apply  "one SQLite transaction: checkpoint CAS + rows"
+  step absorb "drained effects reach the hub"
+  step hub    "hub fans mutations into per-session tail rings" direct
+  step frame  "mutation frames on /ws/sessions/{id}"           direct
+  step patch  "SDK patches its cache, 16 ms coalescing"        at sym:clients/ts/client.ts#SessionSubscription via ws
+  step render "room hooks re-render the transcript"            via port
+  see "docs/ARCHITECTURE.md#71-cross-adapter-applicability-checkpoint-2026-08-27"
+}
+
+flow search-query "Search query" {
+  intent "Job 1. A sidecar generation behind the canonical watermark answers `catching-up` from a consistent snapshot."
+  step sheet   "search sheet collects query and facets"
+  step feed    "useSearch asks the injected CatalogPort"
+  step port    "the host's catalog port wraps RosettaClient"     via port
+  step client  "GET /api/search?q=…"
+  step handler "parse grammar, expand session scope"             via http
+  step backend "spawn_blocking → SearchBackend::search"          at sym:rosetta_search::SearchBackend
+  step sidecar "FTS5 MATCH on the generation CURRENT names"
+  see "docs/ARCHITECTURE.md#52-the-three-services"
+}

@@ -1122,6 +1122,7 @@ async fn command(
     Ok(Json(CommandResponse { command }))
 }
 
+// @atlas step search-query.handler
 async fn search(
     State(state): State<AppState>,
     Query(request): Query<SearchRequest>,

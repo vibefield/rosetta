@@ -3,6 +3,8 @@
 //! Agent-agnostic source IO lives here: append-delimited [`tailer`] reads,
 //! data-root [`discovery`], bounded meta reads, consistent SQLite snapshots,
 //! filesystem notification hints, and the append-only raw ledger.
+//!
+//! @atlas layer capture-io · domain capture
 
 pub mod discovery;
 pub mod document;

@@ -1,0 +1,124 @@
+// Domains cut across layers and languages. Each crate root names its crate's domain in-code
+// (`//! @atlas layer … · domain …`); the claims below are the modules, files and TS paths that serve another
+// domain. The most specific `contains` wins; `touches` adds a secondary membership and never competes.
+
+domain capture "Discovery, consent & capture" {
+  contains mod:rosetta_pipeline::{discover, skim, snapshot, document}
+  contains mod:rosetta_server::{consent, enrolled}, mod:rosettad::enroll
+  contains file:clients/app/renderer/src/components/RollCall.tsx
+  touches mod:rosetta_adapter_support::glob
+  see "docs/ARCHITECTURE.md#35-runtime-handoff-watcher-tailer-and-raw-ledger"
+  see "docs/ARCHITECTURE.md#supervisor-enrolled-runtimes-2026-09-12"
+}
+
+domain ledger "Raw ledger (durable truth)" {
+  contains mod:rosetta_capture::{ledger, segment, segment_index, recompress}
+  contains mod:rosetta_pipeline::{replay, command}
+  contains mod:rosettad::{runtime_ledger, ledger_cmd, ledger_verify, ledger_compression, cold_stage}
+  see "docs/ARCHITECTURE.md#35-runtime-handoff-watcher-tailer-and-raw-ledger"
+}
+
+domain normalize "Per-agent normalization" {
+  intent "Where agent weirdness ends: native records in, canonical IngestOps out."
+  see "docs/ARCHITECTURE.md#4-layer-2--normalizer"
+}
+
+domain ingest "Cold & live ingestion" {
+  contains mod:rosetta_store::{apply, cold_stream, bulk, reclaim}
+  contains mod:rosetta_server::{health, board}
+  contains file:clients/room/src/lib/{ingest, ingest-activity, use-ingest-activity, catalog-status}.ts
+  contains file:clients/room/src/components/{IngestStatus, ColdStart}.tsx
+  see "CLAUDE.md#current-phase"
+  see "docs/ingest-engine.html"
+}
+
+domain projection "Canonical projection" {
+  intent "One disposable SQLite projection plus content-addressed members; a cache of the ledger."
+  see "docs/ARCHITECTURE.md#6-storage"
+}
+
+domain search "Full-text search (job 1)" {
+  contains mod:rosetta_store::search_sync, sym:rosetta_server::http::search
+  contains path:clients/room/src/components/search/, path:clients/room/src/lib/search-*.ts
+  touches sym:clients/ts/client.ts#RosettaClient.search
+  see "docs/ARCHITECTURE.md#52-the-three-services"
+}
+
+domain observe "Live observation (job 2)" {
+  intent "The History room is this job's client: every catalog list, transcript and live patch."
+  contains pkg:@vibefield/rosetta-room
+  contains mod:rosetta_store::hot, mod:rosetta_server::{hub, ws}, mod:rosetta_server::http::activity
+  contains sym:clients/ts/client.ts#{SessionSubscription, MetaSubscription, CollaborationSubscription}
+  contains file:clients/ts/ordered-cache.ts
+  see "docs/ARCHITECTURE.md#52-the-three-services"
+}
+
+domain usage "Usage & spend" {
+  contains path:tools/pricing/
+  contains mod:rosetta_core::{fold, usage_totals}, mod:rosetta_store::apply::usage_owners
+  contains mod:rosetta_store::{pricing, usage_sql, usage_totals}
+  contains path:crates/adapters/*/src/usage*.rs, path:crates/adapters/copilot/src/usage/
+  contains path:clients/room/src/components/charts/
+  contains path:clients/room/src/lib/{spend, chart-data, day-activity, model-labels, use-day-usage}.ts
+  contains file:clients/room/src/components/{SummaryPanels, SummaryMetrics}.tsx
+  see "docs/ARCHITECTURE.md#413-usage-accounting-and-list-price-usd-2026-09-22"
+}
+
+domain media "Images & assets" {
+  contains mod:rosetta_adapter_support::media, mod:rosetta_core::assets
+  contains mod:rosetta_store::assets, mod:rosetta_server::http::images
+  contains path:crates/adapters/*/src/images.rs, file:crates/adapters/claude-code/src/media.rs
+  contains path:clients/room/src/components/file-viewer/, file:clients/room/src/lib/image-media.ts
+  see "docs/ARCHITECTURE.md#412-authored-images-2026-09-09"
+}
+
+domain auth "Access control" {
+  contains mod:rosetta_server::{auth, grant}, mod:rosettad::auth_files
+  contains file:clients/ts/grants.ts, file:clients/ts/base64url.ts, path:tools/auth/
+  see "docs/AUTH.md#daemon-access-control"
+}
+
+domain api "Daemon API (REST + WS + SDK)" {
+  intent "The wire surface every consumer dials; the job domains claim their own routes and frames."
+  contains pkg:@vibefield/rosetta-protocol
+  touches path:docs/site/
+  see "docs/ARCHITECTURE.md#5-layer-3--service-provider"
+  see "clients/ts/README.md#package-shape"
+}
+
+domain host "Room hosting & daemon supervision" {
+  intent "How a host gives the room its ports and owns one daemon."
+  contains pkg:@vibefield/rosetta-agent-history
+  contains file:clients/room/src/{ports, host-inputs}.ts, file:clients/room/src/room-context.tsx
+  contains file:clients/room/src/components/{HostMenu, HostAct}.tsx, file:clients/room/src/lib/session-leases.ts
+  contains mod:rosettad::announce
+  see "clients/room/README.md#the-ports-srcportsts"
+  see "docs/ARCHITECTURE.md#51-transport-decision-one-daemon-localhost-httpws"
+}
+
+domain worktree "Worktree & git column" {
+  contains path:clients/room/src/components/{worktree, git}/
+  contains file:clients/app/electron/{git-service, fx-host, worktree-file-actions, worktree-explorer-config}.mjs
+  contains file:clients/app/renderer/src/host/worktree-ports.ts
+  see "clients/room/README.md#the-ports-srcportsts"
+}
+
+domain perf "Performance evidence" {
+  intent "Frozen before/after pairs authorize optimizations."
+  contains mod:rosettad::{bench, brutal}, mod:rosetta_pipeline::instrument, path:tools/ingest-bench/
+  see "docs/ARCHITECTURE.md#7-performance-playbook"
+  see "CLAUDE.md#conventions"
+}
+
+domain groundtruth "Ground-truth evidence (L1)" {
+  contains path:groundtruth/, path:tools/groundtruth/
+  contains path:crates/adapters/*/src/spec.rs
+  see "docs/ARCHITECTURE.md#3-layer-1--ground-truth-evidence"
+}
+
+domain monitor "Metric feeds (job 3)" status planned {
+  intent "Distilled live metrics for runtime monitors such as chopsticks; WS /v1/metrics is documented but not routed."
+  expects mod:rosetta_server::metrics?
+  touches mod:rosetta_server::{health, board}, mod:rosetta_server::http::activity
+  see "docs/ARCHITECTURE.md#52-the-three-services"
+}
