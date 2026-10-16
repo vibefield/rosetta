@@ -2,6 +2,8 @@
 //! transactional write path, and the typed read surface. Foreign schema versions
 //! fail closed on ordinary open; `rosettad rebuild` explicitly reconstructs and
 //! atomically replaces the projection from the durable raw ledger.
+//!
+//! @atlas layer storage · domain projection
 
 mod activity;
 pub mod apply;
@@ -449,6 +451,7 @@ impl Store {
         })
     }
 
+    // @atlas step live.apply
     /// Transfer an owned batch into a cold planner without copying its
     /// normalized payload. Other store modes use the ordinary apply path.
     pub fn apply_owned(&mut self, batch: Batch) -> Result<ApplyStats, StoreError> {

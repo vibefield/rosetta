@@ -320,6 +320,7 @@ async fn timeline_meta_snapshot(
     .await
 }
 
+// @atlas step live.frame
 /// One session subscription: hello, snapshot-or-replay, then live items
 /// until the client disconnects.
 pub(crate) async fn run_session_stream<S: FrameSink>(

@@ -1,6 +1,8 @@
 //! rosetta-adapter-copilot — the Layer-2 PARSER for GitHub Copilot CLI,
 //! designed against the common interface with the Layer-1 canonical ground
 //! truth (`groundtruth/copilot/groundtruth.json`) as its specification.
+//!
+//! @atlas layer agents · domain normalize
 
 pub mod adapter;
 pub mod normalize;

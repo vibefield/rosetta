@@ -420,6 +420,7 @@ impl Hub {
         state.mirror.runtimes().cloned().collect()
     }
 
+    // @atlas step live.hub
     /// Absorb one drained [`Effects`] batch, strictly after its transactions
     /// committed: refresh the mirror (row diffs → precise meta events), push
     /// session-scoped mutations into rings, fan out, evict idle rings.

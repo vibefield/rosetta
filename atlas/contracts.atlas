@@ -1,0 +1,13 @@
+// The wire seam has four anchors in two crates, so it is declared here. Contracts with one anchor are declared
+// in-code at their trait or enum: adapter (AgentAdapter), ingest-op (IngestOp), search-backend (SearchBackend).
+
+contract wire "Wire protocol (REST + WS frames)" {
+  intent "Protocol re-exports core/store/search types instead of DTO mirrors, so the wire shape follows L2."
+  at sym:rosetta_protocol::ServerFrame, sym:rosetta_protocol::ErrorCode
+  at sym:rosetta_store::hot::{Mutation, Stamp}
+  mirror "clients/ts/generated/{name}.ts#{name}"
+  used-by crate:rosetta-server
+  note file:clients/ts/protocol-version.mjs "Bumped together with PROTOCOL_VERSION; the wire golden test checks that both agree."
+  see "docs/ARCHITECTURE.md#52-the-three-services"
+  see "clients/ts/README.md#vibefieldrosetta-protocol"
+}

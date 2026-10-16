@@ -127,6 +127,7 @@ pub(crate) fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+// @atlas step live.absorb
 /// Drain both effects seams into the hub, strictly after commit. Row
 /// effects first — session mutations into the rings, their touched rows
 /// into the mirror — then the metadata identity keys, the writer thread's

@@ -4,6 +4,8 @@
 //! query/readiness contract and the synchronous FTS5 reference backend so the
 //! server does not depend on an engine-specific query path. A disposable
 //! sidecar can implement [`SearchBackend`] without changing the L3 protocol.
+//!
+//! @atlas layer query · domain search
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -382,6 +384,10 @@ impl fmt::Display for SearchError {
 
 impl std::error::Error for SearchError {}
 
+// @atlas contract search-backend "Backend-neutral search seam" {
+//   implemented-by crate:rosetta-search
+//   used-by crate:rosetta-server, crate:rosettad
+// }
 /// Synchronous interface because search engines and SQLite are blocking. The
 /// async server runs calls on its blocking pool.
 pub trait SearchBackend: Send + Sync {

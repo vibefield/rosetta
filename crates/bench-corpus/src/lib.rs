@@ -20,6 +20,8 @@
 //! let report = generate(&spec, Path::new("/tmp/rosetta-bench/cc")).unwrap();
 //! println!("{}", report.table());
 //! ```
+//!
+//! @atlas layer tooling · domain perf
 
 pub mod claude_code;
 pub mod clock;

@@ -227,6 +227,10 @@ impl NormalizeCtx {
     }
 }
 
+// @atlas contract adapter "Agent adapter interface" {
+//   implemented-by $agents
+//   used-by crate:rosetta-pipeline, crate:rosettad
+// }
 /// One implementation per agent. Object-safe: the pipeline holds a registry
 /// of `&'static dyn AgentAdapter`.
 pub trait AgentAdapter: Send + Sync {
@@ -390,6 +394,7 @@ pub trait AgentAdapter: Send + Sync {
         true
     }
 
+    // @atlas step live.parse
     /// Stream phase: one raw record in, canonical ops out. Combines the pure
     /// parse and normalize stages; each adapter keeps its `parse_line` public
     /// so the stages stay independently testable and benchable.

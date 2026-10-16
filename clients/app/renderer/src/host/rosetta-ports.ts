@@ -15,6 +15,7 @@ export interface DaemonWords {
 
 const NO_WORDS: DaemonWords = { unavailable: () => null, onChange: () => () => {} };
 
+// @atlas step search-query.port
 /** The catalog over the daemon's own lists and figures: REST and /ws/meta. */
 export function catalogOver(client: RosettaClient, words: DaemonWords = NO_WORDS): CatalogPort {
   return {

@@ -1,0 +1,39 @@
+// Position is rank, top to bottom; nested layers are ordered sub-tiers. Every Rust crate places itself in its
+// crate root (`//! @atlas layer …`), so the crate leaves below are empty here. This file holds the structure and
+// what is not a crate: the TS packages and the directories. `exhaustive`: an unplaced production file is a violation.
+
+layers stack "Data flows up; dependencies point down" exhaustive {
+  see "docs/ARCHITECTURE.md#2-the-three-layers"
+  layer consumers "Consumers" {
+    intent "Consumers never reach past L3 into the store."
+    layer host-app "Desktop host" { contains pkg:@vibefield/rosetta-agent-history }
+    layer room-lib "History room package" { contains pkg:@vibefield/rosetta-room }
+    layer client-sdk "TS client SDK" { contains pkg:@vibefield/rosetta-protocol }
+  }
+  layer services "Services" code L3 {
+    layer edge "Runtime edge (axum REST + WS)"
+    layer wire-types "Wire contract"
+    layer query "Search seam"
+    note crate:rosetta-search "ARCHITECTURE.md §8 calls it the L3 search boundary; the §2 diagram omits it."
+  }
+  layer runtime "Runtime" code L2 {
+    layer orchestration "Ingest orchestration"
+    layer agents "Agent adapters" independent
+    layer adapter-kit "Adapter kit"
+    layer storage "Projection store"
+    layer capture-io "Capture & raw ledger"
+    layer kernels "Pure kernels"
+    layer model "Canonical model"
+    note crate:rosetta-media, crate:rosetta-pricing "In no layer diagram of the docs; pure libraries used by both L2 and L3."
+  }
+  layer truth "Ground truth" code L1 {
+    contains path:groundtruth/, path:tools/groundtruth/
+    intent "Dev-time evidence; runs no production code. Adapters embed groundtruth.json, so no code edge reaches it."
+  }
+  layer root "Composition root" outside {
+    intent "CLI and daemon in one binary; wires every crate and nothing depends on it."
+  }
+  layer tooling "Evidence & tooling" outside {
+    contains path:tools/, path:docs/site/
+  }
+}

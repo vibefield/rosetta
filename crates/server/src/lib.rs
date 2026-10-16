@@ -5,6 +5,17 @@
 //! [`grant`] (the bearer, per-session grants and the Origin rule —
 //! docs/AUTH.md). Async lives only in this layer; the ingest engine below
 //! stays synchronous.
+//!
+//! @atlas layer edge · domain api
+//! @atlas rule server-deps "server → {core, protocol, store}" {
+//!   only this -> crate:rosetta-{core, protocol, store}
+//!   see "docs/ARCHITECTURE.md#8-workspace-layout"
+//! }
+//! @atlas rule search-seam "server searches only through the backend-neutral seam" {
+//!   deny this -> sym:rosetta_search::{Fts5SidecarSearch, Fts5Search}
+//!   except mod:rosetta_server::http -> sym:rosetta_search::Fts5SidecarSearch "AppState::new builds the FTS5 default for tests; the daemon injects its backend via with_search"
+//!   see "docs/ARCHITECTURE.md#6-storage"
+//! }
 
 pub mod auth;
 pub mod board;

@@ -1,0 +1,90 @@
+// Decisions with their real status. Verified only when accepted and every confirmed-by rule, contract or
+// flow is verified; proposed and hypothesis decisions are asserted.
+
+decision dependency-rule "Crate dependency rule: enforced, not aspirational" status accepted {
+  because "spaghetti's layers leaked into each other; ARCHITECTURE.md §8 states the rule for adapters, pipeline, server, core, protocol and rosettad."
+  affects path:crates/
+  confirmed-by data-flows-up, rosettad-is-root, core-is-a-leaf,
+    thin-protocol, server-deps, pipeline-deps, adapters-isolated
+  see "docs/ARCHITECTURE.md#8-workspace-layout"
+}
+
+decision model-hypothesis "Canonical model is a hypothesis until Phase 2" code IR2 status hypothesis {
+  because "spaghetti overfit its model to one agent (Claude Code)."
+  affects mod:rosetta_core::{ops, timeline, rows}
+  see "docs/ARCHITECTURE.md#41-one-canonical-model-consumer-driven"
+}
+
+decision machine-independent-truth "Machine-independent ground truth" code IR3 status accepted {
+  because "CI enforcement is fixture-only; local agent data may corroborate but is never load-bearing."
+  affects path:groundtruth/, path:tools/groundtruth/
+  see "CLAUDE.md#iron-rules-each-one-is-a-spaghetti-failure-mode--do-not-relitigate"
+  see "docs/ARCHITECTURE.md#3-layer-1--ground-truth-evidence"
+}
+
+decision two-representations "Two representations: raw ledger + one projection" code IR4 status accepted {
+  because "spaghetti kept three coexisting models in a 101-table schema."
+  affects crate:rosetta-capture, crate:rosetta-store
+  see "CLAUDE.md#iron-rules-each-one-is-a-spaghetti-failure-mode--do-not-relitigate"
+  see "docs/ARCHITECTURE.md#6-storage"
+}
+
+decision persist-what-users-care-about "Persist only what a user cares about" code IR5 status accepted {
+  because "Normalization is deliberately lossy; reconciliation machinery may live in RAM, never in canonical SQLite."
+  affects crate:rosetta-store, crate:rosetta-core, crate:rosetta-pipeline
+  confirmed-by resolver-mints-project-id
+  see "CLAUDE.md#iron-rules-each-one-is-a-spaghetti-failure-mode--do-not-relitigate"
+}
+
+decision parsers-once "Parsers exist once, in Rust; TS gets generated types" code IR6 status accepted {
+  because "spaghetti kept ~20k LOC of duplicate TS parsers."
+  affects crate:rosetta-protocol, path:clients/ts/generated/
+  confirmed-by wire, room-dials-nothing
+  see "CLAUDE.md#iron-rules-each-one-is-a-spaghetti-failure-mode--do-not-relitigate"
+}
+
+decision one-groundtruth-file "One ground-truth file per agent" code IR7 status accepted {
+  because "Intermediates contribute but are never authoritative, so schema truth is read from one place."
+  affects path:groundtruth/, path:tools/groundtruth/
+  see "CLAUDE.md#iron-rules-each-one-is-a-spaghetti-failure-mode--do-not-relitigate"
+}
+
+decision ledger-first "Ledger-first crash protocol" status accepted {
+  because "An orphan ledger tail is harmless; a projection row that points at unflushed ledger is forbidden."
+  affects mod:rosetta_pipeline::stream, mod:rosetta_capture::ledger
+  confirmed-by live
+  see "docs/ingest-engine.html"
+}
+
+decision single-writer "Single synchronous writer; async only at the L3 edge" status accepted {
+  because "Debuggability: plain threads and bounded channels keep flamegraphs readable."
+  affects crate:rosettad, crate:rosetta-server
+  confirmed-by async-at-edge
+  see "docs/ARCHITECTURE.md#51-transport-decision-one-daemon-localhost-httpws"
+  see "docs/ingest-engine.html"
+}
+
+decision fts5-sidecar "Detached FTS5 sidecar behind a backend-neutral seam" status accepted {
+  because "Search loss never blocks canonical reads; Tantivy has not cleared relevance or storage acceptance."
+  affects crate:rosetta-search
+  confirmed-by search-backend, search-seam, tantivy-benchmark-only
+  see "docs/ARCHITECTURE.md#6-storage"
+  see "docs/ARCHITECTURE.md#11-open-decisions-defaults-chosen-cheap-to-revisit"
+}
+
+decision access-control "Open listener by default; bearer and per-session grants on demand" status accepted date 2026-09-30 {
+  affects mod:rosetta_server::{auth, grant}, mod:rosettad::auth_files
+  see "docs/ARCHITECTURE.md#11-open-decisions-defaults-chosen-cheap-to-revisit"
+  see "docs/AUTH.md#2-two-guards-never-one-for-the-other"
+}
+
+decision ingestion-api "Ingestion lifecycle API" status proposed date 2026-10-05 {
+  expects mod:rosettad::ingestion?
+  see "docs/INGESTION_API_PROPOSAL.md#decision"
+}
+
+decision daemon-lifecycle "Daemon ownership, control, and recovery" status proposed date 2026-10-06 {
+  expects mod:rosettad::lifecycle?
+  affects crate:rosettad, file:clients/app/electron/daemon-service.mjs
+  see "docs/DAEMON_LIFECYCLE_PROPOSAL.md#1-decisions"
+}

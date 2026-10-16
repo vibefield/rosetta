@@ -10,6 +10,12 @@
 //! The pipeline owns id derivation: adapters report NATIVE facts, and every
 //! rosetta id (runtime, project, session, timeline prefix inputs) is minted
 //! here from `rosetta_core::ids`.
+//!
+//! @atlas layer orchestration · domain ingest
+//! @atlas rule pipeline-deps "pipeline → {core, capture, store, adapters}" {
+//!   only this -> crate:rosetta-{core, capture, store}, crate:rosetta-adapter-*
+//!   see "docs/ARCHITECTURE.md#8-workspace-layout"
+//! }
 
 pub mod capture;
 pub mod checkpoint;

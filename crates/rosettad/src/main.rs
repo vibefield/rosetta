@@ -17,6 +17,12 @@
 //! `--enroll FILE` (2026-09-12) is a supervisor's enrollment file: consent for
 //! discovered kinds given at start, plus extra managed data roots of a kind
 //! that are consented by construction — see `enroll.rs`.
+//!
+//! @atlas layer root · domain ingest
+//! @atlas rule rosettad-is-root "Nothing depends on rosettad" {
+//!   deny * -> this on code, manifest
+//!   see "docs/ARCHITECTURE.md#8-workspace-layout"
+//! }
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -1,0 +1,90 @@
+// Cross-cutting rules. A rule about one crate or package lives in its root (`grep -rn '@atlas rule' crates clients`).
+// Every rule cites where rosetta states it; `code IRn` is CLAUDE.md iron rule n. Checks see production code only
+// (no tests, benches, cfg(test) code or dev-dependencies). Never weaken a rule to pass: fix the code. An
+// `except <selector> "real reason"` or a wider `only` list changes the design: that is the user's call.
+
+rule data-flows-up "Data flows up only; dependencies point down" code IR1 {
+  layered
+  see "CLAUDE.md#iron-rules-each-one-is-a-spaghetti-failure-mode--do-not-relitigate"
+  see "docs/ARCHITECTURE.md#2-the-three-layers"
+}
+
+rule adapters-isolated "All knowledge of one agent lives in its adapter pair" code IR1 {
+  independent $agents
+  only $agents -> crate:rosetta-core, crate:rosetta-adapter-support
+  see "docs/ARCHITECTURE.md#31-one-data-pack-and-one-parser-crate-per-agent"
+  see "docs/ARCHITECTURE.md#8-workspace-layout"
+}
+
+rule agents-sealed "Only the composition root names a concrete adapter" code IR1 {
+  deny *, !crate:rosettad -> $agents
+  see "CLAUDE.md#iron-rules-each-one-is-a-spaghetti-failure-mode--do-not-relitigate"
+}
+
+rule resolver-mints-project-id "The shared meta resolver, never an adapter, mints the canonical project id" code IR5 {
+  deny $agents, crate:rosetta-adapter-support -> sym:rosetta_core::ids::project_id
+  see "CLAUDE.md#iron-rules-each-one-is-a-spaghetti-failure-mode--do-not-relitigate"
+}
+
+rule l3-parses-nothing "L3 never parses agent files" {
+  deny layer:services -> layer:agents, layer:adapter-kit, layer:capture-io
+  see "docs/ARCHITECTURE.md#2-the-three-layers"
+}
+
+rule store-sealed "Consumers never reach past L3 into the store" code IR1 {
+  forbid text "node:sqlite", "better-sqlite3" in path:clients/, path:tools/
+  except file:tools/ingest-bench/src/lib/database.js "ARCHITECTURE.md §5.1: the read-only escape hatch onto an unstable internal format"
+  see "docs/ARCHITECTURE.md#51-transport-decision-one-daemon-localhost-httpws"
+}
+
+rule tooling-stays-out "Production crates never import development tooling" {
+  deny *, !layer:tooling -> layer:tooling
+  see "docs/ARCHITECTURE.md#8-workspace-layout"
+}
+
+rule pure-normalizers "normalize() is pure: no IO, no clock, no randomness" {
+  forbid text "std::fs", "File::open", "std::env", "std::net", "std::process",
+    "SystemTime", "Instant::now", "thread::spawn", "rand::" in $agents,
+    crate:rosetta-{core, adapter-support, media, pricing}
+  see "CLAUDE.md#conventions"
+  see "docs/ARCHITECTURE.md#42-normalization-is-a-pure-versioned-function"
+}
+
+rule async-at-edge "Async lives only at the L3 edge" {
+  forbid text "async fn", "tokio::" in path:crates/, !crate:rosetta-server
+  deny path:crates/, !crate:rosetta-server -> ext:tokio, ext:axum, ext:futures-util, ext:tower, ext:tower-http
+  except file:crates/rosettad/src/serve.rs "composition root builds the tokio runtime that hosts the L3 server"
+  see "docs/ingest-engine.html"
+}
+
+rule tantivy-benchmark-only "Tantivy stays a benchmark-only prototype" {
+  deny *, !crate:rosetta-search-bench -> ext:tantivy
+  see "docs/ARCHITECTURE.md#11-open-decisions-defaults-chosen-cheap-to-revisit"
+}
+
+rule grants-node-only "Grants sign with node:crypto; no browser bundle imports them" {
+  deny pkg:@vibefield/rosetta-room, path:clients/app/renderer/,
+    file:clients/ts/index.ts, file:clients/ts/client.ts -> file:clients/ts/grants.ts
+  see "clients/ts/README.md#package-shape"
+}
+
+rule generated-bindings "clients/ts/generated/ holds only ts-rs output" code IR6 {
+  limit code-lines <= 0 in path:clients/ts/generated/
+  see "clients/ts/README.md#vibefieldrosetta-protocol"
+}
+
+rule groundtruth-data-only "groundtruth/ is data-only" {
+  limit code-lines <= 0 in path:groundtruth/
+  see "CLAUDE.md#conventions"
+}
+
+rule permissive-raw "Raw serde types are permissive" {
+  forbid text "deny_unknown_fields" in path:crates/adapters/*/src/raw/
+  see "CLAUDE.md#conventions"
+}
+
+rule module-size "Keep modules under ~1,000 lines" warn {
+  limit lines <= 1000 in path:crates/, path:clients/
+  see "CLAUDE.md#conventions"
+  see "docs/ARCHITECTURE.md#1-lessons-from-spaghetti-what-we-keep-what-we-kill"
+}

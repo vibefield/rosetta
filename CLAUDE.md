@@ -219,6 +219,7 @@ tools/groundtruth/         LAYER 1 dev tools (stdlib Python): fixture farm,
                            mock model, census, schema merge, HTML render,
                            boundary/artifact checks
 tools/ingest-bench/        local Electron cold-ingest profiler + read-only DB inspector
+atlas/                     graded design intent (*.atlas); see "Atlas" below
 crates/                    all Rust crates
   adapter-support/         permissive parser + replay-test primitives
   adapters/<agent>/        raw parsers using canonical ground truth as spec
@@ -265,6 +266,32 @@ clients/                   TypeScript consumers                       [Phase 4]
 - Edition 2024, workspace deps, `cargo fmt` + `clippy -D warnings` clean.
 - `groundtruth/` is data-only. Rust belongs under `crates/`; repository tooling
   belongs under `tools/`.
+
+## Atlas
+
+`atlas/*.atlas` plus `@atlas` comment lines (every crate root, a few trait/enum/fn seams)
+declare what code cannot say about itself: layer and domain placement, contracts, the two
+hot-path flows, dependency rules, decisions. Project Atlas grades each statement against the
+code. It is not a third living document: every rule and decision cites this file, `docs/` or
+a package README with a checked `see "file#slug"`. Authoring guide: the `atlas` skill.
+
+- A new crate, npm package or top-level directory is placed in a layer and a domain in the
+  same change: a crate ends its root `//!` doc with a blank `//!` line, then
+  `//! @atlas layer x · domain y`; anything else goes in `atlas/layers.atlas` and
+  `atlas/domains.atlas`.
+- Renaming or moving code updates every selector that names it, in `atlas/` and in other
+  code's `@atlas` lines (brace forms like `crate:rosetta-{core, store}` hide from grep), and
+  `check` then shows 0 DANGLING. An `@atlas` line travels with the code it sits on.
+- Never weaken a rule to make it pass: fix the code. Widening an `only` list, adding an
+  `except`, or changing what a rule or decision means is the user's call, even when `check`
+  suggests it. `atlas/atlas.baseline.json` is written only by `atlas baseline`, never by hand.
+- Check after changing crates, packages, modules, dependencies or `atlas/`, with
+  `ATLAS=${ATLAS:-$HOME/Projects/project100/protos/project-atlas}`:
+  `npm --prefix "$ATLAS" run -s atlas -- check "$PWD" --intent "$PWD/atlas"`. Exit 1 = a new
+  error violation; DANGLING does not fail it but must be fixed. It runs `cargo doc`, a build;
+  when builds are off-limits,
+  `npx --prefix "$ATLAS" tsx "$ATLAS/packages/engine-intent/src/cli.ts" atlas crates clients`
+  checks syntax only.
 
 ## Commands
 
