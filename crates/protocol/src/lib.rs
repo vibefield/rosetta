@@ -13,6 +13,12 @@
 //! Pagination follows the exact-watermark rule: a cursor binds the session
 //! watermark at first page; on mismatch the server answers
 //! [`ErrorCode::CursorExpired`] — match or expired, never a silent rebase.
+//!
+//! @atlas layer wire-types · domain api
+//! @atlas rule thin-protocol "protocol depends on almost nothing" {
+//!   only this -> crate:rosetta-core
+//!   see "docs/ARCHITECTURE.md#8-workspace-layout"
+//! }
 
 use serde::{Deserialize, Serialize};
 

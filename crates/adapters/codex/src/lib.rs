@@ -12,6 +12,8 @@
 //! * The workspace carries no date crate and `rosetta-core` exposes no
 //!   timestamp parser, so RFC 3339 → `Ms` lives in [`time`]. Every agent will
 //!   need it; it belongs in `core`.
+//!
+//! @atlas layer agents · domain normalize
 
 pub mod adapter;
 mod exec_program;

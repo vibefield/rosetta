@@ -1,0 +1,80 @@
+// Runtime units and how they talk. A link with `via` is a runtime claim: asserted, its `at` anchors must
+// resolve and each `witness` literal must occur in them. A link without `via` is graded against code edges.
+
+component daemon "rosettad serve" kind daemon {
+  intent "One process: the sole synchronous canonical writer thread, a tokio/axum edge, the search worker."
+  contains crate:rosettad
+  see "docs/ARCHITECTURE.md#51-transport-decision-one-daemon-localhost-httpws"
+}
+component protocol-rs "rosetta-protocol (Rust wire types)" kind library { contains crate:rosetta-protocol }
+component sdk "@vibefield/rosetta-protocol" kind library { contains pkg:@vibefield/rosetta-protocol }
+component room-ui "@vibefield/rosetta-room" kind ui-library {
+  contains pkg:@vibefield/rosetta-room
+  see "clients/room/README.md#vibefieldrosetta-room"
+}
+component app "Agent History (Electron)" kind desktop-app {
+  contains pkg:@vibefield/rosetta-agent-history
+  component app-main "Electron main" kind process {
+    contains file:clients/app/electron/main.mjs, file:clients/app/electron/daemon-service.mjs
+  }
+  component preload "Preload bridge" kind bridge { contains file:clients/app/electron/preload.cjs }
+  component renderer "Renderer (React 19)" kind ui-process { contains path:clients/app/renderer/ }
+  component fx-host "Worktree host (mille + git)" kind utility-process {
+    contains file:clients/app/electron/fx-host.mjs, file:clients/app/electron/git-service.mjs
+  }
+}
+component gt-tools "Ground-truth pipeline" kind dev-cli { contains path:tools/groundtruth/ }
+component ingest-bench "Cold-ingest profiler + DB inspector" kind dev-tool { contains path:tools/ingest-bench/ }
+component agent-clis "Agent CLIs (~/.claude, ~/.codex, …)" external
+component supervisor "Supervisors (VibeField fieldd, chopsticks)" external
+
+agent-clis -> daemon "JSONL appends, rewrites, SQLite DBs" via fs {
+  at mod:rosetta_capture::watch
+  witness "recommended_watcher"
+}
+app-main -> daemon "serve --json --announce; version-checked; SIGINT, then SIGKILL" via spawn {
+  at file:clients/app/electron/daemon-service.mjs
+  witness "--announce"
+  witness "PROTOCOL_VERSION"
+}
+sdk -> daemon "REST /api/*; the version header is checked first" via http {
+  at sym:clients/ts/client.ts#RosettaClient, mod:rosetta_server::http
+  witness "/api/search"
+  witness "x-rosetta-protocol-version"
+}
+sdk -> daemon "WS /ws/sessions, /ws/meta, /ws/collaboration" via ws {
+  at sym:clients/ts/client.ts#RosettaClient, mod:rosetta_server::http
+  witness "/ws/meta"
+}
+renderer -> app-main "contextBridge: daemon state, git facts, previews" via ipc {
+  at file:clients/app/electron/preload.cjs, file:clients/app/renderer/src/host/desktop-bridge.ts
+  witness "agentHistoryHost"
+}
+renderer -> fx-host "transferred MessagePorts: worktree tree + git streams" via port {
+  at file:clients/app/renderer/src/host/worktree-ports.ts
+  witness "ah-worktree-ports"
+}
+daemon -> supervisor "announce file: origin, pid, protocol version" via fs {
+  at mod:rosettad::announce
+  witness "rosetta-daemon/1"
+}
+supervisor -> daemon "--enroll file: authoritative consent" via fs {
+  at mod:rosettad::enroll
+  witness "enabled_kinds"
+}
+sdk -> protocol-rs "clients/ts/generated/ comes from ts-rs; never hand-written" via codegen {
+  at file:crates/protocol/src/lib.rs
+  witness "ts_rs::TS"
+}
+gt-tools -> daemon "groundtruth.json compiled into every adapter" via embed {
+  at path:crates/adapters/*/src/spec.rs
+  witness "groundtruth.json"
+}
+ingest-bench -> daemon "reads the projection SQLite directly (sanctioned escape hatch)" via fs {
+  at file:tools/ingest-bench/src/lib/database.js
+  witness "node:sqlite"
+}
+
+renderer -> room-ui "hosts HistoryRoom and hands it every port"
+renderer -> sdk "the reference host builds the room's ports over RosettaClient"
+room-ui -> sdk "wire types only; the room dials nothing"

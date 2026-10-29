@@ -3,6 +3,8 @@
 //! Ground-truth document construction is intentionally implemented by the
 //! Python tooling under `tools/groundtruth`; this crate contains only the
 //! pieces that production Rust parsers need.
+//!
+//! @atlas layer adapter-kit · domain normalize
 
 pub mod adapter;
 mod glob;

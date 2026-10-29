@@ -15,6 +15,10 @@ use crate::timeline::{
     ToolUpdatePatch, TruncationScope, WorkflowJournalObservation, WorkflowRun,
 };
 
+// @atlas contract ingest-op "IngestOp: where agent weirdness ends" {
+//   produced-by $agents, crate:rosetta-pipeline each-variant
+//   used-by crate:rosetta-store
+// }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum IngestOp {

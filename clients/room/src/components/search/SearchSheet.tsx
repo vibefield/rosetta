@@ -211,6 +211,7 @@ const GRAMMAR_HINT = (
   </>
 );
 
+// @atlas step search-query.sheet
 export function SearchSheet({
   open,
   onClose,

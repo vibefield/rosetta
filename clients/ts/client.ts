@@ -527,6 +527,7 @@ export class RosettaClient {
     return new Uint8Array(await response.arrayBuffer());
   }
 
+  // @atlas step search-query.client
   search(request: SearchRequest, signal?: AbortSignal): Promise<SearchResponse> {
     return this.request(
       `/api/search${queryString({

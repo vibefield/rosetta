@@ -1,0 +1,21 @@
+atlas 1
+
+// Rosetta's design intent: what the code cannot say about itself, graded against the code by Project Atlas.
+// Crate roots and a few seams carry their own `@atlas` lines (`grep -rn '@atlas' crates clients`).
+// Duties and the one command: CLAUDE.md "Atlas"; the authoring guide is the `atlas` skill.
+
+system rosetta "Rosetta" {
+  intent "Multi-agent ingestion engine: ledger every raw record coding agents write, serve one canonical projection over localhost HTTP/WS."
+  thesis """
+    Three jobs, in consumer priority: search, observe, monitor.
+    L1 ground truth → L2 runtime → L3 services: data flows up, dependencies point down.
+    All knowledge of one agent lives in its pair: groundtruth/<agent> and crates/adapters/<agent>.
+    Two data representations only: an append-only raw ledger and one disposable projection, rebuilt, never migrated.
+    Parsers exist once, in Rust; consumers get generated types and dial the daemon, never the store.
+    """
+  see "CLAUDE.md#iron-rules-each-one-is-a-spaghetti-failure-mode--do-not-relitigate"
+  see "docs/ARCHITECTURE.md#rosetta-architecture"
+}
+
+// The adapter glob also matches rosetta-adapter-support; the agents are the other 9.
+let $agents = crate:rosetta-adapter-*, !crate:rosetta-adapter-support

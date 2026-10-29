@@ -292,6 +292,7 @@ impl Ledger {
         Ok(())
     }
 
+    // @atlas step live.ledger
     /// Owned variant for cold pipelines that can move framed payloads out of
     /// their tail batch. Small records share a bounded frame so checksumming
     /// and compression writes are amortized. Large records retain the direct

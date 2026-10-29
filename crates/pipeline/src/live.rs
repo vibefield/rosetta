@@ -334,6 +334,7 @@ impl<'a> LiveRunner<'a> {
             .map(|_| ())
     }
 
+    // @atlas step live.map
     /// Drain ready hints and run due recovery work without waiting on this
     /// runtime. A shared writer waits once on `rosetta_capture::SourceWake`
     /// between passes, and publishes committed effects after each runner.

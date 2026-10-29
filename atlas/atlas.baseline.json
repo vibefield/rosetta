@@ -1,0 +1,26 @@
+{
+ "schema": "atlas.baseline/1",
+ "violations": [
+  "claim:contract:ingest-op/contract/857de262",
+  "claim:decision:dependency-rule/decision/e8d6f51b",
+  "rule:module-size|clients/room/src/lib/transcript/families.ts",
+  "rule:module-size|clients/ts/client.ts",
+  "rule:module-size|crates/adapters/claude-code/src/normalize.rs",
+  "rule:module-size|crates/adapters/codex/src/normalize.rs",
+  "rule:module-size|crates/adapters/copilot/src/normalize.rs",
+  "rule:module-size|crates/adapters/grok/src/normalize.rs",
+  "rule:module-size|crates/core/src/timeline.rs",
+  "rule:module-size|crates/pipeline/src/meta.rs",
+  "rule:module-size|crates/pipeline/src/replay.rs",
+  "rule:module-size|crates/rosettad/src/main.rs",
+  "rule:module-size|crates/rosettad/src/serve.rs",
+  "rule:module-size|crates/server/src/http.rs",
+  "rule:module-size|crates/store/src/apply.rs",
+  "rule:module-size|crates/store/src/queries.rs",
+  "rule:server-deps|pkg:cargo/rosetta-server|pkg:cargo/rosetta-media",
+  "rule:server-deps|pkg:cargo/rosetta-server|pkg:cargo/rosetta-pricing",
+  "rule:server-deps|pkg:cargo/rosetta-server|pkg:cargo/rosetta-search",
+  "rule:thin-protocol|pkg:cargo/rosetta-protocol|pkg:cargo/rosetta-search",
+  "rule:thin-protocol|pkg:cargo/rosetta-protocol|pkg:cargo/rosetta-store"
+ ]
+}

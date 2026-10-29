@@ -6,6 +6,8 @@
 //! every run verifies them before and after, opens SQLite read-only, and emits
 //! only timings, counts, labels, and digests. Query text, snippets, and row ids
 //! never enter the report.
+//!
+//! @atlas layer tooling · domain perf · touches search
 
 mod compare;
 mod fingerprint;
