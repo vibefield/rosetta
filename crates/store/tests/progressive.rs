@@ -75,6 +75,97 @@ fn message_op(row: MessageRow) -> IngestOp {
 }
 
 #[test]
+fn retirement_keeps_published_history_and_a_new_source_write_restores_the_completion_gate() {
+    for bulk in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = if bulk {
+            Store::open_in_memory_for_rebuild().unwrap()
+        } else {
+            Store::open_progressive(&temp.path().join("projection.db")).unwrap()
+        };
+        let finish = |store: &mut Store| {
+            if bulk {
+                store.finish_bulk_load()
+            } else {
+                store.finish_progressive_load()
+            }
+        };
+        store
+            .apply(&Batch {
+                ops: vec![
+                    IngestOp::Runtime(runtime()),
+                    IngestOp::SessionMeta(session(StreamState::Streaming)),
+                ],
+                checkpoints: vec![CheckpointUpdate {
+                    runtime_id: "rt".into(),
+                    stream: "transcript".into(),
+                    path: "session.jsonl".into(),
+                    session_id: Some("s".into()),
+                    expected: None,
+                    next: "opaque".into(),
+                    updated_at: None,
+                }],
+                source: None,
+            })
+            .unwrap();
+        let cursor = queries::cursor_state(store.conn(), "rt", "session.jsonl")
+            .unwrap()
+            .unwrap()
+            .id;
+        store
+            .apply(&Batch {
+                ops: vec![message_op(message("retained history"))],
+                checkpoints: vec![],
+                source: Some(SourceWrite {
+                    cursor_id: cursor,
+                    session_id: "s".into(),
+                    generation: 1,
+                    first_sequence: 0,
+                    mode: SourceMode::Activate,
+                }),
+            })
+            .unwrap();
+        let staged = |generation| Batch {
+            ops: vec![],
+            checkpoints: vec![],
+            source: Some(SourceWrite {
+                cursor_id: cursor,
+                session_id: "s".into(),
+                generation,
+                first_sequence: 0,
+                mode: SourceMode::Stage,
+            }),
+        };
+        store.apply(&staged(2)).unwrap();
+        assert!(finish(&mut store).is_err());
+        store.retire_source(cursor);
+        store.apply(&staged(3)).unwrap();
+        assert!(
+            finish(&mut store).is_err(),
+            "resumed capture must finish its new generation"
+        );
+        store.retire_source(cursor);
+        let before = queries::cursor_state(store.conn(), "rt", "session.jsonl").unwrap();
+        finish(&mut store).unwrap();
+        assert_eq!(
+            queries::cursor_state(store.conn(), "rt", "session.jsonl").unwrap(),
+            before
+        );
+        assert_eq!(
+            queries::timeline_page(store.conn(), "s", None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            queries::projection_state(store.conn())
+                .unwrap()
+                .canonical_ready
+        );
+    }
+}
+
+#[test]
 fn interrupted_progressive_projection_is_public_resumable_and_not_ready() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("projection.sqlite");

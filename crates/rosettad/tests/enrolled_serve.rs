@@ -919,3 +919,6 @@ fn a_bad_enrollment_entry_refuses_startup_before_binding() {
     assert!(!stdout.contains("\"event\":\"ready\""), "{stdout}");
     assert!(!bench.db.exists());
 }
+
+#[path = "enrolled_serve/exclusions.rs"]
+mod exclusions;

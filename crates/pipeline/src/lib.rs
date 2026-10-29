@@ -24,6 +24,7 @@ pub mod command;
 pub mod discover;
 mod document;
 pub mod early;
+mod exclusions;
 pub mod instrument;
 pub mod live;
 pub mod meta;
@@ -48,6 +49,7 @@ pub use discover::{
     CensusRoot, Discovery, discover, discover_root, discover_roots, expand_data_root,
 };
 pub use early::{EarlyToolReport, PreparedAdmission, StreamedPreparer};
+pub use exclusions::{CwdExclusions, reserve_retired_generation};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
 pub use live::{
     HintMapping, LiveOptions, LiveReport, LiveRunner, PollEvidence, map_hint, stream_live,
@@ -152,6 +154,9 @@ impl SliceBudget {
 /// attribute cost to a knob.
 #[derive(Debug, Clone)]
 pub struct IngestOptions {
+    /// Start-time folder policy, applied before metadata or source capture.
+    /// Existing history is retained; removing a rule allows capture to resume.
+    pub exclude_cwds: CwdExclusions,
     /// Skim windows — the meta-phase promise is enforced by these bounds.
     pub skim_head_bytes: usize,
     pub skim_tail_bytes: usize,
@@ -220,6 +225,7 @@ impl IngestOptions {
 impl Default for IngestOptions {
     fn default() -> Self {
         Self {
+            exclude_cwds: CwdExclusions::default(),
             skim_head_bytes: 64 * 1024,
             skim_tail_bytes: 16 * 1024,
             skim_fallback_bytes: 128 * 1024,

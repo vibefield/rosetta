@@ -17,7 +17,7 @@
 //! document/database are coalesced when popped, preserving the snapshot
 //! driver's one-copy-per-physical-source contract.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::meta::SessionFile;
 
@@ -77,6 +77,19 @@ pub struct ColdSchedule {
 }
 
 impl ColdSchedule {
+    /// Later bounded metadata can prove a queued session belongs to an
+    /// excluded folder. Retire every lane before another source is captured.
+    pub fn retire_sessions(&mut self, sessions: &BTreeSet<String>) {
+        self.live
+            .retain(|(_, file)| !sessions.contains(&file.session_id));
+        self.boost
+            .retain(|(_, file)| !sessions.contains(&file.session_id));
+        for queue in self.starter.iter_mut().chain(&mut self.completion) {
+            queue.retain(|file| !sessions.contains(&file.session_id));
+        }
+        self.sessions.retain(|id, _| !sessions.contains(id));
+    }
+
     pub fn new(rosters: impl IntoIterator<Item = Vec<SessionFile>>) -> Self {
         let starter: Vec<VecDeque<SessionFile>> = rosters
             .into_iter()
@@ -393,6 +406,29 @@ mod tests {
         std::iter::from_fn(|| schedule.pop())
             .map(|(lane, runtime, file)| (lane, runtime, file.session_id))
             .collect()
+    }
+
+    #[test]
+    fn retirement_removes_tasks_from_every_lane_and_readiness_count() {
+        let mut schedule = ColdSchedule::new(vec![vec![
+            file("starter"),
+            file("boost"),
+            file("live"),
+            file("allowed"),
+        ]]);
+        schedule.promote(["boost".into()]);
+        schedule.nominate_live(0, file("live"));
+        schedule.requeue(0, file("completion"));
+        let retired = ["starter", "boost", "live", "completion"]
+            .map(str::to_owned)
+            .into();
+        schedule.retire_sessions(&retired);
+        for id in retired {
+            assert!(!schedule.session_pending(&id));
+        }
+        let remaining = drain(&mut schedule);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].2, "allowed");
     }
 
     #[test]

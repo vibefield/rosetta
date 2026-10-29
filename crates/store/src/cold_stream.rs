@@ -219,6 +219,9 @@ impl Store {
         }
         let commit_started = Instant::now();
         tx.commit()?;
+        for cursor_id in cursor_ids {
+            self.retired_sources.remove(&cursor_id);
+        }
         totals.sqlite_commit_nanos = totals
             .sqlite_commit_nanos
             .saturating_add(elapsed_nanos(commit_started));

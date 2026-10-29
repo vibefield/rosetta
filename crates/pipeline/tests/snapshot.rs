@@ -195,6 +195,148 @@ fn harness() -> Harness {
 }
 
 #[test]
+fn excluded_members_of_one_database_are_not_captured_or_rewritten() {
+    let mut h = harness();
+    let ledger_dir = h._home.path().join("ledger");
+    let mut ledger = Ledger::open(&ledger_dir).unwrap();
+    h.opts.exclude_cwds = rosetta_pipeline::CwdExclusions::new(["/w/beta".into()]).unwrap();
+    let (meta, files) = meta_ingest_into(
+        &FakeDbAgent,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    assert_eq!(meta.sessions, 1);
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].native_session_id, "sess-a");
+    stream_backfill_into(
+        &FakeDbAgent,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    ledger.flush().unwrap();
+    assert!(
+        queries::search(h.store.conn(), "xolotl", 5)
+            .unwrap()
+            .is_empty()
+    );
+    for entry in rosetta_capture::scan_ledger(&ledger_dir).unwrap().entries {
+        if let rosetta_capture::LedgerEntry::Raw { source, .. } = entry {
+            assert_eq!(source.native_session_id, "sess-a");
+        }
+    }
+    // Retire the already indexed member while the same physical database
+    // continues to admit and update other sessions.
+    h.opts.exclude_cwds = rosetta_pipeline::CwdExclusions::new(["/w/alpha".into()]).unwrap();
+    let before =
+        queries::session(h.store.conn(), &ids::session_id(&h.runtime.id, "sess-a")).unwrap();
+    let conn = rusqlite::Connection::open(&h.db).unwrap();
+    conn.execute_batch("UPDATE messages SET body='excludedreplacement' WHERE session='sess-a'; UPDATE sessions SET title='Excluded new title' WHERE id='sess-a';").unwrap();
+    drop(conn);
+    let (_, files) = meta_ingest_into(
+        &FakeDbAgent,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].native_session_id, "sess-b");
+    stream_backfill_into(
+        &FakeDbAgent,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    assert_eq!(
+        queries::session(h.store.conn(), &ids::session_id(&h.runtime.id, "sess-a")).unwrap(),
+        before
+    );
+    assert_eq!(
+        queries::search(h.store.conn(), "xolotl", 5).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        queries::search(h.store.conn(), "ometeotl", 5)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        queries::search(h.store.conn(), "excludedreplacement", 5)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_retired_snapshot_generation_is_not_reused_when_capture_resumes() {
+    let mut h = harness();
+    let (_, files) = meta_ingest_into(
+        &FakeDbAgent,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    let file = &files[0];
+    let source = rosetta_capture::SourceDef {
+        ledger_only: file.ledger_only,
+        relative_path: file.relative_path.clone(),
+        stream_id: file.stream_id.clone(),
+        session_id: file.session_id.clone(),
+        native_session_id: file.native_session_id.clone(),
+        agent_version: file.agent_version.clone(),
+    };
+    rosetta_pipeline::reserve_retired_generation(
+        &FakeDbAgent,
+        &h.runtime,
+        &mut h.store,
+        &source,
+        7,
+        &h.instrument,
+    )
+    .unwrap();
+    stream_backfill_into(
+        &FakeDbAgent,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    let cursor = queries::cursor_state(h.store.conn(), &h.runtime.id, &file.relative_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(cursor.active_generation, 8);
+    assert_eq!(cursor.highest_generation, 8);
+}
+
+#[test]
 fn database_sessions_flow_end_to_end() {
     let adapter = &FakeDbAgent;
     let mut h = harness();

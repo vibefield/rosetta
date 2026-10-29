@@ -265,13 +265,13 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         .unwrap_or_else(|| DEFAULT_ADDR.to_string())
         .parse()
         .map_err(|error| format!("bad --addr: {error}"))?;
-    let opts = IngestOptions::default();
     let live = LiveOptions::default();
     let instrument = Arc::new(Instrument::new());
     let adapters = selected(&flags)?;
     // The supervisor's file is validated before anything binds or reads: a
     // bad entry is a startup refusal the supervisor sees at once.
     let enrollment = load_enrollment(&flags)?;
+    let opts = Enrollment::ingest_options(enrollment.as_ref());
     // So are the access policy's secret files (docs/AUTH.md). Read once:
     // the supervisor may delete them after the ready event.
     let auth = Arc::new(crate::auth_files::load_policy(&flags)?);
@@ -1206,6 +1206,26 @@ fn run_resumed_fresh_serve(
         )
         .map_err(|error| format!("{name} resume metadata: {error}"))?;
         for (path, (generation, source)) in &unsealed {
+            if meta.excluded_sessions.contains(&source.session_id)
+                || cold_opts
+                    .exclude_cwds
+                    .excludes_session(&store, &source.session_id)
+                    .map_err(|error| error.to_string())?
+            {
+                // Retire unfinished capture as well as ordinary roster work.
+                // Its raw prefix stays unsealed: never certify a complete
+                // generation or reread a source the user has excluded.
+                rosetta_pipeline::reserve_retired_generation(
+                    adapter,
+                    &runtime,
+                    &mut store,
+                    source,
+                    *generation,
+                    instrument,
+                )
+                .map_err(|error| format!("retiring {path} generation: {error}"))?;
+                continue;
+            }
             let file = roster
                 .iter()
                 .find(|file| file.relative_path == *path)

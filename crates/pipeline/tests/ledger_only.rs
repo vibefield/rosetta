@@ -240,6 +240,48 @@ fn options() -> IngestOptions {
 }
 
 #[test]
+fn folder_exclusions_stop_even_internal_session_raw_capture() {
+    let f = fixture(false);
+    let mut opts = options();
+    opts.exclude_cwds = rosetta_pipeline::CwdExclusions::new(["/fixture/project".into()]).unwrap();
+    let instrument = Instrument::new();
+    let mut store = Store::open_in_memory().unwrap();
+    let mut ledger = Ledger::open(&f.ledger_dir).unwrap();
+    let (meta, files) = meta_ingest_into(
+        &CodexAdapter,
+        &f.runtime,
+        &f.root,
+        &mut store,
+        &opts,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    assert!(files.is_empty());
+    assert_eq!(meta.sessions, 0);
+    stream_backfill_into(
+        &CodexAdapter,
+        &f.runtime,
+        &f.root,
+        &mut store,
+        &files,
+        &opts,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    ledger.flush().unwrap();
+    assert!(
+        scan_ledger(&f.ledger_dir)
+            .unwrap()
+            .entries
+            .iter()
+            .all(|entry| !matches!(entry, LedgerEntry::Raw { .. }))
+    );
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM ingest_cursor"), 0);
+}
+
+#[test]
 fn fresh_ingest_resume_and_ledger_replay_keep_only_user_facing_sessions() {
     let f = fixture(true);
     let opts = options();

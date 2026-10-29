@@ -430,7 +430,10 @@ impl<'a> LiveRunner<'a> {
         audit: bool,
         instrument: &Instrument,
     ) -> Result<(), PipelineError> {
-        if needs_admission {
+        // A rewrite or a newly completed metadata record can reveal the cwd
+        // of an already-known source. Recheck before capturing that movement
+        // when the supervisor has a folder policy.
+        if needs_admission || (!self.opts.exclude_cwds.is_empty() && !changed.is_empty()) {
             instrument.time(Metric::LiveAdmitNanos, || {
                 self.admit(store, &mut changed, instrument)
             })?;
@@ -474,6 +477,17 @@ impl<'a> LiveRunner<'a> {
                 .filter(|file| picks.contains(&file.relative_path))
                 .cloned()
                 .collect();
+            let (audit_subset, excluded) = crate::meta::filter_audit_sources(
+                self.adapter,
+                &self.runtime,
+                &self.root,
+                store,
+                audit_subset,
+                &self.opts,
+                instrument,
+            )?;
+            self.files
+                .retain(|file| !excluded.contains(&file.session_id));
             if !audit_subset.is_empty() {
                 let opts = self.opts.clone();
                 self.stream(store, &audit_subset, &opts, instrument)?;

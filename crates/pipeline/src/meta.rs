@@ -18,6 +18,10 @@ use rosetta_store::{ApplyStats, Batch, Store};
 use crate::instrument::{Instrument, Metric};
 use crate::{IngestOptions, PipelineError};
 
+mod exclusions;
+use exclusions::CwdAdmission;
+pub(crate) use exclusions::filter_audit_sources;
+
 /// One source file the stream phase will tail, with the ids minted here.
 #[derive(Debug, Clone)]
 pub struct SessionFile {
@@ -65,6 +69,9 @@ pub struct MetaReport {
     pub walk_truncated: bool,
     pub sessions: usize,
     pub projects: usize,
+    /// Sessions withheld by folder policy, including dependent children.
+    /// Recovery uses these identities to retire interrupted source captures.
+    pub excluded_sessions: BTreeSet<String>,
     pub stats: ApplyStats,
 }
 
@@ -77,7 +84,9 @@ struct MetaOutput {
     session_positions: HashMap<String, usize>,
     project_hints: BTreeMap<String, BTreeSet<ProjectHint>>,
     files: Vec<SessionFile>,
-    ops: Vec<IngestOp>,
+    /// Keep skim ops attached to their source session until policy settles.
+    ops: Vec<(Option<String>, IngestOp)>,
+    admission: CwdAdmission,
 }
 
 pub fn meta_ingest(
@@ -194,6 +203,12 @@ pub fn meta_ingest_inventory_into(
         },
     )?;
     instrument.add(Metric::BatchesApplied, 1);
+    exclusions::retire_interrupted_sources(
+        &runtime.id,
+        store,
+        &opts.exclude_cwds,
+        &report.excluded_sessions,
+    )?;
     Ok((report, files))
 }
 
@@ -265,7 +280,10 @@ pub(crate) fn plan_inventory(
     let layout = adapter.layout();
 
     let mut report = MetaReport::default();
-    let mut output = MetaOutput::default();
+    let mut output = MetaOutput {
+        admission: CwdAdmission::new(opts.exclude_cwds.clone()),
+        ..MetaOutput::default()
+    };
     report.walk_truncated = walk_truncated;
 
     let entries: Vec<Entry<'_>> = inventory
@@ -413,6 +431,7 @@ pub(crate) fn plan_inventory(
     // Session ownership is a metadata decision. Resolve child inheritance and
     // local repository identity exactly once before any transcript is streamed;
     // the resulting SessionRow + ProjectRow facts are then journaled together.
+    report.excluded_sessions = std::mem::take(&mut output.admission).filter(&mut output, store)?;
     settle_projects(&mut output);
 
     // A re-skim must never regress ingest progress: a session the stream
@@ -428,6 +447,11 @@ pub(crate) fn plan_inventory(
 
     report.sessions = output.sessions.len();
     report.projects = output.projects.len();
+    if !opts.exclude_cwds.is_empty() {
+        // Policy settles after every sibling and ancestor has contributed.
+        // Never advertise candidates that will be withheld as discovered.
+        instrument.add(Metric::SessionsDiscovered, report.sessions as u64);
+    }
     instrument.add(Metric::FilesMatched, report.files_matched as u64);
 
     // FK order: runtime → projects → sessions, one transaction.
@@ -456,7 +480,7 @@ pub(crate) fn plan_inventory(
     ops.push(IngestOp::Runtime(runtime.clone()));
     ops.extend(projects.into_iter().map(IngestOp::Project));
     ops.extend(sessions.into_iter().map(IngestOp::SessionMeta));
-    ops.extend(meta_ops);
+    ops.extend(meta_ops.into_iter().map(|(_, op)| op));
 
     // Newest sessions stream first.
     files.sort_by_key(|file| std::cmp::Reverse(file.modified_ms));
@@ -791,6 +815,7 @@ fn admit_identified(
 ) {
     let sessions_before = output.sessions.len();
     let session_id = ids::session_id(&runtime.id, &native_session_id);
+    output.admission.observe(&runtime.id, &session_id, &skim);
 
     if skim.ledger_only {
         output.files.push(SessionFile {
@@ -810,6 +835,12 @@ fn admit_identified(
         return;
     }
 
+    output.ops.extend(
+        std::mem::take(&mut skim.ops)
+            .into_iter()
+            .map(|op| (Some(session_id.clone()), op)),
+    );
+
     if let Some(project) = skim
         .project
         .take()
@@ -823,15 +854,18 @@ fn admit_identified(
     }
 
     if let Some(title) = skim.title.take() {
-        output.ops.push(IngestOp::SessionTitle(SessionTitleRow {
-            session_id: session_id.clone(),
-            title,
-            kind: skim.title_kind.take().unwrap_or(TitleKind::Explicit),
-            at: skim
-                .updated_at
-                .or(skim.started_at)
-                .unwrap_or(source.modified_ms),
-        }));
+        output.ops.push((
+            Some(session_id.clone()),
+            IngestOp::SessionTitle(SessionTitleRow {
+                session_id: session_id.clone(),
+                title,
+                kind: skim.title_kind.take().unwrap_or(TitleKind::Explicit),
+                at: skim
+                    .updated_at
+                    .or(skim.started_at)
+                    .unwrap_or(source.modified_ms),
+            }),
+        ));
     }
 
     let cwd = skim.cwd.take().map(|cwd| ids::normalize_root(&cwd));
@@ -941,10 +975,12 @@ fn admit_identified(
         agent_version: skim.agent_version,
         source_missing: false,
     });
-    instrument.add(
-        Metric::SessionsDiscovered,
-        (output.sessions.len() - sessions_before) as u64,
-    );
+    if output.admission.is_empty() {
+        instrument.add(
+            Metric::SessionsDiscovered,
+            (output.sessions.len() - sessions_before) as u64,
+        );
+    }
 }
 
 fn canonical_project_hint(runtime_id: &str, hint: ProjectHint) -> Option<ProjectHint> {
@@ -976,10 +1012,17 @@ fn admit_skim(
     member: bool,
     instrument: &Instrument,
 ) {
-    if !skim.ledger_only {
-        output.ops.extend(std::mem::take(&mut skim.ops));
-    }
     let Some(native_session_id) = skim.session_id.clone() else {
+        if output.admission.excludes_cwd(skim.cwd.as_deref()) {
+            return;
+        }
+        if !skim.ledger_only {
+            output.ops.extend(
+                std::mem::take(&mut skim.ops)
+                    .into_iter()
+                    .map(|op| (None, op)),
+            );
+        }
         report.files_unidentified += 1;
         instrument.add(Metric::FilesUnidentified, 1);
         return;
@@ -1053,6 +1096,9 @@ fn admit_database(
         })?;
         let skim = adapter.snapshot_session(&stream.id, &value);
         let Some(native) = skim.session_id.clone() else {
+            if output.admission.excludes_cwd(skim.cwd.as_deref()) {
+                continue;
+            }
             report.files_unidentified += 1;
             instrument.add(Metric::FilesUnidentified, 1);
             continue;

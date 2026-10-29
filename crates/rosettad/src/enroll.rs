@@ -32,7 +32,8 @@ use rosetta_adapter_support::AgentAdapter;
 use rosetta_core::ids;
 use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    CensusRoot, Discovery, IngestOptions, Instrument, discover_roots, expand_data_root,
+    CensusRoot, CwdExclusions, Discovery, IngestOptions, Instrument, discover_roots,
+    expand_data_root,
 };
 use rosetta_server::{DiscoveryRow, RuntimeIdentity, RuntimeProvenance};
 use serde::Deserialize;
@@ -56,6 +57,8 @@ struct EnrollmentFile {
     enabled_kinds: Vec<String>,
     #[serde(default)]
     runtimes: Vec<EnrolledRootSpec>,
+    #[serde(default)]
+    exclude_cwds: Vec<String>,
 }
 
 /// One validated enrolled root: a registered adapter over an existing
@@ -89,6 +92,8 @@ pub(crate) struct Enrollment {
     /// about at resolution time, never fatal.
     pub enabled_kinds: Vec<String>,
     pub runtimes: Vec<EnrolledRuntime>,
+    /// Global to discovered and enrolled runtimes; read again on restart.
+    pub exclude_cwds: CwdExclusions,
 }
 
 impl Enrollment {
@@ -122,6 +127,8 @@ impl Enrollment {
                 file.format
             ));
         }
+        let exclude_cwds = CwdExclusions::new(file.exclude_cwds)
+            .map_err(|error| format!("--enroll {}: {error}", path.display()))?;
         let mut runtimes: Vec<EnrolledRuntime> = Vec::with_capacity(file.runtimes.len());
         for (index, spec) in file.runtimes.iter().enumerate() {
             let entry = |message: String| {
@@ -211,7 +218,56 @@ impl Enrollment {
             path: path.to_path_buf(),
             enabled_kinds: file.enabled_kinds,
             runtimes,
+            exclude_cwds,
         })
+    }
+
+    pub fn ingest_options(enrollment: Option<&Self>) -> IngestOptions {
+        IngestOptions {
+            exclude_cwds: enrollment
+                .map(|file| file.exclude_cwds.clone())
+                .unwrap_or_default(),
+            ..IngestOptions::default()
+        }
+    }
+
+    /// Rebuild keeps retired history, but an excluded first generation may
+    /// have been interrupted before it ever sealed. Ignore only those proven
+    /// retired sources; every other incomplete archive remains an error.
+    pub fn validate_rebuild_sources(
+        policy: &CwdExclusions,
+        store: &mut rosetta_store::Store,
+        adapter: &dyn AgentAdapter,
+        runtime: &RuntimeRow,
+        report: &rosetta_pipeline::RebuildReport,
+        instrument: &Instrument,
+    ) -> Result<(), String> {
+        for (path, (generation, source)) in &report.unsealed_sources {
+            if policy
+                .excludes_session(store, &source.session_id)
+                .map_err(|error| error.to_string())?
+            {
+                rosetta_pipeline::reserve_retired_generation(
+                    adapter,
+                    runtime,
+                    store,
+                    source,
+                    *generation,
+                    instrument,
+                )
+                .map_err(|error| error.to_string())?;
+                continue;
+            }
+            let cursor = rosetta_store::queries::cursor_state(store.conn(), &runtime.id, path)
+                .map_err(|error| format!("reading rebuilt cursor: {error}"))?;
+            if cursor.is_some_and(|cursor| cursor.active_generation > 0) {
+                continue;
+            }
+            return Err(format!(
+                "ledger has raw records but no complete-generation marker for: {path}"
+            ));
+        }
+        Ok(())
     }
 
     /// The transport's decoration map: enrolled runtime id → label.

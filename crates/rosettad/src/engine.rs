@@ -394,6 +394,8 @@ impl ColdEngine {
                         // membership changes inside a known snapshot are
                         // recovered by the live runner's opening poll.
                         needs_admission |= mapping.needs_admission && mapping.nominated.is_empty();
+                        needs_admission |=
+                            !cx.opts.exclude_cwds.is_empty() && !mapping.nominated.is_empty();
                         for nominated in mapping.nominated {
                             if let Some(file) = entry
                                 .roster
@@ -408,7 +410,7 @@ impl ColdEngine {
                 }
             }
             if needs_admission {
-                let (_, fresh) = rosetta_pipeline::meta_ingest_into(
+                let (meta, fresh) = rosetta_pipeline::meta_ingest_into(
                     entry.adapter,
                     &entry.runtime,
                     &entry.root,
@@ -418,6 +420,14 @@ impl ColdEngine {
                     entry.ledger.as_mut(),
                 )
                 .map_err(|error| error.to_string())?;
+                self.schedule.retire_sessions(&meta.excluded_sessions);
+                for id in &meta.excluded_sessions {
+                    let project = self
+                        .plan
+                        .project_of(index, id)
+                        .and_then(|row| row.project_id.as_deref());
+                    self.board.session_done(project, id);
+                }
                 for file in &fresh {
                     if !entry
                         .roster
