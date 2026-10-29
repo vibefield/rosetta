@@ -4,9 +4,19 @@ import type { ProjectBackfill } from "./ProjectBackfill";
 import type { RuntimeBackfill } from "./RuntimeBackfill";
 
 /**
- * The ingest block on [`DaemonStatus`]: phase plus per-runtime meters.
+ * The ingest block on [`DaemonStatus`]: phase, first-pass boundary, and meters.
  */
 export type IngestProgress = { phase: IngestPhase, 
+/**
+ * Unix milliseconds when this process finished publishing the first
+ * bounded metadata pass for all active runtimes. Sessions and projects
+ * can be listed; transcript, aggregate, and search readiness are separate.
+ * Sticky through later phases and live work, even when streaming began
+ * before the last skim. A restart establishes a new stamp after its own
+ * metadata pass, including on warm starts. Null until that boundary;
+ * older daemons omit the field, which means the boundary is unknown.
+ */
+metadata_ready_at?: number | null, 
 /**
  * Installed runtimes in serve order.
  */

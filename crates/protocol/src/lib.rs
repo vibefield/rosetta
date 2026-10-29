@@ -81,10 +81,11 @@ pub struct DaemonStatus {
 
 /// Where the daemon's ingest is in its life. `AwaitingConsent` means the
 /// census is on the board and nothing has been read — the USER decides
-/// which runtimes enroll. `MetadataReady` is the exact phase boundary where
-/// every bounded skim has committed but no complete source record has been
-/// streamed. `Live` means the watch loop owns the store and the cold backfill
-/// is history.
+/// which runtimes enroll. `MetadataReady` is the audit phase after every
+/// bounded skim has committed, before complete-record streaming begins.
+/// Parallel cold starts may already be streaming at that boundary; use
+/// [`IngestProgress::metadata_ready_at`] to observe it in any phase. `Live`
+/// means the watch loop owns the store and the cold backfill is history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -112,11 +113,21 @@ pub enum BackfillState {
     Done,
 }
 
-/// The ingest block on [`DaemonStatus`]: phase plus per-runtime meters.
+/// The ingest block on [`DaemonStatus`]: phase, first-pass boundary, and meters.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct IngestProgress {
     pub phase: IngestPhase,
+    /// Unix milliseconds when this process finished publishing the first
+    /// bounded metadata pass for all active runtimes. Sessions and projects
+    /// can be listed; transcript, aggregate, and search readiness are separate.
+    /// Sticky through later phases and live work, even when streaming began
+    /// before the last skim. A restart establishes a new stamp after its own
+    /// metadata pass, including on warm starts. Null until that boundary;
+    /// older daemons omit the field, which means the boundary is unknown.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional = nullable, type = "number | null"))]
+    pub metadata_ready_at: Option<Ms>,
     /// Installed runtimes in serve order.
     pub runtimes: Vec<RuntimeBackfill>,
     /// The ProgressBoard's per-project fold, largest plans first. Empty

@@ -787,6 +787,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let wake = SourceWake::default();
     let mut backfills = Vec::new();
     let mut failures = Vec::new();
+    let mut metadata_complete = true;
     for target in &targets {
         if !target.installed() && !target.is_enrolled() {
             println!("{}: not installed, skipping", target.name());
@@ -797,6 +798,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             continue;
         }
         if stop.load(Ordering::SeqCst) {
+            metadata_complete = false;
             break;
         }
         let adapter = target.adapter;
@@ -843,7 +845,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // metadata batches are committed, while no complete source record has
     // entered the raw ledger or canonical message tables. Freeze the health
     // surface here even though the ordinary path immediately advances.
-    health.ingest_metadata_ready();
+    if metadata_complete && !backfills.is_empty() {
+        health.ingest_metadata_ready(now_ms());
+    }
     if flags.stop_after_meta {
         if backfills.is_empty() {
             return Err("nothing to serve: no enrolled runtimes".to_string());
@@ -1121,7 +1125,8 @@ fn run_resumed_fresh_serve(
     let status_board = board.clone();
     health.ingest_project_source(Arc::new(move || status_board.snapshot()));
 
-    for target in consented_targets(targets, consented) {
+    let mut remaining = consented_targets(targets, consented).peekable();
+    while let Some(target) = remaining.next() {
         let adapter = target.adapter;
         let name = target.name();
         handled.insert(target.id().to_string());
@@ -1231,6 +1236,9 @@ fn run_resumed_fresh_serve(
             .map_err(|error| format!("reserving {path} generation: {error}"))?;
         }
 
+        // Replayed and current metadata must reach the public mirror before
+        // the first-pass stamp; payload catch-up may still take a long time.
+        absorb_effects(&mut store, hub)?;
         health.ingest_skim_done(&runtime.id, meta.sessions as u64, meta.files_skimmed as u64);
         let ownership = queries::session_list(store.conn(), None, i64::MAX)
             .map_err(|error| format!("reading resumed progress ownership: {error}"))?
@@ -1246,6 +1254,9 @@ fn run_resumed_fresh_serve(
             health.clone(),
             false,
         ));
+        if remaining.peek().is_none() {
+            health.ingest_metadata_ready(now_ms());
+        }
         health.ingest_stream(
             &runtime.id,
             counter_source(instrument, instrument.snapshot()),
@@ -1590,6 +1601,7 @@ fn run_warm_live_serve(
 ) -> Result<(Store, u64), String> {
     let wake = SourceWake::default();
     let mut runners = Vec::new();
+    let mut metadata_complete = true;
     for target in consented_targets(targets, consented) {
         let adapter = target.adapter;
         let name = target.name();
@@ -1600,6 +1612,7 @@ fn run_warm_live_serve(
             continue;
         }
         if stop.load(Ordering::SeqCst) {
+            metadata_complete = false;
             break;
         }
 
@@ -1648,6 +1661,14 @@ fn run_warm_live_serve(
         runners.push((target.identity(), runner));
     }
 
+    // Warm starts already serve a complete projection, but the first current
+    // inventory pass has its own process-local boundary. Publish its metadata
+    // before recording it, without reopening a cold phase or a progress meter.
+    let metadata_absorbed = absorb_effects(&mut store, hub)? as u64;
+    if metadata_complete {
+        health.ingest_metadata_ready(now_ms());
+    }
+
     let absorbed = drive_live_runners(
         flags,
         &mut store,
@@ -1661,7 +1682,7 @@ fn run_warm_live_serve(
         search,
         stop,
     )?;
-    Ok((store, absorbed))
+    Ok((store, metadata_absorbed + absorbed))
 }
 
 // @atlas step live.tick

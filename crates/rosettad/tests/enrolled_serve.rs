@@ -264,6 +264,10 @@ impl Drop for ChildGuard {
 
 /// A long-running serve; the returned origin answers HTTP until the guard drops.
 fn spawn_serve(bench: &Bench) -> (ChildGuard, String) {
+    spawn_serve_with_flags(bench, &[])
+}
+
+fn spawn_serve_with_flags(bench: &Bench, extra: &[&str]) -> (ChildGuard, String) {
     let mut child = bench
         .command(
             "serve",
@@ -274,6 +278,7 @@ fn spawn_serve(bench: &Bench) -> (ChildGuard, String) {
                 "127.0.0.1:0",
             ],
         )
+        .args(extra)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
@@ -919,3 +924,6 @@ fn a_bad_enrollment_entry_refuses_startup_before_binding() {
     assert!(!stdout.contains("\"event\":\"ready\""), "{stdout}");
     assert!(!bench.db.exists());
 }
+
+#[path = "enrolled_serve/metadata_ready.rs"]
+mod metadata_ready;
