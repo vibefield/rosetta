@@ -445,6 +445,7 @@ fn exemplars() -> serde_json::Value {
             },
             ingest: IngestProgress {
                 phase: IngestPhase::Backfilling,
+                metadata_ready_at: None,
                 runtimes: vec![
                     RuntimeBackfill {
                         kind: "claude-code".into(),
@@ -828,4 +829,24 @@ fn typescript_protocol_version_matches() {
         include_str!("../../../clients/ts/protocol-version.mjs"),
         expected
     );
+}
+
+#[test]
+fn the_first_pass_stamp_is_additive_and_preserves_null_and_zero() {
+    let legacy = serde_json::json!({
+        "phase": "backfilling", "runtimes": [], "projects": [],
+    });
+    let mut ingest: IngestProgress = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(ingest.metadata_ready_at, None);
+    for stamp in [None, Some(0), Some(1_791_216_000_000)] {
+        ingest.metadata_ready_at = stamp;
+        let mut expected = legacy.clone();
+        expected["metadata_ready_at"] = serde_json::json!(stamp);
+        let wire = serde_json::to_value(&ingest).unwrap();
+        assert_eq!(wire, expected);
+        assert_eq!(
+            serde_json::from_value::<IngestProgress>(wire).unwrap(),
+            ingest
+        );
+    }
 }

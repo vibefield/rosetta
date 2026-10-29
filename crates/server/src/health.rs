@@ -69,6 +69,7 @@ struct BackfillEntry {
 
 struct IngestState {
     phase: IngestPhase,
+    metadata_ready_at: Option<Ms>,
     entries: Vec<BackfillEntry>,
     /// The ProgressBoard's latest per-project fold, pushed by the serve
     /// loop between passes. A view of RAM state — never authoritative.
@@ -117,6 +118,7 @@ impl DaemonHealth {
             runtimes: Mutex::new(BTreeMap::new()),
             ingest: Mutex::new(IngestState {
                 phase: IngestPhase::Discovering,
+                metadata_ready_at: None,
                 entries: Vec::new(),
                 projects: Vec::new(),
                 project_source: None,
@@ -172,18 +174,21 @@ impl DaemonHealth {
         }
     }
 
-    /// Every enrolled runtime has completed its bounded skim. This is a real
-    /// observable boundary even when the ordinary daemon immediately proceeds
-    /// to streaming; metadata-audit mode deliberately remains here. A fresh
-    /// cold start begins each runtime's capture as soon as its own metadata
-    /// is public, so by the last skim others may be streaming already: their
-    /// meters keep running and the phase stays `Backfilling`.
-    pub fn ingest_metadata_ready(&self) {
+    /// Call after every active runtime's bounded metadata is public. Record
+    /// that first boundary once, independently of the phase: a fresh start
+    /// may already be streaming, and a warm start stays live throughout its
+    /// inventory catch-up. Metadata-audit mode deliberately remains here.
+    /// Neither later phases nor repeated observations move the stamp.
+    pub fn ingest_metadata_ready(&self, now_ms: Ms) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
+        if ingest.metadata_ready_at.is_some() {
+            return;
+        }
+        ingest.metadata_ready_at = Some(now_ms);
         let skim_side = |entry: &BackfillEntry| {
             matches!(entry.state, BackfillState::Queued | BackfillState::Skimming)
         };
-        if ingest.entries.iter().all(skim_side) {
+        if ingest.phase == IngestPhase::Backfilling && ingest.entries.iter().all(skim_side) {
             ingest.phase = IngestPhase::MetadataReady;
         }
         for entry in ingest.entries.iter_mut().filter(|entry| skim_side(entry)) {
@@ -269,6 +274,7 @@ impl DaemonHealth {
         let ingest = self.ingest.lock().expect("ingest state poisoned");
         IngestProgress {
             phase: ingest.phase,
+            metadata_ready_at: ingest.metadata_ready_at,
             projects: ingest
                 .project_source
                 .as_ref()
@@ -420,6 +426,7 @@ mod tests {
             health.snapshot(&hub, 1_000).ingest.phase,
             IngestPhase::Discovering
         );
+        assert_eq!(health.snapshot(&hub, 1_000).ingest.metadata_ready_at, None);
 
         health.ingest_register(&identity("rt1"), 100, 1_000_000);
         let counter = Arc::new(AtomicU64::new(0));
@@ -448,9 +455,10 @@ mod tests {
         assert_eq!(ingest.runtimes[0].files_skimmed, 100);
         assert_eq!(ingest.runtimes[0].sessions_total, 250);
 
-        health.ingest_metadata_ready();
+        health.ingest_metadata_ready(2_600);
         let ingest = health.snapshot(&hub, 2_600).ingest;
         assert_eq!(ingest.phase, IngestPhase::MetadataReady);
+        assert_eq!(ingest.metadata_ready_at, Some(2_600));
         assert_eq!(ingest.runtimes[0].bytes_streamed, 0);
         assert_eq!(ingest.runtimes[0].records, 0);
 
@@ -465,6 +473,7 @@ mod tests {
         counter.store(600_000, Ordering::Relaxed);
         let ingest = health.snapshot(&hub, 3_000).ingest;
         assert_eq!(ingest.phase, IngestPhase::Backfilling);
+        assert_eq!(ingest.metadata_ready_at, Some(2_600));
         assert_eq!(ingest.runtimes[0].state, BackfillState::Streaming);
         assert_eq!(ingest.runtimes[0].runtime_id, "rt1");
         assert_eq!(ingest.runtimes[0].kind, "claude-code");
@@ -479,6 +488,7 @@ mod tests {
         counter.store(9, Ordering::Relaxed);
         let ingest = health.snapshot(&hub, 4_000).ingest;
         assert_eq!(ingest.phase, IngestPhase::Live);
+        assert_eq!(ingest.metadata_ready_at, Some(2_600));
         assert_eq!(ingest.runtimes[0].state, BackfillState::Done);
         assert_eq!(ingest.runtimes[0].bytes_streamed, 1_000_000);
         assert_eq!(ingest.runtimes[0].records, 5_000);
@@ -507,12 +517,14 @@ mod tests {
             }),
         );
         health.ingest_skim("late", Arc::new(IngestCounters::default));
+        assert_eq!(health.snapshot(&hub, 1_500).ingest.metadata_ready_at, None);
         health.ingest_skim_done("late", 4, 10);
-        health.ingest_metadata_ready();
+        health.ingest_metadata_ready(1_900);
 
         streamed.store(512, Ordering::Relaxed);
         let ingest = health.snapshot(&hub, 2_000).ingest;
         assert_eq!(ingest.phase, IngestPhase::Backfilling);
+        assert_eq!(ingest.metadata_ready_at, Some(1_900));
         assert_eq!(ingest.runtimes[0].state, BackfillState::Streaming);
         assert_eq!(
             ingest.runtimes[0].bytes_streamed, 512,
@@ -520,6 +532,63 @@ mod tests {
         );
         assert_eq!(ingest.runtimes[1].state, BackfillState::Queued);
         assert_eq!(ingest.runtimes[1].sessions_total, 4);
+    }
+
+    #[test]
+    fn first_pass_is_sticky_across_phases_but_resets_with_the_process() {
+        let hub = Hub::new(HubConfig::default(), 1);
+        let health = DaemonHealth::new(1_000);
+        health.ingest_await_consent();
+        assert_eq!(health.snapshot(&hub, 1_100).ingest.metadata_ready_at, None);
+        // A real, empty metadata pass still completes. Zero is a valid stamp.
+        health.ingest_register(&identity("empty"), 0, 0);
+        health.ingest_skim("empty", Arc::new(IngestCounters::default));
+        health.ingest_skim_done("empty", 0, 0);
+        health.ingest_metadata_ready(0);
+        assert_eq!(
+            health.snapshot(&hub, 1_200).ingest.metadata_ready_at,
+            Some(0)
+        );
+
+        for phase in [
+            IngestPhase::Backfilling,
+            IngestPhase::Restoring,
+            IngestPhase::Finalizing,
+            IngestPhase::Publishing,
+        ] {
+            health.ingest_phase(phase);
+            health.ingest_metadata_ready(2_000);
+            let ingest = health.snapshot(&hub, 3_000).ingest;
+            assert_eq!(ingest.phase, phase, "repeated calls never rewind work");
+            assert_eq!(ingest.metadata_ready_at, Some(0));
+        }
+        health.ingest_live();
+        health.ingest_metadata_ready(4_000);
+        let ingest = health.snapshot(&hub, 5_000).ingest;
+        assert_eq!(ingest.phase, IngestPhase::Live);
+        assert_eq!(ingest.metadata_ready_at, Some(0));
+        let restarted = DaemonHealth::new(6_000);
+        assert_eq!(
+            restarted.snapshot(&hub, 6_000).ingest.metadata_ready_at,
+            None
+        );
+    }
+
+    #[test]
+    fn a_warm_metadata_pass_records_the_boundary_without_leaving_live() {
+        let hub = Hub::new(HubConfig::default(), 1);
+        for empty in [false, true] {
+            let health = DaemonHealth::new(1_000);
+            health.ingest_live();
+            if !empty {
+                health.ingest_register(&identity("warm"), 10, 1_000);
+            }
+            assert_eq!(health.snapshot(&hub, 1_500).ingest.metadata_ready_at, None);
+            health.ingest_metadata_ready(2_000);
+            let ingest = health.snapshot(&hub, 2_500).ingest;
+            assert_eq!(ingest.phase, IngestPhase::Live);
+            assert_eq!(ingest.metadata_ready_at, Some(2_000));
+        }
     }
 
     #[test]

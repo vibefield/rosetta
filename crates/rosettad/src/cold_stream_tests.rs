@@ -204,6 +204,7 @@ fn metadata_goes_public_in_registry_order_and_every_runtime_is_admitted() {
         .health
         .snapshot(&Hub::new(HubConfig::default(), 0), 1)
         .ingest;
+    assert!(status.metadata_ready_at.is_some(), "{status:?}");
     assert!(
         status
             .runtimes
@@ -239,9 +240,19 @@ fn the_first_unplannable_runtime_in_registry_order_fails_the_start() {
         ),
     ];
 
-    let error = build(requests, false).result.unwrap_err();
+    let built = build(requests, false);
+    let error = built.result.unwrap_err();
     assert!(error.contains(&first), "{error}");
     assert!(!error.contains(&second), "{error}");
+    assert_eq!(
+        built
+            .health
+            .snapshot(&Hub::new(HubConfig::default(), 0), 1)
+            .ingest
+            .metadata_ready_at,
+        None,
+        "a failed metadata plan never completes the first pass"
+    );
 }
 
 #[test]
@@ -255,4 +266,13 @@ fn a_stop_before_metadata_captures_nothing() {
         "stopped before cold metadata completed"
     );
     assert!(column(&built.store, "SELECT id FROM session").is_empty());
+    assert_eq!(
+        built
+            .health
+            .snapshot(&Hub::new(HubConfig::default(), 0), 1)
+            .ingest
+            .metadata_ready_at,
+        None,
+        "an interrupted first pass has no completion stamp"
+    );
 }

@@ -1387,6 +1387,7 @@
         "subscribers": 2
       },
       "ingest": {
+        "metadata_ready_at": null,
         "phase": "backfilling",
         "projects": [
           {

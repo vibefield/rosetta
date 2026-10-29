@@ -19,7 +19,7 @@ export const endpoints = [
     id: 'status', group: 'Daemon', method: 'GET', path: '/api/status', title: 'Get daemon status',
     description: 'Inspect protocol compatibility, canonical publication, search readiness, and live ingestion progress in one read.',
     response: 'StatusResponse', sdk: 'await client.status()',
-    notes: ['The listener answers before cold ingestion finishes. A reachable daemon is not necessarily ready for every query.', 'canonical_ready and search.readiness are independent. Wait for canonical_ready before reading project aggregates; inspect search.readiness before treating an empty search as complete.', 'daemon is null when the projection is served without an ingestion loop.'],
+    notes: ['The listener answers before cold ingestion finishes. A reachable daemon is not necessarily ready for every query.', 'daemon.ingest.metadata_ready_at records when this process published the first bounded metadata pass for all active runtimes, so projects and sessions can be listed. The Unix-millisecond stamp stays fixed through later phases, even if streaming began before the last skim. It is null until that boundary and is established anew after a restart, including warm starts. Older daemons omit it; absence means the boundary is unknown. Do not infer first-pass completion from file-meter equality.', 'canonical_ready and search.readiness are independent. Wait for canonical_ready before reading project aggregates; inspect search.readiness before treating an empty search as complete.', 'daemon is null when the projection is served without an ingestion loop.'],
     related: ['readiness', 'types/StatusResponse'],
   },
   {

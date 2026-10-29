@@ -309,6 +309,20 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > Recovery explicitly reports `restoring`; runtimes distinguish `preparing` and `applying` after
 > input reading, and the final canonical phases distinguish `finalizing` from `publishing`.
 >
+> **First metadata pass** (2026-10-29): `daemon.ingest.metadata_ready_at` is the Unix-millisecond
+> stamp when this process has published every active runtime's bounded metadata, including its
+> public project/session lists. It is independent of phase: a fresh start can already be
+> streaming earlier runtimes when the last skim lands. The stamp stays fixed through later
+> stages and live work; file-meter equality is not a completion signal. Metadata-audit mode
+> still exposes `metadata_ready` as its phase. Fresh, resumed, and warm starts record their
+> own boundary after metadata publication; warm inventory catch-up keeps the `live` phase.
+> A failed or interrupted metadata pass leaves the stamp null. It is a process-local RAM
+> observation, reset on restart, not a durable readiness flag. Canonical publication and search
+> readiness remain separate. The additive protocol-27 field defaults to null when an older
+> response omits it; TypeScript makes absence explicit, and consumers fall back to the older
+> phase heuristic only when the field is absent. Rosetta's list veil uses the stamp while cold
+> work remains active; an already-live warm catalog remains usable throughout its catch-up.
+>
 > Detached search reports `SearchState.progress` for its unpublished generation: document counts
 > during `indexing`, then `optimizing`, `validating`, and `publishing`. The denominator comes from
 > the same canonical snapshot, and its atomic numerator advances every 256 documents. Progress is
