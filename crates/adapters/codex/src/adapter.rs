@@ -34,6 +34,10 @@ impl AgentAdapter for CodexAdapter {
         }
     }
 
+    fn census_session_streams(&self) -> Option<&'static [&'static str]> {
+        Some(&[spec::ROLLOUT])
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 17: per-response `token_usage_record` (remote compactions), the
         // first settings snapshot's tier back-applied to the first turn, a

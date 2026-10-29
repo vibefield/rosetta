@@ -31,6 +31,10 @@ impl AgentAdapter for PiAdapter {
         (stream_id == spec::SESSION).then_some(StreamDriver::JsonLines)
     }
 
+    fn census_session_streams(&self) -> Option<&'static [&'static str]> {
+        Some(&[spec::SESSION])
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 9: `usage` entries (cache warming) as samples, compaction request
         // counts, summaries on the latest model, never-reported usage as
