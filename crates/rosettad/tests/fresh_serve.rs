@@ -364,6 +364,8 @@ fn completed_second_boot_is_live_incremental_catch_up() {
 /// gone and its ledger is the named staged generation, with its manifest.
 /// Returns the staged directory.
 fn stage_ledger(db: &Path, claude: &Path) -> std::path::PathBuf {
+    // Model a legacy interrupted start, without a completed run receipt.
+    std::fs::remove_file(db.with_file_name("rosetta.db.ingestion.json")).unwrap();
     let ledger = db.with_extension("ledger");
     let staged = ledger.with_file_name(format!(
         "{}.staged",

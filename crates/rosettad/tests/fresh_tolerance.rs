@@ -170,6 +170,8 @@ fn jsonl_seals(ledger: &Path) -> Vec<(u64, bool)> {
 /// Turn a finished start back into an interrupted one: the projection is
 /// gone and its ledger is the named staged generation, with its manifest.
 fn stage_ledger(db: &Path, claude: &Path) -> PathBuf {
+    // Model a legacy interrupted start, without a completed run receipt.
+    std::fs::remove_file(db.with_file_name("rosetta.db.ingestion.json")).unwrap();
     let ledger = db.with_extension("ledger");
     let staged = ledger.with_file_name(format!(
         "{}.staged",

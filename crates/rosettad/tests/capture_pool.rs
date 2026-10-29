@@ -135,7 +135,9 @@ fn staged_ledger_rebuilds_and_finishes_on_next_boot(first_boot: &[&str]) {
     let finished = projection(&db);
 
     // Turn the pool-built ledger back into a staged generation, as an
-    // interrupted first boot leaves it.
+    // interrupted legacy first boot leaves it. Its completed control receipt
+    // cannot accompany a deliberately removed published projection.
+    std::fs::remove_file(db.with_file_name("rosetta.db.ingestion.json")).unwrap();
     let ledger = db.with_extension("ledger");
     let staged = ledger.with_file_name(format!(
         "{}.staged",

@@ -10,6 +10,9 @@ import { PROTOCOL_VERSION } from "./protocol-version.mjs";
 export { PROTOCOL_VERSION } from "./protocol-version.mjs";
 import type { TimelineEntryResponse } from "./generated/TimelineEntryResponse";
 import type { ResponseRuntime } from "./generated/ResponseRuntime";
+import type { Ingestion } from "./generated/Ingestion";
+import type { IngestionConflict } from "./generated/IngestionConflict";
+import type { IngestionControlRequest } from "./generated/IngestionControlRequest";
 import type { ApiError } from "./generated/ApiError";
 import type { ImageVariant } from "./generated/ImageVariant";
 import type { AssetRef } from "./generated/AssetRef";
@@ -117,15 +120,23 @@ export interface RosettaClientOptions {
   credential?: RosettaCredential;
 }
 
+/** Pin these values for the lifetime of one user intent, including retries. */
+export interface IngestionCommand extends IngestionControlRequest {
+  readonly indexId: string;
+  readonly idempotencyKey: string;
+}
+
 export class ApiRequestError extends Error {
   readonly status: number;
   readonly code: ErrorCode | null;
+  readonly details: IngestionConflict | null;
 
-  constructor(status: number, code: ErrorCode | null, message: string) {
+  constructor(status: number, code: ErrorCode | null, message: string, details: IngestionConflict | null = null) {
     super(message);
     this.name = "ApiRequestError";
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -307,11 +318,13 @@ export class RosettaClient {
     }
     if (!response.ok) {
       let code: ErrorCode | null = null;
+      let details: IngestionConflict | null = null;
       let message = `${response.status} on ${path}`;
       try {
         const body = (await response.json()) as { error?: ApiError };
         if (body.error) {
           code = body.error.code;
+          details = body.error.details ?? null;
           message = body.error.message;
         }
       } catch {
@@ -320,7 +333,7 @@ export class RosettaClient {
       if (code === "cursor_expired") {
         throw new CursorExpiredError(message);
       }
-      throw new ApiRequestError(response.status, code, message);
+      throw new ApiRequestError(response.status, code, message, details);
     }
     return response;
   }
@@ -331,6 +344,25 @@ export class RosettaClient {
 
   status(signal?: AbortSignal): Promise<StatusResponse> {
     return this.request("/api/status", withSignal(signal));
+  }
+
+  /** Finite cold runs; live-watcher controls are a separate capability. */
+  readonly ingestions = {
+    get: (id: string, signal?: AbortSignal): Promise<Ingestion> =>
+      this.request(`/api/ingestions/${encodeURIComponent(id)}`, withSignal(signal)),
+    pause: (id: string, command: IngestionCommand, signal?: AbortSignal): Promise<Ingestion> =>
+      this.ingestionCommand(id, "pause", command, signal),
+    resume: (id: string, command: IngestionCommand, signal?: AbortSignal): Promise<Ingestion> =>
+      this.ingestionCommand(id, "resume", command, signal),
+  };
+
+  private ingestionCommand(id: string, action: "pause" | "resume", command: IngestionCommand, signal?: AbortSignal): Promise<Ingestion> {
+    return this.request(`/api/ingestions/${encodeURIComponent(id)}/${action}`, {
+      method: "POST", ...withSignal(signal),
+      headers: { "content-type": "application/json", "x-rosetta-index-id": command.indexId,
+        "idempotency-key": command.idempotencyKey },
+      body: JSON.stringify({ expected_revision: command.expected_revision }),
+    });
   }
 
   /** The roll call's census — what discovery found, content-free. */

@@ -45,7 +45,7 @@ export function progressDuration(ms: number): string {
 /** Percentages describe the named step, never an invented overall ETA. */
 export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
   const ingest = feed.ingest;
-  if (ingest?.phase === "awaiting_consent" || feed.receivedAt === null) return null;
+  if (feed.receivedAt === null) return null;
   const runtimes = ingest?.runtimes ?? [];
   const sessions = runtimes.reduce((sum, row) => sum + row.sessions_total, 0);
   const base: ActivityPhase = {
@@ -54,6 +54,18 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
     amount: "Looking for conversations…", current: 0, total: 0,
     unit: null, fraction: null, active: true,
   };
+  const run = ingest?.run;
+  if (run?.state === "paused" || run?.state === "pausing" || run?.state === "failed") {
+    const paused = run.state === "paused";
+    const failed = run.state === "failed";
+    return { ...base, key: run.state, active: !paused && !failed,
+      title: paused ? "History import paused" : failed ? "History import needs attention" : "Pausing history import",
+      detail: paused ? "Saved progress is retained. Resume when you are ready."
+        : failed ? run.error ?? "Import stopped. You can resume after resolving the problem."
+        : "Finishing in-flight work and saving progress. Your history stays available.",
+      amount: `${number(sessions)} sessions found` };
+  }
+  if (ingest?.phase === "awaiting_consent") return null;
   if (ingest?.phase === "discovering") return base;
   if (ingest?.phase === "restoring") {
     const current = runtimes.filter((row) => row.state === "streaming")
@@ -156,11 +168,15 @@ export interface ActivitySamples {
   readonly rate: number | null;
 }
 
+export function activityIdentity(feed: ActivityFeed, phase: ActivityPhase): string {
+  return `${feed.startedAt}:${feed.ingest?.run?.progress_epoch ?? ""}:${phase.key}:${phase.unit}`;
+}
+
 /** Eight seconds of actual observations smooth variable batch sizes. A restart,
  * phase transition, retry, or regressing counter starts a new sample window. */
 export function sampleActivity(previous: ActivitySamples | null, feed: ActivityFeed, phase: ActivityPhase): ActivitySamples {
   const at = feed.receivedAt ?? 0;
-  const identity = `${feed.startedAt}:${phase.key}:${phase.unit}`;
+  const identity = activityIdentity(feed, phase);
   const last = previous?.points.at(-1);
   if (!previous || previous.identity !== identity || !last || phase.current < last.value || at < last.at) {
     return { identity, points: [{ at, value: phase.current }], changedAt: at, rate: null };

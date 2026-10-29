@@ -53,6 +53,7 @@ export type {
   GitWorktree,
   HostPort,
   InstalledBrowser,
+  IngestionPort,
   RoomPorts,
   SessionClient,
   SessionFeed,

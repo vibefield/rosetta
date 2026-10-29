@@ -1,3 +1,9 @@
+export type * from "./generated/Ingestion";
+export type * from "./generated/IngestionState";
+export type * from "./generated/IngestionPhase";
+export type * from "./generated/IngestionAction";
+export type * from "./generated/IngestionControlRequest";
+export type * from "./generated/IngestionConflict";
 export type * from "./generated/ApiError";
 export type * from "./generated/AssetRef";
 export type * from "./generated/CanonicalText";

@@ -49,3 +49,9 @@
 }
 
 .ah-ingest-note { flex: 0 0 auto; margin: 0; padding: 9px 14px; color: var(--vf-text-secondary); font-size: 11px; line-height: 1.5; }
+
+.ah-ingest-controls { margin: 10px 0 4px; }
+.ah-ingest-controls button { padding: 5px 10px; border: 1px solid var(--vf-hairline-strong); border-radius: 5px; background: var(--vf-chrome-surface); color: var(--vf-text-primary); font: inherit; cursor: pointer; }
+.ah-ingest-controls button:disabled { opacity: .55; cursor: default; }
+.ah-ingest-controls button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
+.ah-ingest-controls [role="alert"] { color: var(--vf-text-secondary); line-height: 1.5; }

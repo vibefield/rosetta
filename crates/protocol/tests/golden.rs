@@ -444,6 +444,19 @@ fn exemplars() -> serde_json::Value {
                 overflow_rewarms: 0,
             },
             ingest: IngestProgress {
+                run: Some(rosetta_protocol::Ingestion {
+                    id: "ing_example".into(),
+                    index_id: "idx_example".into(),
+                    revision: 7,
+                    state: rosetta_protocol::IngestionState::Paused,
+                    phase: Some(rosetta_protocol::IngestionPhase::Capturing),
+                    created_at: 1_000,
+                    updated_at: 2_000,
+                    progress_epoch: "ing_example:1".into(),
+                    runtime_ids: vec!["rt1".into()],
+                    allowed_actions: vec![rosetta_protocol::IngestionAction::Resume],
+                    error: None,
+                }),
                 phase: IngestPhase::Backfilling,
                 metadata_ready_at: None,
                 runtimes: vec![
@@ -568,6 +581,7 @@ fn exemplars() -> serde_json::Value {
         ServerFrame::Resync,
         ServerFrame::Error {
             error: ApiError {
+                details: None,
                 code: ErrorCode::Internal,
                 message: "boom".into(),
             },
@@ -842,6 +856,7 @@ fn the_first_pass_stamp_is_additive_and_preserves_null_and_zero() {
         ingest.metadata_ready_at = stamp;
         let mut expected = legacy.clone();
         expected["metadata_ready_at"] = serde_json::json!(stamp);
+        expected["run"] = serde_json::Value::Null;
         let wire = serde_json::to_value(&ingest).unwrap();
         assert_eq!(wire, expected);
         assert_eq!(

@@ -26,7 +26,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::ingestion_control::ColdControl;
 use rosetta_capture::{NotifyEvents, SourceWake};
+
+pub(crate) mod control;
 use rosetta_pipeline::{
     IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric,
     RawCommandLocator, RebuildOptions, SessionFile, SliceBudget, StreamReport,
@@ -362,7 +365,17 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // The transport comes up before any ingest work. A returning user's
     // mirror warms from the standing projection so the room is instantly
     // whole; a fresh install serves empty lists and honest meters.
-    let health = Arc::new(DaemonHealth::new(now_ms()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let control = if flags.stop_after_meta {
+        None
+    } else {
+        ColdControl::open(&db, &public_ledgers, warm_live, stop.clone())?
+    };
+    let mut health = DaemonHealth::new(now_ms());
+    if let Some(control) = &control {
+        health = health.with_ingestion(control.clone());
+    }
+    let health = Arc::new(health);
     if warm_live {
         // The standing canonical projection is already valid and readable.
         // Offline catch-up is live maintenance, not another cold backfill, so
@@ -391,15 +404,18 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         .local_addr()
         .map_err(|error| format!("reading bound address: {error}"))?;
 
-    let stop = Arc::new(AtomicBool::new(false));
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     {
         // First ctrl-c stops gracefully (the backfill finishes its current
         // file; the live loop exits on its next tick); a second forces.
         let stop = stop.clone();
+        let cancel = control.as_ref().map(|control| control.cancel());
         tokio_runtime.spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 stop.store(true, Ordering::SeqCst);
+                if let Some(cancel) = &cancel {
+                    cancel.store(true, Ordering::SeqCst);
+                }
                 eprintln!("stopping — finishing the current file; ctrl-c again to force quit");
             }
             if tokio::signal::ctrl_c().await.is_ok() {
@@ -475,6 +491,18 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             (true, true) => "bearer required, grants accepted",
         };
         println!("serving http://{local} — {warmed} mirror rows warm, {access} (ctrl-c to stop)");
+    }
+
+    if !warm_live && let Some(control) = &control {
+        if control.pause_requested() {
+            control.stopped(None)?;
+        }
+        if control.wait().is_err() {
+            let _ = shutdown_tx.send(true);
+            let _ = tokio_runtime.block_on(server);
+            search_worker.stop();
+            return Ok(());
+        }
     }
 
     // Mid-backfill readers ride the metadata effects seam: every committed
@@ -636,6 +664,14 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             if stop.load(Ordering::SeqCst) {
                 break;
             }
+            if let Some(control) = &control
+                && control.pause_requested()
+            {
+                control.stopped(None)?;
+                if control.wait().is_err() {
+                    break;
+                }
+            }
             match granted.recv_timeout(CONSENT_POLL) {
                 Ok(kinds) => {
                     // The grant names kinds; each maps to that kind's
@@ -669,53 +705,29 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
 
     if fresh_fast {
         let temp = cold_temp.expect("fresh fast serve owns a private projection file");
-        let ledger_stage = ServeColdStage::open(
-            &public_ledgers,
+        let outcome = control::run_fresh(
+            &flags,
             &db,
-            &ColdEnrollment::from_targets(consented_targets(&targets, &consented)),
-        )?;
-        let outcome = if pending_cold.is_some() {
-            run_resumed_fresh_serve(
-                &flags,
-                &db,
-                &targets,
-                &consented,
-                &generation_consented,
-                &opts,
-                &live,
-                &instrument,
-                store,
-                temp,
-                ledger_stage,
-                &projection_reader,
-                &health,
-                &hub,
-                &search_worker,
-                &search,
-                &stop,
-                started,
-            )
-        } else {
-            run_fresh_fast_serve(
-                &flags,
-                &db,
-                &targets,
-                &consented,
-                &opts,
-                &live,
-                &instrument,
-                store,
-                temp,
-                ledger_stage,
-                &projection_reader,
-                &health,
-                &hub,
-                &search_worker,
-                &search,
-                &stop,
-                started,
-            )
-        };
+            &adapters,
+            enrollment.as_ref(),
+            &targets,
+            &consented,
+            &generation_consented,
+            &opts,
+            &live,
+            &instrument,
+            store,
+            temp,
+            pending_cold.is_some(),
+            &projection_reader,
+            &health,
+            &hub,
+            &search_worker,
+            &search,
+            &stop,
+            started,
+            control.as_ref().expect("cold serve owns a controller"),
+        );
         let (mut store, absorbed) = match outcome {
             Ok(done) => done,
             Err(error) if stop.load(Ordering::SeqCst) => {
@@ -781,6 +793,10 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(control) = &control {
+        control.configure(consented.iter().cloned().collect())?;
+    }
+
     // Phase one: skim every enrolled runtime before reading any transcript.
     // This publishes the whole project/session roster first, so one large
     // runtime cannot hide every smaller runtime's lists.
@@ -789,6 +805,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     let mut failures = Vec::new();
     let mut metadata_complete = true;
     for target in &targets {
+        control::disk_boundary(control.as_deref(), &mut backfills)?;
         if !target.installed() && !target.is_enrolled() {
             println!("{}: not installed, skipping", target.name());
             continue;
@@ -930,6 +947,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     engine.publish_projects(&health);
     engine.bootstrap_whole_file(&store)?;
     let mut cx = ColdCx {
+        control: control.as_deref(),
         store: &mut store,
         hub: &hub,
         health: &health,
@@ -962,10 +980,14 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
         }
 
+        control::publish_disk(control.as_deref(), &mut backfills)?;
         if progressive {
             instrument
                 .finish_progressive_load(&mut store)
                 .map_err(|error| format!("finalizing progressive projection: {error}"))?;
+        }
+        if let Some(control) = &control {
+            control.succeeded()?;
         }
         println!(
             "milestone: canonical-ready elapsed_s={:.2}",
@@ -1102,7 +1124,17 @@ fn run_resumed_fresh_serve(
     search: &Fts5SidecarSearch,
     stop: &Arc<AtomicBool>,
     started: Instant,
+    control: &ColdControl,
+    retain_view: bool,
 ) -> Result<(Store, u64), String> {
+    let cold_cancel = control.cancel();
+    let restoring_hub = Hub::new(HubConfig::default(), now_ms() as u64);
+    let public_hub = hub;
+    let hub = if retain_view {
+        &restoring_hub
+    } else {
+        public_hub
+    };
     store.observe_meta_effects();
     let wake = SourceWake::default();
     let stage_root = ledger_stage.path().to_path_buf();
@@ -1114,7 +1146,7 @@ fn run_resumed_fresh_serve(
         starter_budget: None,
         audit_files_per_run: 0,
         private_build: true,
-        cancel: Some(stop.clone()),
+        cancel: Some(cold_cancel.clone()),
         ..opts.clone()
     };
     let mut events = BTreeMap::new();
@@ -1136,7 +1168,7 @@ fn run_resumed_fresh_serve(
                 target.root.display()
             ));
         }
-        if stop.load(Ordering::SeqCst) {
+        if cold_cancel.load(Ordering::SeqCst) {
             return Err("cold resume cancelled before runtime replay".to_string());
         }
 
@@ -1160,7 +1192,7 @@ fn run_resumed_fresh_serve(
                 RebuildOptions {
                     flush_reconciliation: false,
                     allow_unsealed_sources: true,
-                    cancel: Some(stop.clone()),
+                    cancel: Some(cold_cancel.clone()),
                     ..RebuildOptions::default()
                 },
             )
@@ -1254,7 +1286,7 @@ fn run_resumed_fresh_serve(
             health.clone(),
             false,
         ));
-        if remaining.peek().is_none() {
+        if !retain_view && remaining.peek().is_none() {
             health.ingest_metadata_ready(now_ms());
         }
         health.ingest_stream(
@@ -1350,7 +1382,16 @@ fn run_resumed_fresh_serve(
         projection_reader,
         instrument,
         health,
+        control,
     )?;
+    let hub = public_hub;
+    hub.rewarm(store.conn())
+        .map_err(|error| error.to_string())?;
+    health.ingest_metadata_ready(now_ms());
+    let sessions =
+        queries::session_list(store.conn(), None, i64::MAX).map_err(|error| error.to_string())?;
+    hub.invalidate_sessions(sessions.iter().map(|row| row.id.as_str()), now_ms());
+    control.succeeded()?;
     println!(
         "milestone: canonical-ready elapsed_s={:.2}",
         started.elapsed().as_secs_f64()
@@ -1430,7 +1471,9 @@ fn run_fresh_fast_serve(
     search: &Fts5SidecarSearch,
     stop: &Arc<AtomicBool>,
     started: Instant,
+    control: &ColdControl,
 ) -> Result<(Store, u64), String> {
+    let cold_cancel = control.cancel();
     store
         .use_precomputed_bulk_ordinals()
         .map_err(|error| format!("enabling precomputed cold ordinals: {error}"))?;
@@ -1442,14 +1485,14 @@ fn run_fresh_fast_serve(
     let mut events = std::collections::BTreeMap::new();
     let mut requests = Vec::new();
     let cold_opts = IngestOptions {
-        cancel: Some(stop.clone()),
+        cancel: Some(cold_cancel.clone()),
         ..opts.clone()
     };
     for target in consented_targets(targets, consented) {
         if !target.active() {
             continue;
         }
-        if stop.load(Ordering::SeqCst) {
+        if cold_cancel.load(Ordering::SeqCst) {
             return Err("stopped before cold metadata completed".into());
         }
         let watcher = NotifyEvents::watch_with_wake(&target.root, &wake)
@@ -1498,7 +1541,7 @@ fn run_fresh_fast_serve(
             hub,
             health,
             board: &board,
-            stop,
+            stop: &cold_cancel,
             started,
         },
         &mut failures,
@@ -1534,7 +1577,9 @@ fn run_fresh_fast_serve(
         projection_reader,
         instrument,
         health,
+        control,
     )?;
+    control.succeeded()?;
     println!(
         "milestone: canonical-ready elapsed_s={:.2}",
         started.elapsed().as_secs_f64()
@@ -1833,11 +1878,13 @@ fn publish_fresh_ram_projection(
     projection_reader: &ProjectionReader,
     instrument: &Instrument,
     health: &DaemonHealth,
+    control: &ColdControl,
 ) -> Result<Store, String> {
     health.ingest_phase(rosetta_server::IngestPhase::Finalizing);
     instrument
         .finish_bulk_load(&mut store)
         .map_err(|error| format!("finalizing canonical RAM projection: {error}"))?;
+    control.publishing()?;
     health.ingest_phase(rosetta_server::IngestPhase::Publishing);
     instrument.time(Metric::PublishNanos, || {
         crate::publication::stage_ram_projection(store.conn(), &temp)

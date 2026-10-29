@@ -25,6 +25,7 @@ pub mod grant;
 pub mod health;
 pub mod http;
 pub mod hub;
+pub mod ingestion;
 pub mod ws;
 
 pub use auth::{AuthPolicy, GrantEvent, GrantObserver, Refusal};

@@ -48,7 +48,7 @@ import {
   useTimeline,
 } from "./lib/hooks";
 import { useIngestActivity } from "./lib/use-ingest-activity";
-import { isIngestActive } from "./lib/ingest";
+import { isAwaitingConsent, isIngestActive } from "./lib/ingest";
 import {
   UNASSIGNED_PROJECT_ID,
   buildProjectViewModel,
@@ -684,7 +684,7 @@ function RoomBody({
 
   const disconnected = meta === null;
   // The roll call: discovery is on the board and nothing has been read.
-  const awaitingConsent = ingest?.phase === "awaiting_consent";
+  const awaitingConsent = isAwaitingConsent(ingest);
   // The first run before its first metadata batch: the daemon answers and
   // meters move, but there is not yet a canonical project to render. Once
   // RAM metadata arrives the ordinary room takes over progressively.
@@ -820,7 +820,7 @@ function RoomBody({
         readiness={readiness}
         progress={searchProgress}
         canonicalReady={canonicalReady}
-        ingestPaused={ingest?.phase === "metadata_ready"}
+        ingestPaused={ingest?.phase === "metadata_ready" || ingest?.run?.state === "paused" || ingest?.run?.state === "failed"}
         agentKinds={kinds}
         currentProject={
           projectId !== null && projectId !== UNASSIGNED_PROJECT_ID

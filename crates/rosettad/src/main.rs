@@ -65,6 +65,7 @@ mod cold_stage;
 mod cold_stream;
 mod engine;
 mod enroll;
+mod ingestion_control;
 mod ledger_cmd;
 mod ledger_compression;
 mod ledger_verify;

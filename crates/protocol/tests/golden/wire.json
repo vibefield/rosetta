@@ -1405,6 +1405,23 @@
             "sessions_total": 12
           }
         ],
+        "run": {
+          "allowed_actions": [
+            "resume"
+          ],
+          "created_at": 1000,
+          "error": null,
+          "id": "ing_example",
+          "index_id": "idx_example",
+          "phase": "capturing",
+          "progress_epoch": "ing_example:1",
+          "revision": 7,
+          "runtime_ids": [
+            "rt1"
+          ],
+          "state": "paused",
+          "updated_at": 2000
+        },
         "runtimes": [
           {
             "bytes_streamed": 1073741824,

@@ -25,9 +25,9 @@ domain normalize "Per-agent normalization" {
 
 domain ingest "Cold & live ingestion" {
   contains mod:rosetta_store::{apply, cold_stream, bulk, reclaim}
-  contains mod:rosetta_server::{health, board}
+  contains mod:rosetta_server::{health, board, ingestion}
   contains file:clients/room/src/lib/{ingest, ingest-activity, use-ingest-activity, catalog-status}.ts
-  contains file:clients/room/src/components/{IngestStatus, ColdStart}.tsx
+  contains file:clients/room/src/components/{IngestStatus, IngestionControls, ColdStart}.tsx
   see "CLAUDE.md#current-phase"
   see "docs/ingest-engine.html"
 }

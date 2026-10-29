@@ -323,6 +323,60 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > phase heuristic only when the field is absent. Rosetta's list veil uses the stamp while cold
 > work remains active; an already-live warm catalog remains usable throughout its catch-up.
 >
+> **Cold pause and resume (issue #25, 2026-10-29).** Auto-started cold work owns one
+> stable run. `daemon.ingest.run` adds its id, logical `index_id`, control revision,
+> execution state (`running`, `pausing`, `paused`, `failed`, `succeeded`), work phase,
+> progress epoch, effective runtime ids, allowed actions, and bounded error. The same
+> resource is returned by `GET /api/ingestions/{id}`. This is an additive protocol-27
+> field; the existing phase vocabulary and sticky `metadata_ready_at` are unchanged.
+> Counters stay in the existing ingest block and are never persisted. Recovery changes
+> `progress_epoch` so clients reset rate estimates when the observation baseline changes.
+>
+> `POST /api/ingestions/{id}/pause` and `/resume` take `{ "expected_revision": N }`,
+> `X-Rosetta-Index-Id`, and a caller-generated UUID `Idempotency-Key`. Accepted changes
+> return 202, satisfied/replayed commands 200, with the current run, Location,
+> Retry-After, and Cache-Control: no-store. Index identity is checked before receipts;
+> matching accepted keys are resolved before revision/transition checks, including
+> after process restart. Conflicts use the existing error envelope plus typed run and
+> revision details. Only daemon-level authority can call these routes; session grants
+> are refused and both mutations use the Origin guard.
+>
+> The projection lock protects a sibling `<db filename>.ingestion.json` control
+> receipt, atomically replaced and fsynced before acknowledgment. It holds only
+> identities, state, revision, ownership binding, bounded error, and request/key digests.
+> Accepted keys survive at least 24 hours; bounded capacity reserves a slot for pause
+> and refuses additional controls with 429 instead of dropping unexpired receipts.
+> Existing cold-stage formats remain readable and are adopted on first controlled start.
+> Paused/pausing intent stays stopped across process restart; running intent recovers
+> through the existing sealed-ledger path. A failed run waits for explicit resume.
+>
+> A pause acknowledgment is not a quiescence claim. Fresh RAM workers observe a cold
+> cancellation signal separate from process shutdown, join, close their ledger writers,
+> and sync retained evidence before state becomes paused. The listener, metadata mirror,
+> and existing RAM reader remain available. In-process resume rebuilds disposable state
+> behind that retained reader, rechecks current inventory, and switches at publication;
+> a process restart cannot retain RAM and restores it after resume. Disk-progressive
+> work pauses between committed source/slice passes after flushing its ledgers, retains
+> its scheduler/cursors in-process, and rechecks admission after resume. Neither path
+> captures while paused. Native bytes removed by their producer during a pause cannot
+> be recovered unless they were already archived.
+>
+> Pause admission and the publication fence share one coordinator lock. A pause that
+> wins prevents publication; after the fence, controls return 409
+> `publication_in_progress`. The existing staged-ledger/SQLite install recovery reconciles
+> a crash in that interval before controls reopen. Success releases capture to the
+> ordinary live loop. This implementation exposes cold get/pause/resume only: live
+> controls, manual start, discard, redo, and the full overview in
+> `INGESTION_API_PROPOSAL.md` remain proposed. Metadata-audit mode and an existing warm
+> projection without a cold receipt expose no cold controls.
+>
+> The SDK exposes `client.ingestions.get/pause/resume` and preserves pinned index,
+> revision, and operation key across retries. The room displays execution state from
+> its existing status poll; an optional host-owned `RoomPorts.ingestion` enables Pause
+> import / Resume import. A host without that port remains observation-only. The desktop
+> supplies its direct daemon client; external hosts must deliberately adopt this port
+> and forward the additive run block. Their separately pinned checkout is not changed here.
+>
 > Detached search reports `SearchState.progress` for its unpublished generation: document counts
 > during `indexing`, then `optimizing`, `validating`, and `publishing`. The denominator comes from
 > the same canonical snapshot, and its atomic numerator advances every 256 documents. Progress is

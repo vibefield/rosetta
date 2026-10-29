@@ -83,6 +83,7 @@ export function createRosettaHost(): RosettaHost {
       catalog: catalogOver(client, { unavailable: () => daemonState?.error ?? null, onChange: onDaemonState }),
       sessions: sessionsOver(client),
       assets: assetsOver(client),
+      ingestion: client.ingestions,
       host: bridge === null ? null : hostPortOver(bridge),
     },
     daemonState: () => daemonState,

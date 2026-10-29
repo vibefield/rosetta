@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isCensusRunning, isIngestActive } from "../../room/src/lib/ingest.ts";
+import { isAwaitingConsent, isCensusRunning, isIngestActive } from "../../room/src/lib/ingest.ts";
 
 const progress = (stamp, phase = "backfilling") => ({
   phase,
@@ -8,6 +8,17 @@ const progress = (stamp, phase = "backfilling") => ({
   // The final runtime can still be queued between metadata and streaming.
   runtimes: [{ state: "streaming" }, { state: "queued" }],
   projects: [],
+});
+
+test("a pause before consent keeps the import controls visible until resume", () => {
+  const waiting = progress(null, "awaiting_consent");
+  assert.equal(isAwaitingConsent(waiting), true);
+  assert.equal(isAwaitingConsent({ ...waiting, run: { state: "running" } }), true);
+  for (const state of ["pausing", "paused", "failed"]) {
+    const stopped = { ...waiting, run: { state } };
+    assert.equal(isAwaitingConsent(stopped), false);
+    assert.equal(isIngestActive(stopped), true);
+  }
 });
 
 test("the first-pass stamp releases lists while transcript ingest remains active", () => {

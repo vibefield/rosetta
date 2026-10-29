@@ -11,6 +11,13 @@ export function isIngestActive(ingest: IngestProgress | null): boolean {
   return ingest !== null && ingest.phase !== "live";
 }
 
+/** Keep resume visible if discovery reaches the consent gate while paused.
+ * Once resumed, the host's ordinary consent screen can take over again. */
+export function isAwaitingConsent(ingest: IngestProgress | null): boolean {
+  return ingest?.phase === "awaiting_consent" &&
+    (ingest.run == null || ingest.run.state === "running");
+}
+
 /** The census (skim) has not yet named every session: the LISTS themselves
  * are still incomplete, so the list sections stay veiled. */
 export function isCensusRunning(ingest: IngestProgress | null): boolean {
