@@ -22,7 +22,7 @@ use rosetta_store::Store;
 
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
-use crate::meta::{SessionFile, meta_ingest_into};
+use crate::meta::{AdmissionSources, SessionFile, meta_ingest_into};
 use crate::stream::{StreamReport, stream_backfill_into};
 use crate::{IngestOptions, PipelineError};
 
@@ -123,6 +123,47 @@ pub fn map_hint(
     }
 }
 
+/// Coalesced directory hints nominate many quiet transcripts. Stat those
+/// nominations before reading metadata; explicit file and snapshot hints
+/// remain unconditional. A stamp-preserving rewrite hidden in a directory
+/// hint stays the rotating audit's responsibility, as with a dropped hint.
+pub fn map_changed_hint(
+    adapter: &dyn AgentAdapter,
+    files: &[SessionFile],
+    root: &std::path::Path,
+    relative_path: &str,
+) -> HintMapping {
+    let mut mapping = map_hint(adapter, files, relative_path);
+    if mapping.nominated.is_empty()
+        || mapping.needs_admission
+        || mapping.nominated.iter().any(|path| path == relative_path)
+    {
+        return mapping;
+    }
+    let by_path: HashMap<_, _> = files
+        .iter()
+        .map(|file| (file.relative_path.as_str(), file))
+        .collect();
+    mapping.nominated.retain(|path| {
+        let Some(file) = by_path.get(path.as_str()) else {
+            return true;
+        };
+        if file.driver != rosetta_adapter_support::StreamDriver::JsonLines {
+            return true;
+        }
+        let Ok(stat) = std::fs::metadata(root.join(path)) else {
+            return true;
+        };
+        stat.len() != file.size
+            || stat
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .is_none_or(|time| time.as_millis() as i64 != file.modified_ms)
+    });
+    mapping
+}
+
 /// What the stat poll compares a walked file against, taken from its cursor's
 /// committed checkpoint: the normalizer that wrote it and the byte length its
 /// tail observed. A runner keeps these in RAM, because reading and decoding
@@ -203,6 +244,7 @@ pub struct LiveRunner<'a> {
     opts: IngestOptions,
     live: LiveOptions,
     files: Vec<SessionFile>,
+    admission_sources: AdmissionSources,
     ledger: Option<Ledger>,
     last_poll: Instant,
     report: LiveReport,
@@ -252,7 +294,7 @@ impl<'a> LiveRunner<'a> {
         mut ledger: Option<Ledger>,
         instrument: &Instrument,
     ) -> Result<Self, PipelineError> {
-        let (_, files) = meta_ingest_into(
+        let (meta, files) = meta_ingest_into(
             adapter,
             &runtime,
             &root,
@@ -261,9 +303,10 @@ impl<'a> LiveRunner<'a> {
             instrument,
             ledger.as_mut(),
         )?;
-        Ok(Self::resume_from_roster(
-            adapter, runtime, root, events, files, opts, live, ledger,
-        ))
+        Ok(
+            Self::resume_from_roster(adapter, runtime, root, events, files, opts, live, ledger)
+                .with_admission_sources(meta.admission_sources),
+        )
     }
 
     /// Enter the live lane from a roster skimmed by the immediately preceding
@@ -289,6 +332,7 @@ impl<'a> LiveRunner<'a> {
             opts,
             live,
             files,
+            admission_sources: AdmissionSources::default(),
             ledger,
             last_poll: Instant::now(),
             report: LiveReport::default(),
@@ -303,6 +347,13 @@ impl<'a> LiveRunner<'a> {
     /// had read that cursor row itself.
     pub fn with_poll_evidence(mut self, evidence: HashMap<String, PollEvidence>) -> Self {
         self.evidence = evidence;
+        self
+    }
+
+    /// Carry the full skim's dependency index across the cold/live handoff,
+    /// including withheld sources that still govern sibling/child policy.
+    pub fn with_admission_sources(mut self, sources: AdmissionSources) -> Self {
+        self.admission_sources = sources;
         self
     }
 
@@ -374,7 +425,10 @@ impl<'a> LiveRunner<'a> {
     ) -> Result<bool, PipelineError> {
         self.report.ticks += 1;
         let mut changed: BTreeSet<String> = BTreeSet::new();
-        let mut needs_admission = false;
+        // Older callers can hand over only the admitted roster. Bootstrap
+        // its withheld dependencies once before any policy-protected capture.
+        let mut needs_admission =
+            !self.opts.exclude_cwds.is_empty() && !self.admission_sources.is_complete();
         let mut poll_due = force_poll || self.last_poll.elapsed() >= self.live.poll_interval;
 
         let mut budget = self.live.max_coalesced;
@@ -390,7 +444,11 @@ impl<'a> LiveRunner<'a> {
             match event {
                 SourceEvent::Changed(path) => {
                     let mapping = instrument.time(Metric::LiveHintNanos, || {
-                        map_hint(self.adapter, &self.files, &path)
+                        if self.opts.exclude_cwds.is_empty() {
+                            map_hint(self.adapter, &self.files, &path)
+                        } else {
+                            map_changed_hint(self.adapter, &self.files, &self.root, &path)
+                        }
                     });
                     if mapping.nominated.is_empty() && !mapping.needs_admission {
                         self.report.hints_ignored += 1;
@@ -439,12 +497,15 @@ impl<'a> LiveRunner<'a> {
         }
 
         if !changed.is_empty() {
-            let subset: Vec<SessionFile> = self
+            let mut subset: Vec<SessionFile> = self
                 .files
                 .iter()
                 .filter(|file| changed.contains(&file.relative_path))
                 .cloned()
                 .collect();
+            if !needs_admission {
+                subset = self.recheck(store, subset, instrument)?;
+            }
             // Catch-up never audits: forcing a replay of exactly the files
             // that are actively growing would be the worst possible pick.
             let mut opts = self.opts.clone();
@@ -474,12 +535,63 @@ impl<'a> LiveRunner<'a> {
                 .filter(|file| picks.contains(&file.relative_path))
                 .cloned()
                 .collect();
+            let audit_subset = self.recheck(store, audit_subset, instrument)?;
             if !audit_subset.is_empty() {
                 let opts = self.opts.clone();
                 self.stream(store, &audit_subset, &opts, instrument)?;
             }
         }
         Ok(())
+    }
+
+    /// Hints and audits use the same session-wide gate. Reading metadata
+    /// here does not append another metadata batch on every transcript write.
+    fn recheck(
+        &mut self,
+        store: &mut Store,
+        files: Vec<SessionFile>,
+        instrument: &Instrument,
+    ) -> Result<Vec<SessionFile>, PipelineError> {
+        if self.opts.exclude_cwds.is_empty() || files.is_empty() {
+            return Ok(files);
+        }
+        let check = self.admission_sources.recheck(
+            self.adapter,
+            &self.runtime,
+            &self.root,
+            store,
+            &files,
+            &self.opts,
+            instrument,
+        )?;
+        if !check.excluded_sessions.is_empty() {
+            self.files.retain(|file| {
+                if !check.excluded_sessions.contains(&file.session_id) {
+                    return true;
+                }
+                if file.driver == rosetta_adapter_support::StreamDriver::JsonLines {
+                    // Retirement is already an admission decision. A quiet
+                    // retired file must not look newly discovered on the next poll.
+                    self.physical_seen
+                        .insert(file.relative_path.clone(), (file.size, file.modified_ms));
+                }
+                false
+            });
+        }
+        if check.requires_admission {
+            let mut changed = files
+                .iter()
+                .map(|file| file.relative_path.clone())
+                .collect();
+            self.admit(store, &mut changed, instrument)?;
+            return Ok(self
+                .files
+                .iter()
+                .filter(|file| changed.contains(&file.relative_path))
+                .cloned()
+                .collect());
+        }
+        Ok(check.files)
     }
 
     /// Stream `files` through the ordinary backfill phase. Any of them may
@@ -657,7 +769,7 @@ impl<'a> LiveRunner<'a> {
         instrument: &Instrument,
     ) -> Result<(), PipelineError> {
         self.report.admissions += 1;
-        let (_, fresh) = meta_ingest_into(
+        let (meta, fresh) = meta_ingest_into(
             self.adapter,
             &self.runtime,
             &self.root,
@@ -666,6 +778,7 @@ impl<'a> LiveRunner<'a> {
             instrument,
             self.ledger.as_mut(),
         )?;
+        self.admission_sources = meta.admission_sources;
         for file in &fresh {
             let known = self
                 .files

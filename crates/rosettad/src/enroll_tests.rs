@@ -81,6 +81,7 @@ fn a_valid_file_yields_enrolled_runtimes_with_absolute_identities() {
     .unwrap();
     assert_eq!(enrollment.enabled_kinds, ["claude-code", "grok"]);
     assert_eq!(enrollment.runtimes.len(), 2);
+    assert!(enrollment.exclude_cwds.is_empty());
     let first = &enrollment.runtimes[0];
     assert_eq!(first.adapter.kind(), "claude-code");
     assert_eq!(first.label.as_deref(), Some("Kim"));
@@ -97,6 +98,47 @@ fn a_valid_file_yields_enrolled_runtimes_with_absolute_identities() {
     let presentation: Vec<_> = enrollment.presentation().collect();
     assert_eq!(presentation[0].1.as_deref(), Some("Kim"));
     assert_eq!(enrollment.enrolled_ids().len(), 2);
+}
+
+#[test]
+fn folder_exclusions_are_optional_absolute_and_independent_of_existing_roots() {
+    let home = Path::new("/unused-home");
+    let enrollment = parse(
+        r#"{"format":1,"exclude_cwds":["/deleted/client/./", "/deleted/client"]}"#,
+        home,
+    )
+    .unwrap();
+    let opts = Enrollment::ingest_options(Some(&enrollment));
+    assert!(opts.exclude_cwds.excludes("/deleted/client/sub"));
+    assert!(!opts.exclude_cwds.excludes("/deleted/client-other"));
+    assert!(Enrollment::ingest_options(None).exclude_cwds.is_empty());
+    for invalid in ["", "relative", "~/client"] {
+        let error = parse(
+            &serde_json::json!({
+                "format":1, "exclude_cwds":["/valid", invalid]
+            })
+            .to_string(),
+            home,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("--enroll /tmp/enroll.json: exclude_cwds[1]"),
+            "{error}"
+        );
+    }
+    for invalid in [
+        serde_json::json!(null),
+        serde_json::json!("/folder"),
+        serde_json::json!([1]),
+    ] {
+        assert!(
+            parse(
+                &serde_json::json!({"format":1,"exclude_cwds":invalid}).to_string(),
+                home
+            )
+            .is_err()
+        );
+    }
 }
 
 /// Witness (e): every refusal at start names the entry.

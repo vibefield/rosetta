@@ -8,7 +8,7 @@
 //! cursors and generations — the engine can crash and be rebuilt from a
 //! skim, which is exactly what a restart does.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -377,14 +377,24 @@ impl ColdEngine {
     fn drain_hints(&mut self, cx: &mut ColdCx<'_>) -> Result<(), String> {
         for (index, entry) in cx.backfills.iter_mut().enumerate() {
             let mut needs_admission = false;
+            let mut nominated = BTreeSet::new();
+            let mut excluded = BTreeSet::new();
             for _ in 0..COLD_HINT_BURST {
                 let Some(event) = entry.events.next_event(Duration::ZERO) else {
                     break;
                 };
                 match event {
                     SourceEvent::Changed(path) => {
-                        let mapping =
-                            rosetta_pipeline::map_hint(entry.adapter, &entry.roster, &path);
+                        let mapping = if cx.opts.exclude_cwds.is_empty() {
+                            rosetta_pipeline::map_hint(entry.adapter, &entry.roster, &path)
+                        } else {
+                            rosetta_pipeline::map_changed_hint(
+                                entry.adapter,
+                                &entry.roster,
+                                &entry.root,
+                                &path,
+                            )
+                        };
                         // The metadata cut already settled membership for a
                         // known physical snapshot. Its WAL movement may
                         // reprioritize those known members, but re-enumerating
@@ -394,21 +404,46 @@ impl ColdEngine {
                         // membership changes inside a known snapshot are
                         // recovered by the live runner's opening poll.
                         needs_admission |= mapping.needs_admission && mapping.nominated.is_empty();
-                        for nominated in mapping.nominated {
-                            if let Some(file) = entry
-                                .roster
-                                .iter()
-                                .find(|file| file.relative_path == nominated)
-                            {
-                                self.schedule.nominate_live(index, file.clone());
-                            }
-                        }
+                        nominated.extend(mapping.nominated);
                     }
                     SourceEvent::Rescan => {}
                 }
             }
+            if !needs_admission && nominated.is_empty() {
+                continue;
+            }
+            if !needs_admission && !nominated.is_empty() && !cx.opts.exclude_cwds.is_empty() {
+                let candidates: Vec<_> = entry
+                    .roster
+                    .iter()
+                    .filter(|file| nominated.contains(&file.relative_path))
+                    .cloned()
+                    .collect();
+                let check = entry
+                    .meta
+                    .admission_sources
+                    .recheck(
+                        entry.adapter,
+                        &entry.runtime,
+                        &entry.root,
+                        cx.store,
+                        &candidates,
+                        cx.opts,
+                        cx.instrument,
+                    )
+                    .map_err(|error| error.to_string())?;
+                needs_admission = check.requires_admission;
+                excluded.extend(check.excluded_sessions);
+                if !needs_admission {
+                    nominated = check
+                        .files
+                        .into_iter()
+                        .map(|file| file.relative_path)
+                        .collect();
+                }
+            }
             if needs_admission {
-                let (_, fresh) = rosetta_pipeline::meta_ingest_into(
+                let (meta, fresh) = rosetta_pipeline::meta_ingest_into(
                     entry.adapter,
                     &entry.runtime,
                     &entry.root,
@@ -418,6 +453,8 @@ impl ColdEngine {
                     entry.ledger.as_mut(),
                 )
                 .map_err(|error| error.to_string())?;
+                excluded.extend(meta.excluded_sessions);
+                entry.meta.admission_sources = meta.admission_sources;
                 for file in &fresh {
                     if !entry
                         .roster
@@ -450,6 +487,26 @@ impl ColdEngine {
                     }
                 }
                 entry.roster = fresh;
+            }
+            if !excluded.is_empty() {
+                self.schedule.retire_sessions(&excluded);
+                for id in &excluded {
+                    let project = self
+                        .plan
+                        .project_of(index, id)
+                        .and_then(|row| row.project_id.as_deref());
+                    self.board.session_done(project, id);
+                }
+                entry
+                    .roster
+                    .retain(|file| !excluded.contains(&file.session_id));
+            }
+            for file in &entry.roster {
+                if nominated.contains(&file.relative_path) {
+                    self.schedule.nominate_live(index, file.clone());
+                }
+            }
+            if needs_admission || !excluded.is_empty() {
                 self.publish_projects(cx.health);
             }
         }
@@ -464,6 +521,35 @@ impl ColdEngine {
             return Ok(());
         }
         for entry in cx.backfills.iter_mut() {
+            let check = entry
+                .meta
+                .admission_sources
+                .recheck(
+                    entry.adapter,
+                    &entry.runtime,
+                    &entry.root,
+                    cx.store,
+                    &entry.roster,
+                    cx.opts,
+                    cx.instrument,
+                )
+                .map_err(|error| error.to_string())?;
+            entry.roster = if check.requires_admission {
+                let (meta, roster) = rosetta_pipeline::meta_ingest_into(
+                    entry.adapter,
+                    &entry.runtime,
+                    &entry.root,
+                    cx.store,
+                    cx.opts,
+                    cx.instrument,
+                    entry.ledger.as_mut(),
+                )
+                .map_err(|error| error.to_string())?;
+                entry.meta.admission_sources = meta.admission_sources;
+                roster
+            } else {
+                check.files
+            };
             // Audit replays are cold passes too: keep the row-effects scope
             // current so a watched session's forced replay redelivers to its
             // subscribers (idempotent by deterministic ids) instead of going

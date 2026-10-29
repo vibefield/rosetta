@@ -1090,6 +1090,7 @@ pub fn prepare_runtime(
     let mut report = RebuildReport {
         segments: election.visit.segments,
         torn_segments: election.visit.torn_segments,
+        unsealed_sources: election.unsealed.clone(),
         ..RebuildReport::default()
     };
     let mut meta_ops = Vec::new();

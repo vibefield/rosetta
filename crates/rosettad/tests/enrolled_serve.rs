@@ -925,5 +925,8 @@ fn a_bad_enrollment_entry_refuses_startup_before_binding() {
     assert!(!bench.db.exists());
 }
 
+#[path = "enrolled_serve/exclusions.rs"]
+mod exclusions;
+
 #[path = "enrolled_serve/metadata_ready.rs"]
 mod metadata_ready;

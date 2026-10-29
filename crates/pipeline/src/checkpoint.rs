@@ -23,8 +23,9 @@ pub struct PipeCheckpoint {
     pub session_id: String,
     pub stream_id: String,
     pub normalizer_version: u32,
-    /// Store-owned source epoch. It advances on every full replay even when a
-    /// capture checkpoint expired and its local tail generation restarted at 1.
+    /// Source epoch, including a reserved raw epoch for a retired interrupted
+    /// capture. It advances on every full replay even when a capture checkpoint
+    /// expired and its local tail generation restarted at 1.
     pub source_generation: u64,
     /// Next durable source-op sequence within `source_generation`.
     pub next_source_sequence: u64,
