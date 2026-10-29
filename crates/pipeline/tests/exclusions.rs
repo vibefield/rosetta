@@ -335,7 +335,7 @@ fn retained_parent_metadata_retires_new_children_after_the_parent_source_is_prun
 fn live_creation_obeys_policy_and_quiet_excluded_files_do_not_trigger_repeated_admission() {
     let mut h = Harness::new();
     h.exclude("/work/client");
-    let (_, files) = h.ingest();
+    let (meta, files) = h.ingest();
     let mut events = ScriptedEvents::default();
     let private = write_session(
         &h.root,
@@ -369,7 +369,8 @@ fn live_creation_obeys_policy_and_quiet_excluded_files_do_not_trigger_repeated_a
         h.opts.clone(),
         live,
         Some(h.ledger),
-    );
+    )
+    .with_admission_sources(meta.admission_sources);
     runner.tick(&mut h.store, &h.instrument).unwrap();
     assert_eq!(queries::all_sessions(h.store.conn()).unwrap().len(), 1);
     let admissions = runner.report().admissions;
@@ -393,7 +394,7 @@ fn known_source_rewrites_are_rechecked_on_hints_and_on_stamp_preserving_audits()
             None,
             "beforepayload",
         );
-        let (_, files) = h.ingest();
+        let (meta, files) = h.ingest();
         let before = queries::session(h.store.conn(), &h.id("work")).unwrap();
         let metadata = std::fs::metadata(h.root.join(&path)).unwrap();
         write_session(
@@ -435,7 +436,8 @@ fn known_source_rewrites_are_rechecked_on_hints_and_on_stamp_preserving_audits()
             h.opts.clone(),
             live,
             Some(h.ledger),
-        );
+        )
+        .with_admission_sources(meta.admission_sources);
         runner.tick(&mut h.store, &h.instrument).unwrap();
         assert_eq!(queries::session(h.store.conn(), &id).unwrap(), before);
         assert!(
@@ -449,4 +451,326 @@ fn known_source_rewrites_are_rechecked_on_hints_and_on_stamp_preserving_audits()
             "audit={audit}"
         );
     }
+}
+
+#[test]
+fn audit_rechecks_cwd_bearing_siblings_before_capture() {
+    let mut h = Harness::new();
+    h.exclude("/work/secret");
+    let sibling = write_session(&h.root, "a-sibling", "work", None, None, "beforepayload");
+    let owner = write_session(
+        &h.root,
+        "z-owner",
+        "work",
+        Some("/work/public"),
+        None,
+        "beforepayload",
+    );
+    let (meta, files) = h.ingest();
+    let sibling_meta = std::fs::metadata(h.root.join(&sibling)).unwrap();
+    let owner_meta = std::fs::metadata(h.root.join(&owner)).unwrap();
+    write_session(&h.root, "a-sibling", "work", None, None, "hiddenpayload");
+    write_session(
+        &h.root,
+        "z-owner",
+        "work",
+        Some("/work/secret"),
+        None,
+        "hiddenpayload",
+    );
+    for (path, metadata) in [(&sibling, sibling_meta), (&owner, owner_meta)] {
+        assert_eq!(
+            std::fs::metadata(h.root.join(path)).unwrap().len(),
+            metadata.len()
+        );
+        std::fs::File::options()
+            .write(true)
+            .open(h.root.join(path))
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
+            .unwrap();
+    }
+    h.opts.audit_files_per_run = 1;
+    let mut runner = LiveRunner::resume_from_roster(
+        &CodexAdapter,
+        h.runtime.clone(),
+        h.root.clone(),
+        Box::<ScriptedEvents>::default(),
+        files,
+        h.opts.clone(),
+        LiveOptions {
+            tick: Duration::ZERO,
+            poll_interval: Duration::ZERO,
+            max_coalesced: 16,
+        },
+        Some(h.ledger),
+    )
+    .with_admission_sources(meta.admission_sources);
+    runner.tick(&mut h.store, &h.instrument).unwrap();
+    drop(runner);
+    assert!(
+        !raw_payloads(&h.ledger_dir).contains("hiddenpayload"),
+        "audit captured excluded sibling payload"
+    );
+}
+
+#[test]
+fn one_append_does_not_reskim_unrelated_sessions() {
+    use std::io::Write;
+    for directory_hint in [false, true] {
+        let mut h = Harness::new();
+        h.exclude("/work/secret");
+        let mut active = String::new();
+        for index in 0..100 {
+            let name = format!("work-{index}");
+            active = write_session(
+                &h.root,
+                &name,
+                &name,
+                Some("/work/public"),
+                None,
+                "beforepayload",
+            );
+        }
+        let (meta, files) = h.ingest();
+        let before = h.instrument.snapshot().get(Metric::FilesSkimmed);
+        let meta_before = scan_ledger(&h.ledger_dir)
+            .unwrap()
+            .entries
+            .into_iter()
+            .filter(|entry| matches!(entry, LedgerEntry::Meta { .. }))
+            .count();
+        std::fs::OpenOptions::new().append(true).open(h.root.join(&active)).unwrap()
+        .write_all(record("response_item", 2, json!({"type":"message","id":"append","role":"user","content":[{"type":"input_text","text":"appendedpayload"}]})).as_bytes()).unwrap();
+        let mut events = ScriptedEvents::default();
+        events.push_changed(if directory_hint {
+            "sessions/2026/09/09"
+        } else {
+            &active
+        });
+        let mut runner = LiveRunner::resume_from_roster(
+            &CodexAdapter,
+            h.runtime.clone(),
+            h.root.clone(),
+            Box::new(events),
+            files,
+            h.opts.clone(),
+            LiveOptions {
+                tick: Duration::ZERO,
+                poll_interval: Duration::from_secs(30),
+                max_coalesced: 16,
+            },
+            Some(h.ledger),
+        )
+        .with_admission_sources(meta.admission_sources);
+        runner.tick(&mut h.store, &h.instrument).unwrap();
+        let skimmed = h.instrument.snapshot().get(Metric::FilesSkimmed) - before;
+        assert_eq!(skimmed, 1, "one append re-skimmed {skimmed} sources");
+        assert_eq!(runner.report().admissions, 0);
+        assert_eq!(
+            queries::search(h.store.conn(), "appendedpayload", 5)
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(runner);
+        let meta_after = scan_ledger(&h.ledger_dir)
+            .unwrap()
+            .entries
+            .into_iter()
+            .filter(|entry| matches!(entry, LedgerEntry::Meta { .. }))
+            .count();
+        assert_eq!(
+            meta_after, meta_before,
+            "an append must not journal another metadata batch"
+        );
+    }
+}
+
+fn restore_modified(path: &Path, before: &std::fs::Metadata) {
+    assert_eq!(std::fs::metadata(path).unwrap().len(), before.len());
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(before.modified().unwrap()))
+        .unwrap();
+}
+
+#[test]
+fn an_audited_child_follows_new_ancestry_through_withheld_sources() {
+    for ledger_only in [false, true] {
+        let mut h = Harness::new();
+        h.exclude("/work/secret");
+        let child = write_session(
+            &h.root,
+            "a-child",
+            "child",
+            None,
+            Some("public"),
+            "beforepayload",
+        );
+        write_session(
+            &h.root,
+            "public",
+            "public",
+            Some("/work/public"),
+            None,
+            "parentpayload",
+        );
+        let secret = write_session(
+            &h.root,
+            "secret",
+            "secret",
+            None,
+            Some("ancestor"),
+            "privateparent",
+        );
+        write_session(
+            &h.root,
+            "ancestor",
+            "ancestor",
+            Some("/work/secret"),
+            None,
+            "privateancestor",
+        );
+        if ledger_only {
+            let path = h.root.join(secret);
+            let source = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(
+                path,
+                source.replace(
+                    "\"thread_source\":\"user\"",
+                    "\"thread_source\":\"guardian_review\"",
+                ),
+            )
+            .unwrap();
+        }
+        for i in 0..20 {
+            let id = format!("unrelated-{i}");
+            write_session(
+                &h.root,
+                &id,
+                &id,
+                Some("/work/public"),
+                None,
+                "unrelatedpayload",
+            );
+        }
+        let (meta, files) = h.ingest();
+        assert!(
+            !files
+                .iter()
+                .any(|file| file.native_session_id == "secret"
+                    || file.native_session_id == "ancestor")
+        );
+        let before = std::fs::metadata(h.root.join(&child)).unwrap();
+        h.opts.audit_files_per_run = 1;
+        let mut runner = LiveRunner::resume_from_roster(
+            &CodexAdapter,
+            h.runtime.clone(),
+            h.root.clone(),
+            Box::<ScriptedEvents>::default(),
+            files,
+            h.opts.clone(),
+            LiveOptions {
+                tick: Duration::ZERO,
+                poll_interval: Duration::ZERO,
+                max_coalesced: 16,
+            },
+            Some(h.ledger),
+        )
+        .with_admission_sources(meta.admission_sources);
+        // Seed the one-shot stat observations of already-withheld sources.
+        runner.catch_up(&mut h.store, &h.instrument).unwrap();
+        let admissions = runner.report().admissions;
+        let skimmed = h.instrument.snapshot().get(Metric::FilesSkimmed);
+        write_session(
+            &h.root,
+            "a-child",
+            "child",
+            None,
+            Some("secret"),
+            "hiddenpayload",
+        );
+        restore_modified(&h.root.join(&child), &before);
+        runner.tick(&mut h.store, &h.instrument).unwrap();
+        assert_eq!(
+            runner.report().admissions,
+            admissions,
+            "the audit must not fall back to a root skim"
+        );
+        assert_eq!(
+            h.instrument.snapshot().get(Metric::FilesSkimmed) - skimmed,
+            4,
+            "each relevant source is read once"
+        );
+        assert!(
+            queries::search(h.store.conn(), "hiddenpayload", 5)
+                .unwrap()
+                .is_empty()
+        );
+        drop(runner);
+        assert!(
+            !raw_payloads(&h.ledger_dir).contains("hiddenpayload"),
+            "ledger_only={ledger_only}"
+        );
+    }
+}
+
+#[test]
+fn a_transcript_hint_rechecks_its_shared_database_metadata() {
+    let mut h = Harness::new();
+    h.exclude("/work/secret");
+    let path = write_session(&h.root, "work", "work", None, None, "beforepayload");
+    for i in 0..20 {
+        let id = format!("unrelated-{i}");
+        write_session(
+            &h.root,
+            &id,
+            &id,
+            Some("/work/public"),
+            None,
+            "unrelatedpayload",
+        );
+    }
+    let db = rusqlite::Connection::open(h.root.join("state_5.sqlite")).unwrap();
+    db.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY, source TEXT, thread_source TEXT, cwd TEXT, title TEXT, cli_version TEXT, created_at INTEGER, updated_at INTEGER);
+        INSERT INTO threads VALUES ('work', 'cli', 'user', '/work/public', 'Work', '0.150.1', 10, 11);").unwrap();
+    let (meta, files) = h.ingest();
+    let id = h.id("work");
+    let before = queries::session(h.store.conn(), &id).unwrap();
+    db.execute(
+        "UPDATE threads SET cwd = '/work/secret' WHERE id = 'work'",
+        [],
+    )
+    .unwrap();
+    write_session(&h.root, "work", "work", None, None, "hiddenpayload");
+    let skimmed = h.instrument.snapshot().get(Metric::FilesSkimmed);
+    let mut events = ScriptedEvents::default();
+    events.push_changed(&path);
+    let mut runner = LiveRunner::resume_from_roster(
+        &CodexAdapter,
+        h.runtime.clone(),
+        h.root.clone(),
+        Box::new(events),
+        files,
+        h.opts.clone(),
+        LiveOptions {
+            tick: Duration::ZERO,
+            poll_interval: Duration::from_secs(30),
+            max_coalesced: 16,
+        },
+        Some(h.ledger),
+    )
+    .with_admission_sources(meta.admission_sources);
+    runner.tick(&mut h.store, &h.instrument).unwrap();
+    assert_eq!(runner.report().admissions, 0);
+    assert_eq!(
+        h.instrument.snapshot().get(Metric::FilesSkimmed) - skimmed,
+        2
+    );
+    assert_eq!(queries::session(h.store.conn(), &id).unwrap(), before);
+    drop(runner);
+    assert!(!raw_payloads(&h.ledger_dir).contains("hiddenpayload"));
 }

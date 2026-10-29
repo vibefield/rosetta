@@ -52,10 +52,12 @@ pub use early::{EarlyToolReport, PreparedAdmission, StreamedPreparer};
 pub use exclusions::{CwdExclusions, reserve_retired_generation};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
 pub use live::{
-    HintMapping, LiveOptions, LiveReport, LiveRunner, PollEvidence, map_hint, stream_live,
+    HintMapping, LiveOptions, LiveReport, LiveRunner, PollEvidence, map_changed_hint, map_hint,
+    stream_live,
 };
 pub use meta::{
-    MetaReport, SessionFile, meta_ingest, meta_ingest_into, meta_ingest_inventory_into,
+    AdmissionCheck, AdmissionSources, MetaReport, SessionFile, meta_ingest, meta_ingest_into,
+    meta_ingest_inventory_into,
 };
 pub use plan::{IngestPlan, SessionPlan};
 pub use replay::{

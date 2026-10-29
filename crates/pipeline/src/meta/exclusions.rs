@@ -36,50 +36,11 @@ pub(super) fn retire_interrupted_sources(
     Ok(())
 }
 
-/// An audit can discover a rewrite with unchanged size/mtime. Check just its
-/// bounded source subset before replaying it; quiet ticks must not reskim the
-/// entire runtime. Planning is read-only, so retired metadata stays frozen.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn filter_audit_sources(
-    adapter: &dyn rosetta_adapter_support::AgentAdapter,
-    runtime: &rosetta_core::rows::RuntimeRow,
-    root: &std::path::Path,
-    store: &Store,
-    files: Vec<super::SessionFile>,
-    opts: &crate::IngestOptions,
-    instrument: &crate::Instrument,
-) -> Result<(Vec<super::SessionFile>, BTreeSet<String>), PipelineError> {
-    if opts.exclude_cwds.is_empty() || files.is_empty() {
-        return Ok((files, BTreeSet::new()));
-    }
-    let inventory: Vec<_> = files
-        .iter()
-        .map(|file| rosetta_capture::ScannedFile {
-            relative_path: file.relative_path.clone(),
-            size: file.size,
-            modified_ms: file.modified_ms,
-            class: None,
-        })
-        .collect();
-    let (meta, admitted, _) = super::plan_inventory(
-        adapter, runtime, root, store, &inventory, false, opts, instrument, 1,
-    )?;
-    let allowed: BTreeSet<_> = admitted
-        .iter()
-        .map(|file| (file.relative_path.as_str(), file.session_id.as_str()))
-        .collect();
-    let files = files
-        .into_iter()
-        .filter(|file| allowed.contains(&(file.relative_path.as_str(), file.session_id.as_str())))
-        .collect();
-    Ok((files, meta.excluded_sessions))
-}
-
 #[derive(Debug, Default)]
 pub(super) struct CwdAdmission {
     policy: CwdExclusions,
     excluded: BTreeSet<String>,
-    parents: BTreeMap<String, BTreeSet<String>>,
+    pub(super) parents: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl CwdAdmission {
@@ -119,7 +80,7 @@ impl CwdAdmission {
         );
     }
 
-    fn observe_row(&mut self, row: &SessionRow) {
+    pub(super) fn observe_row(&mut self, row: &SessionRow) {
         if self.excludes_cwd(row.cwd.as_deref()) {
             self.excluded.insert(row.id.clone());
         }
@@ -133,7 +94,7 @@ impl CwdAdmission {
     }
 
     pub(super) fn filter(
-        mut self,
+        &mut self,
         output: &mut MetaOutput,
         store: &Store,
     ) -> Result<BTreeSet<String>, PipelineError> {
@@ -175,7 +136,7 @@ impl CwdAdmission {
             }
         }
         if self.excluded.is_empty() {
-            return Ok(self.excluded);
+            return Ok(self.excluded.clone());
         }
 
         output
@@ -212,6 +173,6 @@ impl CwdAdmission {
             .retain(|(owner, _)| owner.as_ref().is_none_or(|id| needed.contains(id)));
         // Store and ledger rows are intentionally untouched. This is retirement
         // of capture; archived history remains readable and rebuildable.
-        Ok(self.excluded)
+        Ok(self.excluded.clone())
     }
 }

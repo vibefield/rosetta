@@ -1845,6 +1845,17 @@ now does too, through a start-time **enrollment file**:
   Live admission, changed known sources, and rotating JSONL audits recheck folder policy;
   a later metadata fact also removes pending cold work for that session.
 
+  Known-source hints and audits recheck only the candidate sessions' sibling sources and
+  ancestors, following newly skimmed parent links before capture. The full skim carries a
+  RAM-only source/parent index through cold, resumed, and warm handoffs, including sources
+  withheld from capture; retiring a parent must not hide its metadata from a later child.
+  Each relevant physical transcript, document, or shared database is skimmed once per
+  check. Ordinary appends neither reskim unrelated history nor journal metadata batches.
+  Coalesced directory hints first stat their transcript nominations; unchanged-stamp
+  rewrites still reach the same policy check through the rotating audit.
+  New sources and changed source identities still use full metadata admission. A caller
+  handing over only an admitted roster bootstraps the missing dependency index once.
+
   Rebuild retains retired history. Pass the same `--enroll` file when rebuilding an
   archive whose excluded first capture was interrupted: only those proven excluded
   unsealed sources may remain unfinished. Their raw prefix is never sealed as complete;

@@ -1010,7 +1010,8 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                 opts.clone(),
                 live.clone(),
                 Some(ledger),
-            );
+            )
+            .with_admission_sources(entry.meta.admission_sources);
             runners.push((identity, runner, 0_u64));
         }
         let published = absorb_effects(&mut store, &hub)?;
@@ -1318,6 +1319,7 @@ fn run_resumed_fresh_serve(
             root: target.root.clone(),
             roster,
             ledger: Some(ledger),
+            admission_sources: meta.admission_sources,
             // Replay and the resumed backfill leave the cursor rows as the
             // only evidence; the first poll reads them.
             poll_evidence: Default::default(),
@@ -1382,7 +1384,8 @@ fn run_resumed_fresh_serve(
             live.clone(),
             Some(ledger),
         )
-        .with_poll_evidence(output.poll_evidence);
+        .with_poll_evidence(output.poll_evidence)
+        .with_admission_sources(output.admission_sources);
         runners.push((output.identity, runner));
     }
     let absorbed = drive_live_runners(
@@ -1573,7 +1576,8 @@ fn run_fresh_fast_serve(
             live.clone(),
             Some(ledger),
         )
-        .with_poll_evidence(output.poll_evidence);
+        .with_poll_evidence(output.poll_evidence)
+        .with_admission_sources(output.admission_sources);
         runners.push((output.identity, runner));
     }
     let absorbed = drive_live_runners(
@@ -1664,7 +1668,8 @@ fn run_warm_live_serve(
             opts.clone(),
             live.clone(),
             Some(ledger),
-        );
+        )
+        .with_admission_sources(meta.admission_sources);
         runners.push((target.identity(), runner));
     }
 

@@ -888,6 +888,7 @@ fn admit(
         identity: runtime.identity,
         root: runtime.root,
         roster: runtime.roster,
+        admission_sources: runtime.meta.admission_sources,
         ledger: runtime.ledger,
         poll_evidence,
     }))

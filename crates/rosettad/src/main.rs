@@ -1144,6 +1144,7 @@ pub(crate) struct AppliedColdRuntime {
     pub(crate) identity: RuntimeIdentity,
     pub(crate) root: PathBuf,
     pub(crate) roster: Vec<rosetta_pipeline::SessionFile>,
+    pub(crate) admission_sources: rosetta_pipeline::AdmissionSources,
     pub(crate) ledger: Option<Ledger>,
     /// Committed cursor evidence for the live runner's first poll; empty
     /// where the writer did not collect it, and the poll reads cursor rows.
@@ -1272,6 +1273,7 @@ pub(crate) fn apply_captured_cold_runtime(
         identity: captured.identity,
         root: captured.root,
         roster: captured.roster,
+        admission_sources: captured.meta.admission_sources,
         ledger: captured.ledger,
         poll_evidence: HashMap::new(),
     })
