@@ -190,6 +190,10 @@ pub struct Store {
     /// incomplete source. Keep accepting batches so callers can finish their
     /// diagnostic pass, but never allow that scratch file to be published.
     bulk_abandoned: bool,
+    /// Start-time policy can retire an interrupted source without finishing
+    /// capture. Its existing rows and durable generation fence stay intact;
+    /// only this process's publication gate stops waiting for it.
+    retired_sources: BTreeSet<i64>,
     /// A closed cold planner assigned final presentation ordinals before any
     /// message reached SQLite, so finalization need not rank and rewrite the
     /// complete message table.
@@ -216,6 +220,14 @@ enum StoreMode {
 }
 
 impl Store {
+    /// Stop waiting for a source explicitly retired by the caller's current
+    /// admission policy. The caller must also remove it from capture rosters.
+    /// No canonical data, checkpoint, or generation watermark is changed.
+    /// A later source write revokes this process-local retirement.
+    pub fn retire_source(&mut self, cursor_id: i64) {
+        self.retired_sources.insert(cursor_id);
+    }
+
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let mut conn = Connection::open(path)?;
         let objects: i64 = conn.query_row(
@@ -246,6 +258,7 @@ impl Store {
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             usage_owners: apply::UsageOwners::default(),
             bulk_abandoned: false,
+            retired_sources: BTreeSet::new(),
             bulk_ordinals_precomputed: false,
             planned_batches: None,
             effects: None,
@@ -270,6 +283,7 @@ impl Store {
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             usage_owners: apply::UsageOwners::default(),
             bulk_abandoned: false,
+            retired_sources: BTreeSet::new(),
             bulk_ordinals_precomputed: false,
             planned_batches: None,
             effects: None,
@@ -304,6 +318,7 @@ impl Store {
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             usage_owners: apply::UsageOwners::default(),
             bulk_abandoned: false,
+            retired_sources: BTreeSet::new(),
             bulk_ordinals_precomputed: false,
             planned_batches: None,
             effects: None,
@@ -444,6 +459,7 @@ impl Store {
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             usage_owners: apply::UsageOwners::default(),
             bulk_abandoned: false,
+            retired_sources: BTreeSet::new(),
             bulk_ordinals_precomputed: false,
             planned_batches: None,
             effects: None,
@@ -533,6 +549,11 @@ impl Store {
         }
         self.ram_reconciliation.commit(ram_outcome);
         self.ram_reconciliation.commit_delta(&ram_delta);
+        if let Some(source) = &batch.source {
+            // Capture has resumed. A newly incomplete generation must pass
+            // the ordinary publication gate again.
+            self.retired_sources.remove(&source.cursor_id);
+        }
         if bulk_load
             && matches!(
                 batch.source.as_ref().map(|source| source.mode),
@@ -576,6 +597,9 @@ impl Store {
         let commit_started = Instant::now();
         tx.commit()?;
         stats.sqlite_commit_nanos = elapsed_nanos(commit_started);
+        if let Some(source) = &batch.source {
+            self.retired_sources.remove(&source.cursor_id);
+        }
         self.planned_batches
             .as_mut()
             .expect("planning source branch requires a planning buffer")
@@ -653,7 +677,7 @@ impl Store {
                 message: "cold rebuild contains an abandoned source generation".to_string(),
             });
         }
-        bulk::validate_complete(&self.conn)?;
+        bulk::validate_complete(&self.conn, &self.retired_sources)?;
         let _ = self.flush_bulk_reconciliation()?;
         let tx = self.conn.transaction()?;
         let mut stats = bulk::finalize(&tx, self.bulk_ordinals_precomputed)?;
@@ -690,7 +714,7 @@ impl Store {
                     .to_string(),
             });
         }
-        bulk::validate_complete(&self.conn)?;
+        bulk::validate_complete(&self.conn, &self.retired_sources)?;
         let tx = self.conn.transaction()?;
         let mut stats = bulk::finalize(&tx, false)?;
         let started = Instant::now();

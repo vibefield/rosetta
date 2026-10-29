@@ -849,6 +849,25 @@ pub fn cursor_sources_with_prefix(
         .map_err(StoreError::from)
 }
 
+/// Interrupted sources only. The pipeline owns the opaque checkpoint and
+/// can recover an internal source's session identity when its public binding
+/// is absent. Used to retire cold work without altering its durable fence.
+pub fn incomplete_cursors(
+    conn: &Connection,
+    runtime_id: &str,
+) -> Result<Vec<(i64, Option<String>, String)>, StoreError> {
+    let mut statement = conn.prepare_cached(
+        "SELECT id, session_id, checkpoint FROM ingest_cursor
+         WHERE runtime_id = ?1 AND active_generation != highest_generation",
+    )?;
+    statement
+        .query_map([runtime_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
+}
+
 pub fn audit_path(conn: &Connection, runtime_id: &str) -> Result<Option<String>, StoreError> {
     Ok(conn
         .prepare_cached("SELECT last_path FROM source_audit WHERE runtime_id = ?1")?

@@ -276,10 +276,13 @@ pub(crate) fn apply_snapshot_records(
     let revision = hasher.finalize().to_hex().to_string();
 
     let checkpoint = PipeCheckpoint::decode(&cursor.checkpoint).filter(|checkpoint| {
-        checkpoint.session_id == file.session_id
-            && checkpoint.stream_id == file.stream_id
-            && checkpoint.normalizer_version == adapter.normalizer_version()
+        checkpoint.session_id == file.session_id && checkpoint.stream_id == file.stream_id
     });
+    let reserved_generation = checkpoint
+        .as_ref()
+        .map_or(0, |checkpoint| checkpoint.source_generation);
+    let checkpoint = checkpoint
+        .filter(|checkpoint| checkpoint.normalizer_version == adapter.normalizer_version());
     if let Some(previous) = &checkpoint
         && previous.snapshot_revision.as_deref() == Some(revision.as_str())
         && cursor.active_generation == previous.source_generation
@@ -324,6 +327,7 @@ pub(crate) fn apply_snapshot_records(
     let generation = cursor
         .highest_generation
         .max(cursor.active_generation)
+        .max(reserved_generation)
         .checked_add(1)
         .ok_or_else(|| PipelineError::Config("snapshot generation overflowed".to_string()))?;
 

@@ -239,6 +239,59 @@ fn backfill(h: &mut Harness) {
 }
 
 #[test]
+fn folder_policy_filters_document_members_and_preserves_unknown_ownership() {
+    let mut h = harness();
+    let mut sessions = initial_sessions();
+    sessions
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"unknown", "messages":[]}));
+    write_document(&h.document, sessions);
+    h.opts.exclude_cwds = rosetta_pipeline::CwdExclusions::new(["/work/alpha".into()]).unwrap();
+    let (meta, files) = meta_ingest_into(
+        &FakeDocumentAgent,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    assert_eq!(meta.sessions, 2);
+    assert_eq!(meta.projects, 1);
+    assert_eq!(files.len(), 2);
+    assert!(!files.iter().any(|file| file.native_session_id == "a"));
+    stream_backfill_into(
+        &FakeDocumentAgent,
+        &h.runtime,
+        &h.root,
+        &mut h.store,
+        &files,
+        &h.opts,
+        &h.instrument,
+        None,
+    )
+    .unwrap();
+    assert!(
+        queries::session(h.store.conn(), &ids::session_id(&h.runtime.id, "a"))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        queries::search(h.store.conn(), "xolotl", 5).unwrap().len(),
+        1
+    );
+    assert!(
+        queries::session(h.store.conn(), &ids::session_id(&h.runtime.id, "unknown"))
+            .unwrap()
+            .unwrap()
+            .cwd
+            .is_none()
+    );
+}
+
+#[test]
 fn document_membership_and_whole_file_deletion_are_authoritative() {
     let adapter = &FakeDocumentAgent;
     let mut h = harness();

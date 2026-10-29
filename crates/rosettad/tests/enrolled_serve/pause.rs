@@ -276,3 +276,48 @@ fn disk_progressive_pause_retains_cursors_and_finishes_after_resume() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+#[test]
+fn paused_restart_applies_new_folder_exclusions() {
+    let bench = Bench::new();
+    let source = large_history(&bench);
+    let (child, origin) = spawn_serve_with_flags(&bench, &["--capture-workers", "2"]);
+    let before = wait(&origin, |s| {
+        s["daemon"]["ingest"]["metadata_ready_at"].is_i64()
+            && s["daemon"]["ingest"]["runtimes"]
+                .as_array()
+                .is_some_and(|rows| {
+                    rows.iter()
+                        .any(|r| r["bytes_streamed"].as_u64().unwrap_or(0) > 0)
+                })
+    });
+    assert_eq!(post(&origin, run(&before), "pause", 50).0, 202);
+    let paused = wait(&origin, |s| run(s)["state"] == "paused");
+    drop(child);
+    append(
+        &source,
+        "excluded-after-pause",
+        "excludedafterpausesentinel",
+    );
+    let mut enrollment: Value =
+        serde_json::from_slice(&std::fs::read(&bench.enroll).unwrap()).unwrap();
+    enrollment["exclude_cwds"] = json!([
+        "/work/pause",
+        "/private/tmp/rosetta-farm/basic-chat/project"
+    ]);
+    std::fs::write(&bench.enroll, serde_json::to_vec(&enrollment).unwrap()).unwrap();
+    let (_child, origin) = spawn_serve(&bench);
+    let restarted = http_get(&origin, "/api/status");
+    assert_eq!(run(&restarted)["id"], run(&paused)["id"]);
+    assert_eq!(run(&restarted)["state"], "paused");
+    assert_eq!(post(&origin, run(&restarted), "resume", 51).0, 202);
+    wait(&origin, |s| {
+        s["canonical_ready"] == true && run(s)["state"] == "succeeded"
+    });
+    let raw = rosetta_capture::scan_ledger(&bench.native_ledger_dir()).unwrap();
+    for entry in raw.entries {
+        if let rosetta_capture::LedgerEntry::Raw { payload, .. } = entry {
+            assert!(!String::from_utf8_lossy(&payload).contains("excludedafterpausesentinel"));
+        }
+    }
+}

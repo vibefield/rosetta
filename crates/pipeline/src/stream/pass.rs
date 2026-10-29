@@ -145,7 +145,14 @@ impl IngestPass {
         let cursor_id = cursor.id;
         let prev_blob = cursor.checkpoint;
         let active_generation = cursor.active_generation;
-        let highest_generation = cursor.highest_generation;
+        let highest_generation = cursor.highest_generation.max(
+            PipeCheckpoint::decode(&prev_blob)
+                .filter(|checkpoint| {
+                    checkpoint.session_id == file.session_id
+                        && checkpoint.stream_id == file.stream_id
+                })
+                .map_or(0, |checkpoint| checkpoint.source_generation),
+        );
 
         // An expired blob (undecodable, foreign version, or a cursor row that
         // belongs to a different session id) means full replay from byte zero —

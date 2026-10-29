@@ -1145,6 +1145,7 @@ pub(crate) struct AppliedColdRuntime {
     pub(crate) identity: RuntimeIdentity,
     pub(crate) root: PathBuf,
     pub(crate) roster: Vec<rosetta_pipeline::SessionFile>,
+    pub(crate) admission_sources: rosetta_pipeline::AdmissionSources,
     pub(crate) ledger: Option<Ledger>,
     /// Committed cursor evidence for the live runner's first poll; empty
     /// where the writer did not collect it, and the poll reads cursor rows.
@@ -1273,6 +1274,7 @@ pub(crate) fn apply_captured_cold_runtime(
         identity: captured.identity,
         root: captured.root,
         roster: captured.roster,
+        admission_sources: captured.meta.admission_sources,
         ledger: captured.ledger,
         poll_evidence: HashMap::new(),
     })
@@ -1532,13 +1534,13 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
     if flags.audit_boundaries && db.exists() {
         return Err("--audit-boundaries requires a new private cold projection".to_string());
     }
-    let opts = IngestOptions::default();
     let instrument = Instrument::new();
     if flags.audit_boundaries {
         instrument.enable_boundary_evidence();
     }
     let adapters = selected(&flags)?;
     let enrollment = load_enrollment(&flags)?;
+    let opts = Enrollment::ingest_options(enrollment.as_ref());
     let _projection_lock = projection_lock(&db)?;
 
     let (mut store, private_projection) = open_for_backfill(&db)?;
@@ -1893,12 +1895,12 @@ fn cmd_ingest(args: &[String]) -> Result<(), String> {
 fn cmd_watch(args: &[String]) -> Result<(), String> {
     let flags = parse_flags(args)?;
     let db = flags.db.clone().ok_or("watch needs --db PATH")?;
-    let opts = IngestOptions::default();
     let live = LiveOptions::default();
     let wake = SourceWake::default();
     let instrument = Instrument::new();
     let adapters = selected(&flags)?;
     let enrollment = load_enrollment(&flags)?;
+    let opts = Enrollment::ingest_options(enrollment.as_ref());
     let _projection_lock = projection_lock(&db)?;
 
     let mut store = open_progressive_backfill(&db)?;
@@ -2304,6 +2306,8 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
     }
     let enrollment = load_enrollment(&flags)?;
     let instrument = Instrument::new();
+    let policy = Enrollment::ingest_options(enrollment.as_ref()).exclude_cwds;
+    let allow_retired_unsealed = !policy.is_empty() && !flags.experiment_election_only;
     let stage_started = Instant::now();
     let stage_before = instrument.snapshot();
     let runtimes = rebuild_runtimes(
@@ -2385,7 +2389,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
                             election_only: false,
                             election_cache: Some(cache),
                             prefetch_ledger,
-                            allow_unsealed_sources: false,
+                            allow_unsealed_sources: allow_retired_unsealed,
                             cancel: None,
                         },
                     )
@@ -2433,6 +2437,16 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
             let report =
                 apply_prepared_runtime(adapter, &runtime, prepared, &mut store, &instrument)
                     .map_err(|error| error.to_string())?;
+            if !flags.experiment_election_only {
+                Enrollment::validate_rebuild_sources(
+                    &policy,
+                    &mut store,
+                    adapter,
+                    &runtime,
+                    &report,
+                    &instrument,
+                )?;
+            }
             let profile = instrument.snapshot().delta_since(&profile_before);
             if flags.json && flags.profile {
                 bench::emit_command_stage_profile(
@@ -2468,11 +2482,21 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
                         .as_ref()
                         .map(|root| root.join(format!("{dir_name}.json"))),
                     prefetch_ledger: flags.experiment_prefetch_ledger,
-                    allow_unsealed_sources: false,
+                    allow_unsealed_sources: allow_retired_unsealed,
                     cancel: None,
                 },
             )
             .map_err(|error| error.to_string())?;
+            if !flags.experiment_election_only {
+                Enrollment::validate_rebuild_sources(
+                    &policy,
+                    &mut store,
+                    adapter,
+                    &runtime,
+                    &report,
+                    &instrument,
+                )?;
+            }
             if report.hard_errors > 0 {
                 return Err(format!(
                     "{}: {} hard errors during replay",

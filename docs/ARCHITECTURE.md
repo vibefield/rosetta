@@ -1899,6 +1899,54 @@ now does too, through a start-time **enrollment file**:
   to or nested with the kind's native root, and a missing or non-directory root are each
   a startup refusal naming the entry (a missing root is a refusal, not a skip: the
   supervisor enrolls a root after creating it). `label` is presentation only.
+- **Folder exclusions (issue #26).** The same format-1 file optionally carries
+  `"exclude_cwds": ["/abs/work/client"]`, defaulting to an empty list. It applies to
+  every consented runtime, discovered or enrolled, in `serve`, `ingest`, and `watch`.
+  Entries must be absolute; empty, relative, `~` and NUL-containing paths refuse startup
+  before binding. Folders need not still exist. Matching uses the canonical cwd's lexical
+  normalization (separators, dots, and trailing slashes), with component boundaries:
+  `/work/client` includes its descendants, never `/work/client-other`. It is case-sensitive
+  and does not resolve symlinks; the rule names the path recorded by the agent.
+
+  Admission settles after the bounded skims have contributed their facts, before any
+  metadata batch is journaled or applied. A matching cwd from any sibling metadata source
+  or retained session metadata withholds the whole session, every source for it, and its
+  dependent children. A child cannot recreate an excluded ancestor as a placeholder;
+  placeholders needed only by excluded children are dropped too. Unknown cwd alone is
+  not an exclusion. Shared databases/documents retain their allowed virtual members.
+  User exclusions also stop raw capture of adapter-internal sessions (`ledger_only` would
+  still capture them, so it is not the mechanism). Census counts remain physical inventory
+  estimates; post-skim source rosters and session counts contain only admitted work.
+
+  The supervisor changes the file and restarts the daemon, just as for enrollment. An
+  already admitted session is **retired**: its metadata, timeline, search results, and
+  archived raw records stay readable, while new metadata and payload capture stop.
+  Removing the rule admits the source again and catches up from its existing identity.
+  Live admission, changed known sources, and rotating JSONL audits recheck folder policy;
+  a later metadata fact also removes pending cold work for that session.
+
+  Known-source hints and audits recheck only the candidate sessions' sibling sources and
+  ancestors, following newly skimmed parent links before capture. The full skim carries a
+  RAM-only source/parent index through cold, resumed, and warm handoffs, including sources
+  withheld from capture; retiring a parent must not hide its metadata from a later child.
+  Each relevant physical transcript, document, or shared database is skimmed once per
+  check. Ordinary appends neither reskim unrelated history nor journal metadata batches.
+  Coalesced directory hints first stat their transcript nominations; unchanged-stamp
+  rewrites still reach the same policy check through the rotating audit.
+  New sources and changed source identities still use full metadata admission. A caller
+  handing over only an admitted roster bootstraps the missing dependency index once.
+
+  Rebuild retains retired history. Pass the same `--enroll` file when rebuilding an
+  archive whose excluded first capture was interrupted: only those proven excluded
+  unsealed sources may remain unfinished. Their raw prefix is never sealed as complete;
+  a payload-free checkpoint reserves its generation so re-admission allocates a newer
+  one, including after a rebuild. Other incomplete sources still refuse publication.
+  A legacy disk cold load may already have a staged cursor when the rule is added.
+  Its rows and generation watermark remain intact; a process-local set of explicitly
+  retired cursor ids removes only that work from the publication gate. Capturing the
+  source again revokes that exception, and its next generation exceeds the saved fence.
+  This is retirement, not deletion or a forget operation; no canonical schema or public
+  protocol change is required.
 - **Consent by construction.** Enrolled runtimes are never on the roll call
   (`/api/discoveries` lists native layout roots only), never part of the one-shot consent
   gate, always ingested and watched — an enrolled root that is still empty is watched

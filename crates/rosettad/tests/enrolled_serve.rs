@@ -933,3 +933,6 @@ fn a_bad_enrollment_entry_refuses_startup_before_binding() {
 
 #[path = "enrolled_serve/metadata_ready.rs"]
 mod metadata_ready;
+
+#[path = "enrolled_serve/exclusions.rs"]
+mod exclusions;
