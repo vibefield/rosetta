@@ -1,6 +1,6 @@
 {
   "name": "@vibefield/rosetta-room",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "rosetta's History room as a package: the projects, sessions and worktree columns, the panels and charts, and the transcript, behind injected ports. It dials nothing.",
   "main": "./dist/index.js",
@@ -35,7 +35,7 @@
     "@radix-ui/react-context-menu": "^2.3.7",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-tooltip": "^1.2.16",
-    "@vibefield/rosetta-protocol": "^0.1.1",
+    "@vibefield/rosetta-protocol": "^0.1.2",
     "@tanstack/react-virtual": "^3.14.10",
     "@vibecook/mille": "^0.3.4",
     "@vibecook/mille-ui": "^0.3.4"

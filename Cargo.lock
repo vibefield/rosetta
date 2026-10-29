@@ -1313,7 +1313,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rosetta-adapter-antigravity"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-adapter-support",
  "rosetta-core",
@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-adapter-claude-code"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "base64",
  "rosetta-adapter-support",
@@ -1337,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-adapter-codex"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-adapter-support",
  "rosetta-core",
@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-adapter-copilot"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "base64",
  "blake3",
@@ -1364,7 +1364,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-adapter-grok"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-adapter-support",
  "rosetta-core",
@@ -1375,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-adapter-hermes"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-adapter-support",
  "rosetta-capture",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-adapter-kimi-code"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-adapter-support",
  "rosetta-core",
@@ -1399,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-adapter-opencode"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-adapter-support",
  "rosetta-core",
@@ -1411,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-adapter-pi"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-adapter-support",
  "rosetta-core",
@@ -1422,7 +1422,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-adapter-support"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "base64",
  "blake3",
@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-bench-corpus"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-adapter-claude-code",
  "rosetta-adapter-codex",
@@ -1446,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-capture"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "blake3",
  "notify",
@@ -1460,7 +1460,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-core"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "blake3",
  "serde",
@@ -1470,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-media"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "blake3",
  "fast_image_resize",
@@ -1483,7 +1483,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-pipeline"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "blake3",
  "rosetta-adapter-antigravity",
@@ -1509,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-pricing"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-core",
  "serde_json",
@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-protocol"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-core",
  "rosetta-search",
@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-search"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "rosetta-core",
  "rosetta-store",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-search-bench"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "blake3",
  "rosetta-core",
@@ -1557,7 +1557,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-server"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "axum",
  "base64",
@@ -1585,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-store"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "blake3",
  "rosetta-core",
@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "rosettad"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "axum",
  "blake3",
