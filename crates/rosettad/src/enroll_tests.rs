@@ -281,6 +281,7 @@ fn targets_carry_two_runtimes_of_one_kind_and_the_roll_call_lists_only_the_nativ
     assert_eq!(kim_target.name(), "claude-code «Kim»");
     assert_eq!(kim_target.identity().label.as_deref(), Some("Kim"));
     assert!(kim_target.census.file_count > 0);
+    assert_eq!(kim_target.discovery_row(true).sessions, Some(1));
     // The pipeline row never carries the label or provenance.
     let row = kim_target.enabled_runtime();
     assert!(row.enabled && row.label.is_none() && row.provenance.is_discovered());
@@ -289,6 +290,7 @@ fn targets_carry_two_runtimes_of_one_kind_and_the_roll_call_lists_only_the_nativ
     // it is watched so the persona's first session appears live.
     let empty_target = &targets[3];
     assert!(empty_target.is_enrolled() && !empty_target.installed() && empty_target.active());
+    assert_eq!(empty_target.discovery_row(true).sessions, Some(0));
 
     // `enabled_kinds`: the installed native claude-code consents; codex is
     // not installed and the unknown kind is unknown — both warnings.
@@ -311,7 +313,9 @@ fn targets_carry_two_runtimes_of_one_kind_and_the_roll_call_lists_only_the_nativ
     assert_eq!(board.len(), 2);
     assert!(board.iter().all(|row| row.data_root.starts_with("~/")));
     assert!(board[0].enabled && board[0].installed);
+    assert_eq!(board[0].sessions, Some(1));
     assert!(!board[1].enabled && !board[1].installed);
+    assert_eq!(board[1].sessions, Some(0));
     assert!(!board.iter().any(|row| row.data_root.contains("agents")));
 
     let by_kind = discovered_by_kind(&targets);

@@ -309,6 +309,20 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > Recovery explicitly reports `restoring`; runtimes distinguish `preparing` and `applying` after
 > input reading, and the final canonical phases distinguish `finalizing` from `publishing`.
 >
+> **First metadata pass** (2026-10-29): `daemon.ingest.metadata_ready_at` is the Unix-millisecond
+> stamp when this process has published every active runtime's bounded metadata, including its
+> public project/session lists. It is independent of phase: a fresh start can already be
+> streaming earlier runtimes when the last skim lands. The stamp stays fixed through later
+> stages and live work; file-meter equality is not a completion signal. Metadata-audit mode
+> still exposes `metadata_ready` as its phase. Fresh, resumed, and warm starts record their
+> own boundary after metadata publication; warm inventory catch-up keeps the `live` phase.
+> A failed or interrupted metadata pass leaves the stamp null. It is a process-local RAM
+> observation, reset on restart, not a durable readiness flag. Canonical publication and search
+> readiness remain separate. The additive protocol-27 field defaults to null when an older
+> response omits it; TypeScript makes absence explicit, and consumers fall back to the older
+> phase heuristic only when the field is absent. Rosetta's list veil uses the stamp while cold
+> work remains active; an already-live warm catalog remains usable throughout its catch-up.
+>
 > Detached search reports `SearchState.progress` for its unpublished generation: document counts
 > during `indexing`, then `optimizing`, `validating`, and `publishing`. The denominator comes from
 > the same canonical snapshot, and its atomic numerator advances every 256 documents. Progress is
@@ -678,6 +692,18 @@ capture contract explicit.
   fails a walk. Discovery walks all registered roots concurrently (the first failing root in
   registry order fails the census) and records each file's claiming stream on its
   `ScannedFile`, which the census and metadata admission reuse instead of matching again.
+- **Census session estimates** (2026-10-29): `DiscoveryRow.sessions` counts files
+  claimed by the adapter's declared `census_session_streams` during that same walk,
+  before consent and without opening content. Antigravity counts its primary transcript;
+  Claude Code counts main and subagent transcripts; Codex counts rollouts; Copilot counts
+  session events; Grok counts updates; Kimi counts agent wires; Pi counts session files.
+  Metadata, duplicate logs, and workflow journals do not add sessions. Hermes and OpenCode
+  return null because their sessions live inside databases. A truncated walk also returns
+  null; a complete supported walk with no transcript files returns zero. This is a file-based
+  estimate including child transcripts, not a promise of the final visible session count:
+  metadata-only sessions, duplicate identities, malformed files, and content-based admission
+  policy can make that count differ. The wire field is additive with a serde default;
+  protocol 27 is unchanged, and clients treat an older daemon's missing field as unknown.
 - **Metadata skim** (2026-09-27): sources are read and skimmed by their adapter on a
   bounded pool (at most eight threads, never more than the cores) while one ordered merge
   admits their facts in inventory order, so the metadata batch and its ledger frame are

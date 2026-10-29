@@ -445,6 +445,7 @@ fn exemplars() -> serde_json::Value {
             },
             ingest: IngestProgress {
                 phase: IngestPhase::Backfilling,
+                metadata_ready_at: None,
                 runtimes: vec![
                     RuntimeBackfill {
                         kind: "claude-code".into(),
@@ -743,7 +744,17 @@ fn exemplars() -> serde_json::Value {
                 data_root: "~/.claude".into(),
                 installed: true,
                 files: 1_209,
+                sessions: Some(1_204),
                 bytes: 2_147_483_648,
+                newest_modified_ms: 1_000,
+                enabled: false,
+            }, DiscoveryRow {
+                kind: "hermes".into(),
+                data_root: "~/.hermes".into(),
+                installed: true,
+                files: 3,
+                sessions: None,
+                bytes: 4_096,
                 newest_modified_ms: 1_000,
                 enabled: false,
             }],
@@ -828,4 +839,43 @@ fn typescript_protocol_version_matches() {
         include_str!("../../../clients/ts/protocol-version.mjs"),
         expected
     );
+}
+
+#[test]
+fn the_first_pass_stamp_is_additive_and_preserves_null_and_zero() {
+    let legacy = serde_json::json!({
+        "phase": "backfilling", "runtimes": [], "projects": [],
+    });
+    let mut ingest: IngestProgress = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(ingest.metadata_ready_at, None);
+    for stamp in [None, Some(0), Some(1_791_216_000_000)] {
+        ingest.metadata_ready_at = stamp;
+        let mut expected = legacy.clone();
+        expected["metadata_ready_at"] = serde_json::json!(stamp);
+        let wire = serde_json::to_value(&ingest).unwrap();
+        assert_eq!(wire, expected);
+        assert_eq!(
+            serde_json::from_value::<IngestProgress>(wire).unwrap(),
+            ingest
+        );
+    }
+}
+
+#[test]
+fn discovery_session_estimates_are_additive_and_distinguish_unknown_from_zero() {
+    let legacy = serde_json::json!({
+        "kind": "claude-code", "data_root": "~/.claude", "installed": true,
+        "files": 10, "bytes": 1_000, "newest_modified_ms": 5, "enabled": false,
+    });
+    let mut row: DiscoveryRow = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(row.sessions, None, "an older daemon has no estimate");
+
+    for sessions in [None, Some(0), Some(1_204)] {
+        row.sessions = sessions;
+        let mut expected = legacy.clone();
+        expected["sessions"] = serde_json::json!(sessions);
+        let wire = serde_json::to_value(&row).unwrap();
+        assert_eq!(wire, expected, "only the additive field changes");
+        assert_eq!(serde_json::from_value::<DiscoveryRow>(wire).unwrap(), row);
+    }
 }

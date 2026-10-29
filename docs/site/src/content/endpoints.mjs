@@ -19,14 +19,14 @@ export const endpoints = [
     id: 'status', group: 'Daemon', method: 'GET', path: '/api/status', title: 'Get daemon status',
     description: 'Inspect protocol compatibility, canonical publication, search readiness, and live ingestion progress in one read.',
     response: 'StatusResponse', sdk: 'await client.status()',
-    notes: ['The listener answers before cold ingestion finishes. A reachable daemon is not necessarily ready for every query.', 'canonical_ready and search.readiness are independent. Wait for canonical_ready before reading project aggregates; inspect search.readiness before treating an empty search as complete.', 'daemon is null when the projection is served without an ingestion loop.'],
+    notes: ['The listener answers before cold ingestion finishes. A reachable daemon is not necessarily ready for every query.', 'daemon.ingest.metadata_ready_at records when this process published the first bounded metadata pass for all active runtimes, so projects and sessions can be listed. The Unix-millisecond stamp stays fixed through later phases, even if streaming began before the last skim. It is null until that boundary and is established anew after a restart, including warm starts. Older daemons omit it; absence means the boundary is unknown. Do not infer first-pass completion from file-meter equality.', 'canonical_ready and search.readiness are independent. Wait for canonical_ready before reading project aggregates; inspect search.readiness before treating an empty search as complete.', 'daemon is null when the projection is served without an ingestion loop.'],
     related: ['readiness', 'types/StatusResponse'],
   },
   {
     id: 'discoveries', group: 'Daemon', method: 'GET', path: '/api/discoveries', title: 'List discovered agents',
-    description: 'Read the content-free census of agent data roots, including installation, file counts, byte estimates, and enrollment.',
+    description: 'Read the content-free census of agent data roots, including installation, file counts, session estimates, byte estimates, and enrollment.',
     response: 'DiscoveriesResponse', sdk: 'await client.discoveries()',
-    notes: ['Discovery reports inventory without reading transcript content. installed means the root contains at least one file claimed by an adapter.', 'Use enabled to distinguish discovered agents from agents already admitted for ingestion.'],
+    notes: ['Discovery reports inventory without reading transcript content. installed means the root contains at least one file claimed by an adapter.', 'sessions estimates one session per authoritative transcript file, including child sessions. Metadata and duplicate logs do not count. It can differ from the final admitted session count. Zero means a complete supported census found no transcripts; null means the layout cannot supply a file-based estimate (Hermes and OpenCode) or the walk was truncated. Older daemons may omit sessions; treat absence as unknown.', 'Use enabled to distinguish discovered agents from agents already admitted for ingestion.'],
   },
   {
     id: 'enable-runtimes', group: 'Daemon', method: 'POST', path: '/api/runtimes/enable', title: 'Enable agent runtimes',

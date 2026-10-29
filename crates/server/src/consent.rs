@@ -129,6 +129,7 @@ mod tests {
             data_root: format!("~/.{kind}"),
             installed,
             files: 10,
+            sessions: Some(3),
             bytes: 1_000,
             newest_modified_ms: 5,
             enabled: false,

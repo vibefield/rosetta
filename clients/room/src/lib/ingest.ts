@@ -16,6 +16,9 @@ export function isIngestActive(ingest: IngestProgress | null): boolean {
 export function isCensusRunning(ingest: IngestProgress | null): boolean {
   if (!isIngestActive(ingest)) return false;
   if (ingest === null) return true;
+  // A completed first pass stays complete while queued runtimes start
+  // streaming or later work changes phase. Older daemons omit the stamp.
+  if (ingest.metadata_ready_at !== undefined) return ingest.metadata_ready_at === null;
   // The explicit audit seam proves every bounded skim has committed. Runtime
   // rows remain queued because complete-record streaming has not started.
   if (ingest.phase === "metadata_ready") return false;

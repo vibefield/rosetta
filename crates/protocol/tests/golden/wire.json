@@ -169,7 +169,18 @@
         "files": 1209,
         "installed": true,
         "kind": "claude-code",
-        "newest_modified_ms": 1000
+        "newest_modified_ms": 1000,
+        "sessions": 1204
+      },
+      {
+        "bytes": 4096,
+        "data_root": "~/.hermes",
+        "enabled": false,
+        "files": 3,
+        "installed": true,
+        "kind": "hermes",
+        "newest_modified_ms": 1000,
+        "sessions": null
       }
     ]
   },
@@ -1387,6 +1398,7 @@
         "subscribers": 2
       },
       "ingest": {
+        "metadata_ready_at": null,
         "phase": "backfilling",
         "projects": [
           {

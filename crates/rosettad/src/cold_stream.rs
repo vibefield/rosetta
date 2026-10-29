@@ -632,13 +632,6 @@ fn write(
                     publish_metadata(&plan, &names[published], &mut ownership, cx)?;
                     published += 1;
                     let last = published == workers;
-                    if last {
-                        cx.health.ingest_metadata_ready();
-                        println!(
-                            "milestone: metadata-ready elapsed_s={:.2}",
-                            cx.started.elapsed().as_secs_f64()
-                        );
-                    }
                     plan.opts.progress = Some(ColdProgress::observe(
                         &plan.runtime.id,
                         &plan.files,
@@ -647,6 +640,13 @@ fn write(
                         cx.health.clone(),
                         true,
                     ));
+                    if last {
+                        cx.health.ingest_metadata_ready(now_ms());
+                        println!(
+                            "milestone: metadata-ready elapsed_s={:.2}",
+                            cx.started.elapsed().as_secs_f64()
+                        );
+                    }
                     let baseline = plan.instrument.snapshot();
                     cx.health.ingest_stream(
                         &plan.runtime.id,
