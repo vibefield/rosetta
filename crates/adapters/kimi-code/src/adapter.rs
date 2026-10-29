@@ -31,6 +31,10 @@ impl AgentAdapter for KimiCodeAdapter {
         }
     }
 
+    fn census_session_streams(&self) -> Option<&'static [&'static str]> {
+        Some(&[spec::WIRE])
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 13: a step's first visible row owns its request and the remainder
         // flushes at step.end; fork copies drop usage; negative inputOther

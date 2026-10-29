@@ -12,7 +12,15 @@ data_root: string,
 /**
  * The root exists and holds at least one file a layout stream claims.
  */
-installed: boolean, files: number, bytes: number, newest_modified_ms: number, 
+installed: boolean, files: number, 
+/**
+ * Content-free session estimate: one per authoritative transcript file,
+ * including child sessions. May differ from the admitted session count.
+ * Null for layouts without a file-based estimate or a truncated census;
+ * zero when a complete supported census finds no transcripts. Older
+ * daemons omit this field; consumers must treat absence as unknown too.
+ */
+sessions?: number | null, bytes: number, newest_modified_ms: number, 
 /**
  * Consent already granted — persisted from an earlier run, the CLI,
  * or this run's enable call.

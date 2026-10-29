@@ -217,6 +217,14 @@ pub struct DiscoveryRow {
     pub installed: bool,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub files: u64,
+    /// Content-free session estimate: one per authoritative transcript file,
+    /// including child sessions. May differ from the admitted session count.
+    /// Null for layouts without a file-based estimate or a truncated census;
+    /// zero when a complete supported census finds no transcripts. Older
+    /// daemons omit this field; consumers must treat absence as unknown too.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional = nullable, type = "number | null"))]
+    pub sessions: Option<u64>,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub bytes: u64,
     pub newest_modified_ms: Ms,

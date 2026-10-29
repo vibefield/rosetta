@@ -27,6 +27,7 @@ type Census = (
     i64,
     bool,
     Vec<ScannedFile>,
+    Option<usize>,
 );
 
 /// Everything a discovery reports except the wall-clock `discovered_at`.
@@ -43,6 +44,7 @@ fn census(discovery: &Discovery) -> Census {
         discovery.newest_modified_ms,
         discovery.walk_truncated,
         discovery.inventory.clone(),
+        discovery.session_count,
     )
 }
 

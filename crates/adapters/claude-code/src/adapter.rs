@@ -35,6 +35,10 @@ impl AgentAdapter for ClaudeCodeAdapter {
         }
     }
 
+    fn census_session_streams(&self) -> Option<&'static [&'static str]> {
+        Some(&[spec::TRANSCRIPT, spec::SUBAGENT_TRANSCRIPT])
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 28: exclusive usage buckets with 1-hour writes, the most final
         // streamed snapshot, iteration samples, no `<synthetic>` usage, and

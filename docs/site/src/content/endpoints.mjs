@@ -24,9 +24,9 @@ export const endpoints = [
   },
   {
     id: 'discoveries', group: 'Daemon', method: 'GET', path: '/api/discoveries', title: 'List discovered agents',
-    description: 'Read the content-free census of agent data roots, including installation, file counts, byte estimates, and enrollment.',
+    description: 'Read the content-free census of agent data roots, including installation, file counts, session estimates, byte estimates, and enrollment.',
     response: 'DiscoveriesResponse', sdk: 'await client.discoveries()',
-    notes: ['Discovery reports inventory without reading transcript content. installed means the root contains at least one file claimed by an adapter.', 'Use enabled to distinguish discovered agents from agents already admitted for ingestion.'],
+    notes: ['Discovery reports inventory without reading transcript content. installed means the root contains at least one file claimed by an adapter.', 'sessions estimates one session per authoritative transcript file, including child sessions. Metadata and duplicate logs do not count. It can differ from the final admitted session count. Zero means a complete supported census found no transcripts; null means the layout cannot supply a file-based estimate (Hermes and OpenCode) or the walk was truncated. Older daemons may omit sessions; treat absence as unknown.', 'Use enabled to distinguish discovered agents from agents already admitted for ingestion.'],
   },
   {
     id: 'enable-runtimes', group: 'Daemon', method: 'POST', path: '/api/runtimes/enable', title: 'Enable agent runtimes',

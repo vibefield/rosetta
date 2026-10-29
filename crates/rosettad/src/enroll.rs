@@ -342,6 +342,7 @@ impl RuntimeTarget {
             data_root: self.runtime.data_root.clone(),
             installed: self.installed(),
             files: self.census.file_count as u64,
+            sessions: self.census.session_count.map(|count| count as u64),
             bytes: self.census.total_bytes,
             newest_modified_ms: self.census.newest_modified_ms,
             enabled,

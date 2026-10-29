@@ -37,6 +37,10 @@ impl AgentAdapter for AntigravityAdapter {
         }
     }
 
+    fn census_session_streams(&self) -> Option<&'static [&'static str]> {
+        Some(&[spec::TRANSCRIPT])
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 8: the conversation store's per-step usage becomes session usage
         // samples (§4.1.3); the checkpoint gains the generation index.
