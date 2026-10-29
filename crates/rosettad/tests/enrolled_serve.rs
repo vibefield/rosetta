@@ -203,6 +203,9 @@ impl Bench {
     /// interruption the real daemon recovers from, staged deterministically
     /// instead of racing a SIGKILL against a fixture-sized backfill.
     fn stage_cold_generation(&self, enrolled_kim: bool) {
+        // This helper constructs a legacy interrupted stage, not a completed
+        // run with its published database removed behind its control receipt.
+        let _ = std::fs::remove_file(self.db.with_file_name("rosetta.db.ingestion.json"));
         let ledger = self.db.with_extension("ledger");
         let staged = self.staged_ledger();
         std::fs::remove_file(&self.db).unwrap();
@@ -236,6 +239,9 @@ impl Bench {
         .unwrap();
     }
 }
+
+#[path = "enrolled_serve/pause.rs"]
+mod pause;
 
 fn assert_success(output: &std::process::Output) -> String {
     assert!(
@@ -925,8 +931,8 @@ fn a_bad_enrollment_entry_refuses_startup_before_binding() {
     assert!(!bench.db.exists());
 }
 
-#[path = "enrolled_serve/exclusions.rs"]
-mod exclusions;
-
 #[path = "enrolled_serve/metadata_ready.rs"]
 mod metadata_ready;
+
+#[path = "enrolled_serve/exclusions.rs"]
+mod exclusions;

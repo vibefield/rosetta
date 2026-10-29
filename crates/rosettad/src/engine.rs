@@ -167,6 +167,7 @@ pub(crate) fn acknowledge_search(
 
 /// Everything the cold loop borrows from the serve phase per call.
 pub(crate) struct ColdCx<'a> {
+    pub control: Option<&'a crate::ingestion_control::ColdControl>,
     pub store: &'a mut Store,
     pub hub: &'a Hub,
     pub health: &'a DaemonHealth,
@@ -273,7 +274,8 @@ impl ColdEngine {
     /// and boosts jump ahead of the rotation between passes.
     pub fn run(&mut self, cx: &mut ColdCx<'_>) -> Result<(), String> {
         while self.schedule.pending() && !cx.stop.load(Ordering::SeqCst) {
-            self.drain_hints(cx)?;
+            let resumed = crate::serve::control::disk_boundary(cx.control, cx.backfills)?;
+            self.drain_hints(cx, resumed)?;
             self.schedule.promote(cx.boost.drain());
             // Check before the pass too: a promotion that empties the
             // starter lane must not charge the following (possibly long,
@@ -374,9 +376,9 @@ impl ColdEngine {
     /// satisfied the metadata cut, later hints do not recreate cold work;
     /// the live phase's stat poll catches that suffix after handoff. This is
     /// the cold phase's termination guarantee under continuous writers.
-    fn drain_hints(&mut self, cx: &mut ColdCx<'_>) -> Result<(), String> {
+    fn drain_hints(&mut self, cx: &mut ColdCx<'_>, rescan: bool) -> Result<(), String> {
         for (index, entry) in cx.backfills.iter_mut().enumerate() {
-            let mut needs_admission = false;
+            let mut needs_admission = rescan;
             let mut nominated = BTreeSet::new();
             let mut excluded = BTreeSet::new();
             for _ in 0..COLD_HINT_BURST {
@@ -520,7 +522,9 @@ impl ColdEngine {
         if cx.stop.load(Ordering::SeqCst) {
             return Ok(());
         }
-        for entry in cx.backfills.iter_mut() {
+        for index in 0..cx.backfills.len() {
+            crate::serve::control::disk_boundary(cx.control, cx.backfills)?;
+            let entry = &mut cx.backfills[index];
             let check = entry
                 .meta
                 .admission_sources

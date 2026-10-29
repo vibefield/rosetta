@@ -23,6 +23,26 @@ export const endpoints = [
     related: ['readiness', 'types/StatusResponse'],
   },
   {
+    id: 'ingestion', group: 'Daemon', method: 'GET', path: '/api/ingestions/{id}', title: 'Get a cold ingestion',
+    description: 'Read the current auto-started cold run, its revision, execution state, and allowed controls.',
+    response: 'Ingestion', sdk: 'await client.ingestions.get(id)', source: 'crates/server/src/http/ingestions.rs',
+    notes: ['The same resource is present at daemon.ingest.run in status. Its state is independent of the existing work phase and metadata_ready_at stamp.', 'A stable run id survives pause and process restart. Warm-only legacy projections and metadata-audit mode have no controllable cold run. Responses are not cached.'],
+  },
+  {
+    id: 'ingestion-pause', group: 'Daemon', method: 'POST', path: '/api/ingestions/{id}/pause', title: 'Pause cold ingestion',
+    description: 'Persist pause intent and drain cold workers to a recoverable boundary while keeping reads available.',
+    request: 'IngestionControlRequest', body: { expected_revision: 7 }, response: 'Ingestion',
+    sdk: 'await client.ingestions.pause(id, { expected_revision: 7, indexId, idempotencyKey })', source: 'crates/server/src/http/ingestions.rs',
+    notes: ['Send X-Rosetta-Index-Id from the run and a caller-generated UUID in Idempotency-Key. Retain both and expected_revision for retries.', '202 means pausing, not stopped. Only paused proves workers are quiescent and retained evidence is flushed. No fixed pause latency is promised. HTTP reads stay available.', 'The publication fence rejects late controls with 409 publication_in_progress. Session grants cannot control ingestion; the daemon credential and Origin rules apply.', 'A matching retry or already-satisfied action returns 200; accepted changes return 202 with Location and Retry-After. All lifecycle responses use Cache-Control: no-store.'],
+  },
+  {
+    id: 'ingestion-resume', group: 'Daemon', method: 'POST', path: '/api/ingestions/{id}/resume', title: 'Resume cold ingestion',
+    description: 'Continue the same cold run using retained evidence and the current authorized source inventory.',
+    request: 'IngestionControlRequest', body: { expected_revision: 9 }, response: 'Ingestion',
+    sdk: 'await client.ingestions.resume(id, { expected_revision: 9, indexId, idempotencyKey })', source: 'crates/server/src/http/ingestions.rs',
+    notes: ['Uses the same index, revision, idempotency, access, and response rules as pause. Resume while pausing returns 409 invalid_transition.', 'Paused intent survives daemon restarts. RAM restoration may reset counters; progress_epoch identifies the new baseline.', 'This controls unfinished cold work. Continuous live updates, starting a second run, discard, and archive replacement remain separate, unimplemented lifecycle capabilities.'],
+  },
+  {
     id: 'discoveries', group: 'Daemon', method: 'GET', path: '/api/discoveries', title: 'List discovered agents',
     description: 'Read the content-free census of agent data roots, including installation, file counts, session estimates, byte estimates, and enrollment.',
     response: 'DiscoveriesResponse', sdk: 'await client.discoveries()',

@@ -131,7 +131,8 @@ export function useDaemonStatus(catalog: CatalogPort): DaemonStatusFeed {
         const phase = status.ingest?.phase;
         // Keep search visible after canonical publication. Audit/consent are
         // intentional pauses; an unanswered first request retries promptly.
-        const paused = phase === "metadata_ready" || phase === "awaiting_consent";
+        const paused = status.ingest?.run?.state === "paused" || status.ingest?.run?.state === "failed" ||
+          phase === "metadata_ready" || phase === "awaiting_consent";
         const complete = status.canonicalReady && status.searchReadiness === "ready";
         delay = complete ? 30_000 : paused ? 2_500 : 500;
       } catch (error: unknown) {

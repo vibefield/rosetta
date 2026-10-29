@@ -67,6 +67,7 @@ function createOverlayCount(): OverlayCount {
 }
 
 export interface Room {
+  readonly ingestion: RoomPorts["ingestion"];
   readonly catalog: CatalogPort;
   readonly sessions: SessionLeases;
   readonly assets: AssetSource;
@@ -96,6 +97,7 @@ export function RoomProvider({
   readonly children?: ReactNode;
 }) {
   const { catalog, sessions: sessionPort, assets } = ports;
+  const ingestion = ports.ingestion;
   const host = ports.host ?? null;
   const initialSummaryTab = options.initialSummaryTab ?? "activity";
   const portalContainer = options.portalContainer ?? null;
@@ -112,10 +114,10 @@ export function RoomProvider({
   const fold = useMemo(() => createFoldPreference(storage), [storage]);
   const room = useMemo<Room>(
     () => ({
-      catalog, sessions, assets, host, initialSummaryTab, favicons, portalContainer, overlays,
+      catalog, sessions, assets, ingestion, host, initialSummaryTab, favicons, portalContainer, overlays,
       storage, tints, fold,
     }),
-    [catalog, sessions, assets, host, initialSummaryTab, favicons, portalContainer, overlays, storage, tints, fold],
+    [catalog, sessions, assets, ingestion, host, initialSummaryTab, favicons, portalContainer, overlays, storage, tints, fold],
   );
   return <RoomContext.Provider value={room}>{children}</RoomContext.Provider>;
 }

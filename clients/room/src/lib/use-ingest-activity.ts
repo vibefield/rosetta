@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { activityPhase, progressBytes, progressDuration, sampleActivity } from "./ingest-activity";
+import { activityIdentity, activityPhase, progressBytes, progressDuration, sampleActivity } from "./ingest-activity";
 import type { ActivityFeed, ActivitySamples, IngestActivity } from "./ingest-activity";
 
 export function useIngestActivity(feed: ActivityFeed): IngestActivity | null {
@@ -30,13 +30,13 @@ export function useIngestActivity(feed: ActivityFeed): IngestActivity | null {
   const sinceAnswer = Math.max(0, now - (feed.receivedAt ?? now));
   const elapsed = `${progressDuration(feed.uptimeMs + (phase.active ? sinceAnswer : 0))} elapsed`;
   const sinceChange = Math.max(0, now - (samples?.changedAt ?? now));
-  const rate = sinceChange < 4_000 && samples?.identity === `${feed.startedAt}:${phase.key}:${phase.unit}`
+  const rate = sinceChange < 4_000 && samples?.identity === activityIdentity(feed, phase)
     ? samples.rate : null;
   let footer = "Connected";
   if (feed.connectionError) footer = `Last update ${progressDuration(sinceAnswer)} ago`;
   else if (rate && phase.unit) footer = phase.unit === "bytes"
     ? `${progressBytes(rate)}/s` : `${Math.round(rate).toLocaleString()} ${phase.unit === "documents" ? "messages" : phase.unit === "records" ? "items" : phase.unit}/s`;
   else if (phase.unit && sinceChange >= 10_000) footer = `Connected · No new counts for ${progressDuration(sinceChange)}`;
-  else if (!phase.active) footer = key === "ready" ? "Complete" : key === "paused" ? "Paused" : "Ready to browse";
+  else if (!phase.active) footer = key === "ready" ? "Complete" : key === "paused" ? "Paused" : key === "failed" ? "Stopped" : "Ready to browse";
   return { phase, feed, footer, elapsed };
 }

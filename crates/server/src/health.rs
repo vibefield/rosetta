@@ -106,6 +106,7 @@ struct RuntimeEntry {
 
 pub struct DaemonHealth {
     started_at_ms: Ms,
+    control: Option<Arc<dyn crate::ingestion::IngestionControl>>,
     /// Keyed by runtime id.
     runtimes: Mutex<BTreeMap<String, RuntimeEntry>>,
     ingest: Mutex<IngestState>,
@@ -115,6 +116,7 @@ impl DaemonHealth {
     pub fn new(now_ms: Ms) -> Self {
         Self {
             started_at_ms: now_ms,
+            control: None,
             runtimes: Mutex::new(BTreeMap::new()),
             ingest: Mutex::new(IngestState {
                 phase: IngestPhase::Discovering,
@@ -126,11 +128,32 @@ impl DaemonHealth {
         }
     }
 
+    pub fn with_ingestion(mut self, control: Arc<dyn crate::ingestion::IngestionControl>) -> Self {
+        self.control = Some(control);
+        self
+    }
+
+    pub fn ingestion(&self) -> Option<&Arc<dyn crate::ingestion::IngestionControl>> {
+        self.control.as_ref()
+    }
+
+    /// Recovery resets only observations. The first-pass stamp stays sticky
+    /// within this process, including across pause/resume.
+    pub fn ingest_reset_progress(&self) {
+        let mut ingest = self.ingest.lock().expect("ingest state poisoned");
+        ingest.entries.clear();
+        ingest.projects.clear();
+        ingest.project_source = None;
+    }
+
     /// The census is on the board and nothing has been read — the user is
     /// choosing. The app renders the roll call off this phase alone.
     pub fn ingest_await_consent(&self) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
         ingest.phase = IngestPhase::AwaitingConsent;
+        if let Some(control) = &self.control {
+            control.observe_phase(IngestPhase::AwaitingConsent);
+        }
     }
 
     /// Enroll one runtime with its census denominators, queued. Every later
@@ -156,6 +179,9 @@ impl DaemonHealth {
     pub fn ingest_skim(&self, runtime_id: &str, source: IngestCounterSource) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
         ingest.phase = IngestPhase::Backfilling;
+        if let Some(control) = &self.control {
+            control.observe_phase(IngestPhase::Backfilling);
+        }
         if let Some(entry) = entry_mut(&mut ingest, runtime_id) {
             entry.state = BackfillState::Skimming;
             entry.live = Some(source);
@@ -201,6 +227,9 @@ impl DaemonHealth {
     pub fn ingest_stream(&self, runtime_id: &str, source: IngestCounterSource) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
         ingest.phase = IngestPhase::Backfilling;
+        if let Some(control) = &self.control {
+            control.observe_phase(IngestPhase::Backfilling);
+        }
         if let Some(entry) = entry_mut(&mut ingest, runtime_id) {
             entry.state = BackfillState::Streaming;
             entry.live = Some(source);
@@ -237,6 +266,9 @@ impl DaemonHealth {
 
     pub fn ingest_phase(&self, phase: IngestPhase) {
         self.ingest.lock().expect("ingest state poisoned").phase = phase;
+        if let Some(control) = &self.control {
+            control.observe_phase(phase);
+        }
     }
 
     /// Fresh parallel workers update the board while the sole writer is busy.
@@ -256,6 +288,9 @@ impl DaemonHealth {
     pub fn ingest_live(&self) {
         let mut ingest = self.ingest.lock().expect("ingest state poisoned");
         ingest.phase = IngestPhase::Live;
+        if let Some(control) = &self.control {
+            control.observe_phase(IngestPhase::Live);
+        }
         if let Some(source) = ingest.project_source.take() {
             ingest.projects = source();
         }
@@ -274,6 +309,7 @@ impl DaemonHealth {
         let ingest = self.ingest.lock().expect("ingest state poisoned");
         IngestProgress {
             phase: ingest.phase,
+            run: self.control.as_ref().map(|control| control.snapshot()),
             metadata_ready_at: ingest.metadata_ready_at,
             projects: ingest
                 .project_source

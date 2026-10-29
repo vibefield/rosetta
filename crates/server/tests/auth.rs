@@ -414,6 +414,7 @@ async fn the_bearer_guards_every_rest_route_and_websocket() {
     let server = serve(policy()).await;
     for path in [
         "/api/status",
+        "/api/ingestions/ing_test",
         "/api/runtimes",
         "/api/projects",
         "/api/sessions",
@@ -450,7 +451,11 @@ async fn the_bearer_guards_every_rest_route_and_websocket() {
             .await;
         assert_eq!(wrong.refusal(), (401, Some("bad-token")), "{path}");
         let right = server.get(path, &[("authorization", &bearer())]).await;
-        let expected = if path == "/api/nowhere" { 404 } else { 200 };
+        let expected = if path == "/api/nowhere" || path.starts_with("/api/ingestions/") {
+            404
+        } else {
+            200
+        };
         assert_eq!(right.status, expected, "{path}: {right:?}");
     }
     let search = server
@@ -554,6 +559,16 @@ async fn an_allowed_origin_is_never_a_credential() {
             Some("authorization")
         );
     }
+    for action in ["pause", "resume"] {
+        let reply = server
+            .request(
+                "POST",
+                &format!("/api/ingestions/ing_test/{action}"),
+                &[("origin", FOREIGN), ("authorization", &bearer())],
+            )
+            .await;
+        assert_eq!(reply.status, 403);
+    }
     // A foreign page holding the real bearer is still refused where browsers
     // skip CORS: upgrades and writes.
     assert_eq!(
@@ -654,6 +669,7 @@ async fn a_grant_opens_its_own_session_and_nothing_else() {
     // aggregates and writes.
     for path in [
         "/api/status",
+        "/api/ingestions/ing_test",
         "/api/runtimes",
         "/api/projects",
         "/api/sessions",
@@ -663,6 +679,19 @@ async fn a_grant_opens_its_own_session_and_nothing_else() {
     ] {
         let reply = server.get(path, &[("authorization", &header)]).await;
         assert_eq!(reply.refusal(), (401, Some("wrong-route")), "{path}");
+    }
+    for action in ["pause", "resume"] {
+        let reply = server
+            .request(
+                "POST",
+                &format!("/api/ingestions/ing_test/{action}"),
+                &[
+                    ("authorization", &header),
+                    ("content-type", "application/json"),
+                ],
+            )
+            .await;
+        assert_eq!(reply.refusal(), (401, Some("wrong-route")));
     }
     // The recorded-file read is its session's route with a second scope
     // (RO-13): a read grant reaches it and lacks the scope.

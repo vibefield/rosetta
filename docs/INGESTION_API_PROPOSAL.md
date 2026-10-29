@@ -1,8 +1,14 @@
 # Ingestion lifecycle API
 
-**Status: proposal, 2026-10-05. Not implemented.** The current wire contract as of
-integration on 2026-10-10 is protocol 27. The routes and types below are a proposed
-addition, not callable endpoints or generated SDK methods.
+**Status: proposal, 2026-10-05; cold pause/resume subset implemented 2026-10-29.**
+The current subset is documented in [ARCHITECTURE.md](ARCHITECTURE.md): auto-started
+cold runs expose GET, pause, and resume, with their resource at `daemon.ingest.run`.
+The full resource/overview, start, discard, restart, and live controller below remain
+proposed; do not infer those capabilities from cold pause/resume support.
+The wire contract as of
+integration on 2026-10-10 is protocol 27. Apart from that implemented subset,
+the routes and types below are proposed additions, not callable endpoints or
+generated SDK methods.
 
 **Revised after the desktop/Vibefield integration review.** The resource split
 fits both hosts, but the original fixed-enrollment and source-only replacement

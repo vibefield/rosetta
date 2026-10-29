@@ -39,6 +39,7 @@ use crate::hub::Hub;
 
 mod activity;
 mod images;
+mod ingestions;
 
 const DEFAULT_LIST_LIMIT: i64 = 100;
 const DEFAULT_SEARCH_LIMIT: i64 = 50;
@@ -255,6 +256,15 @@ pub fn router(state: AppState) -> Router {
         || axum::middleware::from_fn_with_state(auth.clone(), crate::auth::require_allowed_origin);
     Router::new()
         .route("/api/status", get(status))
+        .route("/api/ingestions/{id}", get(ingestions::get))
+        .route(
+            "/api/ingestions/{id}/pause",
+            axum::routing::post(ingestions::pause).route_layer(origin_guard()),
+        )
+        .route(
+            "/api/ingestions/{id}/resume",
+            axum::routing::post(ingestions::resume).route_layer(origin_guard()),
+        )
         .route("/api/discoveries", get(discoveries))
         // The two writes a reader's intent can make. Both carry the same
         // origin guard the WS upgrades do: a browser page from a foreign
@@ -381,6 +391,7 @@ impl Failure {
         Self(
             StatusCode::INTERNAL_SERVER_ERROR,
             ApiError {
+                details: None,
                 code: ErrorCode::Internal,
                 message: message.into(),
             },
@@ -391,6 +402,7 @@ impl Failure {
         Self(
             StatusCode::NOT_FOUND,
             ApiError {
+                details: None,
                 code: ErrorCode::NotFound,
                 message: message.into(),
             },
@@ -401,6 +413,7 @@ impl Failure {
         Self(
             StatusCode::BAD_REQUEST,
             ApiError {
+                details: None,
                 code: ErrorCode::BadRequest,
                 message: message.into(),
             },
@@ -411,6 +424,7 @@ impl Failure {
         Self(
             StatusCode::SERVICE_UNAVAILABLE,
             ApiError {
+                details: None,
                 code: ErrorCode::NotReady,
                 message: message.into(),
             },
@@ -421,6 +435,7 @@ impl Failure {
         Self(
             StatusCode::GONE,
             ApiError {
+                details: None,
                 code: ErrorCode::CursorExpired,
                 message: "the timeline was rewritten; refetch from the head".into(),
             },

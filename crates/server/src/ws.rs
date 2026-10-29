@@ -387,6 +387,7 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
                 let _ = sink
                     .send(ServerFrame::Error {
                         error: rosetta_protocol::ApiError {
+                            details: None,
                             code: rosetta_protocol::ErrorCode::Internal,
                             message: "snapshot read failed".into(),
                         },

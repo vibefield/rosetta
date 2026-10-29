@@ -9,6 +9,8 @@ import type {
   DayUsageResponse,
   ImageVariant,
   IngestProgress,
+  Ingestion,
+  IngestionCommand,
   MetaSubscriptionHandlers,
   RosettaClient,
   SearchBuildProgress,
@@ -262,10 +264,17 @@ export interface AssetSource {
 }
 
 /** Everything a host hands the room. */
+export interface IngestionPort {
+  pause(id: string, command: IngestionCommand, signal?: AbortSignal): Promise<Ingestion>;
+  resume(id: string, command: IngestionCommand, signal?: AbortSignal): Promise<Ingestion>;
+}
+
 export interface RoomPorts {
   readonly catalog: CatalogPort;
   readonly sessions: SessionPort;
   readonly assets: AssetSource;
+  /** Optional daemon-level authority. Absence leaves history observation-only. */
+  readonly ingestion?: IngestionPort | null;
   /** Absent: a browser tab, which the room states rather than papers over. */
   readonly host?: HostPort | null;
 }

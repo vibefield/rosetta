@@ -66,8 +66,11 @@ export async function build({ check = false } = {}) {
   for (const endpoint of endpoints) {
     assert(routes.includes(`${endpoint.method} ${endpoint.path}`), `Documented route no longer exists: ${endpoint.path}`);
     for (const name of [endpoint.request, endpoint.response].filter(Boolean)) assert(['binary', 'document'].includes(name) || types.has(name), `Unknown response/request type: ${name}`);
-    const method = endpoint.sdk.match(/client\.(\w+)/)?.[1];
-    assert(method && new RegExp(`\\b${method}\\(`).test(client), `SDK method no longer exists: ${method}`);
+    const methods = endpoint.sdk.match(/client\.([\w.]+)\(/)?.[1].split('.') ?? [];
+    const [namespace, method] = methods;
+    const exists = methods.length === 1 ? new RegExp(`\\b${namespace}\\(`).test(client)
+      : methods.length === 2 && new RegExp(`readonly ${namespace} = \\{[\\s\\S]*?\\b${method}:`).test(client);
+    assert(exists, `SDK method no longer exists: ${methods.join('.')}`);
   }
   for (const [name, info] of types) for (const dep of info.dependencies) assert(types.has(dep), `${name} references missing type ${dep}`);
   const publicTypes = new Set([...publicIndex.matchAll(/export (?:type )?\* from "\.\/generated\/(\w+)"/g)].map(match => match[1]));

@@ -2,6 +2,7 @@ import { useId } from "react";
 import { AgentMark, agentLabel } from "../lib/agents";
 import { runtimeActivity } from "../lib/ingest-activity";
 import type { IngestActivity } from "../lib/ingest-activity";
+import { IngestionControls } from "./IngestionControls";
 
 function ProgressMeter({ value, label, paused = false }: {
   readonly value: number | null; readonly label: string; readonly paused?: boolean;
@@ -43,6 +44,7 @@ export function IngestStatus({ activity }: { readonly activity: IngestActivity |
         <span title={feed.connectionError ?? (footer.includes("No new") ? "The service is connected; its work counters have not changed." : undefined)}>{footer}</span>
         <span>{elapsed}</span>
       </div>
+      <IngestionControls run={feed.ingest?.run} />
       {!ready && (feed.ingest?.runtimes.length ?? 0) > 0 && <details className="ah-ingest-status__agents">
         <summary>Agent details <span aria-hidden="true">⌄</span></summary>
         <ul>

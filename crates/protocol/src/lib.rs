@@ -22,6 +22,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod ingestion;
+pub use ingestion::*;
+
 pub use rosetta_core::assets::ImageVariant;
 pub use rosetta_core::rows::{
     Ms, ProjectRow, RuntimeProvenance, RuntimeRow, SessionActivity, SessionRole, SessionRow,
@@ -118,6 +121,11 @@ pub enum BackfillState {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct IngestProgress {
     pub phase: IngestPhase,
+    /// Cold-run controls and execution state, independent of work phase.
+    /// Absent on older daemons, static readers, and metadata-audit mode.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub run: Option<Ingestion>,
     /// Unix milliseconds when this process finished publishing the first
     /// bounded metadata pass for all active runtimes. Sessions and projects
     /// can be listed; transcript, aggregate, and search readiness are separate.
@@ -566,6 +574,13 @@ pub enum ErrorCode {
     NotReady,
     /// The pagination watermark no longer matches: refetch from the head.
     CursorExpired,
+    IndexChanged,
+    RevisionConflict,
+    IdempotencyConflict,
+    InvalidTransition,
+    PublicationInProgress,
+    ControlCapacity,
+    ShuttingDown,
     Internal,
 }
 
@@ -574,6 +589,9 @@ pub enum ErrorCode {
 pub struct ApiError {
     pub code: ErrorCode,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub details: Option<IngestionConflict>,
 }
 
 /// Server→client WebSocket frames. The subscribe protocol is the hub's:

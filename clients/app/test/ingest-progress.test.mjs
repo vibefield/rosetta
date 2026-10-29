@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { activityPhase, progressBytes, progressDuration, sampleActivity } from "../../room/src/lib/ingest-activity.ts";
+
+test("cold pause state is visible independently of metadata readiness and resets rate epochs", () => {
+  const base = feed();
+  const paused = { ...base, ingest: { ...base.ingest, metadata_ready_at: 100,
+    run: { state: "paused", progress_epoch: "one" } } };
+  assert.equal(activityPhase(paused).title, "History import paused");
+  assert.equal(activityPhase(paused).active, false);
+  const pausing = { ...paused, ingest: { ...paused.ingest, run: { state: "pausing" } } };
+  assert.equal(activityPhase(pausing).active, true);
+  assert.equal(activityPhase(pausing).key, "pausing");
+  const old = sampleActivity(null, base, activityPhase(base));
+  const resumed = { ...base, ingest: { ...base.ingest, run: { state: "running", progress_epoch: "two" } } };
+  assert.notEqual(sampleActivity(old, resumed, activityPhase(resumed)).identity, old.identity);
+});
 import { dataHooks, microtasks } from "./support/hooks.mjs";
 import { deferred, fakeClock } from "./support/protocol.mjs";
 
