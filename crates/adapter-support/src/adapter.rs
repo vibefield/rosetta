@@ -243,6 +243,20 @@ pub trait AgentAdapter: Send + Sync {
     /// have completely different grammars.
     fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver>;
 
+    /// Streams whose files each estimate one session in the content-free
+    /// census, including child-session transcripts. Only authoritative
+    /// transcripts belong here: metadata, duplicate logs, and auxiliary
+    /// journals must not count the same session again. Discovery uses the
+    /// layout's already-classified paths; it never skims or opens a database.
+    ///
+    /// `None` means file counts cannot estimate sessions (for example, a
+    /// multi-session database). A supported layout with no matching files
+    /// estimates zero. This is not an exact count of admitted sessions:
+    /// content-only identity, role, and admission facts are still unknown.
+    fn census_session_streams(&self) -> Option<&'static [&'static str]> {
+        None
+    }
+
     /// Bump whenever normalized output or adapter checkpoint semantics change.
     /// A mismatch expires the cursor and starts a source-generation replay.
     fn normalizer_version(&self) -> u32;

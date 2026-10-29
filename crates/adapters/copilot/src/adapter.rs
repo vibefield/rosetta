@@ -37,6 +37,10 @@ impl AgentAdapter for CopilotAdapter {
         }
     }
 
+    fn census_session_streams(&self) -> Option<&'static [&'static str]> {
+        Some(&[spec::EVENTS])
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 9: per-model shutdown intervals in exclusive buckets with billed
         // nano-AIU; no per-message output usage (§4.1.3).

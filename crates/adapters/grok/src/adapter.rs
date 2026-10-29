@@ -38,6 +38,10 @@ impl AgentAdapter for GrokAdapter {
         }
     }
 
+    fn census_session_streams(&self) -> Option<&'static [&'static str]> {
+        Some(&[spec::UPDATES])
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 10: exclusive usage buckets, per-model turn usage, billed ticks,
         // aggregate scope, and usage for prompts without a row (§4.1.3).
