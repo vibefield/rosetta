@@ -237,6 +237,200 @@ fn fresh_serve_publishes_metadata_then_installs_valid_projection() {
     assert!(db.with_extension("ledger").is_dir());
 }
 
+/// The first `milestone: <name>` line whose fields include every `with`
+/// pair: its position in `stdout` and its `elapsed_s`.
+fn milestone(stdout: &str, name: &str, with: &[&str]) -> (usize, f64) {
+    stdout
+        .lines()
+        .enumerate()
+        .find_map(|(index, line)| {
+            let rest = line.strip_prefix("milestone: ")?.strip_prefix(name)?;
+            let fields = rest.split_whitespace().collect::<Vec<_>>();
+            if !(rest.is_empty() || rest.starts_with(' '))
+                || !with.iter().all(|pair| fields.contains(pair))
+            {
+                return None;
+            }
+            let elapsed = fields
+                .iter()
+                .find_map(|field| field.strip_prefix("elapsed_s="))?
+                .parse()
+                .ok()?;
+            Some((index, elapsed))
+        })
+        .unwrap_or_else(|| panic!("no milestone {name} {with:?}:\n{stdout}"))
+}
+
+fn set_modified(path: &Path, modified: std::time::SystemTime) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+}
+
+/// Set every file's modification time under `root`.
+fn age_tree(root: &Path, modified: std::time::SystemTime) {
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            age_tree(&path, modified);
+        } else {
+            set_modified(&path, modified);
+        }
+    }
+}
+
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The transcripts of two fixtures in one home: basic-chat's written now,
+/// resume's three days ago.
+fn two_session_home(home: &Path) {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../groundtruth/claude-code/fixtures/2.1.241");
+    let claude = home.join(".claude");
+    copy_tree(&fixtures.join("basic-chat/claude-config"), &claude);
+    let resume = fixtures.join("resume/claude-config/projects");
+    copy_tree(&resume, &claude.join("projects"));
+    let now = std::time::SystemTime::now();
+    age_tree(&claude, now);
+    let relative = find_project_jsonl(&resume);
+    let relative = relative.strip_prefix(&resume).unwrap();
+    set_modified(&claude.join("projects").join(relative), now - 3 * DAY);
+}
+
+/// Measurement is behaviour-neutral stdout (docs/ARCHITECTURE.md, cold-build
+/// measurement): per-runtime metadata and admission milestones, first and
+/// recent readiness in order before canonical readiness, and a census that
+/// carries structure only.
+#[test]
+fn fresh_serve_reports_readiness_milestones_in_order_and_a_structure_only_census() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    two_session_home(&home);
+    let db = temp.path().join("archive/rosetta.db");
+    let stdout = assert_success(&run_serve(&home, &db));
+
+    let metadata = milestone(&stdout, "runtime-metadata-public", &["agent=claude-code"]);
+    let complete = milestone(&stdout, "first-session-complete", &[]);
+    let admitted = milestone(&stdout, "runtime-readable", &["sessions=2"]);
+    let first = milestone(&stdout, "first-readable", &[]);
+    let day = milestone(
+        &stdout,
+        "recent-ready",
+        &["horizon=24h", "horizon_sessions=1"],
+    );
+    let week = milestone(
+        &stdout,
+        "recent-ready",
+        &["horizon=7d", "horizon_sessions=2"],
+    );
+    let canonical = milestone(&stdout, "canonical-ready", &[]);
+    let peak = milestone(&stdout, "memory-peak", &[]);
+    let order = [
+        metadata, complete, admitted, first, day, week, canonical, peak,
+    ];
+    for pair in order.windows(2) {
+        assert!(
+            pair[0].0 < pair[1].0 && pair[0].1 <= pair[1].1,
+            "{pair:?}\n{stdout}"
+        );
+    }
+    let (usage, line) = stdout
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.starts_with("usage-copies: dropped="))
+        .expect("usage-copies line");
+    assert!(usage > canonical.0, "{stdout}");
+    for field in [" displaced=", " owned=", " unclaimed_usage="] {
+        assert!(line.contains(field), "{field}: {line}");
+    }
+
+    let census = stdout
+        .lines()
+        .filter(|line| line.starts_with("census: "))
+        .collect::<Vec<_>>();
+    assert_eq!(census.len(), 1, "{stdout}");
+    let census = census[0];
+    for field in [
+        "files=2 ",
+        " le1h=1/",
+        " le30d=2/",
+        " older=0/0 ",
+        // Transcripts are their own files: nothing is shared.
+        " shared=0/0 ",
+        " sessions=2 ",
+        " roots=2 ",
+    ] {
+        assert!(census.contains(field), "{field}: {census}");
+    }
+    // Structure only: every value is a number, a number list, a runtime id
+    // or the agent kind, and only a tally (`files/bytes`) has a slash.
+    for field in census.trim_start_matches("census: ").split_whitespace() {
+        let (key, value) = field.split_once('=').expect("key=value fields");
+        assert!(!field.contains('\\'), "{field}: {census}");
+        match key {
+            "agent" => assert_eq!(value, "claude-code"),
+            "runtime" => assert!(value.bytes().all(|b| b.is_ascii_hexdigit())),
+            "le1h" | "le24h" | "le7d" | "le30d" | "older" | "shared" => {
+                let tally = value.split('/').collect::<Vec<_>>();
+                assert!(tally.len() == 2 && tally.iter().all(|n| n.parse::<u64>().is_ok()));
+            }
+            _ => assert!(
+                value.split(',').all(|n| n.parse::<u64>().is_ok()),
+                "{field}: {census}"
+            ),
+        }
+    }
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let mut ids = conn
+        .prepare("SELECT id, native_session_id, root_session_id, project_id FROM session")
+        .unwrap()
+        .query_map([], |row| {
+            Ok([
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+            ])
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .concat();
+    ids.retain(|id| !id.is_empty());
+    assert!(ids.len() >= 6, "two sessions' identities: {ids:?}");
+    for id in ids {
+        assert!(!census.contains(&id), "{id} leaked: {census}");
+    }
+}
+
+/// A horizon holding no session is decided at the first admission.
+#[test]
+fn a_horizon_without_recent_sessions_is_ready_at_the_first_admission() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    two_session_home(&home);
+    age_tree(
+        &home.join(".claude/projects"),
+        std::time::SystemTime::now() - 40 * DAY,
+    );
+    let db = temp.path().join("archive/rosetta.db");
+    let stdout = assert_success(&run_serve(&home, &db));
+
+    let first = milestone(&stdout, "first-readable", &[]);
+    for horizon in ["horizon=24h", "horizon=7d"] {
+        let ready = milestone(&stdout, "recent-ready", &[horizon, "horizon_sessions=0"]);
+        assert!(ready.0 > first.0, "{stdout}");
+    }
+    let census = stdout
+        .lines()
+        .find(|line| line.starts_with("census: "))
+        .expect("census line");
+    assert!(census.contains(" le30d=0/0 older=2/"), "{census}");
+}
+
 #[test]
 fn interrupted_first_serve_is_preserved_and_restarted_through_ram() {
     let temp = tempfile::tempdir().unwrap();

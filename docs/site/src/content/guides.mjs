@@ -88,7 +88,7 @@ export const guides = [
       ${s('two-gates', 'Two independent readiness gates', `<p><code>/api/status</code> exposes <code>canonical_ready</code> and <code>search.readiness</code>. The canonical projection can be readable while the detached search index is still building.</p>${table(['Surface', 'During a fresh cold start'], [
         ['Projects and sessions', 'Metadata appears as bounded runtime skims commit.'],
         ['Timeline', 'A pending runtime exposes no partial payload. Rows become visible when its readiness commit admits the runtime.'],
-        ['Heatmap, usage, day usage, contribution', '503 with not_ready until canonical publication.'],
+        ['Heatmap, usage, day usage, contribution, pricing', '503 with not_ready until canonical publication.'],
         ['Search', '200 with building readiness and no hits until canonical publication; then the detached index builds.'],
       ])}`)}
       ${s('search-states', 'Read the search state with every result', table(['Readiness', 'Meaning for the reader'], [

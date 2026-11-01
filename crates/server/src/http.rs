@@ -871,15 +871,17 @@ async fn boost(
     State(state): State<AppState>,
     Json(request): Json<BoostRequest>,
 ) -> Result<Json<BoostResponse>, Failure> {
+    // A malformed request is a 400 in every serve mode, drained or not.
+    if request.session_id.is_empty() {
+        return Err(Failure::bad_request("boost needs a session_id"));
+    }
     let Some(ledger) = state.boost.as_ref() else {
         // No backfill loop to reorder — nothing to do, honestly said.
         return Ok(Json(BoostResponse { queued: false }));
     };
-    if request.session_id.is_empty() {
-        return Err(Failure::bad_request("boost needs a session_id"));
-    }
-    ledger.push(&request.session_id);
-    Ok(Json(BoostResponse { queued: true }))
+    // A closed ledger's drainer is done: nothing will reorder, honestly said.
+    let queued = ledger.push(&request.session_id);
+    Ok(Json(BoostResponse { queued }))
 }
 
 async fn runtimes(State(state): State<AppState>) -> Json<RuntimesResponse> {
@@ -1284,8 +1286,11 @@ async fn day_usage(
 }
 
 /// The price catalog behind every cost figure, and the pricing version the
-/// open projection's rollup was priced with.
+/// open projection's rollup was priced with. Its coverage report reads the
+/// same `usage_bucket` rollup the other aggregates do, which an unpublished
+/// RAM build has not folded yet, so it shares their gate.
 async fn pricing(State(state): State<AppState>) -> Result<Json<PricingResponse>, Failure> {
+    require_canonical_aggregates(&state.projection)?;
     let (projection_version, unpriced) = with_read(state.projection.clone(), |conn| {
         let version = rosetta_store::pricing::stored_version(conn).map_err(store_err)?;
         // The coverage report: a model the catalog cannot price shows up here

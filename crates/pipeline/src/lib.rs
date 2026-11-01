@@ -63,12 +63,14 @@ pub use meta::{
 };
 pub use plan::{IngestPlan, SessionPlan};
 pub use replay::{
-    PreparedRuntime, RebuildOptions, RebuildReport, apply_prepared_runtime,
-    prepare_captured_runtime, prepare_runtime, rebuild_runtime, rebuild_runtime_with_options,
+    PreparedRuntime, RebuildOptions, RebuildReport, StoppedSource, activate_stopped_source,
+    apply_prepared_runtime, prepare_captured_runtime, prepare_runtime, rebuild_runtime,
+    rebuild_runtime_with_options,
 };
 pub use sched::{ColdLane, ColdSchedule, order_runtime_roster};
 pub use stream::{
     StreamReport, reserve_unsealed_generation, stream_backfill, stream_backfill_into,
+    stream_backfill_withholding_health,
 };
 pub use streamed::StreamedRuntime;
 

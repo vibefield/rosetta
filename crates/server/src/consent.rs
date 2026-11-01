@@ -96,10 +96,20 @@ impl ConsentGate {
 }
 
 /// Session ids the reader has opened while their files were still queued,
-/// oldest request first. The serve loop drains between files.
+/// oldest request first. The serve loop drains between files. A serve mode
+/// with no drainer never attaches one, and the drainer closes it when its
+/// loop ends, so `queued: true` names a queue whose drainer is still
+/// running. A request that lands during its final pass expires with it
+/// (boosts are advisory).
 #[derive(Default)]
 pub struct BoostLedger {
-    queue: Mutex<Vec<String>>,
+    queue: Mutex<BoostQueue>,
+}
+
+#[derive(Default)]
+struct BoostQueue {
+    ids: Vec<String>,
+    closed: bool,
 }
 
 impl BoostLedger {
@@ -107,15 +117,27 @@ impl BoostLedger {
         Self::default()
     }
 
-    pub fn push(&self, session_id: &str) {
+    /// Queue one session; false once the drainer has closed the ledger.
+    pub fn push(&self, session_id: &str) -> bool {
         let mut queue = self.queue.lock().expect("boost queue poisoned");
-        if !queue.iter().any(|queued| queued == session_id) {
-            queue.push(session_id.to_owned());
+        if queue.closed {
+            return false;
         }
+        if !queue.ids.iter().any(|queued| queued == session_id) {
+            queue.ids.push(session_id.to_owned());
+        }
+        true
     }
 
     pub fn drain(&self) -> Vec<String> {
-        std::mem::take(&mut *self.queue.lock().expect("boost queue poisoned"))
+        std::mem::take(&mut self.queue.lock().expect("boost queue poisoned").ids)
+    }
+
+    /// The drainer is done: drop what is left and refuse every later push.
+    pub fn close(&self) {
+        let mut queue = self.queue.lock().expect("boost queue poisoned");
+        queue.closed = true;
+        queue.ids.clear();
     }
 }
 
@@ -170,6 +192,19 @@ mod tests {
         ledger.push("s1");
         ledger.push("s2");
         assert_eq!(ledger.drain(), vec!["s2".to_string(), "s1".to_string()]);
+        assert!(ledger.drain().is_empty());
+    }
+
+    #[test]
+    fn a_closed_boost_ledger_refuses_and_holds_nothing() {
+        let ledger = BoostLedger::new();
+        assert!(ledger.push("s1"));
+        ledger.close();
+        assert!(
+            ledger.drain().is_empty(),
+            "close drops what no one will read"
+        );
+        assert!(!ledger.push("s2"));
         assert!(ledger.drain().is_empty());
     }
 }

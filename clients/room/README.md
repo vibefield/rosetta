@@ -92,9 +92,23 @@ key there. A host that passes `search` binds ⌘G and ⌘⇧G (Ctrl G and Ctrl S
 G off a Mac) to the handle's `stepMatch(1)` and `stepMatch(-1)`, because the
 match stepper the sheet leaves in the transcript's head names those keys.
 
+**While full text cannot answer, the sheet searches titles.** Until the
+catalog's status says search can answer (`canonicalReady` false, or search
+readiness `building`, as through a first import), the sheet matches the query
+against the session titles the room already holds, under "Titles that match",
+and says "Full-text search arrives when the import finishes." Opening one
+opens its thread as a hit does, with no message to land on. When full text
+starts answering, the room asks the query again, and the titles stay until
+that answer arrives. A catching-up, stale or ready index keeps the ordinary
+sheet. The foot's meter fills only from the index's document count, sweeps
+for work with no count, and is absent while the import is paused or the index
+has failed.
+
 **The disconnected face can be all the host's words.** While the catalog has
-delivered no rows, the room draws one face: a title, a sentence under it, and
-a meter. Every part a host leaves out stays the room's own, so rosetta's app
+delivered no rows, the room draws one face: a title, a sentence under it, and,
+while it is still reaching the index, a sweeping meter (reaching has no amount,
+so none is drawn; once the index has stopped answering there is no meter at
+all). Every part a host leaves out stays the room's own, so rosetta's app
 reads as it always has; a host that never names its daemon to a person gives
 both titles and its sentence.
 

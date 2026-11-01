@@ -543,6 +543,8 @@ pub(crate) struct BulkReconciliationPlan {
     session_touches: BTreeMap<String, i64>,
     tool_activity: BTreeMap<ToolKey, (i64, i64)>,
     folded_usage: u64,
+    /// Of `folded_usage`, the records carrying a response identity.
+    unclaimed_usage: u64,
     usage_seen: BTreeSet<UsageKey>,
     unmatched_usage: BTreeMap<UsageKey, BufferedTail>,
 }
@@ -568,6 +570,7 @@ pub(crate) fn apply_plan(
     stats.tool_results_merged = plan.matched_updates;
     stats.tool_results_unmatched = plan.unmatched_updates;
     stats.usage_applied = plan.folded_usage;
+    stats.usage_identities_unclaimed = plan.unclaimed_usage;
     stats.profile.bulk_tool_rows_reconciled =
         plan.messages.len().saturating_add(plan.existing.len()) as u64;
 

@@ -21,7 +21,13 @@ export function dataHooks(client) {
     status: { value: (signal) => client.status(signal).then(catalogStatusOf) },
   });
   let active;
+  // Transitions run at once here; the count says which updates asked for one.
+  let transitions = 0;
   const react = {
+    startTransition(scope) {
+      transitions += 1;
+      scope();
+    },
     useState(initial) {
       const runtime = active;
       const slot = runtime.slot(() => ({
@@ -98,6 +104,9 @@ export function dataHooks(client) {
     };
     return {
       renders,
+      get transitions() {
+        return transitions;
+      },
       render(...next) {
         if (next.length) args = next;
         let turns = 0;

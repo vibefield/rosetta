@@ -95,7 +95,15 @@ pub(super) fn run_fresh(
         };
         match outcome {
             Ok(done) => return Ok(done),
-            Err(error) if stop.load(Ordering::SeqCst) => return Err(error),
+            Err(error) if stop.load(Ordering::SeqCst) => {
+                // A stop (ctrl-c, the app's quit) also keeps the staged
+                // generation for the next start, so it completes the same
+                // physical barrier a pause does, within the host's kill
+                // window. A failed barrier is reported; the stop keeps its
+                // own error.
+                stop_barrier(&stage_path);
+                return Err(error);
+            }
             Err(error) => {
                 let observed = control.snapshot();
                 if observed.state == IngestionState::Succeeded
@@ -160,6 +168,50 @@ pub(super) fn run_fresh(
     }
 }
 
+/// The app host SIGKILLs ten seconds after its SIGINT; the stop barrier
+/// takes at most half of that.
+const STOP_SYNC_BUDGET: Duration = Duration::from_secs(5);
+
+/// The stop path's barrier, with every writer already joined: report how
+/// long syncing the staged evidence took, or why it did not finish.
+fn stop_barrier(stage: &Path) {
+    if !stage.exists() {
+        // Publication already promoted it, after its own barrier.
+        return;
+    }
+    let started = Instant::now();
+    match sync_evidence_within(stage, STOP_SYNC_BUDGET) {
+        Ok(()) => eprintln!(
+            "stop barrier: staged raw ledger synced elapsed_ms={:.1}",
+            started.elapsed().as_secs_f64() * 1_000.0
+        ),
+        Err(error) => eprintln!("stop barrier: staged raw ledger not synced ({error})"),
+    }
+}
+
+/// [`sync_evidence`] on a helper thread, waited on for at most `budget`.
+/// An fsync cannot be interrupted, so one that overruns is left to finish or
+/// to end with the process; evidence synced at earlier seals stays valid.
+fn sync_evidence_within(root: &Path, budget: Duration) -> Result<(), String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let root = root.to_path_buf();
+    std::thread::Builder::new()
+        .name("stop-barrier".into())
+        .spawn(move || {
+            let _ = sender.send(sync_evidence(&root));
+        })
+        .map_err(|error| format!("starting the sync: {error}"))?;
+    match receiver.recv_timeout(budget) {
+        Ok(synced) => synced,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Err(format!("still syncing after {} s", budget.as_secs()))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("the sync thread panicked".into())
+        }
+    }
+}
+
 /// All writers have gone before entry. Sync owned evidence only; never walk
 /// native source roots or follow links out of a stage.
 pub(crate) fn sync_evidence(root: &Path) -> Result<(), String> {
@@ -220,5 +272,33 @@ pub(crate) fn publish_disk(
             Err(_) if control.pause_requested() => continue,
             Err(error) => return Err(error),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_stop_barrier_syncs_a_staged_tree_within_its_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let stage = temp.path().join("rosetta.ledger.staged");
+        std::fs::create_dir_all(stage.join("claude-code")).unwrap();
+        std::fs::write(stage.join(".cold-generation.json"), b"{}").unwrap();
+        std::fs::write(stage.join("claude-code/00000000.rledger"), b"RLZ1").unwrap();
+        assert_eq!(sync_evidence_within(&stage, STOP_SYNC_BUDGET), Ok(()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stop_barrier_that_cannot_sync_reports_instead_of_following_links() {
+        let temp = tempfile::tempdir().unwrap();
+        let stage = temp.path().join("rosetta.ledger.staged");
+        std::fs::create_dir_all(&stage).unwrap();
+        std::os::unix::fs::symlink(temp.path(), stage.join("escape")).unwrap();
+        assert_eq!(
+            sync_evidence_within(&stage, STOP_SYNC_BUDGET),
+            Err("unexpected non-file in cold evidence".to_string())
+        );
     }
 }

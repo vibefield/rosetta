@@ -331,7 +331,16 @@ fn a_response_copied_into_another_transcript_counts_once_for_the_earliest_sessio
             ..Batch::default()
         })
         .unwrap();
-    assert_eq!(stats.usage_copies_dropped, 2);
+    // One claim each: the first copy owned, the origin displacing it, the
+    // later copy dropped.
+    assert_eq!(
+        (
+            stats.usage_identities_owned,
+            stats.usage_copies_displaced,
+            stats.usage_copies_dropped,
+        ),
+        (1, 1, 1)
+    );
     assert_eq!(row_usage(&store, "orig"), (Some(500), Some(10)));
     assert_eq!(row_usage(&store, "copy"), (None, None));
     assert_eq!(row_usage(&store, "copy3"), (None, None));
@@ -347,12 +356,17 @@ fn a_response_copied_into_another_transcript_counts_once_for_the_earliest_sessio
         tokens: io(700, 10),
         identity: Some("msg_01:req_01".into()),
     }));
-    store
+    let stats = store
         .apply(&Batch {
             ops,
             ..Batch::default()
         })
         .unwrap();
+    // The owner's correction is its own again; the copy's sample is dropped.
+    assert_eq!(
+        (stats.usage_identities_owned, stats.usage_copies_dropped),
+        (1, 1)
+    );
     assert_eq!(row_usage(&store, "orig"), (Some(700), Some(10)));
     let one = expected_cost("claude-opus-4-8", SEP_01, UsageScope::Request, &io(700, 10)).unwrap();
     assert_eq!(totals(&store).cost, Some(one));

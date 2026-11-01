@@ -445,6 +445,10 @@ impl<'a> FoldState<'a> {
             .collect::<BTreeMap<_, _>>();
         let mut remaining_tail = Vec::with_capacity(tail.len());
         let mut folded_usage = 0_u64;
+        // Folded usage records whose response identity no owner index ever
+        // sees (each snapshot of a row counts): measured only, so the
+        // cold/live ownership gap has a size.
+        let mut unclaimed_usage = 0_u64;
         let mut usage_seen = BTreeSet::new();
         for buffered in tail {
             let IngestOp::Usage {
@@ -453,7 +457,7 @@ impl<'a> FoldState<'a> {
                 ts,
                 model,
                 tokens,
-                ..
+                identity,
             } = &buffered.op
             else {
                 remaining_tail.push(buffered);
@@ -482,6 +486,9 @@ impl<'a> FoldState<'a> {
             }
             note_session_touch(&mut session_touches, session_id, Some(*ts));
             folded_usage = folded_usage.saturating_add(1);
+            if identity.is_some() {
+                unclaimed_usage = unclaimed_usage.saturating_add(1);
+            }
         }
         let tail = remaining_tail;
 
@@ -497,6 +504,7 @@ impl<'a> FoldState<'a> {
                 session_touches,
                 tool_activity,
                 folded_usage,
+                unclaimed_usage,
                 usage_seen,
                 unmatched_usage: BTreeMap::new(),
             },

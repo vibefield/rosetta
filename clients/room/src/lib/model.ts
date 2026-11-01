@@ -133,6 +133,37 @@ function createActivitySeries(
   return { dailyTokens, currentDayIndex };
 }
 
+/* ── sessions by project: one pass per metadata change ─────────────────── */
+
+/** Every session under its `projectKey`, each list in the input's order —
+ * exactly what filtering the whole list by one project would return. The
+ * room builds it once per metadata change, so P projects cost O(sessions)
+ * rather than O(P × sessions) on every burst of a cold import. */
+export type SessionsByProject = ReadonlyMap<string, readonly SessionRow[]>;
+
+const NO_SESSIONS: readonly SessionRow[] = [];
+
+export function indexSessionsByProject(sessions: readonly SessionRow[]): SessionsByProject {
+  const index = new Map<string, SessionRow[]>();
+  for (const session of sessions) {
+    const key = projectKey(session);
+    const list = index.get(key);
+    if (list === undefined) index.set(key, [session]);
+    else list.push(session);
+  }
+  return index;
+}
+
+/** One project's sessions, subagents included, in the input's order. */
+export function sessionsOfProject(index: SessionsByProject, projectId: string): readonly SessionRow[] {
+  return index.get(projectId) ?? NO_SESSIONS;
+}
+
+/** One project's top-level threads, in the input's order (the caller ranks). */
+export function rootSessionsOfProject(index: SessionsByProject, projectId: string): SessionRow[] {
+  return sessionsOfProject(index, projectId).filter((session) => session.parent_session_id === null);
+}
+
 export function buildProjectViewModel(
   projectRow: ProjectRow,
   allSessions: readonly SessionRow[],
@@ -142,9 +173,26 @@ export function buildProjectViewModel(
   /** The room's dealt colour for a project (`TintDealer.projectTint`). */
   projectTint: (projectId: string) => string,
 ): ProjectViewModel {
-  const projectSessions = allSessions.filter(
-    (session) => projectKey(session) === projectRow.id,
+  return buildProjectViewModelFromSessions(
+    projectRow,
+    allSessions.filter((session) => projectKey(session) === projectRow.id),
+    projectStats,
+    getRuntimeKind,
+    currentTimestamp,
+    projectTint,
   );
+}
+
+/** The same view model from the project's own sessions — the list
+ * `sessionsOfProject` hands it — so no project scans anyone else's. */
+export function buildProjectViewModelFromSessions(
+  projectRow: ProjectRow,
+  projectSessions: readonly SessionRow[],
+  projectStats: ProjectStats | undefined,
+  getRuntimeKind: (runtimeId: string) => string,
+  currentTimestamp: number,
+  projectTint: (projectId: string) => string,
+): ProjectViewModel {
   const rootSessions = projectSessions.filter(
     (session) => session.parent_session_id === null,
   );

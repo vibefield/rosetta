@@ -80,9 +80,24 @@ pub struct ApplyStats {
     pub tool_results_unmatched: u64,
     pub usage_applied: u64,
     pub usage_unmatched: u64,
-    /// Usage of responses copied from another session, dropped or retracted
-    /// because an earlier-started session owns them.
+    /// Identity-bearing usage records `UsageOwners` admitted as their
+    /// owner's (`Claim::Own`): an identity's first record, or its owner's own
+    /// correction. With the dropped and displaced counts, every claim.
+    pub usage_identities_owned: u64,
+    /// Usage of responses copied from another session, dropped on arrival
+    /// because an earlier-started session already owns them
+    /// (`UsageOwners` answered `Claim::DropCopy`).
     pub usage_copies_dropped: u64,
+    /// Usage records that displaced the current owner of their identity: the
+    /// record was applied and the previous owner's usage retracted
+    /// (`Claim::Displace`). A visible session's usage can drop by these.
+    pub usage_copies_displaced: u64,
+    /// Usage records carrying a response identity that the cold fold merged
+    /// straight onto their dated tool row, so they never reached
+    /// `UsageOwners`: neither registered nor checked for a copy. Records, not
+    /// rows: each of a row's successive snapshots counts. Counted only; live
+    /// ingest claims the same records (ARCHITECTURE §4.1.3, counting rule 2).
+    pub usage_identities_unclaimed: u64,
     pub drift_recorded: u64,
     /// Distinct session/hour/model keys rebuilt after the batch. This remains
     /// bounded by changed buckets, not changed messages.
@@ -148,7 +163,10 @@ impl ApplyStats {
         self.tool_results_unmatched += batch.tool_results_unmatched;
         self.usage_applied += batch.usage_applied;
         self.usage_unmatched += batch.usage_unmatched;
+        self.usage_identities_owned += batch.usage_identities_owned;
         self.usage_copies_dropped += batch.usage_copies_dropped;
+        self.usage_copies_displaced += batch.usage_copies_displaced;
+        self.usage_identities_unclaimed += batch.usage_identities_unclaimed;
         self.drift_recorded += batch.drift_recorded;
         self.bucket_rebuilds += batch.bucket_rebuilds;
         self.source_sweeps += batch.source_sweeps;
@@ -1447,7 +1465,10 @@ fn claim_usage(
     effects: Option<&mut Effects>,
 ) -> Result<bool, StoreError> {
     match owners.claim(tx, identity, session_id, target, carries_usage)? {
-        Claim::Own => Ok(true),
+        Claim::Own => {
+            stats.usage_identities_owned += 1;
+            Ok(true)
+        }
         Claim::DropCopy => {
             stats.usage_copies_dropped += 1;
             Ok(false)
@@ -1456,7 +1477,7 @@ fn claim_usage(
             session_id: displaced,
             target,
         } => {
-            stats.usage_copies_dropped += 1;
+            stats.usage_copies_displaced += 1;
             match target {
                 OwnerTarget::Row(timeline_id) => {
                     apply_usage(

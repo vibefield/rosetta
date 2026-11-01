@@ -30,11 +30,12 @@ use crate::ingestion_control::ColdControl;
 use rosetta_capture::{NotifyEvents, SourceWake};
 
 pub(crate) mod control;
+mod resume;
 use rosetta_pipeline::{
     IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric,
     RawCommandLocator, RebuildOptions, SessionFile, SliceBudget, StreamReport,
     meta_ingest_inventory_into, read_raw_command, rebuild_runtime_with_options,
-    reserve_unsealed_generation, stream_backfill_into,
+    stream_backfill_withholding_health,
 };
 use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
@@ -361,6 +362,13 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     };
     let progressive = store.is_progressive();
     let warm_live = !fresh_fast && !progressive && !flags.stop_after_meta;
+    // 1 s memory samples while a cold build runs (every sample under
+    // --json --profile); the guard stops the thread on every return.
+    let _memory = crate::ingest_metrics::MemorySampler::start(
+        started,
+        !warm_live,
+        flags.json && flags.profile,
+    );
 
     // The transport comes up before any ingest work. A returning user's
     // mirror warms from the standing projection so the room is instantly
@@ -384,7 +392,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     }
     let hub = Arc::new(Hub::new(HubConfig::default(), now_ms() as u64));
     let consent = Arc::new(ConsentGate::new());
-    let boost = Arc::new(BoostLedger::new());
+    // Only the disk ColdEngine drains boosts (and closes the ledger when its
+    // loop ends). Every other mode attaches none, so the route says queued:false.
+    let boost = (progressive && !flags.stop_after_meta).then(|| Arc::new(BoostLedger::new()));
     let warmed = hub.warm(store.conn()).map_err(|error| error.to_string())?;
     let search = Fts5SidecarSearch::new(db.clone());
     let search_worker = if fresh_fast {
@@ -423,17 +433,19 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
         });
     }
-    let state = AppState::with_search(hub.clone(), db.clone(), Arc::new(search.clone()))
+    let mut state = AppState::with_search(hub.clone(), db.clone(), Arc::new(search.clone()))
         .with_projection(projection_reader.clone())
         .with_daemon_health(health.clone())
         .with_consent(consent.clone())
-        .with_boost(boost.clone())
         .with_enrolled(enrolled_presentation)
         .with_auth(auth.clone())
         .with_raw_commands(Arc::new(LedgerCommandReader {
             root: public_ledgers.clone(),
             adapters: crate::registry(),
         }));
+    if let Some(boost) = &boost {
+        state = state.with_boost(boost.clone());
+    }
     let server = tokio_runtime.spawn({
         let mut shutdown_rx = shutdown_rx.clone();
         let router = router(state);
@@ -953,7 +965,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         health: &health,
         search_worker: &search_worker,
         instrument: &instrument,
-        boost: &boost,
+        boost: boost
+            .as_deref()
+            .expect("the disk cold engine owns the boost ledger"),
         stop: &stop,
         opts: &opts,
         sliced: &sliced,
@@ -993,6 +1007,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             "milestone: canonical-ready elapsed_s={:.2}",
             started.elapsed().as_secs_f64(),
         );
+        crate::ingest_metrics::after_canonical_ready(started, &instrument);
 
         // Canonical reads are public now. Let the initial detached generation
         // finish without competing source scans or live SQLite writes; the
@@ -1154,6 +1169,10 @@ fn run_resumed_fresh_serve(
     let mut applied = Vec::new();
     let mut failures = Vec::new();
     let mut handled = BTreeSet::new();
+    // This build writes into the RAM generation readers target, but its rows
+    // are final only after the global reconciliation and finalization below.
+    let mut withheld = resume::WithheldReadiness::default();
+    let mut done = Vec::new();
     let board = Arc::new(rosetta_server::ProgressBoard::new());
     let status_board = board.clone();
     health.ingest_project_source(Arc::new(move || status_board.snapshot()));
@@ -1194,10 +1213,12 @@ fn run_resumed_fresh_serve(
                     flush_reconciliation: false,
                     allow_unsealed_sources: true,
                     cancel: Some(cold_cancel.clone()),
+                    withhold_session_health: true,
                     ..RebuildOptions::default()
                 },
             )
             .map_err(|error| format!("replaying {name} staged ledger: {error}"))?;
+            withheld.replayed(report.session_health);
             if report.hard_errors != 0 {
                 // Recovery is the same private build as fresh capture. Replay
                 // retains the raw evidence and holds affected sessions
@@ -1226,9 +1247,8 @@ fn run_resumed_fresh_serve(
             BTreeMap::new()
         };
 
-        // Current bounded metadata settles the roster after replay. A raw-only
-        // source must still be present: otherwise there is no complete evidence
-        // from which this generation can ever be published.
+        // Current bounded metadata settles the roster after replay; each
+        // raw-only source is then fenced against it, or closed if it is gone.
         let mut ledger = open_runtime_ledger(&stage_root, &runtime)?
             .with_codec(flags.cold_ledger_codec)
             .defer_sync_until_flush()
@@ -1249,51 +1269,20 @@ fn run_resumed_fresh_serve(
             Some(&mut ledger),
         )
         .map_err(|error| format!("{name} resume metadata: {error}"))?;
-        for (path, (generation, source)) in &unsealed {
-            if meta.excluded_sessions.contains(&source.session_id)
-                || cold_opts
-                    .exclude_cwds
-                    .excludes_session(&store, &source.session_id)
-                    .map_err(|error| error.to_string())?
-            {
-                // Retire unfinished capture as well as ordinary roster work.
-                // Its raw prefix stays unsealed: never certify a complete
-                // generation or reread a source the user has excluded.
-                rosetta_pipeline::reserve_retired_generation(
-                    adapter,
-                    &runtime,
-                    &mut store,
-                    source,
-                    *generation,
-                    instrument,
-                )
-                .map_err(|error| format!("retiring {path} generation: {error}"))?;
-                continue;
-            }
-            let file = roster
-                .iter()
-                .find(|file| file.relative_path == *path)
-                .ok_or_else(|| {
-                    format!("cannot finish {name}: interrupted source {path} is no longer present")
-                })?;
-            if file.stream_id != source.stream_id
-                || file.session_id != source.session_id
-                || file.native_session_id != source.native_session_id
-            {
-                return Err(format!(
-                    "cannot finish {name}: interrupted source {path} changed identity"
-                ));
-            }
-            reserve_unsealed_generation(
-                adapter,
-                &runtime,
-                &mut store,
-                file,
-                *generation,
-                instrument,
-            )
-            .map_err(|error| format!("reserving {path} generation: {error}"))?;
-        }
+        let missing = resume::settle_interrupted_sources(
+            &name,
+            adapter,
+            &runtime,
+            &ledger_dir,
+            &mut store,
+            &mut ledger,
+            &unsealed,
+            &roster,
+            &meta,
+            &cold_opts,
+            instrument,
+            &mut withheld,
+        )?;
 
         // Replayed and current metadata must reach the public mirror before
         // the first-pass stamp; payload catch-up may still take a long time.
@@ -1320,7 +1309,7 @@ fn run_resumed_fresh_serve(
             &runtime.id,
             counter_source(instrument, instrument.snapshot()),
         );
-        let stream = stream_backfill_into(
+        let mut stream = stream_backfill_withholding_health(
             adapter,
             &runtime,
             &target.root,
@@ -1329,8 +1318,10 @@ fn run_resumed_fresh_serve(
             &observed_opts,
             instrument,
             Some(&mut ledger),
+            withheld.caught_up(),
         )
         .map_err(|error| format!("{name} resume source catch-up: {error}"))?;
+        stream.files_missing += missing;
         let refused = failures.len();
         let tolerated = record_fresh_failures(
             &name,
@@ -1353,12 +1344,12 @@ fn run_resumed_fresh_serve(
             .map(|session| session.id)
             .collect::<Vec<_>>();
         hub.invalidate_sessions(session_ids.iter().map(String::as_str), now_ms());
-        for session_id in &session_ids {
-            board.session_done(
-                ownership.get(session_id).and_then(Option::as_deref),
-                session_id,
-            );
-        }
+        // Done on the board only once public, which is at publication here.
+        done.extend(
+            session_ids
+                .into_iter()
+                .map(|id| (ownership.get(&id).cloned().flatten(), id)),
+        );
         health.ingest_done(&runtime.id, stream.payload_bytes, stream.records);
         events.insert(runtime.id.clone(), watcher);
         applied.push(AppliedColdRuntime {
@@ -1411,7 +1402,11 @@ fn run_resumed_fresh_serve(
         instrument,
         health,
         control,
+        Some(withheld),
     )?;
+    for (project, session_id) in &done {
+        board.session_done(project.as_deref(), session_id);
+    }
     let hub = public_hub;
     hub.rewarm(store.conn())
         .map_err(|error| error.to_string())?;
@@ -1424,6 +1419,7 @@ fn run_resumed_fresh_serve(
         "milestone: canonical-ready elapsed_s={:.2}",
         started.elapsed().as_secs_f64()
     );
+    crate::ingest_metrics::after_canonical_ready(started, instrument);
 
     let public_ledgers = ledger_root(flags, db);
     let mut runners = Vec::with_capacity(applied.len());
@@ -1607,12 +1603,14 @@ fn run_fresh_fast_serve(
         instrument,
         health,
         control,
+        None,
     )?;
     control.succeeded()?;
     println!(
         "milestone: canonical-ready elapsed_s={:.2}",
         started.elapsed().as_secs_f64()
     );
+    crate::ingest_metrics::after_canonical_ready(started, instrument);
 
     if flags.json && flags.profile {
         crate::bench::emit_profile("serve-cold", instrument);
@@ -1910,12 +1908,19 @@ fn publish_fresh_ram_projection(
     instrument: &Instrument,
     health: &DaemonHealth,
     control: &ColdControl,
+    withheld: Option<resume::WithheldReadiness>,
 ) -> Result<Store, String> {
     health.ingest_phase(rosetta_server::IngestPhase::Finalizing);
     instrument
         .finish_bulk_load(&mut store)
         .map_err(|error| format!("finalizing canonical RAM projection: {error}"))?;
     control.publishing()?;
+    // A resumed build's rows are final only now (finalization neither reads
+    // nor writes readiness). Past the publication fence no pause can keep
+    // this view, and the backup below carries the states it commits.
+    if let Some(withheld) = withheld {
+        withheld.commit(&mut store)?;
+    }
     health.ingest_phase(rosetta_server::IngestPhase::Publishing);
     instrument.time(Metric::PublishNanos, || {
         crate::publication::stage_ram_projection(store.conn(), &temp)

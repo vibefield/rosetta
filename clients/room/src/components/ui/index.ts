@@ -10,6 +10,8 @@ export { ListSummaryHeader } from "./ListSummaryHeader";
 export type { ListSummaryHeaderProps } from "./ListSummaryHeader";
 export { ListToolbar } from "./ListToolbar";
 export type { ListToolbarProps } from "./ListToolbar";
+export { Meter, meterWidth } from "./Meter";
+export type { MeterProps } from "./Meter";
 export { SummaryMetric } from "./SummaryMetric";
 export type { SummaryMetricProps } from "./SummaryMetric";
 export { ResultGroupHeader } from "./ResultGroupHeader";

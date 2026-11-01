@@ -271,8 +271,16 @@ impl ColdEngine {
 
     /// The cold loop: live ▸ boost ▸ starter ▸ completion until the lanes
     /// drain or a stop lands. One budgeted pass per iteration; watcher hints
-    /// and boosts jump ahead of the rotation between passes.
+    /// and boosts jump ahead of the rotation between passes. This loop is the
+    /// boost ledger's only drainer, so it closes the ledger however it ends:
+    /// a later boost answers `queued: false` instead of waiting forever.
     pub fn run(&mut self, cx: &mut ColdCx<'_>) -> Result<(), String> {
+        let ran = self.run_lanes(cx);
+        cx.boost.close();
+        ran
+    }
+
+    fn run_lanes(&mut self, cx: &mut ColdCx<'_>) -> Result<(), String> {
         while self.schedule.pending() && !cx.stop.load(Ordering::SeqCst) {
             let resumed = crate::serve::control::disk_boundary(cx.control, cx.backfills)?;
             self.drain_hints(cx, resumed)?;

@@ -1,7 +1,7 @@
 // The room's data spine: one meta subscription for who/what exists, REST for
 // figures, and one session subscription for the transcript being read. Every
 // hook reads through the port it is handed; none of them dials anything.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApiError,
   CollaborationTimeline,
@@ -47,23 +47,40 @@ export interface MetaFeed {
   error: ApiError | null;
 }
 
-export function useMeta(catalog: CatalogPort): MetaFeed {
+export interface MetaFeedOptions {
+  /** Land each metadata change as a React transition: the renders it causes
+   * yield to input, and a burst coalesces into the newest state. The room
+   * asks for it while an import runs; what renders is unchanged, only when. */
+  readonly transition?: boolean;
+}
+
+export function useMeta(catalog: CatalogPort, options: MetaFeedOptions = {}): MetaFeed {
   const [feed, setFeed] = useState<{ meta: MetaState | null; snapshotVersion: number }>({
     meta: null, snapshotVersion: 0,
   });
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
   const [error, setError] = useState<ApiError | null>(null);
+  // Read at delivery, so turning it on or off never resubscribes.
+  const transition = useRef(options.transition === true);
+  transition.current = options.transition === true;
   useEffect(() => {
+    // Status and errors travel the same way as the rows, so a "live" never
+    // commits ahead of the snapshot it announces.
+    const deliver = (apply: () => void) => {
+      if (transition.current) startTransition(apply);
+      else apply();
+    };
     const sub = catalog.subscribeMeta({
-      onChange: (meta, source) => {
-        setFeed((previous) => ({
-          meta,
-          snapshotVersion: previous.snapshotVersion + (source === "snapshot" ? 1 : 0),
-        }));
-        setError(null);
-      },
-      onStatus: setStatus,
-      onError: setError,
+      onChange: (meta, source) =>
+        deliver(() => {
+          setFeed((previous) => ({
+            meta,
+            snapshotVersion: previous.snapshotVersion + (source === "snapshot" ? 1 : 0),
+          }));
+          setError(null);
+        }),
+      onStatus: (next) => deliver(() => setStatus(next)),
+      onError: (next) => deliver(() => setError(next)),
     });
     return () => sub.close();
   }, [catalog]);
@@ -701,11 +718,16 @@ export const SEARCH_LIMIT = 200;
  * while its successor is in flight — a list that blanks on every keystroke
  * reads as a search that keeps failing — and only the newest request may
  * land: a superseded one is aborted and its late result ignored.
+ *
+ * A change of `askAgain` re-asks an unchanged query. The room passes whether
+ * full text can answer, so the empty answer an unpublished index gave is
+ * replaced as soon as the index can answer.
  */
 export function useSearch(
   catalog: CatalogPort,
   query: string,
   facets: SearchFacets = {},
+  askAgain: string | number | boolean = 0,
 ): SearchFeed {
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -746,6 +768,6 @@ export function useSearch(
       clearTimeout(timer);
       controller.abort();
     };
-  }, [catalog, query, project, kind, agent]);
+  }, [catalog, query, project, kind, agent, askAgain]);
   return { query: query.trim(), response, error, searching };
 }

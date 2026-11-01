@@ -65,6 +65,12 @@ impl ClosedSource {
         &self.source.relative_path
     }
 
+    /// The public session this source belongs to; `None` for a ledger-only
+    /// source, which admits none.
+    pub fn session_id(&self) -> Option<&str> {
+        (!self.source.ledger_only).then_some(self.source.session_id.as_str())
+    }
+
     /// Framed payload bytes this source consumed — the producer's in-flight
     /// budget unit.
     pub fn payload_bytes(&self) -> u64 {

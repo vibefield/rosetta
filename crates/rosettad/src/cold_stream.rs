@@ -48,6 +48,7 @@ use serde_json::json;
 
 use crate::cold_progress::ColdProgress;
 use crate::engine::{absorb_effects, now_ms};
+use crate::ingest_metrics::{ColdMilestones, UsageCopies};
 use crate::ledger_compression::thread_cpu_time;
 use crate::serve::counter_source;
 use crate::{
@@ -591,6 +592,13 @@ fn write(
     failures: &mut Vec<String>,
 ) -> Result<Vec<AppliedColdRuntime>, String> {
     let workers = names.len();
+    // Measurement only: milestones and census from what the writer knows.
+    let mut milestones = ColdMilestones::new(
+        cx.started,
+        now_ms(),
+        workers,
+        cx.flags.json && cx.flags.profile,
+    );
     let mut plans: Vec<Option<Result<Box<PlannedColdRuntime>, String>>> =
         std::iter::repeat_with(|| None).take(workers).collect();
     let mut published = 0_usize;
@@ -630,6 +638,7 @@ fn write(
                         return Err("stopped before cold metadata completed".into());
                     }
                     publish_metadata(&plan, &names[published], &mut ownership, cx)?;
+                    let public_at = cx.started.elapsed();
                     published += 1;
                     let last = published == workers;
                     plan.opts.progress = Some(ColdProgress::observe(
@@ -652,7 +661,10 @@ fn write(
                         &plan.runtime.id,
                         counter_source(&plan.instrument, baseline),
                     );
+                    let (id, kind) = (&plan.runtime.id, plan.adapter.kind());
+                    let census = milestones.metadata_public(public_at, id, kind, &plan.files);
                     producers.start(plan, last);
+                    milestones.census(census, cx.store);
                 }
             }
             StreamMessage::Opened(opened) => {
@@ -694,10 +706,14 @@ fn write(
                 let entry = open.get_mut(&runtime_id).ok_or_else(|| {
                     format!("streamed sources arrived for unopened runtime {runtime_id}")
                 })?;
+                let completes = milestones.completes_first_session(&sources);
                 let cpu_before = thread_cpu_time();
                 entry
                     .apply(cx.store, sources, cx.instrument)
                     .map_err(|error| format!("applying streamed {runtime_id} sources: {error}"))?;
+                if completes {
+                    milestones.first_session_complete();
+                }
                 if let (Some(before), Some(after)) = (cpu_before, thread_cpu_time()) {
                     *apply_cpu.entry(runtime_id).or_default() += after.saturating_sub(before);
                 }
@@ -711,9 +727,15 @@ fn write(
                     format!("streamed runtime {} closed unopened", runtime.runtime.id)
                 })?;
                 let applied_cpu = apply_cpu.remove(&runtime.runtime.id).unwrap_or_default();
-                if let Some(output) =
-                    admit(runtime, streamed, applied_cpu, &ownership, cx, failures)?
-                {
+                if let Some(output) = admit(
+                    runtime,
+                    streamed,
+                    applied_cpu,
+                    &ownership,
+                    &mut milestones,
+                    cx,
+                    failures,
+                )? {
                     outputs.push(output);
                 }
             }
@@ -721,6 +743,7 @@ fn write(
         }
     }
     if cx.flags.json && cx.flags.profile {
+        let usage = UsageCopies::of(cx.instrument);
         bench::emit(&json!({
             "event": "stage-profile",
             "command": "serve",
@@ -730,6 +753,10 @@ fn write(
             "idleMs": millis(idle_nanos),
             "cpuMs": cpu_millis(writer_cpu_started),
             "applyCalls": apply_calls,
+            "usageIdentitiesOwned": usage.owned,
+            "usageCopiesDropped": usage.dropped,
+            "usageCopiesDisplaced": usage.displaced,
+            "usageIdentitiesUnclaimed": usage.unclaimed,
         }));
     }
     Ok(outputs)
@@ -743,6 +770,7 @@ fn admit(
     mut streamed: StreamedRuntime,
     applied_cpu: Duration,
     ownership: &BTreeMap<String, Option<String>>,
+    milestones: &mut ColdMilestones,
     cx: &mut StreamedCold<'_>,
     failures: &mut Vec<String>,
 ) -> Result<Option<AppliedColdRuntime>, String> {
@@ -882,6 +910,7 @@ fn admit(
         runtime.stream.records,
         session_ids.len()
     );
+    milestones.readable(&runtime_id, kind, &session_ids, &runtime.roster);
     Ok(Some(AppliedColdRuntime {
         adapter: runtime.adapter,
         runtime: runtime.runtime,

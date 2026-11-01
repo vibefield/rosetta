@@ -59,7 +59,7 @@ export const endpoints = [
     id: 'boost', group: 'Daemon', method: 'POST', path: '/api/ingest/boost', title: 'Prioritize a session',
     description: 'Record an advisory request to bring a queued session forward in the backfill scheduler.',
     request: 'BoostRequest', body: { session_id: 'SESSION_ID' }, response: 'BoostResponse', sdk: 'await client.boost(sessionId)',
-    notes: ['queued acknowledges the request, not completed ingestion. Without a backfill queue, queued is false.', 'A nonempty id that the queue never encounters simply expires. It is safe to request a boost when a reader selects a pending session.'],
+    notes: ['queued acknowledges the request, not completed ingestion. It is true only while a backfill queue is still running; a fresh in-memory import, a returning start and live service have none, so they answer false.', 'A nonempty id that the queue never encounters simply expires. It is safe to request a boost when a reader selects a pending session.'],
   },
   {
     id: 'runtimes', group: 'Daemon', method: 'GET', path: '/api/runtimes', title: 'List runtimes',
@@ -101,7 +101,7 @@ export const endpoints = [
   {
     id: 'pricing', group: 'Projects', method: 'GET', path: '/api/pricing', title: 'Inspect pricing coverage',
     description: 'Inspect the compiled pricing catalog, the projection’s pricing version, source provenance, and unpriced model usage.',
-    response: 'PricingResponse', sdk: 'await client.pricing()',
+    response: 'PricingResponse', sdk: 'await client.pricing()', canonical: true,
     notes: ['basis is list_price_equivalent: the model creator’s API list-price equivalent for recorded usage. Provider-reported cost is a separate fact.', 'unpriced reports unknown models and usage the catalog could not price. Missing coverage must not be presented as a zero-cost result.'],
   },
   {

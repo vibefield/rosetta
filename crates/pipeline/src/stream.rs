@@ -120,7 +120,56 @@ pub fn stream_backfill_into(
     files: &[SessionFile],
     opts: &IngestOptions,
     instrument: &Instrument,
+    ledger: Option<&mut rosetta_capture::Ledger>,
+) -> Result<StreamReport, PipelineError> {
+    stream_backfill_inner(
+        adapter, runtime, root, store, files, opts, instrument, ledger, None,
+    )
+}
+
+/// [`stream_backfill_into`] that computes each roster session's readiness
+/// into `withheld` instead of committing it, so every session stays Pending.
+/// A resumed private build reads into the RAM generation its readers already
+/// target, and its timeline order is final only after finalization; the
+/// caller commits these states once it is (`sessions_indexed` stays zero).
+/// Later calls replace an earlier decision for the same session, exactly as
+/// the commits they stand for would have.
+#[allow(clippy::too_many_arguments)]
+pub fn stream_backfill_withholding_health(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    store: &mut Store,
+    files: &[SessionFile],
+    opts: &IngestOptions,
+    instrument: &Instrument,
+    ledger: Option<&mut rosetta_capture::Ledger>,
+    withheld: &mut BTreeMap<String, StreamState>,
+) -> Result<StreamReport, PipelineError> {
+    stream_backfill_inner(
+        adapter,
+        runtime,
+        root,
+        store,
+        files,
+        opts,
+        instrument,
+        ledger,
+        Some(withheld),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stream_backfill_inner(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    store: &mut Store,
+    files: &[SessionFile],
+    opts: &IngestOptions,
+    instrument: &Instrument,
     mut ledger: Option<&mut rosetta_capture::Ledger>,
+    mut withheld: Option<&mut BTreeMap<String, StreamState>>,
 ) -> Result<StreamReport, PipelineError> {
     let tailer = Tailer::new(opts.tail.clone())?;
     // Snapshot-driven virtual sources take their own path: no tailing, and
@@ -294,7 +343,9 @@ pub fn stream_backfill_into(
         } else {
             StreamState::Streaming
         };
-        if store.set_session_stream_state(&session_id, next)? && complete {
+        if let Some(withheld) = withheld.as_deref_mut() {
+            withheld.insert(session_id, next);
+        } else if store.set_session_stream_state(&session_id, next)? && complete {
             report.sessions_indexed += 1;
         }
     }

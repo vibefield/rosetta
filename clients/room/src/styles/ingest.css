@@ -41,10 +41,15 @@
 .ah-project-list-item[data-cooking] .ah-project-list-item__metrics { animation: none; }
 .ah-project-list-item__metrics[data-cooking]::after { display: none; }
 .ah-project-list-item[data-cooking]:not([data-fill]) .ah-project-list-item__accent { animation: none; opacity: .3; }
+/* The room's colourless meter (room.css) when nobody knows the amount: it
+   sweeps rather than resting at an invented width — a fixed sliver reads as
+   progress that was never measured. Same travel as the import card's. */
+.ah-meter[data-indeterminate] i { width: 34%; animation: ah-ingest-travel 1.8s ease-in-out infinite; }
 @keyframes ah-ingest-travel { 0% { transform: translateX(-110%); } 100% { transform: translateX(310%); } }
 @media (prefers-reduced-motion: reduce) {
   .ah-ingest-meter i, .ah-ingest-status__agents summary > span { animation: none; transition: none; }
-  .ah-ingest-meter[data-indeterminate] i { width: 100%; opacity: .35; animation: none; }
+  .ah-ingest-meter[data-indeterminate] i,
+  .ah-meter[data-indeterminate] i { width: 100%; opacity: .35; animation: none; }
   .ah-project-list-item__accent { animation: none !important; transition: none !important; }
 }
 

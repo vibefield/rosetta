@@ -69,13 +69,20 @@ export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient,
     <div className="ah-empty" style={{ flex: 1 }}>
       <strong>Choose what rosetta reads</strong>
       <p>
-        These agent stores were found on this machine. Nothing is read until
-        you say so — and everything stays on this machine.
+        {rows === null ? "" : "These agent stores were found on this machine. "}
+        Nothing is read until you say so — and everything stays on this machine.
       </p>
       {rows === null ? (
-        <div className="ah-meter">
-          <i style={{ width: "8%" }} />
-        </div>
+        // The census has no amount until it answers: a sweep, never a
+        // fixed sliver that reads as progress.
+        <>
+          <div className="ah-meter" data-indeterminate="" aria-hidden="true">
+            <i />
+          </div>
+          <p className="ah-rollcall__absent" role="status">
+            Looking for agent stores on this machine…
+          </p>
+        </>
       ) : (
         <>
           <div className="ah-rollcall" role="group" aria-label="Agents to enroll">

@@ -65,6 +65,7 @@ mod cold_stage;
 mod cold_stream;
 mod engine;
 mod enroll;
+mod ingest_metrics;
 mod ingestion_control;
 mod ledger_cmd;
 mod ledger_compression;
@@ -2391,6 +2392,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
                             prefetch_ledger,
                             allow_unsealed_sources: allow_retired_unsealed,
                             cancel: None,
+                            withhold_session_health: false,
                         },
                     )
                     .map_err(|error| error.to_string())?;
@@ -2484,6 +2486,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
                     prefetch_ledger: flags.experiment_prefetch_ledger,
                     allow_unsealed_sources: allow_retired_unsealed,
                     cancel: None,
+                    withhold_session_health: false,
                 },
             )
             .map_err(|error| error.to_string())?;

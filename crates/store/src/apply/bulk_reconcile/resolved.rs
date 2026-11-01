@@ -153,6 +153,7 @@ pub struct ResolvedSession {
     matched_updates: u64,
     unmatched_updates: u64,
     folded_usage: u64,
+    unclaimed_usage: u64,
 }
 
 impl ResolvedSession {
@@ -208,6 +209,7 @@ impl ResolvedSession {
             session_touches,
             tool_activity,
             folded_usage,
+            unclaimed_usage,
             ..
         } = plan;
         debug_assert!(
@@ -245,6 +247,7 @@ impl ResolvedSession {
             matched_updates,
             unmatched_updates,
             folded_usage,
+            unclaimed_usage,
         })
     }
 
@@ -296,6 +299,7 @@ impl ResolvedSession {
         stats.tool_results_merged = self.matched_updates;
         stats.tool_results_unmatched = self.unmatched_updates;
         stats.usage_applied = self.folded_usage;
+        stats.usage_identities_unclaimed = self.unclaimed_usage;
         stats.profile.bulk_tool_rows_reconciled = self.tool_rows();
         let mut dirty_buckets = BTreeSet::<BucketKey>::new();
         for resolved in &mut self.rows {

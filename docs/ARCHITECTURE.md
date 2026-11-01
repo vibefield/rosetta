@@ -153,9 +153,19 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > reports their count separately from source catch-up, and preserves their raw records and
 > Streaming readiness. The daemon regression exercises a malformed sealed record through
 > resume and canonical publication, not only a malformed suffix first read during catch-up.
+> An interrupted source the resumed roster no longer holds — its file vanished while no daemon
+> ran, or its first record no longer identifies a session (unidentified or unfinished) — no longer
+> refuses either (2026-11-01). It closes the way a fresh build closes a file it loses mid-read:
+> `activate_stopped_source` replays exactly that generation's staged frames (segment-index
+> scoped), appends its seal to the staged ledger (clean or not, as it normalized), and activates it
+> at the generation it was captured under; it counts as `missing=` in that runtime's tolerated
+> line and in the profile, and its session publishes `Streaming` with the rows that were read. The
+> seal is what keeps the published archive rebuildable — `rebuild` refuses a raw-only source it
+> cannot prove retired — and a rebuild projects the same rows, reading that session `Indexed` when
+> the prefix was clean, exactly as after a fresh build's cut-short source. The live runner admits
+> the file if it returns. One whose identity changed still refuses.
 > A start still refuses what no later read can repair: a truncated discovery or metadata walk
-> (the file cap), a checkpoint conflict, a record past the raw frame limit (§3.5), a resumed
-> start's interrupted source that is gone (its reserved generation can never finish), and what
+> (the file cap), a checkpoint conflict, a record past the raw frame limit (§3.5), and what
 > only a bug or corruption leaves — a closed source with a gap in its operation sequence, an
 > undecodable final checkpoint, or no terminal generation. Finite `ingest`, `watch` and the
 > disk-progressive engine keep the strict gate that refuses every shortfall. The
@@ -210,6 +220,47 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > barrier and re-snapshot through the ordinary API. No raw record, parser state, candidate value,
 > or reconciliation map enters the read target. Finite `ingest` and replay keep the retained
 > closed-runtime path (`prepare_captured_runtime` → `apply_prepared_runtime`).
+>
+> **Cold-build measurement (2026-11-01).** The streamed writer prints what it already knows,
+> without changing capture order, admission, or throughput (`rosettad::ingest_metrics`). These
+> are `milestone:` stdout lines whose `elapsed_s` is measured from serve start, like the others:
+> - `runtime-metadata-public runtime=<id> agent=<kind>` as each runtime's metadata becomes public.
+> - `first-session-complete` the first time the writer has applied every roster source of some
+>   session: today's counterfactual first-readable. It is an optimistic lower bound for any finer
+>   flip, not a moment that session was publishable. A crossed session's facts, a resolved
+>   session's leftover usage and file edits, and ordinals still to canonicalize wait for the
+>   runtime fold at admission.
+> - `runtime-readable runtime=<id> agent=<kind> sessions=<n>` at each admission.
+> - `first-readable` at the first admission that makes a session non-`Pending`.
+> - `recent-ready horizon=24h|7d horizon_sessions=<n>`: the first moment every public roster
+>   session whose newest roster file mtime lies within the horizon of the census cut (the writer's
+>   start) is non-`Pending`. It is decided from session ids and roster mtimes only, once every
+>   roster is known and an admission has made a session readable. So it never precedes
+>   `first-readable`, and a horizon with no sessions reads ready right at it, with
+>   `horizon_sessions=0`.
+>
+> For each roster the writer also prints one structure-only `census:` line, once that runtime's
+> producer has started (its one store read never delays capture). It counts physical files: the
+> virtual `<path>#<native-id>` sources of one snapshot database or document are one file, whose
+> age is its newest source's. The line gives files; bytes; *cumulative* `files/bytes` per age
+> (`le1h`, `le24h`, `le7d`, `le30d`, then `older`); `shared=files/bytes` for files several
+> sessions' sources share; and the 20 largest file sizes. It adds nearest-rank p50/p90/p99/max,
+> plus the count over 64 MiB, of the bytes each session owns alone and of those per tree
+> (sessions grouped by their settled `root_session_id`). Shared files are charged to no session,
+> and a session that reads only shared files is not counted. It never prints a path, a session
+> id, or content, and `--json --profile` repeats it as a `census` event.
+>
+> A sampler thread probes memory every second. On macOS it reads the `proc_pid_rusage` footprint
+> and resident size, `vm.swapusage`, and the `host_statistics64` pageouts, swap-ins, swap-outs
+> and compressor pages; on Linux it reads procfs, best effort. `--json --profile` emits every
+> sample as a `memory-sample` event for the life of serve. Otherwise the sampler runs only during a
+> cold build, prints a compact `memory:` line at most every 10 s, and stops at canonical
+> readiness. Right after `milestone: canonical-ready`, every cold path prints two more lines:
+> - `milestone: memory-peak`: peak footprint (including the kernel's lifetime high-water mark),
+>   peak resident and swap, and the host's swap-outs and pageouts since serve start, or `na` where
+>   the platform cannot tell;
+> - `usage-copies: dropped=… displaced=… owned=… unclaimed_usage=…` (§4.1.3, counting rule 2).
+>   The streamed-writer stage profile carries the same four counters.
 >
 > Cold JSONL capture transfers owned normalized batches into the RAM planner instead of
 > deep-copying them. Both owned and borrowed entry points enforce the same metadata boundary
@@ -306,7 +357,8 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > at bounded record-batch boundaries; `PayloadBytes` excludes audit, anchor, and prefix rereads.
 > Fresh and resumed serve populate a shared RAM `ProgressBoard` from metadata's settled ownership.
 > `/api/status` snapshots that board while the writer is busy, and a project's `sessions_done`
-> advances only after the complete runtime becomes public. Metadata-only parent placeholders do
+> advances only after the complete runtime becomes public — for a resumed build, whose runtimes
+> are not admitted one by one, at publication. Metadata-only parent placeholders do
 > not overcount the source plan. Database/document payloads and resumed suffixes have an unknown
 > byte denominator (`bytes_total: 0`); serialized records must never be divided by SQLite file size.
 > JSONL byte totals remain source-size estimates, with UI clamping for delimiters and growing files.
@@ -356,14 +408,24 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 >
 > A pause acknowledgment is not a quiescence claim. Fresh RAM workers observe a cold
 > cancellation signal separate from process shutdown, join, close their ledger writers,
-> and sync retained evidence before state becomes paused. The listener, metadata mirror,
-> and existing RAM reader remain available. In-process resume rebuilds disposable state
+> and sync retained evidence before state becomes paused. While paused, the listener, metadata
+> mirror, and existing RAM reader remain available. That reader keeps what the attempt it was attached to
+> left: a fresh build's admitted runtimes stay readable, while a cross-launch resume — the first
+> attempt of its process, writing into the reader's RAM — leaves every session `Pending`, since its
+> readiness commits only past the publication fence. In-process resume rebuilds disposable state
 > behind that retained reader, rechecks current inventory, and switches at publication;
 > a process restart cannot retain RAM and restores it after resume. Disk-progressive
 > work pauses between committed source/slice passes after flushing its ledgers, retains
 > its scheduler/cursors in-process, and rechecks admission after resume. Neither path
 > captures while paused. Native bytes removed by their producer during a pause cannot
 > be recovered unless they were already archived.
+>
+> A stop (the app's SIGINT on quit, a terminal's ctrl-c) runs the same physical barrier over the
+> staged ledger once those workers have joined, before the daemon exits: at most 5 s of fsyncs
+> inside the app's 10 s SIGKILL window, reported on stderr as
+> `stop barrier: staged raw ledger synced elapsed_ms=…` (or why it did not finish, which never
+> replaces the stop's own outcome). Staged bytes already survive a plain process exit or a
+> SIGKILL; the barrier makes them survive power loss or an OS crash too (R0, 2026-11-01).
 >
 > Pause admission and the publication fence share one coordinator lock. A pause that
 > wins prevents publication; after the fence, controls return 409
@@ -419,8 +481,10 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 >
 > The progressive read contract is intentionally asymmetric. Project and top-level-session lists,
 > bounded session lookups, and timelines may read the canonical shared-memory generation. Global
-> heatmap, usage, and contribution endpoints return HTTP 503 with protocol-v7 `not_ready` until the
-> reader switches to the published file; search stays explicitly Building. This is a correctness
+> heatmap, usage, contribution, and pricing endpoints return HTTP 503 with protocol-v7 `not_ready`
+> until the reader switches to the published file; search stays explicitly Building. (Pricing joined
+> the gate on 2026-11-01: its coverage report reads `usage_bucket` and `pricing_version`, which a
+> Bulk build leaves empty until finalization, so it used to report an empty unpriced list.) This is a correctness
 > and scheduling boundary, not a loading effect: an earlier renderer launched two aggregate queries
 > for each of 135 projects every five seconds, and those shared-cache readers starved the sole cold
 > writer. After publication the renderer hydrates project figures with four workers and a quiet
@@ -433,7 +497,25 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > enrollment, and runtime roots. An exit discards only canonical RAM. The next launch reconstructs
 > it from sealed staged-ledger generations, treats a raw-only tail as unfinished, reserves that
 > generation in RAM, and rereads the source strictly above it; its catch-up passes are private
-> build passes like the fresh walk's, and it publishes past the same per-file imperfections. A
+> build passes like the fresh walk's, and it publishes past the same per-file imperfections.
+> That resumed build writes into the canonical RAM generation the read router already targets,
+> but unlike a fresh build it is not admitted runtime by runtime: it replays in ledger order with
+> its reconciliation deferred, catches up serially, reconciles cross-file tool lifecycle, usage
+> and file edits once after every runtime, and leaves provisional ordinals for finalization to
+> renumber. So no resumed session is public before it is final (2026-11-01): replay
+> (`RebuildOptions::withhold_session_health`) and catch-up (`stream_backfill_withholding_health`)
+> return the readiness they compute instead of committing it, and every session stays `Pending` —
+> listed, with no payload on any read route — until `finish_bulk_load` has finalized the
+> projection and the publication fence has passed. A readiness state journaled in a replayed
+> metadata batch (an older binary's resume journaled the states it had committed) is withheld the
+> same way rather than applied. One transaction then commits each session's last decision
+> (catch-up's over replay's; a vanished interrupted source's session `Streaming`) just before the
+> backup that becomes the installed file (finalization neither reads nor writes readiness, so the
+> installed projection equals one whose states were set earlier). A cross-launch resume therefore
+> shows nothing readable until it publishes: a deliberate correctness fix, replacing an exposure
+> of replayed sessions without their tool rows, usage or file edits. (An in-process resume builds
+> in its own RAM behind the reader the paused attempt left, as described under pause.) The plain
+> `rebuild` command, the fresh path, and the disk-progressive path commit readiness as before. A
 > crash after ledger
 > promotion but before SQLite installation remains resumable because the marker moves with the
 > ledger; successful
@@ -481,7 +563,11 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > the boundary — indistinguishable from the file ending there and then growing — so every session
 > opens readable early while paused remainders requeue as ordinary append growth; app boosts run
 > unbudgeted and jump both lanes, preempted by at most one slice, and a session badges Indexed
-> only when its last queued task is gone. Two bounds are explicit: snapshot-driver sources
+> only when its last queued task is gone. This loop is the only boost drainer: serve attaches the
+> boost queue on this path alone and the loop closes it when it ends, so `POST /api/ingest/boost`
+> answers `queued: false` (same shape) on the fresh RAM build, a warm start, a metadata-only audit
+> and every live phase, where nothing would ever read it (2026-11-01; the room ignores the answer).
+> Two bounds are explicit: snapshot-driver sources
 > (SQLite/document) always stream whole because their revision identity is a whole-content hash,
 > and a source that turns unclean inside a pass falls back to whole-file handling. Dirty content
 > follows live-growth semantics on every cold path (decided 2026-08-31): a dirty FIRST generation
@@ -1374,6 +1460,15 @@ its request count, when the agent reports one: Grok's `modelCalls`, Copilot's in
    RAM reconciliation buffer: a rebuild replays the raw ledger through it, and a daemon that
    opens a complete projection starts empty, so a copy whose origin was projected in an
    earlier run is caught at the next rebuild. Copies never persist anything (iron rule 5).
+   `ApplyStats` counts every claim's outcome: `usage_identities_owned` (an identity's first
+   record, or its owner's correction), `usage_copies_dropped` and `usage_copies_displaced` (a
+   displacement can lower a visible session's usage later). It also counts
+   `usage_identities_unclaimed`: identity-bearing usage records the cold fold merges straight
+   onto their dated tool row (`FoldState::finish`), so they never reach the owner index. A cold
+   build neither registers nor drops such a copy, while live ingest claims it. The count is of
+   records, not rows: each of a row's successive snapshots counts. It only sizes that known
+   cold/live gap and changes nothing. All four reach the profiler and the `usage-copies:` line at
+   canonical readiness.
 3. *Extra attempts are separate records.* A fallback, compaction or advisor call inside one
    response (Claude `usage.iterations`) becomes its own `session_usage` sample with its own
    model.
@@ -1511,7 +1606,10 @@ every price change is a reviewable diff.
   usage — id, tokens, first and last hour, and whether the id is unknown to the catalog — so
   a model launched yesterday shows up the day it is first used, before anyone notices a low
   figure. Re-vendor genai-prices weekly and on any unknown id; the vendored copy went stale
-  by one day when Opus 5.5 launched (3.49B tokens, $1,061, unpriced for a day).
+  by one day when Opus 5.5 launched (3.49B tokens, $1,061, unpriced for a day). Like the
+  other aggregates it answers 503 `not_ready` while a fresh RAM build is unpublished: the
+  rollup it reads does not exist before finalization, and an empty list would read as
+  complete coverage.
 
 **Re-pricing never replays the ledger.** `projection_state.pricing_version` records the
 pricing version the rollup costs were computed with. A writer opening a complete projection
@@ -1567,8 +1665,10 @@ and cleanup sit outside the canonical SQL timer, inside the enclosing apply time
 source batches now release incrementally inside closed source application rather than in a
 separate post-reconciliation destruction phase.
 `serve --json --profile` emits discovery timing and a `serve-cold` profile at canonical
-readiness, before live catch-up changes the counters. Detached search readiness is a later
-boundary and must be measured separately; `--ticks 0` does not guarantee it completes.
+readiness, before live catch-up changes the counters, and per-runtime `census` and 1 s
+`memory-sample` events (see "Cold-build measurement" in the status checkpoint at the top).
+Detached search readiness is a later boundary and must be measured separately; `--ticks 0`
+does not guarantee it completes.
 The `live-catch-up` stage exposes the handoff; the search worker was woken at publication and
 builds beside it. Its
 `live poll time` contains filesystem walking and committed-evidence lookups, with separate
@@ -1951,7 +2051,9 @@ now does too, through a start-time **enrollment file**:
   archive whose excluded first capture was interrupted: only those proven excluded
   unsealed sources may remain unfinished. Their raw prefix is never sealed as complete;
   a payload-free checkpoint reserves its generation so re-admission allocates a newer
-  one, including after a rebuild. Other incomplete sources still refuse publication.
+  one, including after a rebuild. Other incomplete sources still refuse publication (a resumed
+  build seals the staged prefix of an interrupted source whose file is gone, so its archive never
+  carries one).
   A legacy disk cold load may already have a staged cursor when the rule is added.
   Its rows and generation watermark remain intact; a process-local set of explicitly
   retired cursor ids removes only that work from the publication gate. Capturing the
@@ -2378,7 +2480,9 @@ still require a driver-specific frozen pair or a declared production-weighted ag
   syncs its parent, and only then installs the validated SQLite file. A missing projection
   beside an unmarked existing ledger normally fails closed to `rebuild`, preventing generation
   collisions. A marked staged/public cold generation instead replays sealed evidence into RAM and
-  finishes raw-only sources at a strictly newer generation. `--restart-incomplete` archives only
+  finishes raw-only sources at a strictly newer generation (sealing the staged prefix of one whose
+  file is gone, as a fresh build seals a source cut short), holding every session Pending until it
+  publishes. `--restart-incomplete` archives only
   explicit legacy artifact sets under the projection lock.
   Existing/live projections retain ledger-sync-before-visible-SQLite ordering. The frozen
   pair measured segment syncs at 7,435 → 66 and ledger time at 96.64 s → 18.02 s; twelve

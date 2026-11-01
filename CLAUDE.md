@@ -116,8 +116,11 @@ refuse a fresh or resumed start (2026-09-28): files that vanished, are unidentif
 yet sessions (unidentified, and no delimiter ends their first record yet: `files_unfinished`)
 wait for live admission; sources missing or unstable at capture and malformed records publish
 Streaming; one `tolerated per-file imperfections (…)` stdout line per runtime and profile
-counters report them. A truncated walk, a checkpoint conflict, a record past the raw frame
-limit, a resumed start's vanished interrupted source, and bug-shaped close errors still refuse;
+counters report them; a resumed start's interrupted source whose file is gone ends at the last
+staged record, sealed and activated like a fresh source that vanished, and is counted `missing`,
+so the archive stays rebuildable (2026-11-01). A truncated walk, a checkpoint conflict, a
+record past the raw frame limit, an interrupted source whose identity changed, and bug-shaped
+close errors still refuse;
 finite `ingest`, `watch` and the disk `ColdEngine` keep the strict gate. No runtime is
 retained whole in RAM. Open session subscriptions receive one resync barrier; parser
 fragments and reconciliation state are never public. This is deliberately runtime-granular:
@@ -131,7 +134,8 @@ from RAM to disk before releasing the RAM generation. Detached search remains ex
 Building and does not start until that switch; it wakes right after it, before any runner's
 catch-up, whose commits become ordinary revision-stamped repairs. Watchers are armed before metadata, and their
 queued suffixes flow into the ordinary live runner after publication. Cross-session aggregates
-(heatmap, usage decomposition, and contribution) return protocol-v7 `not_ready` while the reader
+(heatmap, usage decomposition, and contribution) and the `/api/pricing` coverage report return
+protocol-v7 `not_ready` while the reader
 targets shared RAM; this prevents presentation scans from contending with the sole canonical
 writer. The renderer waits for `canonical_ready` and hydrates project aggregates with bounded
 concurrency after publication. An existing complete projection is live immediately: watchers arm
@@ -142,7 +146,10 @@ in RAM: seeded from the cold writer's final checkpoints on a fresh start, otherw
 row once, and forgotten whenever the runner streams that source.
 `--stop-after-meta` and legacy incomplete disk projections retain the disk-progressive `ColdEngine` path: its four lanes
 (live ▸ boost ▸ starter ▸ completion), slice budget, boost queue, and scoped row effects remain
-the recovery/audit topology. Finite `ingest` and explicit `rebuild` remain private, validated,
+the recovery/audit topology. Only a legacy incomplete projection's `ColdEngine` run attaches and
+drains (and, when its loop ends, closes) the boost queue; every other serve mode, the
+`--stop-after-meta` metadata audit included, attaches none, so `/api/ingest/boost` answers
+`queued: false` (2026-11-01). Finite `ingest` and explicit `rebuild` remain private, validated,
 atomic publication paths and never slice. An idle daemon
 appends nothing to the raw ledger: the rotating audit verifies a file's committed
 content chain (tail checkpoint v2 — a resumable byte fold; pre-chain checkpoints are
@@ -169,15 +176,25 @@ falls back to whole-file handling. Dirty sources converge on live-growth semanti
 every cold path: a dirty FIRST generation activates its parseable rows with the session
 held Streaming (never Indexed) — identical sliced, unsliced, or rebuilt — while dirty
 replacements still abandon outside a private build. `milestone:` stdout lines feed the sweep
-harness.
+harness. A fresh RAM build also prints, as measurement only, per-runtime metadata and admission
+milestones, first-session-complete (an optimistic lower bound for any finer flip), first-readable
+and recent-ready (24 h, 7 d) milestones, one structure-only `census:`
+line per roster, a 1 s memory trace with `milestone: memory-peak`, and `usage-copies:` counters at
+canonical readiness (docs/ARCHITECTURE.md, "Cold-build measurement").
 Interrupted disk-progressive work is durable and resumable. Interrupted fresh RAM work never
 installs an incomplete canonical database; it retains a named `<ledger>.staged` generation with a
-fsynced manifest binding projection, ledger, enrollment, and runtime roots. The next plain `serve`
+fsynced manifest binding projection, ledger, enrollment, and runtime roots; a stop (SIGINT,
+ctrl-c) syncs that staged ledger within 5 s before exiting, as a pause does. The next plain `serve`
 replays sealed evidence into fresh canonical RAM, ignores raw-only tails, reserves their generation
 in RAM so source retries allocate strictly above it, finishes from the current source inventory
 (with the same private-build passes and the same tolerance as a fresh start), and publishes the
-same generation. The recovery marker survives ledger promotion and is removed only
-after SQLite installation. The app does not pass `--restart-incomplete`; that flag remains an
+same generation. That RAM is the read target, but a resume reconciles once at the end and
+finalization renumbers its ordinals, so replay and catch-up withhold every readiness decision:
+each session stays Pending (listed, no payload) until finalization and the publication fence,
+then one commit applies them just before the backup that is installed — nothing is readable
+until a cross-launch resume publishes, and its progress board counts no session done before
+then (2026-11-01). The recovery marker survives ledger promotion and is
+removed only after SQLite installation. The app does not pass `--restart-incomplete`; that flag remains an
 explicit legacy archive/restart operation for old incomplete projection sets. A complete projection
 is never moved. `npm run dev -w @vibefield/rosetta-agent-history` builds `rosettad --release` and
 passes that exact binary to Electron; mtime-based debug/release selection is forbidden.

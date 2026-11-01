@@ -92,6 +92,13 @@ pub enum Metric {
     SessionRenumbers,
     SessionRenumberRows,
     BulkToolRowsReconciled,
+    /// Cross-file usage ownership outcomes — identity-bearing usage owned,
+    /// copies dropped, owners displaced — and cold-folded tool-row usage
+    /// records whose identity it never saw.
+    UsageIdentitiesOwned,
+    UsageCopiesDropped,
+    UsageCopiesDisplaced,
+    UsageIdentitiesUnclaimed,
     MessageLookupNanos,
     MessageWriteNanos,
     ToolResultLookupNanos,
@@ -139,7 +146,7 @@ pub enum Metric {
     LiveStreamNanos,
 }
 
-const METRIC_COUNT: usize = 100;
+const METRIC_COUNT: usize = 104;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -220,6 +227,13 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::SessionRenumbers, "session renumbers"),
     (Metric::SessionRenumberRows, "session renumber rows"),
     (Metric::BulkToolRowsReconciled, "bulk tool rows reconciled"),
+    (Metric::UsageIdentitiesOwned, "usage identities owned"),
+    (Metric::UsageCopiesDropped, "usage copies dropped"),
+    (Metric::UsageCopiesDisplaced, "usage owners displaced"),
+    (
+        Metric::UsageIdentitiesUnclaimed,
+        "folded tool-row usage records unclaimed",
+    ),
     (Metric::MessageLookupNanos, "message lookup time"),
     (Metric::MessageWriteNanos, "message write time"),
     (Metric::ToolResultLookupNanos, "tool-result lookup time"),
@@ -589,6 +603,13 @@ impl Instrument {
         self.add(Metric::AssetWriteNanos, stats.asset_write_nanos);
         self.add(Metric::CanonicalApplyNanos, stats.canonical_apply_nanos);
         self.add(Metric::SqliteCommitNanos, stats.sqlite_commit_nanos);
+        self.add(Metric::UsageIdentitiesOwned, stats.usage_identities_owned);
+        self.add(Metric::UsageCopiesDropped, stats.usage_copies_dropped);
+        self.add(Metric::UsageCopiesDisplaced, stats.usage_copies_displaced);
+        self.add(
+            Metric::UsageIdentitiesUnclaimed,
+            stats.usage_identities_unclaimed,
+        );
         let profile = &stats.profile;
         self.add(Metric::MessageApplyAttempts, profile.message_attempts);
         self.add(

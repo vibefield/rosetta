@@ -212,6 +212,23 @@
 .ah-sheet__recent:hover .ah-sheet__forget, .ah-sheet__forget:focus-visible { opacity: 1; }
 .ah-sheet__forget:hover { color: var(--vf-text-primary); background: var(--vf-fill-hover); }
 
+/* titles that match — while the full-text index is still on its way, the
+   sheet lists the session titles the room already holds, in a hit's shape:
+   the agent's mark, the project's tint and name, the title, the day */
+.ah-sheet__titles-head { display: flex; justify-content: space-between; gap: 12px; }
+.ah-sheet__titles-head > span:last-child {
+  text-transform: none; letter-spacing: 0; font-weight: 400; font-variant-numeric: tabular-nums;
+}
+.ah-sheet__row[data-title] .ah-sheet__snippet { -webkit-line-clamp: 1; }
+.ah-sheet__project {
+  display: inline-flex; align-items: baseline; gap: 5px; margin-right: 7px;
+  color: var(--vf-text-tertiary); font-size: 11px;
+}
+.ah-sheet__project > i {
+  flex: none; align-self: center; width: 6px; height: 6px; border-radius: 999px; background: var(--tint);
+}
+.ah-sheet__pending { margin: 6px 10px 2px; color: var(--vf-text-faint); font-size: 11px; line-height: 1.6; }
+
 /* the foot — the count, the scope, the keys */
 .ah-sheet__foot {
   display: flex; align-items: center; gap: 12px; flex: none;

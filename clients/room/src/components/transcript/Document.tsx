@@ -43,7 +43,7 @@ import { useRoom } from "../../room-context";
 import { lastActive } from "../../lib/format";
 import { sessionLastActive } from "../../lib/session-activity";
 import { withinHistoryWindow } from "../../lib/transcript/history-window";
-import { EmptyState } from "../ui";
+import { EmptyState, Meter } from "../ui";
 import { Anchor } from "./Anchor";
 import { DayPill, Sitting } from "./DayPill";
 import { transcriptModel } from "./document-model";
@@ -924,11 +924,12 @@ export function TranscriptDocument({
             title={
               duringBackfill ? "Indexing history" : "History not yet available"
             }
-            description="No readable messages have been indexed for this session yet."
+            description={duringBackfill
+              ? "This session's messages appear here once they are indexed."
+              : "No readable messages have been indexed for this session yet."}
           >
-            {duringBackfill && <div className="ah-meter">
-              <i style={{ width: "8%" }} />
-            </div>}
+            {/* No amount is known for one session: the meter sweeps. */}
+            {duringBackfill && <Meter fraction={null} />}
           </EmptyState>
         ) : (
           <EmptyState
