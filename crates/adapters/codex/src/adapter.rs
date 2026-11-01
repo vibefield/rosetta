@@ -48,6 +48,10 @@ impl AgentAdapter for CodexAdapter {
         // 19: recorded tool images use durable optimized attachment members.
         // 20: explicitly presented HTML deliverables with transcript anchors.
         // 21: capture can recover presented HTML from the recorded workspace.
+        // Still 21 after image members became recorded originals with WebP
+        // renditions made after import (2026-11-01): legacy bundle refs stay
+        // valid, so re-streaming every source is not worth it; a rebuild
+        // converts them (docs/ARCHITECTURE.md).
         21
     }
 

@@ -203,7 +203,8 @@ Projection schema 13 keeps user-facing canonical rows, rollups, and joins in SQL
 production FTS5 lives in a disposable detached sidecar. The asynchronous
 worker, `projection_state`, and coalesced `search_dirty` consumer landed together; epoch,
 revision, acknowledgement, crash, and repair tests prevent stale or cross-projection hits.
-Verified inline image bytes are decoded once into immutable `<projection>.assets/` members;
+Verified inline image bytes are stored once, as their recorded bytes, in immutable
+`<projection>.assets/` members (WebP display renditions beside them are a disposable cache);
 SQLite retains only relocatable `/api/assets/<digest>.<ext>` references and the raw ledger
 remains lossless.
 Each session now carries exactly one adapter-selected primary cwd and one optional project link

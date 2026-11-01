@@ -128,21 +128,22 @@ pub fn from_bytes(
     if bytes.is_empty() || !magic_matches(mime, &bytes) {
         return unavailable(id, kind, Missing::InvalidData);
     }
-    let (asset, dimensions) = if mime.starts_with("image/") {
-        match rosetta_media::prepare(&bytes) {
-            Ok(prepared) => (prepared.asset.clone(), Some(prepared.dimensions)),
+    // An image is classified from its headers alone, with the display
+    // kernel's limits, and kept as its recorded bytes: no pixel is decoded and
+    // no codec slot is taken here. Display renditions are derived later.
+    let dimensions = if mime.starts_with("image/") {
+        match rosetta_media::probe(&bytes) {
+            Ok(probe) if probe.media_type == mime => Some(probe.dimensions),
+            Ok(_) => return unavailable(id, kind, Missing::InvalidData),
             Err(rosetta_media::MediaError::Unsupported | rosetta_media::MediaError::Limit) => {
                 return unavailable(id, kind, Missing::UnsupportedMedia);
             }
             Err(_) => return unavailable(id, kind, Missing::InvalidData),
         }
     } else {
-        (
-            ProjectionAsset::new(mime, bytes).expect("validated projection media type"),
-            None,
-        )
+        None
     };
-    let mime = asset.media_type.as_str();
+    let asset = ProjectionAsset::new(mime, bytes).expect("validated projection media type");
     let reference = asset.reference();
     let mut attachment = AttachmentRef::new(id, kind, AttachmentSource::Asset { asset: reference });
     attachment.media_type = Some(mime.into());
@@ -294,3 +295,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod recorded_originals;

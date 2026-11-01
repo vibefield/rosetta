@@ -43,6 +43,21 @@ of figures, two transcripts with images and web lines, all relative to now).
   on every mount and every retry, so an evicted URL is asked for again, never
   reused, and a source must not keep a failure. A null answer draws the
   image's "could not load" face with Retry.
+- **A transcript image is drawn only through `imageAssetUrl`.** It is a
+  recorded original (one member, PNG, JPEG, GIF, WebP, BMP or ICO, with no
+  `image_variants`) or, in a projection built before deferred renditions, a
+  complete legacy WebP bundle. One transcript may hold both; anything else
+  keeps its placeholder. Every rendition, `full` (1:1) included, is a WebP the
+  daemon encoded: rosetta's SDK answers an original with
+  `?image=<variant>&v=1` and a bundle with its own members. A host that
+  fetches the bytes fetches that address, never the member's plain URL, which
+  returns the recorded bytes for opening or saving only. An asset-backed
+  timeline artifact that is a recorded image opens the same way. A tile is
+  `aria-busy`, in its loading style, until its rendition draws. Rooms
+  published up to 0.1.2 accept bundles only, and show a newer daemon's
+  originals as placeholders. The SDK published as 0.1.2 answers an
+  original's `full` with its plain URL, so a host pairs this room with the
+  SDK released beside it.
 - **`boost` is optional** because a grant never opens a write: only a host
   holding the daemon's bearer offers it. Without it the index keeps its order.
 - **`browsers()`** returns installed browser ids, names and icon URLs. HTML

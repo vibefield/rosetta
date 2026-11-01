@@ -1,20 +1,33 @@
-//! One bounded, vendor-neutral WebP pipeline. Original bytes remain ledger-only.
-//! No filesystem, network, clock or vendor knowledge enters image preparation.
+//! One bounded, vendor-neutral image kernel: header-only probing for ingestion
+//! and WebP rendition encoding for display. No filesystem, network, clock or
+//! vendor knowledge enters it.
+//!
+//! [`probe`] classifies recorded bytes without decoding pixels. [`renditions`]
+//! encodes display variants under a [`CodecPermit`]; [`prepare`] encodes a whole
+//! legacy bundle (Full plus every variant) in one pooled job, for the live-file
+//! cache. All three share one header stage and one encoder path, so a rendition
+//! is byte-identical whichever made it.
 //!
 //! @atlas layer kernels · domain media
 
 mod animation;
+mod header;
 mod pixels;
 mod pool;
+mod probe;
+mod render;
 
 use std::fmt;
 use std::io::Cursor;
 use std::sync::Arc;
 
-use image::{AnimationDecoder, DynamicImage, ImageDecoder, ImageFormat, ImageReader};
+use image::ImageReader;
 use rosetta_core::ProjectionAsset;
 use rosetta_core::assets::{ImageVariant, ImageVariantBytes};
 use rosetta_core::timeline::Dimensions;
+
+pub use pool::{CodecPermit, Lane, admit, admitted_jobs, try_admit};
+pub use probe::{Probe, probe};
 
 pub const MAX_INPUT_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_PIXELS: u64 = 32 * 1024 * 1024;
@@ -27,6 +40,8 @@ pub enum MediaError {
     Unsupported,
     Limit,
     Encode,
+    /// The caller's stop request ended the work; nothing is wrong with the image.
+    Stopped,
 }
 impl fmt::Display for MediaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -35,6 +50,7 @@ impl fmt::Display for MediaError {
             Self::Unsupported => "image format is not supported",
             Self::Limit => "image exceeds the processing limit",
             Self::Encode => "image could not be encoded",
+            Self::Stopped => "image work was stopped",
         })
     }
 }
@@ -51,16 +67,102 @@ pub struct PreparedImage {
     pub dimensions: Dimensions,
 }
 
-/// At most two jobs decode/resize/encode at once, including ingestion and live
-/// file requests. Repeated content coalesces and shares a 32 MiB compressed LRU.
+/// The whole WebP bundle, Full and every derived variant, as one foreground
+/// codec job (see [`admit`]). Repeated content coalesces and shares a 32 MiB
+/// compressed LRU. Callers that need only an image's class and size use
+/// [`probe`], which takes no codec slot.
 pub fn prepare(bytes: &[u8]) -> Result<Arc<PreparedImage>, MediaError> {
-    if bytes.is_empty() {
-        return Err(MediaError::Invalid);
+    check_input(bytes)?;
+    pool::prepare(bytes)
+}
+
+/// The display renditions an image's viewers ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenditionSet {
+    /// Rail, tile and tile2x, from one decode (of the first frame only for an
+    /// animation, whose thumbs are still posters).
+    Thumbs,
+    /// The Fit preview, at most 1600 px on the long edge; animated for an
+    /// animation.
+    Preview,
+    /// The 1:1 view: the source fitted to WebP's 16383-pixel edge.
+    Full,
+    /// Thumbs and preview from one decode: every derived variant. Full is
+    /// excluded; [`preview_is_full`] tells when preview already is Full.
+    All,
+}
+impl RenditionSet {
+    /// The variants `renditions` returns for this set, in this order.
+    pub fn variants(self) -> &'static [ImageVariant] {
+        match self {
+            Self::Thumbs => &render::THUMBS,
+            Self::Preview => &[ImageVariant::Preview],
+            Self::Full => &[ImageVariant::Full],
+            Self::All => &ImageVariant::DERIVED,
+        }
     }
-    if bytes.len() > MAX_INPUT_BYTES {
+
+    fn wanted(self) -> render::Wanted {
+        render::Wanted {
+            full: self == Self::Full,
+            thumbs: matches!(self, Self::Thumbs | Self::All),
+            preview: matches!(self, Self::Preview | Self::All),
+        }
+    }
+}
+
+/// Encode one rendition set, byte-identical to the same variants of
+/// [`prepare`] (Full included) for every input `prepare` accepts. Inputs
+/// [`probe`] rejects are rejected with its error; no Full encoding is made
+/// unless the set asks for it. No cache: the caller's disk is the cache.
+pub fn renditions(
+    permit: &CodecPermit,
+    bytes: &[u8],
+    set: RenditionSet,
+) -> Result<Vec<ImageVariantBytes>, MediaError> {
+    renditions_with_stop(permit, bytes, set, &|| false)
+}
+
+/// [`renditions`], polling `stop` before decoding, between animation frames
+/// and between encodes; once it returns true the work ends with
+/// [`MediaError::Stopped`].
+pub fn renditions_with_stop(
+    _permit: &CodecPermit,
+    bytes: &[u8],
+    set: RenditionSet,
+    stop: &dyn Fn() -> bool,
+) -> Result<Vec<ImageVariantBytes>, MediaError> {
+    check_input(bytes)?;
+    let header = header::read(bytes)?;
+    probe::frames(&header, bytes)?;
+    let rendered = render::render(header, set.wanted(), stop)?;
+    let out: Vec<_> = rendered
+        .full
+        .map(|bytes| ImageVariantBytes {
+            variant: ImageVariant::Full,
+            bytes,
+        })
+        .into_iter()
+        .chain(rendered.variants)
+        .collect();
+    if out.iter().any(|v| v.bytes.len() > MAX_INPUT_BYTES) {
         return Err(MediaError::Limit);
     }
-    pool::prepare(bytes)
+    Ok(out)
+}
+
+/// The size `variant` of a source with these (oriented) dimensions is
+/// encoded at.
+pub fn target_dimensions(source: Dimensions, variant: ImageVariant) -> Dimensions {
+    let (width, height) = pixels::target_dimensions((source.width, source.height), variant);
+    Dimensions { width, height }
+}
+
+/// True when an image with these [`probe`] or [`prepare`] dimensions needs no
+/// preview downscale, so its Preview rendition is byte-identical to its Full
+/// one (oriented long edge at most 1600 px after the Full fit).
+pub fn preview_is_full(dimensions: Dimensions) -> bool {
+    target_dimensions(dimensions, ImageVariant::Preview) == dimensions
 }
 
 pub fn dimensions(bytes: &[u8]) -> Result<Dimensions, MediaError> {
@@ -69,6 +171,16 @@ pub fn dimensions(bytes: &[u8]) -> Result<Dimensions, MediaError> {
         .map_err(|_| MediaError::Invalid)?
         .into_dimensions()?;
     Ok(Dimensions { width, height })
+}
+
+fn check_input(bytes: &[u8]) -> Result<(), MediaError> {
+    if bytes.is_empty() {
+        return Err(MediaError::Invalid);
+    }
+    if bytes.len() > MAX_INPUT_BYTES {
+        return Err(MediaError::Limit);
+    }
+    Ok(())
 }
 
 fn limits() -> image::Limits {
@@ -87,102 +199,16 @@ fn check_dimensions(width: u32, height: u32) -> Result<(), MediaError> {
 }
 
 fn prepare_uncached(bytes: &[u8]) -> Result<PreparedImage, MediaError> {
-    let format = image::guess_format(bytes).map_err(|_| MediaError::Unsupported)?;
-    if !matches!(
-        format,
-        ImageFormat::Png
-            | ImageFormat::Jpeg
-            | ImageFormat::Gif
-            | ImageFormat::WebP
-            | ImageFormat::Bmp
-            | ImageFormat::Ico
-    ) {
-        return Err(MediaError::Unsupported);
-    }
-    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
-    reader.limits(limits());
-    let mut decoder = reader.into_decoder()?;
-    let (width, height) = decoder.dimensions();
-    check_dimensions(width, height)?;
-    let orientation = decoder.orientation()?;
-    let profile = decoder.icc_profile()?.filter(|p| p.len() <= 1024 * 1024);
-    let transform = pixels::color_transform(profile.as_deref());
-    // Animated decoders return composited, full-canvas frames. Keep frame timing
-    // and loop count; only rail/tile renditions are still posters.
-    match format {
-        ImageFormat::Gif => {
-            drop(decoder);
-            let mut source = image::codecs::gif::GifDecoder::new(Cursor::new(bytes))?;
-            source.set_limits(limits())?;
-            let loops = source.loop_count();
-            return animation::prepare(source.into_frames(), loops, orientation, transform);
-        }
-        ImageFormat::WebP => {
-            let mut source = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes))?;
-            if source.has_animation() {
-                drop(decoder);
-                source.set_limits(limits())?;
-                let loops = source.loop_count();
-                return animation::prepare(source.into_frames(), loops, orientation, transform);
-            }
-        }
-        ImageFormat::Png => {
-            let mut source = image::codecs::png::PngDecoder::new(Cursor::new(bytes))?;
-            if source.is_apng()? {
-                drop(decoder);
-                source.set_limits(limits())?;
-                let source = source.apng()?;
-                let loops = source.loop_count();
-                return animation::prepare(source.into_frames(), loops, orientation, transform);
-            }
-        }
-        _ => {}
-    }
-    let mut decoded = DynamicImage::from_decoder(decoder)?;
-    decoded.apply_orientation(orientation);
-    let mut pixels = decoded.into_rgba8();
-    pixels::convert_color(&mut pixels, transform.as_ref())?;
-    // WebP has a 16383-pixel edge limit. Fit exceptional long captures rather
-    // than crop away content or make a native encoder allocation overflow.
-    let full_pixels = pixels::resize(&pixels, ImageVariant::Full)?;
-    let (width, height) = full_pixels.dimensions();
-    let full = pixels::encode(&full_pixels)?;
-    let variants = variants(
-        &pixels,
-        (pixels.dimensions() == (width, height)).then_some(full.as_slice()),
-        ImageVariant::DERIVED,
-    )?;
-    prepared(full, variants, width, height)
-}
-
-fn variants(
-    pixels: &image::RgbaImage,
-    original_encoding: Option<&[u8]>,
-    recipes: impl IntoIterator<Item = ImageVariant>,
-) -> Result<Vec<ImageVariantBytes>, MediaError> {
-    recipes
-        .into_iter()
-        .map(|variant| {
-            let resized = pixels::resize(pixels, variant)?;
-            Ok(ImageVariantBytes {
-                variant,
-                bytes: if resized.dimensions() == pixels.dimensions()
-                    && let Some(encoded) = original_encoding
-                {
-                    encoded.to_vec()
-                } else {
-                    pixels::encode(&resized)?
-                },
-            })
-        })
-        .collect()
+    let header = header::read(bytes)?;
+    let rendered = render::render(header, render::Wanted::EVERYTHING, &|| false)?;
+    let full = rendered.full.ok_or(MediaError::Encode)?;
+    prepared(full, rendered.variants, rendered.dimensions)
 }
 
 fn prepared(
     bytes: Vec<u8>,
     image_variants: Vec<ImageVariantBytes>,
-    width: u32,
-    height: u32,
+    (width, height): (u32, u32),
 ) -> Result<PreparedImage, MediaError> {
     if bytes.len() > MAX_INPUT_BYTES
         || image_variants

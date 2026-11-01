@@ -15,6 +15,7 @@ domain ledger "Raw ledger (durable truth)" {
   contains mod:rosetta_capture::{ledger, segment, segment_index, recompress}
   contains mod:rosetta_pipeline::{replay, command}
   contains mod:rosettad::{runtime_ledger, ledger_cmd, ledger_verify, ledger_compression, cold_stage}
+  contains mod:rosettad::maintenance_pace
   see "docs/ARCHITECTURE.md#35-runtime-handoff-watcher-tailer-and-raw-ledger"
 }
 
@@ -67,6 +68,8 @@ domain usage "Usage & spend" {
 domain media "Images & assets" {
   contains mod:rosetta_adapter_support::media, mod:rosetta_core::assets
   contains mod:rosetta_store::assets, mod:rosetta_server::http::images
+  contains mod:rosetta_store::assets::{renditions, image_refs}, mod:rosettad::image_renditions
+  touches mod:rosettad::maintenance_pace
   contains path:crates/adapters/*/src/images.rs, file:crates/adapters/claude-code/src/media.rs
   contains path:clients/room/src/components/file-viewer/, file:clients/room/src/lib/image-media.ts
   see "docs/ARCHITECTURE.md#412-authored-images-2026-09-09"

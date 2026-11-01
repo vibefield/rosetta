@@ -59,6 +59,10 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // 36: native API block positions survive responses split across files.
         // 37: unknown workflow journal events are soft drift, not unclean sources.
         // 38: bounded HTML recovery locators and links on later file deliveries.
+        // Still 38 after image members became recorded originals with WebP
+        // renditions made after import (2026-11-01): legacy bundle refs stay
+        // valid, so re-streaming every source is not worth it; a rebuild
+        // converts them (docs/ARCHITECTURE.md).
         38
     }
 

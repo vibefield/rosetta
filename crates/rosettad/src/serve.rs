@@ -1420,6 +1420,9 @@ fn run_resumed_fresh_serve(
         started.elapsed().as_secs_f64()
     );
     crate::ingest_metrics::after_canonical_ready(started, instrument);
+    // Before any runner writes: old members and caches nothing names go.
+    search_worker.wake();
+    crate::image_renditions::prune_after_publication(store.conn(), db);
 
     let public_ledgers = ledger_root(flags, db);
     let mut runners = Vec::with_capacity(applied.len());
@@ -1611,6 +1614,9 @@ fn run_fresh_fast_serve(
         started.elapsed().as_secs_f64()
     );
     crate::ingest_metrics::after_canonical_ready(started, instrument);
+    // Before any runner writes: old members and caches nothing names go.
+    search_worker.wake();
+    crate::image_renditions::prune_after_publication(store.conn(), db);
 
     if flags.json && flags.profile {
         crate::bench::emit_profile("serve-cold", instrument);
@@ -1840,6 +1846,12 @@ fn drive_live_runners(
             }
         }
     };
+    let _renditions = crate::image_renditions::start_after_catch_up(
+        flags.image_renditions,
+        store.conn(),
+        search,
+        stop,
+    );
 
     let mut remaining = flags.ticks;
     let mut more_hints = false;

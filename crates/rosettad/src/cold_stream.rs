@@ -49,7 +49,7 @@ use serde_json::json;
 use crate::cold_progress::ColdProgress;
 use crate::engine::{absorb_effects, now_ms};
 use crate::ingest_metrics::{ColdMilestones, UsageCopies};
-use crate::ledger_compression::thread_cpu_time;
+use crate::maintenance_pace::thread_cpu_time;
 use crate::serve::counter_source;
 use crate::{
     AppliedColdRuntime, ColdCaptureRequest, Flags, PlannedColdRuntime, bench, identity_name,

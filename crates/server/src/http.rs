@@ -512,19 +512,8 @@ async fn asset(
             return Err(Failure::bad_request("this asset is not an image"));
         }
         let variant = query.variant()?;
-        let cache = state.images.clone();
-        let permit = cache
-            .workers
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| Failure::internal("image worker closed"))?;
-        let response = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            cache.asset(&name, variant, query.retry.is_some_and(|v| v > 0))
-        })
-        .await
-        .map_err(|_| Failure::internal("image worker failed"))??;
+        let retry = query.retry.is_some_and(|v| v > 0);
+        let response = images::asset_rendition(state.images.clone(), name, variant, retry).await?;
         return Ok(images::conditional(response, &headers));
     }
     let db = state.db.clone();
@@ -763,6 +752,8 @@ fn asset_media_type(name: &str) -> Option<&'static str> {
         "jpg" => Some("image/jpeg"),
         "gif" => Some("image/gif"),
         "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "ico" => Some("image/x-icon"),
         "pdf" => Some("application/pdf"),
         "json" => Some("application/vnd.rosetta.canonical-document+json"),
         "txt" => Some("text/plain; charset=utf-8"),

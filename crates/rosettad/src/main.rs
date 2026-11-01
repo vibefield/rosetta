@@ -65,11 +65,13 @@ mod cold_stage;
 mod cold_stream;
 mod engine;
 mod enroll;
+mod image_renditions;
 mod ingest_metrics;
 mod ingestion_control;
 mod ledger_cmd;
 mod ledger_compression;
 mod ledger_verify;
+mod maintenance_pace;
 mod publication;
 mod recovery;
 mod runtime_ledger;
@@ -223,6 +225,9 @@ struct Flags {
     /// readiness); `zstd-frames:LEVEL` has the capture workers compress each
     /// batch instead.
     cold_ledger_codec: rosetta_capture::SegmentCodec,
+    /// serve only, hidden (tests and measurement): `--image-renditions off`
+    /// holds the background rendition sweep; first views still render.
+    image_renditions: bool,
     /// `ledger compact` only: the zstd level for rewritten segments.
     /// `None` = the write path's blessed default.
     level: Option<i32>,
@@ -317,6 +322,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         capture_workers: None,
         capture_look_ahead: None,
         cold_ledger_codec: DEFAULT_COLD_LEDGER_CODEC,
+        image_renditions: true,
         level: None,
         long_window: false,
         force: false,
@@ -396,6 +402,15 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--cold-ledger-codec" => {
                 let value = take_value(args, &mut at)?;
                 flags.cold_ledger_codec = parse_cold_ledger_codec(&value)?;
+            }
+            "--image-renditions" => {
+                flags.image_renditions = match take_value(args, &mut at)?.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    other => {
+                        return Err(format!("--image-renditions needs on or off, got {other}"));
+                    }
+                };
             }
             "--level" => {
                 let value = take_value(args, &mut at)?;
@@ -2228,8 +2243,9 @@ fn publish_private_projection(
         before_install()?;
         install_rebuilt_projection(db, temp.as_ref())?;
         let _installed = temp.keep();
-        // The old projection is no longer observable. Remove its unused PNG/JPEG
-        // copies now, never during preparation or before atomic installation.
+        // The old projection is no longer observable. Remove image members no
+        // row names (old WebP bundles included) and stale or orphan rendition
+        // caches now, never during preparation or before atomic installation.
         let cleanup =
             rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map_err(|error| error.to_string())

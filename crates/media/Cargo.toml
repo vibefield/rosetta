@@ -6,6 +6,9 @@ edition.workspace = true
 [dependencies]
 rosetta-core = { path = "../core" }
 image.workspace = true
+gif.workspace = true
+png.workspace = true
+image-webp.workspace = true
 webp.workspace = true
 fast_image_resize.workspace = true
 blake3.workspace = true

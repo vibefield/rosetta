@@ -165,7 +165,7 @@ function SessionTranscript({
   reader = false,
   headActs = null,
 }: TranscriptColumnProps) {
-  const { sessions: leases, host } = useRoom();
+  const { sessions: leases, host, assets } = useRoom();
   const listBrowsers = useMemo(() => host?.browsers?.bind(host), [host]);
   const openInBrowser = useMemo(
     () => (host === null ? null : (name: string, bytes: Uint8Array, browserId?: string) => host.openInBrowser(name, bytes, browserId)),
@@ -301,7 +301,7 @@ function SessionTranscript({
       }
     }
     openMetaFile(
-      () => handleForTimelineMetaArtifact(leases, session.id, artifact),
+      () => handleForTimelineMetaArtifact(leases, assets, session.id, artifact),
       "Could not open that recorded artifact",
     );
   };

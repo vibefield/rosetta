@@ -15,7 +15,7 @@ import { useReadingSession, useRoom } from "../../room-context";
 import { resolveKind } from "../file-viewer";
 import type { FileHandle, FileSource } from "../file-viewer";
 import type { ImageResource } from "../file-viewer/types";
-import { isOptimizedImageAsset } from "../../lib/image-media";
+import { isRecordedImageAsset } from "../../lib/image-media";
 
 const EXTENSION_BY_MEDIA_TYPE: ReadonlyMap<string, string> = new Map([
   ["image/png", "png"],
@@ -59,7 +59,7 @@ export function attachmentViewerName(fact: AttachmentFact): string {
 }
 
 /** One stored image as the viewer asks for it: by rendition, through the host. */
-function imageOf(assets: AssetSource, asset: AssetRef, width?: number, height?: number): ImageResource {
+export function imageOf(assets: AssetSource, asset: AssetRef, width?: number, height?: number): ImageResource {
   return { key: asset.digest, url: (rendition) => assets.imageAssetUrl(asset, rendition), width, height };
 }
 
@@ -67,14 +67,14 @@ export function createAttachmentReader(assets: AssetSource, readAsset: AssetRead
   function assetUrl(fact: AttachmentFact): string | null {
     const source = fact.ref?.source;
     if (source === undefined || source === null || source.type !== "asset") return null;
-    if (fact.kind === "image" && !isOptimizedImageAsset(source.asset)) return null;
+    if (fact.kind === "image" && !isRecordedImageAsset(source.asset)) return null;
     return assets.attachmentAssetUrl(source.asset);
   }
 
   function imageResource(fact: AttachmentFact): ImageResource | null {
     const source = fact.ref?.source;
     const asset = source?.type === "asset" && assetUrl(fact) !== null ? source.asset : null;
-    if (!asset || !isOptimizedImageAsset(asset)) return null;
+    if (!asset || !isRecordedImageAsset(asset)) return null;
     return imageOf(assets, asset, fact.ref?.dimensions?.width, fact.ref?.dimensions?.height);
   }
 
@@ -94,12 +94,12 @@ export function createAttachmentReader(assets: AssetSource, readAsset: AssetRead
   const fileSource: FileSource = {
     image(handle) {
       const asset = handle.ref as AssetRef;
-      if (!asset || !isOptimizedImageAsset(asset)) return null;
+      if (!asset || !isRecordedImageAsset(asset)) return null;
       return imageOf(assets, asset);
     },
     async read(handle: FileHandle, signal: AbortSignal): Promise<Uint8Array> {
       const asset = handle.ref as AssetRef;
-      if (!asset || !isOptimizedImageAsset(asset)) throw new Error("that attachment is no longer available");
+      if (!asset || !isRecordedImageAsset(asset)) throw new Error("that attachment is no longer available");
       return readAsset(asset, signal);
     },
   };

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDemoPorts, createRoomDemo, demoActivityOrder, demoProjectViewModels } from "../../room/src/fixtures/index.ts";
-import { isOptimizedImageAsset } from "../../room/src/lib/image-media.ts";
+import { isLegacyImageBundle, isRecordedImageAsset } from "../../room/src/lib/image-media.ts";
 
 const NOW = Date.UTC(2026, 9, 3, 12);
 
@@ -22,11 +22,15 @@ test("the demo's rows hold together: every session in a project, every row in a 
   assert.equal(demo.meta.projects.length, 6);
 });
 
-test("its images are the optimized members the room will draw, each distinct", () => {
+test("its images are the recorded members the room will draw, one of each form, each distinct", () => {
   const demo = createRoomDemo(NOW);
   const attachments = demo.timelines.get("s0")[0].body.attachments;
   assert.equal(attachments.length, 2);
-  for (const attachment of attachments) assert.equal(isOptimizedImageAsset(attachment.source.asset), true);
+  for (const attachment of attachments) assert.equal(isRecordedImageAsset(attachment.source.asset), true);
+  assert.deepEqual(attachments.map((attachment) => isLegacyImageBundle(attachment.source.asset)), [true, false],
+    "a legacy WebP bundle beside a recorded original");
+  assert.equal(attachments[1].source.asset.media_type, "image/png");
+  assert.equal(attachments[1].source.asset.image_variants, undefined);
   assert.notEqual(attachments[0].source.asset.digest, attachments[1].source.asset.digest);
 });
 

@@ -41,6 +41,10 @@ impl AgentAdapter for KimiCodeAdapter {
         // clamps; compaction samples name the request model (§4.1.3).
         // 14: image members are WebP with bounded display renditions.
         // 15: recorded tool images use durable optimized attachment members.
+        // Still 15 after image members became recorded originals with WebP
+        // renditions made after import (2026-11-01): legacy bundle refs stay
+        // valid, so re-streaming every source is not worth it; a rebuild
+        // converts them (docs/ARCHITECTURE.md).
         15
     }
 

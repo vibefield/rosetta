@@ -2142,3 +2142,5 @@ async fn status_reports_daemon_health_only_when_a_loop_feeds_it() {
 
 #[path = "http/image_pipeline.rs"]
 mod image_pipeline;
+#[path = "http/image_renditions.rs"]
+mod image_renditions;

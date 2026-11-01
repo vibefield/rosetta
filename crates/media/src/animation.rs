@@ -1,8 +1,9 @@
 //! Assemble full-canvas WebP frames encoded by libwebp. Keeping the recorded
 //! ANMF durations explicitly avoids encoder heuristics changing the last delay.
+//! Rail and tile renditions are still posters of the first frame.
+use crate::render::{Encodings, Rendered, Stop, THUMBS, Wanted, stopped};
 use crate::{
-    MAX_ANIMATION_PIXELS, MAX_FRAMES, MAX_INPUT_BYTES, MediaError, PreparedImage, check_dimensions,
-    pixels, prepared, variants,
+    MAX_ANIMATION_PIXELS, MAX_FRAMES, MAX_INPUT_BYTES, MediaError, check_dimensions, pixels,
 };
 use image::{
     DynamicImage, Frames,
@@ -10,24 +11,55 @@ use image::{
 };
 use rosetta_core::assets::{ImageVariant, ImageVariantBytes};
 
-pub(super) fn prepare(
-    frames: Frames<'_>,
+/// Frame `count` (1-based) may be read at all. Probing applies the same rule
+/// to header frame counts.
+pub(crate) fn check_frame_count(count: usize) -> Result<(), MediaError> {
+    if count > MAX_FRAMES {
+        return Err(MediaError::Limit);
+    }
+    Ok(())
+}
+
+/// The composited frames read so far stay within the animation pixel budget.
+pub(crate) fn check_animation_pixels(total: u64) -> Result<(), MediaError> {
+    if total > MAX_ANIMATION_PIXELS {
+        return Err(MediaError::Limit);
+    }
+    Ok(())
+}
+
+/// Animated renditions are recorded loop counts in a 16-bit ANIM field.
+pub(crate) fn animation_loops(loops: LoopCount) -> Result<u16, MediaError> {
+    match loops {
+        LoopCount::Infinite => Ok(0),
+        LoopCount::Finite(value) => u16::try_from(value.get()).map_err(|_| MediaError::Limit),
+    }
+}
+
+pub(super) fn render(
+    mut frames: Frames<'_>,
     loops: LoopCount,
     orientation: Orientation,
     transform: Option<pixels::ColorTransform>,
-) -> Result<PreparedImage, MediaError> {
+    wanted: Wanted,
+    stop: Stop<'_>,
+) -> Result<Rendered, MediaError> {
     let mut full = Vec::new();
     let mut preview = Vec::new();
-    let mut posters = None;
+    let mut posters = Vec::new();
     let mut dimensions = (0, 0);
     let mut preview_dimensions = (0, 0);
     let mut total_pixels = 0;
     let mut count = 0;
-    for frame in frames {
+    // Animated outputs share one byte budget, as each is capped on its own.
+    let outputs = usize::from(wanted.full) + usize::from(wanted.preview);
+    loop {
+        stopped(stop)?;
+        let Some(frame) = frames.next() else {
+            break;
+        };
         count += 1;
-        if count > MAX_FRAMES {
-            return Err(MediaError::Limit);
-        }
+        check_frame_count(count)?;
         let frame = frame?;
         let (numerator, denominator) = frame.delay().numer_denom_ms();
         let duration =
@@ -35,51 +67,64 @@ pub(super) fn prepare(
         let mut decoded = DynamicImage::ImageRgba8(frame.into_buffer());
         check_dimensions(decoded.width(), decoded.height())?;
         total_pixels += u64::from(decoded.width()) * u64::from(decoded.height());
-        if total_pixels > MAX_ANIMATION_PIXELS {
-            return Err(MediaError::Limit);
-        }
+        check_animation_pixels(total_pixels)?;
         decoded.apply_orientation(orientation);
         let mut pixels = decoded.into_rgba8();
         pixels::convert_color(&mut pixels, transform.as_ref())?;
-        let full_pixels = pixels::resize(&pixels, ImageVariant::Full)?;
-        let full_encoded = pixels::encode(&full_pixels)?;
+        let mut encodings = Encodings::new(&pixels);
+        let full_dimensions = pixels::target_dimensions(pixels.dimensions(), ImageVariant::Full);
+        let full_encoded = wanted
+            .full
+            .then(|| encodings.get(ImageVariant::Full))
+            .transpose()?;
         if count == 1 {
-            dimensions = full_pixels.dimensions();
-            posters = Some(variants(
-                &pixels,
-                (pixels.dimensions() == dimensions).then_some(full_encoded.as_slice()),
-                ImageVariant::DERIVED
-                    .into_iter()
-                    .filter(|variant| *variant != ImageVariant::Preview),
-            )?);
-        } else if dimensions != full_pixels.dimensions() {
+            dimensions = full_dimensions;
+            if wanted.thumbs {
+                for variant in THUMBS {
+                    stopped(stop)?;
+                    posters.push(ImageVariantBytes {
+                        variant,
+                        bytes: encodings.get(variant)?,
+                    });
+                }
+            }
+        } else if dimensions != full_dimensions {
             return Err(MediaError::Invalid);
         }
-        add_frame(&mut full, &full_encoded, dimensions, duration)?;
-        let pixels = pixels::resize(&pixels, ImageVariant::Preview)?;
-        preview_dimensions = pixels.dimensions();
-        let preview_encoded = if preview_dimensions == dimensions {
-            full_encoded
-        } else {
-            pixels::encode(&pixels)?
-        };
-        add_frame(&mut preview, &preview_encoded, preview_dimensions, duration)?;
-        if full.len() + preview.len() > MAX_INPUT_BYTES * 2 {
+        if let Some(encoded) = &full_encoded {
+            add_frame(&mut full, encoded, dimensions, duration)?;
+        }
+        if outputs == 0 {
+            break; // posters need the first frame only
+        }
+        if wanted.preview {
+            preview_dimensions =
+                pixels::target_dimensions(pixels.dimensions(), ImageVariant::Preview);
+            let encoded = encodings.get(ImageVariant::Preview)?;
+            add_frame(&mut preview, &encoded, preview_dimensions, duration)?;
+        }
+        if full.len() + preview.len() > MAX_INPUT_BYTES * outputs {
             return Err(MediaError::Limit);
         }
     }
-    let mut posters = posters.ok_or(MediaError::Invalid)?;
-    let preview = wrap(preview, preview_dimensions, loops)?;
-    posters.push(ImageVariantBytes {
-        variant: ImageVariant::Preview,
-        bytes: preview,
-    });
-    prepared(
-        wrap(full, dimensions, loops)?,
-        posters,
-        dimensions.0,
-        dimensions.1,
-    )
+    if count == 0 {
+        return Err(MediaError::Invalid);
+    }
+    if wanted.preview {
+        posters.push(ImageVariantBytes {
+            variant: ImageVariant::Preview,
+            bytes: wrap(preview, preview_dimensions, loops)?,
+        });
+    }
+    let full = wanted
+        .full
+        .then(|| wrap(full, dimensions, loops))
+        .transpose()?;
+    Ok(Rendered {
+        full,
+        variants: posters,
+        dimensions,
+    })
 }
 
 fn u24(value: u32, into: &mut Vec<u8>) {
@@ -136,10 +181,7 @@ fn wrap(
     u24(width - 1, &mut extended);
     u24(height - 1, &mut extended);
     chunk(b"VP8X", &extended, &mut data);
-    let loops = match loops {
-        LoopCount::Infinite => 0,
-        LoopCount::Finite(value) => u16::try_from(value.get()).map_err(|_| MediaError::Limit)?,
-    };
+    let loops = animation_loops(loops)?;
     let mut animation = vec![0; 4];
     animation.extend_from_slice(&loops.to_le_bytes());
     chunk(b"ANIM", &animation, &mut data);

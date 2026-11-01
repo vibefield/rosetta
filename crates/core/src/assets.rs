@@ -15,7 +15,8 @@ pub const IMAGE_ASSET_URL_PREFIX: &str = "/api/assets/";
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectionAsset {
-    /// Lowercase BLAKE3 hex of the materialized (possibly transcoded) bytes.
+    /// Lowercase BLAKE3 hex of the member bytes: the recorded original for
+    /// an image, never a transcoding of it.
     pub digest: String,
     /// Verified media type from the closed projection-member allowlist.
     pub media_type: String,
@@ -23,7 +24,10 @@ pub struct ProjectionAsset {
     /// substrate.
     #[serde(skip, default)]
     pub bytes: Vec<u8>,
-    /// Disposable display variants, generated from the same source pixels.
+    /// A legacy WebP bundle's display variants, generated from the same
+    /// source pixels. Only the live-file image cache still builds one; the
+    /// store refuses a projection op that carries them, because display
+    /// renditions are a disposable cache derived after ingestion.
     #[serde(skip, default)]
     pub image_variants: Vec<ImageVariantBytes>,
 }
@@ -120,6 +124,8 @@ fn extension(media_type: &str) -> Option<&'static str> {
         "image/jpeg" => Some("jpg"),
         "image/gif" => Some("gif"),
         "image/webp" => Some("webp"),
+        "image/bmp" => Some("bmp"),
+        "image/x-icon" => Some("ico"),
         "application/pdf" => Some("pdf"),
         "application/vnd.rosetta.canonical-document+json" => Some("json"),
         "text/plain; charset=utf-8" => Some("txt"),
@@ -182,6 +188,58 @@ mod tests {
         assert!(invalid.validate().is_err());
         image.media_type = "image/png".into();
         assert!(image.reference().validate().is_err());
+    }
+
+    /// Rows normalized before display renditions became a cache name legacy
+    /// WebP bundles; newer rows name the recorded original, in any of the six
+    /// image encodings. Both are valid references, side by side.
+    #[test]
+    fn recorded_originals_and_legacy_bundles_are_both_valid_image_references() {
+        use crate::timeline::{AttachmentKind, AttachmentRef, AttachmentSource};
+        let attachment = |asset: &ProjectionAsset| {
+            let reference = asset.reference();
+            let mut attachment = AttachmentRef::new(
+                "image",
+                AttachmentKind::Image,
+                AttachmentSource::Asset {
+                    asset: reference.clone(),
+                },
+            );
+            attachment.media_type = Some(reference.media_type);
+            attachment.byte_len = Some(reference.byte_len);
+            attachment
+        };
+        let mut bundle =
+            ProjectionAsset::new("image/webp", b"RIFF\0\0\0\0WEBPfull".to_vec()).unwrap();
+        bundle.image_variants = super::ImageVariant::DERIVED
+            .into_iter()
+            .map(|variant| super::ImageVariantBytes {
+                variant,
+                bytes: format!("RIFF\0\0\0\0WEBP{}", variant.name()).into_bytes(),
+            })
+            .collect();
+        attachment(&bundle).validate().unwrap();
+        for (media_type, extension, bytes) in [
+            ("image/png", "png", &b"\x89PNG\r\n\x1a\n"[..]),
+            ("image/jpeg", "jpg", b"\xff\xd8\xff"),
+            ("image/gif", "gif", b"GIF89a"),
+            ("image/webp", "webp", b"RIFF\0\0\0\0WEBP"),
+            ("image/bmp", "bmp", b"BM"),
+            ("image/x-icon", "ico", b"\0\0\x01\0"),
+        ] {
+            let original = ProjectionAsset::new(media_type, bytes.to_vec()).unwrap();
+            let reference = original.reference();
+            assert!(reference.url.ends_with(&format!(".{extension}")));
+            assert_eq!(reference.image_variants, None);
+            attachment(&original).validate().unwrap();
+            let mut recoded = original.clone();
+            recoded.image_variants = bundle.image_variants.clone();
+            assert_eq!(
+                recoded.reference().validate().is_ok(),
+                media_type == "image/webp",
+                "only a WebP base may carry a rendition bundle"
+            );
+        }
     }
 
     #[test]

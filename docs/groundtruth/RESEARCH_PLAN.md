@@ -728,7 +728,8 @@ the owning UI record is
 **Image projection recipe (2026-10-01).** The seven established image readers now
 share decoded, oriented, sRGB WebP materialization through libwebp (Q80, method 2),
 with independent 160/320/640/1600-pixel display members. The original native bytes
-remain in the raw ledger; the disposable projection stores compressed WebP only.
+remain in the raw ledger; the disposable projection stored compressed WebP only until
+2026-11-01 (recorded originals, below).
 This changes storage and rendering, not the native evidence matrix above. Normalizer
 versions advance together with schema 26/protocol 25; old projections rebuild from
 the ledger. Copilot's exact joins continue checking original source MIME/byte count
@@ -738,9 +739,19 @@ synthetic placeholders now that normalization performs a complete decode. The me
 suite covers alpha, orientation, ICC conversion, animated WebP timing/loops, bounded
 work and deterministic replay; native-capture gaps remain as listed above.
 
+**Recorded originals (2026-11-01).** Ingestion now stores each verified image once as its
+recorded bytes, classified by a header-only probe that records the same oriented
+dimensions under the same exact limits and decodes no pixels; WebP renditions with the
+2026-10-01 recipe are a disposable cache made after import (background sweep and first
+view). The fixtures stay real images, because the probe still needs well-formed headers.
+This changes storage, not the native evidence matrix above. No schema or normalizer
+version advances: rows normalized earlier keep their WebP bundle refs, and a rebuild
+converts them ([ARCHITECTURE.md §4.1.2](../ARCHITECTURE.md#412-authored-images-2026-09-09)).
+A Copilot member's MIME, byte count and digest are now the native asset's own.
+
 **Recorded tool media (2026-10-02).** Schema 27 / protocol 26 adds resolved
 attachments to the owning tool interaction. The seven established adapters use the
-same WebP pipeline for authored and tool-result images: Codex `input_image` output
+same recorded-image path for authored and tool-result images: Codex `input_image` output
 blocks (including yielded cells) and Base64 image-generation results; Claude nested
 `tool_result` images; Pi `toolResult` image content; Kimi `tool.result.output`
 media parts; Grok ACP content plus its older `ImageContent` fallback; Copilot inline
@@ -751,8 +762,9 @@ The OpenCode canonical pack was regenerated after extending its pinned writer
 intermediates from [v1 ToolStateCompleted](https://github.com/anomalyco/opencode/blob/v1.18.23/packages/schema/src/v1/session.ts)
 and [v2 Tool.Content](https://github.com/anomalyco/opencode/blob/v2.0.14/packages/schema/src/tool.ts).
 Synthetic conformance and warm/replay tests prove the parser behavior; the native
-capture gaps in the table remain. Transcript image views now request only complete
-optimized asset bundles, never current files inferred from tool targets.
+capture gaps in the table remain. Transcript image views request only recorded members
+(an original, or a complete legacy WebP bundle) through daemon WebP renditions, never
+current files inferred from tool targets.
 
 **Claude numbered-image links.** The 2.1.267 native writer carries `imagePasteIds`
 through user-message construction and pairs its entries with top-level image blocks

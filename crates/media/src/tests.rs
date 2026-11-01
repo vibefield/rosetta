@@ -1,7 +1,11 @@
 use super::*;
-use image::{AnimationDecoder, DynamicImage, ImageFormat, Rgba, RgbaImage};
+use image::{AnimationDecoder, DynamicImage, ImageDecoder, ImageFormat, Rgba, RgbaImage};
 use rosetta_core::assets::ImageVariant;
 use std::{io::Cursor, sync::Arc};
+
+mod corpus;
+mod parity;
+mod pool;
 
 fn png(width: u32, height: u32) -> Vec<u8> {
     let image = RgbaImage::from_fn(width, height, |x, y| {

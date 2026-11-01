@@ -16,6 +16,7 @@ rosetta-adapter-pi = { path = "../adapters/pi" }
 rosetta-adapter-support = { path = "../adapter-support" }
 rosetta-capture = { path = "../capture" }
 rosetta-core = { path = "../core" }
+rosetta-media = { path = "../media" }
 rosetta-pipeline = { path = "../pipeline" }
 rosetta-search = { path = "../search" }
 rosetta-server = { path = "../server" }
@@ -33,5 +34,6 @@ libc = "0.2"
 
 [dev-dependencies]
 http-body-util.workspace = true
+image.workspace = true
 rosetta-bench-corpus = { path = "../bench-corpus" }
 tower.workspace = true

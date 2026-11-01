@@ -41,6 +41,7 @@ function Tile({ fact, index, onOpen }: {
   readonly onOpen: (fact: AttachmentFact) => void;
 }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const figureRef = useRef<HTMLElement>(null);
   const openRef = useRef<HTMLButtonElement>(null);
@@ -54,6 +55,10 @@ function Tile({ fact, index, onOpen }: {
   // same fact to a reader as a broken response, and Retry asks it again.
   const refused = resource !== null && !pending && url === null;
   const failed = refused || (url !== null && failedUrl === url);
+  // Busy until the tile's rendition draws: the host may still be fetching it,
+  // or the daemon encoding it on its first view. An offscreen tile asks for
+  // nothing, so it is not busy.
+  const loading = resource !== null && !failed && (pending || (visible && loadedUrl !== url));
   useLayoutEffect(() => {
     if (!restoreFocus.current) return;
     (failed ? retryRef.current : openRef.current)?.focus({ preventScroll: true });
@@ -74,9 +79,10 @@ function Tile({ fact, index, onOpen }: {
         }}>Retry</button>}
       </div>
     ) : (
-      <button type="button" ref={openRef} className="tr-att__tile" aria-label={`Open ${label}${fact.name ? ` — ${fact.name}` : ""}`}
+      <button type="button" ref={openRef} className={loading ? "tr-att__tile tr-att__tile--loading" : "tr-att__tile"}
+        aria-busy={loading} aria-label={`Open ${label}${fact.name ? ` — ${fact.name}` : ""}`}
         aria-haspopup="dialog" onClick={() => onOpen(fact)}>
-        {visible && url !== null && <img key={url} src={url} alt={fact.name ?? label} decoding="async" onError={() => {
+        {visible && url !== null && <img key={url} src={url} alt={fact.name ?? label} decoding="async" onLoad={() => setLoadedUrl(url)} onError={() => {
           restoreFocus.current = Boolean(figureRef.current?.contains(document.activeElement)); setFailedUrl(url);
         }} />}
       </button>

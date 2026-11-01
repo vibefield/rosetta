@@ -1187,8 +1187,11 @@ file/URL locator, not bytes and not a promise that today's resource matches hist
 an asset cannot be nested inside that variant. `Unavailable` needs no invented URL,
 file path, or asset digest. Its reason describes source evidence, never a transient
 HTTP failure. Existing kind/metadata validation still applies; all new strings and
-collections receive the core's corresponding scalar/id/collection bounds. This
-contract uses WebP bundles for display; original encodings remain in the raw ledger.
+collections receive the core's corresponding scalar/id/collection bounds. A recorded
+image is stored once, as its verified original bytes (2026-11-01); WebP display
+renditions are a disposable cache derived from it after ingestion, and the raw ledger
+keeps the native encoding. Rows normalized earlier name legacy WebP bundles, which stay
+valid (see mixed representations below).
 
 Attachment identity is derived from a stable native part identity, or a deterministic
 source-block position when none exists. It is not a content digest: two uses of the
@@ -1212,23 +1215,44 @@ code spans. A link to an unavailable slot focuses its explanation instead of ope
 another image. This has a named consumer: both the transcript and full-message viewer
 must open the same attachment from the same mention, including after a search landing.
 
-**Normalization and storage (WebP pipeline, 2026-10-01).** Each native adapter
-recognizes its own content blocks, transport delimiters, inline data encodings, and
-exact asset joins. The shared adapter-support helper validates Base64/data URLs and
-MIME signatures, then calls the vendor-neutral, filesystem-free `rosetta-media` crate.
-Images are fully decoded, EXIF-oriented and, for RGB ICC profiles, converted to sRGB
-before resizing. Invalid data preserves an unavailable attachment slot. Copilot's
-exact asset joins validate the *native* MIME, byte count and digest before conversion;
-compressed-byte metadata never replaces that source proof.
+**Normalization and storage (WebP pipeline 2026-10-01; recorded originals and deferred
+renditions 2026-11-01).** Each native adapter recognizes its own content blocks,
+transport delimiters, inline data encodings, and exact asset joins. The shared
+adapter-support helper validates Base64/data URLs and MIME signatures, classifies the
+image with the vendor-neutral, filesystem-free `rosetta-media` crate's header-only
+`probe`, and keeps the recorded bytes as the member. Ingestion (cold, live, replay and
+rebuild) never decodes pixels, resizes, encodes or enters the codec pool: a sampling
+profile had put 86% of cold-import CPU in that work, with every capture worker queued on
+its two codec slots. The probe runs `prepare`'s own header stage, in one shared function
+and order (format allowlist, header decode, the 32-megapixel frame check, EXIF
+orientation, ICC profile, the animation decoder and its limits), then counts frames from
+container data alone: GIF frame descriptors, APNG `acTL` plus a chunk-header walk of its
+`fcTL` frames, and WebP `ANMF` chunks. It applies `prepare`'s 32 MiB, 32 MP, 256-frame and
+64 MP limits, its per-frame decoder allocation checks and its 16-bit loop-count check in
+`prepare`'s order. Dimensions are the canvas after EXIF orientation, fitted to the
+16383-pixel Full edge: exactly what the WebP pipeline recorded. The probed type must equal
+the signature-checked MIME; the attachment's `media_type` and `byte_len` are the recorded
+ones. Invalid data and oversized or unsupported inputs keep an unavailable slot
+(`InvalidData` / `UnsupportedMedia`). Only what decoding or encoding alone can find
+diverges: broken pixel data (a corrupt IDAT, LZW or VP8 stream, an ICO entry that disagrees
+with its directory, an animation frame outside its canvas), APNG `fcTL`/`fdAT` chunks the
+png reader rejects (CRC, sequence number, dispose/blend op), and an encoded rendition over
+32 MiB. Such an image is now an `Asset` whose renditions answer 400, where the WebP
+pipeline made it `Unavailable { InvalidData }`; with broken pixels the probe may report a
+frame limit `prepare` would have reached only after the broken frame. Copilot's exact
+asset joins validate the *native* MIME, byte count and digest; display metadata never
+replaces that source proof.
 
-One recipe serves photos and screenshots: the Rust `webp` binding to bundled libwebp,
-lossy quality 80, method 2, alpha quality 100, sharp YUV off, encoder threading off.
-The raw ledger keeps the original native Base64. The image projection stores only
-compressed WebP, including the full image: no duplicate original PNG/JPEG is kept.
-The full image preserves the complete frame and dimensions up to WebP's 16383-pixel
-edge limit; larger edges fit within that limit. No rendition is upscaled. SIMD
-Lanczos3 resizing with premultiplied alpha produces these display resources directly
-from the same decoded source pixels:
+Display renditions use one recipe for photos and screenshots: the Rust `webp` binding to
+bundled libwebp, lossy quality 80, method 2, alpha quality 100, sharp YUV off, encoder
+threading off. The raw ledger keeps the original native Base64; the projection keeps each
+recorded image once as `<blake3(original)>.<png|jpg|gif|webp|bmp|ico>` (APNG is `png`).
+Every display resource is a WebP derived from its pixels, so the renderer never decodes a
+recorded original. Images are fully decoded, EXIF-oriented and, for RGB ICC profiles,
+converted to sRGB before resizing. The full rendition preserves the complete frame and
+dimensions up to WebP's 16383-pixel edge limit; larger edges fit within that limit. No
+rendition is upscaled. SIMD Lanczos3 resizing with premultiplied alpha produces these
+display resources directly from the same decoded source pixels:
 
 | Resource | Maximum pixels | Geometry | Consumer |
 | --- | ---: | --- | --- |
@@ -1238,27 +1262,106 @@ from the same decoded source pixels:
 | Preview | 1600 on the longest edge | contain | viewer Fit mode |
 | Full | 16383 on the longest edge | contain only when required | viewer 1:1 |
 
-Full and preview preserve GIF/APNG/animated WebP frame timing and loop count; tile
-resources are static first-frame posters. Limits are 32 MiB encoded input, 32 megapixels
-per frame, 64 megapixels across an animation and 256 frames. Oversized/unsupported
-inputs retain an unavailable slot; source data stays in the ledger. Two process-wide
-jobs bound decode/resize/encode concurrency; identical input bytes coalesce, with a
-32 MiB compressed-result LRU and no retained decoded pixel buffers.
+Full and preview preserve GIF/APNG/animated WebP frame timing and loop count; rail and
+tile resources are static first-frame posters. Limits are 32 MiB encoded input (and per
+encoded rendition), 32 megapixels per frame, 64 megapixels across an animation and 256
+frames; ingestion's probe enforces every one a header can show, and source data stays in
+the ledger. Two process-wide codec jobs bound decode/resize/encode concurrency, in two
+lanes: a foreground request (a viewer, the live-file cache) is admitted whenever a slot is
+free; a background job only into an idle pool, with no job running and no foreground
+request waiting. So at most one background job runs, beside at most one foreground job,
+and never takes the second slot from a viewer. Ingestion never enters the pool. Live-file
+`prepare()` jobs coalesce identical input bytes, with a 32 MiB compressed-result LRU; no
+decoded pixel buffer is retained.
 
-Each encoded member has its own BLAKE3 filename and truthful MIME/byte count. The full
-`AssetRef.image_variants` map contains four independently content-addressed leaf
-references. This avoids key collisions when different originals compress to the same
-full image but produce different thumbnails. The store materializes and syncs every
-member before publishing its references; identical member bytes deduplicate. No image
-table, original-byte cache, Base64 column or normalization journal is added.
+A new row names only the recorded original: one `<blake3>.<ext>` member per unique image,
+with its recorded MIME and byte count and no `image_variants` map. The store materializes
+and syncs every member before publishing its references; identical member bytes
+deduplicate. It refuses a projection op that carries `image_variants` (renditions are never
+ops), admits `image/bmp` (`BM`) and `image/x-icon` (`00 00 01 00`) beside PNG, JPEG, GIF and
+WebP, and remembers the members it wrote or hash-verified, so a repeated occurrence costs
+one stat instead of a re-read and re-hash. A member pruned since is written again and one
+whose type or length changed is re-verified; only a same-length overwrite of a file this
+store already verified goes unnoticed until a later process verifies it. The set lives
+with one open store, and publication reopens the store, so it never outlives an image GC
+pass. No image table, Base64 column, rendition queue or normalization journal is added.
 
-The helper never reads paths or fetches URLs. Source-only references remain
-references; recovering historical bytes requires separately ledgered capture.
+**Deferred renditions (2026-11-01).** Display renditions are
+`<base-digest>.image-v<recipe>-<variant>.webp` files beside their base member
+(`ImageVariant::file_name`; recipe 1, unchanged because the bytes are). A base is a
+recorded original or the Full WebP of a legacy bundle. SQLite never references a
+rendition and none is fsynced: a read accepts only a regular file whose RIFF size plus 8
+equals its length (a torn or short file is a miss), and a write goes through an `.image-`
+tempfile and a rename, so losing one loses nothing. Rail, tile2x and tile come from one
+decode and are written as a set, tile last. When the oriented long edge is at most 1600
+pixels (`rosetta_media::preview_is_full`), preview needs no downscale and is Full's
+encoding: one file, hard-linked under both names (a copy where links fail). Full of a
+larger image is encoded on its first 1:1 request. A rendition is byte-identical to the
+same variant of the 2026-10-01 bundle for the same input, Full's 16383-pixel fit and the
+reuse of Full's encoding for a variant that needs no resize included. A one-off
+old-versus-new kernel comparison proved that; libwebp output is not guaranteed stable
+across CPU backends, so no digest is pinned, and the comparison is re-run whenever
+`image`, `webp` or `fast_image_resize` is upgraded. Committed tests
+(`crates/media/src/tests/parity.rs`) pin probe/`prepare()` class and dimension agreement
+and rendition/`prepare()` byte equality over an in-process synthetic corpus: GIF, APNG,
+animated WebP, BMP, ICO, EXIF 1/3/6/8, ICC, an edge over 16383, alpha, an image under
+160 px and a corrupt IDAT. One process-wide lock per base serializes its encodes: a
+viewer takes the lock and then a codec slot; the sweep holds a slot first and skips a
+locked base, so neither waits for the other.
+
+On demand, `/api/assets/<digest>.<ext>?image=<variant>&v=1` (any of the six image member
+types) answers a cached rendition on the blocking pool without a worker permit, so cached
+tiles never queue behind encodes. Only a miss takes one of the four `Semaphore(4)`
+permits, then the base's lock and a foreground codec slot: it reads and BLAKE3-verifies
+the base, encodes the requested set (the three thumbs together, preview, or full), and
+serves the bytes even when the cache write fails. `?retry=N` with N > 0 re-encodes and
+replaces the cached files. Every rendition response is `image/webp` with a BLAKE3 ETag,
+`nosniff`, immutable caching and 304 for a matching `If-None-Match`. `?image=full` is
+encoded from pixels on every base, a `.webp` original or legacy bundle base included, so
+no recorded bytes reach the renderer through a rendition URL. A missing base answers 404
+(recover with a rebuild), a hash mismatch 500 with the bytes never decoded, and a base
+the kernel refuses (invalid, unsupported or over a limit) 400. The plain URL is
+unchanged: the verified recorded bytes with their own Content-Type, `nosniff` and
+immutable caching, for opening, saving and downloading only.
+`crates/server/tests/http/image_renditions.rs` holds the codec pool's background slot and
+its other slot, and shows eight cached tiles return while the cold bases wait.
+
+The background sweep (`rosettad::image_renditions`) starts in every serve mode after
+publication and the initial live catch-up, beside ledger compression, and works only
+while search is Ready, as compression does; finite `ingest` and `rebuild` never run it.
+The hidden `--image-renditions on|off` flag (default on) turns it off for tests and
+measurement; first views still render. One `rosetta-image-renditions` thread at macOS
+utility QoS is paced to 50% of one core by its own thread CPU time, on the pacer
+`rosettad::maintenance_pace` shares with ledger compression, which keeps its 10%. It
+removes `.image-` tempfiles older than 10 minutes, then reads its work list on a
+read-only connection that it closes before any encode: the distinct bases without a
+rendition map that `message.detail` `$.attachments` and `$.event.attachments` and
+`message.tool_detail` `$.attachments` name, newest session first. It reads in pages of
+4,096 message ids, each one short statement with an `instr(…, '/api/assets/')` prefilter
+before `json_each`, so no long read transaction holds back WAL checkpoints. Workflow-run
+and canonical-document image resources, and legacy bundles, are left to their first
+view. A stat-only pass drops complete bases, so a warm start with nothing to do reads no
+image bytes. Each remaining base gets one decode (`RenditionSet::All`: the thumbs and the
+preview, plus the full link when preview is Full); Full of an image over 1600 pixels
+waits for its first 1:1 view. The sweep never waits on the pool: `try_admit(Background)`
+admits only into an idle pool, and otherwise the thread parks for 50 ms, checks stop and
+retries. A base a viewer is making is counted `busy` and left to that viewer or the next
+start. Stop is checked before each work-list page, before each base of the stat pass,
+between bases, between encodes and between animation frames, so shutdown never waits for
+a whole scan, and an encode in flight ends at its next frame or encode. Nothing is queued or persisted; images that arrive
+later are made on first view and by the next start. A media error or hash mismatch is
+`failed` and retried by the next start, a missing base is `missing`, and an IO error such
+as a full disk ends the run `deferred`. Stderr receives
+`{"event":"image-renditions","state":"started|finished|stopped|deferred","bases","complete","made","busy","failed","missing","files","bytes","cpuSeconds","wallSeconds","cpuBudgetPercent":50,"error"}`;
+a stop before `started` emits nothing.
+
+The adapter-support helper never reads paths or fetches URLs. Source-only references
+remain references; recovering historical bytes requires separately ledgered capture.
 
 **Recorded tool images (2026-10-02).** `ToolInteraction.attachments` owns images
 returned by a tool, including an opaque orchestration tool. Adapters classify only
-their declared media fields and emit the same optimized `ProjectionAsset` bundles
-as authored messages. Tool lifecycle updates and media patches have distinct
+their declared media fields and emit the same recorded-original `ProjectionAsset`
+members as authored messages. Tool lifecycle updates and media patches have distinct
 mutation indices; attachments merge by occurrence identity and evidence order.
 Repeated bytes retain separate slots. A delayed binary asset corrects its existing
 slot, including after a checkpoint resume. Merge evidence stays in RAM; SQLite's
@@ -1277,6 +1380,35 @@ and references inside externalized canonical documents, and is deferred if those
 cannot be verified. A failed rebuild leaves the installed projection and its
 referenced images intact.
 
+**Mixed representations (2026-11-01).** Recorded originals landed with no
+`SCHEMA_VERSION` bump, no `normalizer_version()` bump and protocol still 29, by design: a
+normalizer bump makes every warm start re-stream all of that adapter's sources (for one
+user a 21 GB background re-ingest), and a schema bump would fail every installed
+projection closed, with no rebuild path in the app. So both forms are valid side by side,
+in one projection and in one transcript. Rows normalized before the switch keep their
+legacy WebP bundle refs (a WebP member plus four WebP leaf members), whose files stay
+valid, readable and displayed. Anything the new binary normalizes (a fresh import, a
+rewritten or replaced source, affected-scope replay, a rebuild) names recorded originals.
+Copilot, Grok and OpenCode checkpoint states that persisted an `AssetRef` keep their
+shape; a join resumed from an older checkpoint re-emits its legacy bundle ref. Core
+validation, the store's rows, the server, image GC, the SDK and the room accept both forms,
+through the same routes; only a new bundle *op* is refused. `rosettad rebuild --db PATH`
+converts everything to originals and then prunes the old bundle members. The seven
+image-producing adapters' version comments record why each version stays.
+
+Image GC (`prune_unreferenced_images`) runs after a rebuild's atomic install and, since
+2026-11-01, right after a fresh RAM or resumed publication, before any live runner writes
+and before the sweep starts; that covers a user who deleted only the `.sqlite`. A failure
+defers it in both places, and warm starts never prune. It removes an image member
+`<64hex>.{png,jpg,gif,webp,bmp,ico}` that no row, rendition map or canonical document
+names (a legacy bundle member a row still names is a reference like any other), and a
+rendition cache whose base no row names or whose recipe or variant this build does not
+make. Text, document and HTML members, `.live-images-v1/` and tempfiles are never
+touched. Its reference walk is paged by 4,096 message ids with an `instr` prefilter before
+`json_tree`, and caches that are all stale need no scan. It runs on the serve thread and
+cannot be interrupted: a SIGINT during it waits for the scan, and that scan's cost on a
+large corpus is unmeasured.
+
 The generic file viewer still supports the admitted current-file read route and its
 bounded mutable WebP cache. It is separate from transcript image presentation.
 
@@ -1287,14 +1419,20 @@ presents images in a horizontal strip below the prompt’s text bubble. Agent re
 and full-message views use the same strip beneath their prose. That is an intentional
 gallery layout, not a claim to reproduce arbitrary text/image interleaving. The raw
 ledger remains available if a future consumer needs an ordered rich-content model.
-Activity images come from recorded tool attachments and optimized assets in
+Activity images come from recorded tool attachments and recorded image members in
 canonical artifact/workflow/structured/external resources. One strip sits outside
 both activity fold levels and keeps its DOM identity as the folds open. Transcript
-thumbnails, inline image mentions and the full-message gallery accept only immutable
-WebP assets with all four content-addressed rendition references. A path, filename,
-media-kind hint, remote URL, raw PNG, or incomplete bundle cannot trigger an image
+thumbnails, inline image mentions and the full-message gallery accept a
+content-addressed recorded original (PNG, JPEG, GIF, WebP, BMP or ICO, URL
+`/api/assets/<digest>.<ext>` matching its type, no rendition map) or a complete legacy
+WebP bundle; one transcript may hold both (2026-11-01). Both are drawn only through
+daemon-encoded WebP: every variant of an original, 1:1 included, is
+`?image=<variant>&v=1`, and a bundle keeps its own members. The renderer never decodes a
+recorded original; its plain URL is for opening or saving. A path, filename, media-kind
+hint, remote URL, mismatched member, or incomplete bundle cannot trigger an image
 request or open the image viewer. Source-only/unavailable recorded occurrences keep
-a placeholder. Current-file reads and on-demand fallback encoders cannot stand in
+a placeholder. An asset-backed timeline-meta artifact that is a recorded image opens
+through the same renditions and reads no bytes. Current-file reads cannot stand in
 for a recorded transcript image; deleting the original temporary file has no effect
 on an image whose bytes were captured. No arbitrary tool output or Markdown URL is
 parsed into an image request.
@@ -1309,7 +1447,9 @@ Closing restores the original opener without moving the transcript. Exact image
 mentions use their owning row, including the outer activity row for folded team/peer
 messages; a full-message popup opens its own image row in a nested viewer.
 Transcript and gallery images use direct HTTP URLs: 320/640-pixel row tiles,
-160-pixel gallery thumbnails, the 1600-pixel Fit preview, and full pixels only on 1:1.
+160-pixel gallery thumbnails, the 1600-pixel Fit preview, and the full-size WebP only on
+1:1 (encoded on that first request for a recorded original over 1600 pixels). A tile is
+`aria-busy`, in its loading style, until its rendition draws.
 Content-addressed renditions use immutable browser caching. Nearby image elements
 mount through continuous intersection observation and unmount offscreen; fixed tile
 geometry and attachment occurrence identity remain stable. The renderer holds no
@@ -1349,6 +1489,13 @@ output arriving after restart, equality with cold ingest, image GC retention, an
 ledger-only reconstruction. `recorded_tool_images.rs` exercises every established
 tool-image encoding. `crates/pipeline/tests/authored_images.rs` exercises durability before publication and
 rebuild into fresh assets after deleting the captured native files and original assets.
+For recorded originals (2026-11-01), `adapter-support`'s `recorded_originals` tests show
+normalization runs no codec job, `crates/store/tests/mixed_images.rs` and
+`crates/server/tests/http/image_renditions.rs` cover a projection holding legacy bundles
+beside originals, `crates/pipeline/tests/legacy_image_checkpoints.rs` resumes Copilot,
+Grok and OpenCode checkpoints that hold bundle refs, `crates/rosettad/tests/image_cleanup.rs`
+covers the post-publication prune, and `clients/app/test/recorded-images.test.mjs` shows
+the room draws only renditions.
 Adapter conformance tests cover occurrence identity, invalid/missing inputs, exact
 bindings, checkpointed joins and replacement snapshots. These synthetic inputs are
 tests of the pinned grammar, not substitutes for native fixture captures.
@@ -2155,11 +2302,14 @@ now does too, through a start-time **enrollment file**:
   The store rejects `SessionMeta` in every source-scoped stream batch, making this a write-boundary
   invariant rather than an adapter convention.
 - **Content-addressed image members** are part of the one canonical projection, not a third
-  representation. An adapter may recognize and decode a verified native inline image, but only
-  the store writes it to `<projection>.assets/<blake3>.<ext>`. Live ingestion makes the immutable
+  representation. An adapter may recognize a verified native inline image and decode its
+  Base64, but only the store writes the recorded bytes to `<projection>.assets/<blake3>.<ext>`.
+  Live ingestion makes the immutable
   file durable before committing its `/api/assets/<blake3>.<ext>` URL. Private builds sync all new
   members before database publication; monotonic content-addressed additions let the final
   SQLite file remain the only atomic swap. The raw ledger keeps the original inline form.
+  Display renditions beside members (`<digest>.image-v1-<variant>.webp`) are a disposable
+  cache, not members: never referenced, never synced, recreated on demand (2026-11-01).
 - **A generation this daemon cannot use is no generation.** A well-formed `CURRENT` manifest
   whose search schema or format differs reads as absent (2026-09-09): the worker rebuilds, status
   reports `building` with the rebuild's progress, and a query answers unavailable — a schema
@@ -2320,6 +2470,43 @@ This makes the optimization boundary explicit:
   [Retained evidence and reproduction commands](../tools/image-bench/results-2026-10-01.json)
   include source/query/binary checksums, every run, machine/configuration, and
   the local raw artifact directory. The scripts live beside that evidence.
+- Deferred image renditions (`image-defer-cold-20261101`, §4.1.2) use a
+  permission-read-only, SHA-256-checked snapshot of the 12 largest admitted Claude Code
+  JSON-lines sources (4 transcripts and 8 subagent transcripts, 1,022,216,033 bytes,
+  manifest SHA-256 `a3227cd8ab2216f7be809d8a48356a8e102511f33d7f4ae00f1acfe89d400d84`) on
+  one Apple M4 Mac mini (16 GB, 4P+6E) with macOS 26.7.2: release builds, the default 9
+  capture workers, zstd-frames level 1, fresh projections, `serve --ticks 0` and finite
+  `ingest`. Before (`be2fe71`, binary `58c7126f…`) → after (binary `1ef19a10…`): serve
+  wall **39.1 / 39.6 s → 2.43 / 2.47 s**; `ingest` wall **57.2 s → 4.75 s**; an
+  interleaved control pair on the same snapshot gave serve **41.8 → 2.46 s** and `ingest`
+  **59.2 → 4.17 s**; serve user CPU **58.5 → 3.9 s**; serve normalize summed over workers
+  **152 s → 0.90 s**; first-readable **38.9 s → 2.2 s**; peak footprint **1,199 → 936
+  MiB**; `.assets/` at publication **4,459 files / 138,211,388 B → 1,084 files /
+  238,557,045 B** (recorded originals), after the sweep 5,951 names / 5,248 inodes /
+  341,973,413 B (the 703 Full names for ≤1600-pixel images are hard links to their
+  previews), and a rebuild of the after projection prunes 0 (a rebuild of a before
+  projection with the after binary prunes the 4,416 legacy WebP members and lands on the
+  after census exactly). The sweep made all 1,041 bases (0 failed, 0 missing) in 68.5 CPU-s
+  over 240.5 s wall — about 28% of one core against its 50% budget, because utility-QoS
+  timer coalescing makes the pacer oversleep — and a second warm start made 0 in 0.08 s.
+  Search-ready was 0.229 s with the sweep and 0.231 s with it off. First views of an
+  unswept image (50 bases, sequential): tile p50/p95 17.7 / 27.1 ms, preview 20.9 /
+  40.1 ms, an on-demand Full over 1600 px 38.7 / 64.6 ms; cached 0.13–0.23 ms; before-side
+  bundle reads 0.32–0.54 ms.
+  Required equalities: the logical TOTAL
+  `7bfbcb752c7d16c3b673c270650753203247f5b394c455255cfbe0ade6e88438` over 80,956 rows and
+  the separate attachment identity, dimensions and source-type digests; every count; per-mode
+  ledger-verify source digests; the pipeline counters; ordered ranked-result digests for
+  the 10-case `product-diagnostic-v3` suite (SHA-256
+  `12e38e5ecc9a0e3d89bdd15b4c9fcc429defd07325f685cb108e91a97465aee7`); and byte equality
+  of every swept rail, tile, tile2x and over-1600-pixel preview with the before side's
+  bundle members. Result: every equality held in every run (ordered hits
+  `a0d0e470…3b152` on both sides; rail, tile, tile2x, preview and Full byte-equal for
+  1,076/1,076 attachments). Real-data parity covers stills only; animations, BMP, ICO and
+  EXIF orientations are pinned by the synthesized media corpus. The intended differences
+  are attachment media types, byte lengths and digests (now in original space) and the
+  absence of rendition maps. [Retained evidence](../tools/image-bench/results-2026-11-01-defer.json)
+  records the binary, manifest and suite checksums, every run, the machine and its load.
 - Inline-image recognition is adapter-specific; content-addressing, durability, and serving
   are shared projection facilities. The retained `image-assets-2026-08-29` pair used the same
   checksummed, permission-read-only 88,498,056-byte Claude transcript on one macOS/aarch64
@@ -2650,7 +2837,7 @@ layer's design is frozen.
 | FTS5 vs Tantivy | detached FTS5 sidecar today; Tantivy prototype remains benchmark-only | revisit with judged relevance + declared/observed query mix + accepted storage margin; FTS5 coherence/crash gates are already implemented |
 | WS vs SSE for streams | WS (bidirectional subscribe/ack) | if consumers end up read-only-simple |
 | Ledger retention | keep forever; segments zstd-compressed since 2026-09-04 (`ledger compact` for older ones); no segment GC yet | compressed ledger > tens of GB |
-| Image-member retention | keep immutable content-addressed members (no GC yet) | `.assets/` growth justifies a ledger-derived mark/sweep under the projection lock |
+| Image-member retention | keep immutable content-addressed members; image GC prunes unreferenced image members and stale or orphan rendition caches after a rebuild and right after a fresh RAM or resumed publication (2026-11-01); warm starts never prune | `.assets/` growth between those points justifies a ledger-derived mark/sweep under the projection lock, or the post-publication reference scan shows in large-corpus startup time |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |
 | Daemon access control | DECIDED 2026-09-30: open on its listener by default (unchanged); `--token-file` bearer on every route and upgrade; per-session HMAC-SHA256 grants over RFC 8785 JSON with `--grant-key-file`; the Origin rule is the browser guard and never a credential (`docs/AUTH.md`) | a supervisor needs revocation, one grant for a session tree, or UDS lands |

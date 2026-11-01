@@ -1438,6 +1438,7 @@ version = "0.1.2"
 dependencies = [
  "base64",
  "blake3",
+ "image",
  "percent-encoding",
  "pulldown-cmark",
  "rosetta-core",
@@ -1488,8 +1489,11 @@ version = "0.1.2"
 dependencies = [
  "blake3",
  "fast_image_resize",
+ "gif",
  "image",
+ "image-webp",
  "moxcms",
+ "png",
  "rosetta-core",
  "serde_json",
  "webp",
@@ -1499,6 +1503,7 @@ dependencies = [
 name = "rosetta-pipeline"
 version = "0.1.2"
 dependencies = [
+ "base64",
  "blake3",
  "libc",
  "percent-encoding",
@@ -1516,6 +1521,7 @@ dependencies = [
  "rosetta-bench-corpus",
  "rosetta-capture",
  "rosetta-core",
+ "rosetta-media",
  "rosetta-store",
  "rusqlite",
  "serde",
@@ -1605,7 +1611,9 @@ name = "rosetta-store"
 version = "0.1.2"
 dependencies = [
  "blake3",
+ "image",
  "rosetta-core",
+ "rosetta-media",
  "rosetta-pricing",
  "rusqlite",
  "serde",
@@ -1621,6 +1629,7 @@ dependencies = [
  "axum",
  "blake3",
  "http-body-util",
+ "image",
  "libc",
  "rosetta-adapter-antigravity",
  "rosetta-adapter-claude-code",
@@ -1635,6 +1644,7 @@ dependencies = [
  "rosetta-bench-corpus",
  "rosetta-capture",
  "rosetta-core",
+ "rosetta-media",
  "rosetta-pipeline",
  "rosetta-search",
  "rosetta-server",
