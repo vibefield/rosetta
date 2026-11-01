@@ -36,6 +36,7 @@ export function hostPortOver(bridge: DesktopHost): HostPort {
     homeDir: bridge.homeDir ?? null,
     platform: bridge.platform ?? null,
     openInBrowser: (name, bytes, browserId) => bridge.openInBrowser(name, bytes, browserId),
+    ...(typeof bridge.artifactThumbnail === "function" ? { artifactThumbnail: (html: string) => bridge.artifactThumbnail!(html) } : {}),
     ...(typeof bridge.browsers === "function" ? { browsers: () => bridge.browsers!() } : {}),
     // A shell whose preload predates the method answers every host with the
     // globe, as before, rather than failing the line.

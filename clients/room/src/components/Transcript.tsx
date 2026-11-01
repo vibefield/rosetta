@@ -1,3 +1,4 @@
+import { publishedArtifactUrl } from "./artifacts/preview";
 // Column ④ — the transcript: a document, not a chat log.
 //
 // The column is the frame; the document inside it is `components/transcript`.
@@ -292,6 +293,13 @@ function SessionTranscript({
 
   const openMetaArtifact = (artifact: TimelineMetaArtifact) => {
     if (session === null) return;
+    if (artifact.source.type === "html_publication" && artifact.source.availability !== "captured") {
+      const url = publishedArtifactUrl(artifact.source.url);
+      if (url) {
+        window.open(url, "_blank", "noopener,noreferrer");
+        return;
+      }
+    }
     openMetaFile(
       () => handleForTimelineMetaArtifact(leases, session.id, artifact),
       "Could not open that recorded artifact",

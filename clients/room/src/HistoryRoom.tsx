@@ -31,6 +31,7 @@ import { ColdStartPanel } from "./components/ColdStart";
 import { ProjectsColumn } from "./components/projects";
 import type { ProjectSort } from "./components/projects";
 import { SearchLauncher, SearchSheet, emptyTranscriptPrompt, searchKeyLegend } from "./components/search";
+import { ArtifactGlyph, ArtifactLibrary } from "./components/artifacts/ArtifactLibrary";
 import type { SearchShortcut } from "./components/search";
 import { SessionsColumn } from "./components/sessions";
 import type { SessionFacts } from "./components/sessions";
@@ -325,6 +326,8 @@ function RoomBody({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [inspectedThread, setInspectedThread] = useState<{ rootId: string; id: string } | null>(null);
   const [focus, setFocus] = useState<ThreadFocus | null>(null);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const artifactLauncherRef = useRef<HTMLButtonElement>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
 
   // "This project" is only a scope while there is one; the unassigned
@@ -714,6 +717,7 @@ function RoomBody({
               onOpen={() => setSheetOpen(true)}
               onClear={clearSearch}
             />
+            {catalog.artifacts && <button ref={artifactLauncherRef} type="button" className="ah-artifacts-launcher" onClick={() => setArtifactsOpen(true)} aria-label="Open artifacts" aria-haspopup="dialog" aria-expanded={artifactsOpen}><ArtifactGlyph />Artifacts</button>}
             {searchOption.accessory}
           </div>
         )}
@@ -837,6 +841,7 @@ function RoomBody({
         onOpenHit={openHit}
       />}
       {receipt !== null && <div className="ah-receipt">{receipt}</div>}
+      {catalog.artifacts && <ArtifactLibrary open={artifactsOpen} onClose={() => setArtifactsOpen(false)} returnFocus={() => artifactLauncherRef.current?.focus()} agents={kinds} projects={meta?.projects ?? []} onOpenSession={(sessionId, timelineId) => setPendingOpen({ sessionId, timelineId })} />}
       </MenuLayerProvider>
     </div>
   );

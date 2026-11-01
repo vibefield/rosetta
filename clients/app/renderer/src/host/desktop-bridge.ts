@@ -47,6 +47,7 @@ export interface DesktopHost {
    * file from becoming a different document between reading and opening.
    */
   openInBrowser(name: string, bytes: Uint8Array, browserId?: string): Promise<boolean>;
+  artifactThumbnail?(html: string): Promise<string | null>;
   /** Installed browsers. Optional for a preload from an older app version. */
   browsers?(): Promise<readonly InstalledBrowser[]>;
   /**

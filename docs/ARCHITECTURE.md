@@ -2562,6 +2562,11 @@ An artifact is an HTML review/design deliverable explicitly presented by an
 agent. Creating, editing, or reading an HTML source file is not sufficient.
 Media attachments keep their existing ingestion and presentation path.
 
+The global Artifacts button sits beside global search. Its library lists
+presented artifacts across admitted sessions, opens their captured HTML, and
+links to the exact originating session and transcript entry. Display titles
+and filenames are separate facts. Missing content remains a visible artifact
+with an honest availability state, not a missing list entry.
 
 1. Adapters emit typed HTML publication facts with their exact session and
    transcript anchor. Native artifact identity/version are retained when
@@ -2667,8 +2672,49 @@ admission. A session read grant cannot enumerate the global library.
 `GET /api/sessions/{id}/artifacts/{publication_id}/content` checks the owning
 session and serves only captured, size- and digest-verified bytes as an inert
 attachment. Session grants may read their own publications. Generic asset URLs
-do not serve HTML.
+do not serve HTML. The library offers a responsive preview grid, filters, presentation history,
+source text, interactive preview and navigation to the exact source session
+(including child sessions) and transcript entry. The session artifact menu uses
+the same publication facts; titles never replace the actual HTML filename.
 
+Preview uses `srcdoc` in an opaque-origin `sandbox="allow-scripts"` iframe,
+without the host bridge or same-origin privilege. A policy inserted before
+captured markup blocks connections, frames, workers, forms and local resources;
+inline scripts and selected public script/font CDNs support self-contained
+designs. Images/media must be embedded. This does not emulate agent-host APIs,
+local companion files or remote data services. Opening a page in the user's
+browser is an explicit action using the captured bytes and recorded filename.
+
+The library automatically drains the bounded API pages (100 entries per request)
+and shows the complete matching list without a Load more button. Each scan owns
+its abort signal, deduplicates publication ids, and restarts up to twice when
+ingestion expires its cursor. Filter changes discard the old scan; persistent
+failures leave a visible error and a Refresh action rather than silently
+claiming a partial result is complete.
+
+Grid cards contain static PNG images, never running HTML frames. Visible cards
+queue one content read and thumbnail render at a time; cancelled offscreen jobs
+are skipped. A shared 16 MiB / 256-entry image cache avoids repeated work when
+scrolling or reopening the library. The desktop host keeps a disposable,
+content-addressed PNG cache under `userData/artifact-thumbnails`, bounded to
+32 MiB / 256 files. It renders at 1200×750 and stores 600×375 images. No captured
+HTML or canonical metadata is persisted in that cache.
+
+The host uses [Electron offscreen rendering](https://www.electronjs.org/docs/latest/tutorial/offscreen-rendering)
+in a temporary, sandboxed window with no preload or Node integration. Its
+separate nonpersistent session denies permissions, network requests, downloads,
+new windows and navigation. The worker is destroyed after its snapshot or a
+four-second deadline, so timers and animations do not survive in the grid.
+Only trusted app main frames may request thumbnails. Static thumbnails render
+self-contained HTML; remote dependencies are unavailable. Hosts without this
+capability display a placeholder. Selecting a card loads the interactive,
+isolated detail preview, whose HTML cache is bounded to 32 MiB / 20 entries.
+Missing HTML displays
+a published-link card when a recorded HTTPS URL exists. The library always offers
+that URL, including after a failed local content read; the session artifact menu
+opens it when local content is unavailable. Links open externally with no opener
+or referrer. Hosted pages are not fetched by ingestion, embedded automatically,
+or represented as captured HTML. File-only presentations retain `url: null`.
 Later deliveries retain the known native artifact identity and published URL;
 queries can fill a missing URL from another admitted presentation of that same
 identity, never by matching a title or basename.
@@ -2677,3 +2723,6 @@ Hermetic tests cover recognition and exclusions, native checkpoint correlation,
 source replacement, missing content, UTF-16 conversion, compressed/pooled raw
 capture, replay after deleting source and projected assets, old-ledger behavior,
 filters/cursor expiry, HTTP/session authorization and the generated wire contract.
+The Electron fixture exercises the actual library UI, static thumbnail rendering
+and cache reuse, worker isolation and timeout, interactive detail, history
+navigation, search, automatic page loading, expired-cursor recovery and layouts.

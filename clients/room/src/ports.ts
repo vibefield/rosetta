@@ -241,6 +241,9 @@ export interface HostPort {
   /** Hand the exact HTML/SVG bytes to the chosen installed browser. Omitting
    * the id retains the default-browser action for hosts without discovery. */
   openInBrowser(name: string, bytes: Uint8Array, browserId?: string): Promise<boolean>;
+  /** Render one bounded HTML document into a cached static PNG data URL.
+   * Hosts without a screenshot renderer leave the grid preview unavailable. */
+  artifactThumbnail?(html: string): Promise<string | null>;
   /** Re-read installed browsers. Absent on hosts with only a default action. */
   browsers?(): Promise<readonly InstalledBrowser[]>;
   /** One site's own icon as an image URL, or null for every honest no — a

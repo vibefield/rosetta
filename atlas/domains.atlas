@@ -79,6 +79,8 @@ domain artifacts "HTML review deliverables" {
   contains mod:rosetta_server::http::artifacts
   contains path:crates/adapters/*/src/html_artifacts.rs
   contains path:crates/adapters/*/src/html_recovery.rs
+  contains path:clients/room/src/components/artifacts/, file:clients/room/src/styles/artifacts.css
+  contains file:clients/app/electron/{artifact-thumbnails, artifact-thumbnail-renderer}.mjs
   touches mod:rosetta_capture::ledger::document
   see "docs/ARCHITECTURE.md#html-review-artifacts-2026-10-30"
 }

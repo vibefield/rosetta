@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld("agentHistoryHost", {
    * Main validates and materializes its own private snapshot. */
   openInBrowser: (name, bytes, browserId) =>
     ipcRenderer.invoke("ah-file-open-browser-preview", { name, bytes, browserId }),
+  artifactThumbnail: (html) => ipcRenderer.invoke("ah-artifact-thumbnail", html),
   /** One site's own icon as a `data:` URL, or null. Main validates the host
    * and fetches from the site itself — never a favicon service. */
   favicon: (host) => ipcRenderer.invoke("ah-favicon", host),
