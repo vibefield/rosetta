@@ -7,8 +7,7 @@ use std::collections::BTreeMap;
 
 use rosetta_core::rows::{Ms, TaskStatus};
 use rosetta_core::timeline::{
-    ArtifactKind, ArtifactOp, AssetRef, PlanOp, ResourceRef, TaskSnapshotItem, TimelineBody,
-    ToolAction, WorkflowRunStatus,
+    ArtifactKind, AssetRef, PlanOp, TaskSnapshotItem, TimelineBody, ToolAction, WorkflowRunStatus,
 };
 use rosetta_core::{TimelineEntry, ids};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -111,6 +110,13 @@ pub struct TimelineMetaArtifact {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum TimelineMetaArtifactSource {
+    HtmlPublication {
+        publication_id: String,
+        timeline_id: String,
+        filename: String,
+        availability: rosetta_core::html_artifacts::HtmlArtifactAvailability,
+        url: Option<String>,
+    },
     TimelineFile {
         timeline_id: String,
         #[cfg_attr(feature = "ts", ts(type = "number"))]
@@ -194,7 +200,7 @@ fn parse_task_status(value: &str) -> Option<TaskStatus> {
 fn tool_entries(conn: &Connection, session_id: &str) -> Result<Vec<TimelineEntry>, StoreError> {
     let mut statement = conn.prepare_cached(
         "SELECT m.* FROM message m
-         WHERE m.session_id = ?1 AND m.tool_kind IN ('task', 'plan', 'artifact')
+         WHERE m.session_id = ?1 AND m.tool_kind IN ('task', 'plan')
          ORDER BY m.ordinal, m.id",
     )?;
     let rows = statement.query_map(params![session_id], message_codec::decode)?;
@@ -670,115 +676,6 @@ fn plan_meta(
     Ok(plans)
 }
 
-fn basename(path: &str) -> &str {
-    path.rsplit(['/', '\\'])
-        .find(|part| !part.is_empty())
-        .unwrap_or(path)
-}
-
-fn asset_name(asset: &AssetRef) -> String {
-    asset
-        .url
-        .rsplit('/')
-        .next()
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&asset.digest)
-        .to_owned()
-}
-
-fn artifact_meta(entries: &[TimelineEntry]) -> Vec<TimelineMetaArtifact> {
-    let mut artifacts: BTreeMap<String, TimelineMetaArtifact> = BTreeMap::new();
-    for entry in entries {
-        let TimelineBody::ToolUse { tool } = &entry.body else {
-            continue;
-        };
-        let ToolAction::Artifact {
-            operation,
-            artifact_kind,
-            name,
-            resources,
-            media,
-            ..
-        } = &tool.action
-        else {
-            continue;
-        };
-        let created_at = tool
-            .timing
-            .and_then(|timing| timing.completed_at.or(timing.started_at))
-            .or(entry.at);
-        let one_resource = resources.len() == 1;
-        for (target_index, resource) in resources.iter().enumerate() {
-            let (identity, fallback_name, byte_len, media_type, source) = match resource {
-                ResourceRef::File { path, .. } => (
-                    format!("file:{path}"),
-                    basename(path).to_owned(),
-                    None,
-                    media.as_ref().and_then(|value| value.media_type.clone()),
-                    TimelineMetaArtifactSource::TimelineFile {
-                        timeline_id: entry.timeline_id.clone(),
-                        target_index: u64::try_from(target_index).unwrap_or(u64::MAX),
-                        path: path.clone(),
-                    },
-                ),
-                ResourceRef::Asset { asset } => (
-                    format!("asset:{}", asset.digest),
-                    asset_name(asset),
-                    Some(asset.byte_len),
-                    Some(asset.media_type.clone()),
-                    TimelineMetaArtifactSource::Asset {
-                        asset: asset.clone(),
-                    },
-                ),
-                ResourceRef::Directory { .. }
-                | ResourceRef::Url { .. }
-                | ResourceRef::Session { .. }
-                | ResourceRef::Task { .. }
-                | ResourceRef::Process { .. } => continue,
-            };
-            let display_name = if one_resource {
-                name.as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(&fallback_name)
-                    .to_owned()
-            } else {
-                fallback_name
-            };
-            let created_at = if *operation == ArtifactOp::Create {
-                artifacts
-                    .get(&identity)
-                    .and_then(|artifact| artifact.created_at)
-                    .or(created_at)
-            } else {
-                artifacts
-                    .get(&identity)
-                    .and_then(|artifact| artifact.created_at)
-            };
-            artifacts.insert(
-                identity.clone(),
-                TimelineMetaArtifact {
-                    id: identity,
-                    name: display_name,
-                    artifact_kind: *artifact_kind,
-                    created_at,
-                    byte_len,
-                    media_type,
-                    source,
-                },
-            );
-        }
-    }
-    let mut artifacts: Vec<_> = artifacts.into_values().collect();
-    artifacts.sort_by(|left, right| {
-        right
-            .created_at
-            .cmp(&left.created_at)
-            .then_with(|| left.name.cmp(&right.name))
-    });
-    artifacts
-}
-
 /// Read all four indexes through one Rust boundary. SQLite performs one
 /// indexed task lookup, one light Workflow summary lookup, one latest-plan
 /// lookup, and one narrow tool-kind scan; rich Workflow documents plus file
@@ -789,7 +686,24 @@ pub fn read(conn: &Connection, session_id: &str) -> Result<TimelineMeta, StoreEr
         tasks: task_meta(conn, session_id, &entries)?,
         workflows: workflow_meta(conn, session_id)?,
         plans: plan_meta(conn, session_id, &entries)?,
-        artifacts: artifact_meta(&entries),
+        artifacts: crate::html_artifacts::for_session(conn, session_id)?
+            .into_iter()
+            .map(|entry| TimelineMetaArtifact {
+                id: entry.publication.artifact_id,
+                name: entry.publication.title,
+                artifact_kind: ArtifactKind::Document,
+                created_at: entry.publication.published_at,
+                byte_len: entry.asset.as_ref().map(|asset| asset.byte_len),
+                media_type: Some(rosetta_core::html_artifacts::HTML_MEDIA_TYPE.into()),
+                source: TimelineMetaArtifactSource::HtmlPublication {
+                    publication_id: entry.publication.id,
+                    timeline_id: entry.publication.timeline_id,
+                    filename: entry.publication.filename,
+                    availability: entry.availability,
+                    url: entry.publication.url,
+                },
+            })
+            .collect(),
     })
 }
 

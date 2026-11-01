@@ -18,6 +18,8 @@
 pub mod adapter;
 mod cost_state;
 mod envelope;
+mod html_artifacts;
+mod html_recovery;
 pub mod normalize;
 pub mod raw;
 pub mod spec;

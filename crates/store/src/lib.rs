@@ -12,6 +12,7 @@ mod bulk;
 mod cold_stream;
 mod columns;
 pub mod hot;
+pub mod html_artifacts;
 mod message_codec;
 pub mod pricing;
 pub mod queries;
@@ -59,6 +60,21 @@ fn elapsed_nanos(started: Instant) -> u64 {
 }
 
 fn validate_source_batch(batch: &Batch) -> Result<(), StoreError> {
+    if let Some(source) = &batch.source {
+        for op in &batch.ops {
+            let session = match op {
+                rosetta_core::IngestOp::HtmlArtifact(row) => Some(&row.session_id),
+                rosetta_core::IngestOp::HtmlArtifactContent(row) => Some(&row.session_id),
+                _ => None,
+            };
+            if session.is_some_and(|session| session != &source.session_id) {
+                return Err(StoreError::SourceState {
+                    cursor_id: source.cursor_id,
+                    message: "HTML publication belongs to another source session".into(),
+                });
+            }
+        }
+    }
     // Only ledgered metadata may settle session identity and ownership.
     if let Some(source) = &batch.source
         && batch

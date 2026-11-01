@@ -10,6 +10,7 @@
 @import "./ingest.css";
 @import "./transcript.css";
 @import "./search.css";
+@import "./artifacts.css";
 @import "./reader.css";
 @import "./host-inputs.css";
 /* The worktree guest's tree: mille's token surface and the VibeField theme,

@@ -8,7 +8,7 @@ use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
-use super::{Ledger, LedgerWriteStats, PrebuiltFrames, SourceDef};
+use super::{CapturedDocument, Ledger, LedgerWriteStats, PrebuiltFrames, SourceDef};
 use crate::CaptureError;
 
 /// Bookkeeping charged per queued command beyond the bytes it carries, so a
@@ -16,6 +16,12 @@ use crate::CaptureError;
 const COMMAND_BYTES: u64 = 64;
 
 pub(super) enum AsyncCommand {
+    Document {
+        source: SourceDef,
+        generation: u64,
+        start_offset: u64,
+        document: CapturedDocument,
+    },
     Raw {
         source: SourceDef,
         generation: u64,
@@ -42,6 +48,9 @@ pub(super) enum AsyncCommand {
 impl AsyncCommand {
     fn queued_bytes(&self) -> u64 {
         let carried = match self {
+            Self::Document { document, .. } => {
+                document.bytes.len() as u64 + document.path.len() as u64
+            }
             Self::Raw { records, .. } => records
                 .iter()
                 .map(|(_, payload)| payload.len() as u64)
@@ -185,6 +194,12 @@ impl Ledger {
                 generation,
                 records,
             } => self.append_raw_owned(&source, generation, records),
+            AsyncCommand::Document {
+                source,
+                generation,
+                start_offset,
+                document,
+            } => self.append_document(&source, generation, start_offset, document),
             AsyncCommand::Prebuilt { source, frames } => {
                 let seals = frames.seals();
                 self.append_prebuilt(&source, frames)?;

@@ -55,7 +55,24 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // 32: cumulative cost-state totals reconcile missing session-tree usage.
         // 33: image members are WebP with bounded display renditions.
         // 34: recorded tool images use durable optimized attachment members.
-        34
+        // 35: confirmed native HTML publications and explicit delivery links.
+        // 36: native API block positions survive responses split across files.
+        // 37: unknown workflow journal events are soft drift, not unclean sources.
+        // 38: bounded HTML recovery locators and links on later file deliveries.
+        38
+    }
+
+    fn html_artifact_hints(
+        &self,
+        ctx: &NormalizeCtx,
+        publication: &rosetta_core::html_artifacts::HtmlArtifactPublication,
+        root: &str,
+    ) -> rosetta_adapter_support::html_artifacts::CaptureHints {
+        crate::html_recovery::hints(ctx, publication, root)
+    }
+
+    fn html_artifact_record(&self, record: &[u8], path: &str) -> Option<Vec<u8>> {
+        crate::html_recovery::content(record, path)
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

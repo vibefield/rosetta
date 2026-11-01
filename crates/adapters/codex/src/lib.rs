@@ -17,6 +17,7 @@
 
 pub mod adapter;
 mod exec_program;
+mod html_artifacts;
 pub mod normalize;
 pub mod raw;
 mod session_policy;

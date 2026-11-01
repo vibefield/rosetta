@@ -9,7 +9,7 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 27;
+pub const SCHEMA_VERSION: i64 = 29;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -115,6 +115,34 @@ CREATE TABLE IF NOT EXISTS task (
   src_cursor INTEGER REFERENCES ingest_cursor(id)
 );
 CREATE INDEX IF NOT EXISTS task_src ON task(src_cursor);
+
+-- Explicit HTML presentations, owned by the transcript source generation.
+-- Bytes live in content-addressed projection members and replay from raw
+-- document observations in the ledger, never from today's workspace files.
+CREATE TABLE IF NOT EXISTS html_artifact (
+  id TEXT PRIMARY KEY,
+  artifact_id TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES session(id),
+  timeline_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  path TEXT,
+  url TEXT,
+  native_id TEXT,
+  version TEXT,
+  published_at INTEGER,
+  sort_at INTEGER NOT NULL,
+  source_offset INTEGER NOT NULL,
+  availability TEXT NOT NULL DEFAULT 'not_captured',
+  captured_at INTEGER,
+  recovered_from TEXT,
+  asset TEXT CHECK (asset IS NULL OR json_valid(asset)),
+  src_cursor INTEGER REFERENCES ingest_cursor(id)
+);
+CREATE INDEX IF NOT EXISTS html_artifact_src ON html_artifact(src_cursor, source_offset, path);
+CREATE INDEX IF NOT EXISTS html_artifact_latest ON html_artifact(artifact_id, sort_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS html_artifact_order ON html_artifact(sort_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS html_artifact_session ON html_artifact(session_id);
 
 -- Workflow attempts remain ordinary timeline tool rows. The mutable native
 -- sidecar is one generation-owned run document joined to those attempts by

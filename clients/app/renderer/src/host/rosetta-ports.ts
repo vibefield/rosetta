@@ -58,6 +58,10 @@ export function catalogOver(client: RosettaClient, words: DaemonWords = NO_WORDS
         signal,
       ),
     boost: (sessionId, signal) => client.boost(sessionId, signal),
+    artifacts: {
+      list: (request, signal) => client.artifacts(request, signal),
+      read: (sessionId, publicationId, signal) => client.readArtifact(sessionId, publicationId, signal),
+    },
   };
 }
 

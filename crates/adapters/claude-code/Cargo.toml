@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 base64.workspace = true
+blake3.workspace = true
 rosetta-adapter-support = { path = "../../adapter-support" }
 rosetta-core = { path = "../../core" }
 serde.workspace = true

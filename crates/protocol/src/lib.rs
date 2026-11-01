@@ -33,6 +33,7 @@ pub use rosetta_core::rows::{
 pub use rosetta_core::{TimelineBody, TimelineEntry, UsageCost};
 pub use rosetta_search::{SearchHit, SearchReadiness, SearchState};
 pub use rosetta_store::hot::{Mutation, Stamp};
+pub use rosetta_store::html_artifacts::{ArtifactEntry, ArtifactListRequest, ArtifactPage};
 pub use rosetta_store::queries::{
     ContributionRow, HeatmapDay, HourTotal, ModelDay, ModelHour, ResponseRuntime, Spend,
 };
@@ -52,7 +53,9 @@ pub use rosetta_store::turns::{TurnGap, TurnSpan};
 /// 25 (2026-10-01): WebP image renditions on asset and canonical file-read URLs.
 /// 27 (2026-10-09): `/api/activity`, every top-level session's turn spans in
 /// a time window (ARCHITECTURE §5).
-pub const PROTOCOL_VERSION: u32 = 27;
+/// 28 (2026-10-30): captured HTML artifact library and session content reads.
+/// 29 (2026-10-30): HTML recovery provenance and published links in session metadata.
+pub const PROTOCOL_VERSION: u32 = 29;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

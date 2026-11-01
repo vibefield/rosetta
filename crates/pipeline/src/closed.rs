@@ -68,7 +68,17 @@ impl ClosedSource {
     /// Framed payload bytes this source consumed — the producer's in-flight
     /// budget unit.
     pub fn payload_bytes(&self) -> u64 {
-        self.payload_bytes
+        self.payload_bytes.saturating_add(
+            self.ops
+                .iter()
+                .filter_map(|op| match op {
+                    IngestOp::ProjectionAsset { asset } => {
+                        Some(asset.materialized_byte_len() as u64)
+                    }
+                    _ => None,
+                })
+                .sum::<u64>(),
+        )
     }
 
     /// Nothing of the source could be read — it vanished, or kept changing

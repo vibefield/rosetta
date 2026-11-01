@@ -165,6 +165,140 @@ fn harness() -> Harness {
     }
 }
 
+#[tokio::test]
+async fn html_library_reads_exact_captured_bytes_only_through_the_owning_session() {
+    use rosetta_core::html_artifacts::{
+        HTML_MEDIA_TYPE, HtmlArtifactAvailability, HtmlArtifactContent, HtmlArtifactPublication,
+        identity,
+    };
+    let mut h = harness();
+    h.append(vec![message(
+        "html-review",
+        MessageKind::Agent,
+        "Here is the design",
+    )]);
+    let bytes = b"<html><script>window.example = true</script><h1>Review</h1></html>".to_vec();
+    let asset = ProjectionAsset::new(HTML_MEDIA_TYPE, bytes.clone()).unwrap();
+    let reference = asset.reference();
+    let id = identity(&["publication"]);
+    h.store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::ProjectionAsset { asset },
+                IngestOp::HtmlArtifact(HtmlArtifactPublication {
+                    id: id.clone(),
+                    artifact_id: identity(&["artifact"]),
+                    session_id: "s1".into(),
+                    timeline_id: "html-review".into(),
+                    title: "Design review".into(),
+                    filename: "design.html".into(),
+                    path: Some("/gone/design.html".into()),
+                    url: None,
+                    native_id: None,
+                    version: None,
+                    published_at: Some(5),
+                    source_offset: 20,
+                }),
+                IngestOp::HtmlArtifactContent(HtmlArtifactContent {
+                    session_id: "s1".into(),
+                    source_offset: 20,
+                    path: Some("/gone/design.html".into()),
+                    availability: HtmlArtifactAvailability::Captured,
+                    captured_at: Some(50),
+                    recovered_from: None,
+                    asset: Some(reference.clone()),
+                }),
+            ],
+            ..Default::default()
+        })
+        .unwrap();
+    let (status, library) = h.get("/api/artifacts").await;
+    assert_eq!(status, StatusCode::OK, "{library}");
+    assert_eq!(library["entries"][0]["publication"]["id"], id);
+    assert_eq!(
+        library["entries"][0]["publication"]["timeline_id"],
+        "html-review"
+    );
+    let response = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/sessions/s1/artifacts/{id}/content"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-type"],
+        "application/octet-stream"
+    );
+    assert_eq!(
+        response.headers()["content-security-policy"],
+        "sandbox; default-src 'none'"
+    );
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .as_ref(),
+        bytes
+    );
+    assert_eq!(
+        h.get(&format!("/api/sessions/s2/artifacts/{id}/content"))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        h.get(&reference.url).await.0,
+        StatusCode::NOT_FOUND,
+        "no executable HTML on the daemon origin"
+    );
+    assert_eq!(
+        h.get("/api/artifacts?cursor=broken").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let mut repeated: HtmlArtifactPublication =
+        serde_json::from_value(library["entries"][0]["publication"].clone()).unwrap();
+    h.store
+        .apply(&Batch {
+            ops: vec![IngestOp::HtmlArtifact(repeated.clone())],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        h.get("/api/artifacts").await.1["entries"][0]["availability"],
+        "captured",
+        "idempotent publication preserves its observation"
+    );
+    repeated.source_offset += 1;
+    h.store
+        .apply(&Batch {
+            ops: vec![IngestOp::HtmlArtifact(repeated)],
+            ..Default::default()
+        })
+        .unwrap();
+    let (_, changed) = h.get("/api/artifacts").await;
+    assert_eq!(
+        changed["entries"][0]["availability"], "not_captured",
+        "a new coordinate cannot inherit an old observation"
+    );
+    assert!(changed["entries"][0]["asset"].is_null());
+    assert_eq!(
+        h.get(&format!("/api/sessions/s1/artifacts/{id}/content"))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
 impl Harness {
     fn append(&mut self, rows: Vec<MessageRow>) {
         self.store

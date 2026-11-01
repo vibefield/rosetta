@@ -25,6 +25,8 @@ pub mod discover;
 mod document;
 pub mod early;
 mod exclusions;
+mod html_artifacts;
+pub use html_artifacts::ArtifactRecovery;
 pub mod instrument;
 pub mod live;
 pub mod meta;
@@ -156,6 +158,8 @@ impl SliceBudget {
 /// attribute cost to a knob.
 #[derive(Debug, Clone)]
 pub struct IngestOptions {
+    /// Bounded archive search and its process-local shared index.
+    pub artifact_recovery: ArtifactRecovery,
     /// Start-time folder policy, applied before metadata or source capture.
     /// Existing history is retained; removing a rule allows capture to resume.
     pub exclude_cwds: CwdExclusions,
@@ -227,6 +231,7 @@ impl IngestOptions {
 impl Default for IngestOptions {
     fn default() -> Self {
         Self {
+            artifact_recovery: ArtifactRecovery::default(),
             exclude_cwds: CwdExclusions::default(),
             skim_head_bytes: 64 * 1024,
             skim_tail_bytes: 16 * 1024,

@@ -227,7 +227,36 @@ pub(crate) fn ingest_run(ctx: &mut NormalizeCtx, line: &[u8]) -> LineOutcome {
 }
 
 pub(crate) fn ingest_journal(ctx: &mut NormalizeCtx, line: &[u8]) -> LineOutcome {
-    let raw = match serde_json::from_slice::<RawJournal>(line) {
+    let value = match serde_json::from_slice::<Value>(line) {
+        Ok(value) => value,
+        Err(error) => return malformed(ctx, "workflow-journal", error.to_string()),
+    };
+    // The canonical journal declares started/result, whose required worker key
+    // does not constrain future event types. Keep unfamiliar events in the raw
+    // ledger and report soft drift, just as transcript normalization does.
+    if let Some(kind) = value.get("type").and_then(Value::as_str)
+        && !matches!(kind, "started" | "result")
+    {
+        let paths = value
+            .as_object()
+            .map(|fields| fields.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        return LineOutcome {
+            ops: vec![IngestOp::Drift(DriftFact {
+                runtime_id: ctx.runtime_id.clone(),
+                agent_version: ctx.agent_version.clone().unwrap_or_default(),
+                stream: "workflow-journal".into(),
+                record_kind: kind.to_owned(),
+                error_code: "unknown_type".into(),
+                shape_hash: ids::shape_hash(&paths),
+                at: None,
+                sample_cursor: ctx.src_cursor,
+                sample_offset: ctx.src_offset,
+            })],
+            status: LineStatus::UnknownType,
+        };
+    }
+    let raw = match serde_json::from_value::<RawJournal>(value) {
         Ok(raw) => raw,
         Err(error) => return malformed(ctx, "workflow-journal", error.to_string()),
     };
@@ -242,13 +271,7 @@ pub(crate) fn ingest_journal(ctx: &mut NormalizeCtx, line: &[u8]) -> LineOutcome
     let kind = match raw.kind.as_str() {
         "started" => WorkflowJournalKind::Started,
         "result" => WorkflowJournalKind::Result,
-        _ => {
-            return malformed(
-                ctx,
-                "workflow-journal",
-                "unknown journal record type".into(),
-            );
-        }
+        _ => unreachable!("unknown journal types returned above"),
     };
     let result_kind = (raw.kind == "result").then(|| result_kind(&raw.result));
     let result_preview = (raw.kind == "result" && !raw.result.is_null())
@@ -670,5 +693,48 @@ mod tests {
         let outcome = ingest_run(&mut ctx, br#"{"runId":"wf_wrong","status":"running"}"#);
         assert!(matches!(outcome.status, LineStatus::HardError { .. }));
         assert!(matches!(outcome.ops.as_slice(), [IngestOp::Drift(_)]));
+    }
+
+    #[test]
+    fn unknown_journal_events_emit_soft_drift_without_requiring_worker_fields() {
+        let mut ctx = NormalizeCtx::new("runtime", "session");
+        ctx.source_identity =
+            Some("projects/project/session/subagents/workflows/wf_main/journal.jsonl".into());
+        ctx.src_cursor = Some(7);
+        ctx.src_offset = Some(41);
+        for line in [
+            br#"{"type":"future_checkpoint"}"#.as_slice(),
+            br#"{"type":"future_worker_event","key":"worker","agentId":"agent-child"}"#,
+        ] {
+            let outcome = ingest_journal(&mut ctx, line);
+            assert_eq!(outcome.status, LineStatus::UnknownType);
+            let [IngestOp::Drift(fact)] = outcome.ops.as_slice() else {
+                panic!("unknown events must not manufacture workflow observations");
+            };
+            assert_eq!(fact.error_code, "unknown_type");
+            assert_eq!(fact.stream, "workflow-journal");
+            assert!(fact.record_kind.starts_with("future_"));
+            assert_eq!(fact.sample_cursor, Some(7));
+            assert_eq!(fact.sample_offset, Some(41));
+        }
+    }
+
+    #[test]
+    fn malformed_known_journal_events_remain_hard_errors() {
+        let mut ctx = NormalizeCtx::new("runtime", "session");
+        ctx.source_identity =
+            Some("projects/project/session/subagents/workflows/wf_main/journal.jsonl".into());
+        for line in [
+            br#"{not json"#.as_slice(),
+            br#"{}"#,
+            br#"{"type":null}"#,
+            br#"{"type":"started"}"#,
+            br#"{"type":"result"}"#,
+            br#"{"type":"started","key":7}"#,
+        ] {
+            let outcome = ingest_journal(&mut ctx, line);
+            assert!(matches!(outcome.status, LineStatus::HardError { .. }));
+            assert!(matches!(outcome.ops.as_slice(), [IngestOp::Drift(_)]));
+        }
     }
 }

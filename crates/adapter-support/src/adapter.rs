@@ -265,6 +265,26 @@ pub trait AgentAdapter: Send + Sync {
     /// A mismatch expires the cursor and starts a source-generation replay.
     fn normalizer_version(&self) -> u32;
 
+    /// Recorded alternatives for an explicitly presented HTML file. Pure:
+    /// adapters name evidence, while capture performs bounded reads and ledgers it.
+    fn html_artifact_hints(
+        &self,
+        _ctx: &NormalizeCtx,
+        publication: &rosetta_core::html_artifacts::HtmlArtifactPublication,
+        _data_root: &str,
+    ) -> crate::html_artifacts::CaptureHints {
+        crate::html_artifacts::CaptureHints {
+            urls: publication.url.iter().cloned().collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Read a referenced write with the adapter's existing native parser.
+    /// Capture has already verified the complete raw record's checksum.
+    fn html_artifact_record(&self, _record: &[u8], _path: &str) -> Option<Vec<u8>> {
+        None
+    }
+
     /// The extraction plan for a [`StreamDriver::SqliteSnapshot`] stream.
     /// Required (and only consulted) for streams whose driver is
     /// `SqliteSnapshot`.

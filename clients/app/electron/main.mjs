@@ -34,12 +34,15 @@ import {
 import { createDaemonService } from "./daemon-service.mjs";
 import { APP_SCHEME, APP_ORIGIN, APP_PRIVILEGES, rendererFileUrl } from "./app-protocol.mjs";
 import { createBrowserPreviewService } from "./browser-preview.mjs";
+import { createArtifactThumbnailService } from "./artifact-thumbnails.mjs";
+import { createArtifactThumbnailRenderer } from "./artifact-thumbnail-renderer.mjs";
 import { createInstalledBrowserService } from "./installed-browsers.mjs";
 import { installedBrowserIcon } from "./browser-icons.mjs";
 import { createFaviconService } from "./favicon-service.mjs";
 import { createWorktreeFileActionHandler } from "./worktree-file-actions.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const historyWindows = new Set();
 protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: APP_PRIVILEGES }]);
 
 // ── Single instance ──────────────────────────────────────────────────────
@@ -50,7 +53,7 @@ if (!singleInstance) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    const win = BrowserWindow.getAllWindows()[0];
+    const win = historyWindows.values().next().value;
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
@@ -70,7 +73,7 @@ let daemonService = null;
 let daemonState = { phase: "starting", origin: null, error: null, revision: 0 };
 function publishDaemonState(state) {
   daemonState = { ...state, revision: daemonState.revision + 1 };
-  for (const win of BrowserWindow.getAllWindows()) {
+  for (const win of historyWindows) {
     if (!win.webContents.isDestroyed()) win.webContents.send("ah-daemon-state", daemonState);
   }
 }
@@ -131,6 +134,8 @@ let worktreeRoot = null;
 let worktreeGeneration = 0;
 let fxSession = null;
 let browserPreviews = null;
+let artifactThumbnails = null;
+let artifactRenderer = null;
 const WORKTREE_READY_TIMEOUT_MS = 10_000;
 
 function forkFxHost(root) {
@@ -319,6 +324,8 @@ function createWindow() {
   });
 
   // External links leave the app; the room never navigates away.
+  historyWindows.add(win);
+  win.once("closed", () => historyWindows.delete(win));
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://") || url.startsWith("http://")) shell.openExternal(url);
     return { action: "deny" };
@@ -448,6 +455,15 @@ app.whenReady().then(async () => {
     "ah-file-open-browser-preview",
     (_event, raw) => browserPreviews?.open(raw) ?? false,
   );
+  artifactRenderer = createArtifactThumbnailRenderer();
+  artifactThumbnails = createArtifactThumbnailService({
+    cacheDir: path.join(app.getPath("userData"), "artifact-thumbnails"),
+    render: artifactRenderer.render,
+  });
+  ipcMain.handle("ah-artifact-thumbnail", (event, html) => {
+    if (!historyWindows.has(BrowserWindow.fromWebContents(event.sender)) || event.senderFrame !== event.sender.mainFrame) return null;
+    return artifactThumbnails?.get(html) ?? null;
+  });
 
   // A web line's site icon. The renderer names a host it read out of a
   // transcript and asks; this side decides whether that host is dialled at
@@ -480,7 +496,7 @@ app.whenReady().then(async () => {
     smoke(win, out, delayMs);
   }
   app.on("activate", () => {
-    if (!shutdownStarted && BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (!shutdownStarted && historyWindows.size === 0) createWindow();
   });
 });
 
@@ -501,6 +517,10 @@ app.on("before-quit", (event) => {
   stopFxSession(session);
   browserPreviews?.dispose();
   browserPreviews = null;
+  artifactThumbnails?.dispose();
+  artifactRenderer?.dispose();
+  artifactThumbnails = null;
+  artifactRenderer = null;
   void (daemonService?.stop() ?? Promise.resolve()).then(() => {
     shutdownComplete = true;
     app.quit();

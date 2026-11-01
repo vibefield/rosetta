@@ -147,6 +147,8 @@ fn the_entry_digest_ignores_containers_segments_ids_and_packing() {
                 raw_payload_bytes: (0..20).map(|index| record(index).len() as u64).sum::<u64>() * 2,
                 seals: 2,
                 metas: 1,
+                documents: 0,
+                document_bytes: 0,
             }
         );
         assert_eq!(

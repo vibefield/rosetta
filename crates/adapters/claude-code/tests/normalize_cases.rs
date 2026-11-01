@@ -440,6 +440,77 @@ fn assistant_records_share_response_block_space_across_checkpoint_resume() {
 }
 
 #[test]
+fn native_response_block_positions_survive_split_sources_and_checkpoint_resume() {
+    // One response continues from a workflow transcript into the ordinary
+    // subagent transcript. Each file has independent normalizer state.
+    let mut text = assistant_record(
+        "msg_split_files",
+        "11111111-1111-1111-1111-111111111401",
+        json!([{"type": "text", "text": "review ready"}]),
+        None,
+    );
+    text["apiBlockIndex"] = json!(1);
+    let mut tool = assistant_record(
+        "msg_split_files",
+        "11111111-1111-1111-1111-111111111402",
+        json!([{"type": "tool_use", "id": "toolu_split_files", "name": "Bash",
+                "input": {"command": "true"}}]),
+        None,
+    );
+    tool["apiBlockIndex"] = json!(2);
+    let (workflow, _) = run(std::slice::from_ref(&text));
+    let (continued, _) = run(std::slice::from_ref(&tool));
+    assert_eq!(messages(&workflow)[0].block_index, Some(1));
+    assert_eq!(messages(&continued)[0].block_index, Some(2));
+
+    // Native positions remain authoritative even when records arrive out of
+    // order, and an older unstamped continuation allocates after them.
+    let fallback = assistant_record(
+        "msg_split_files",
+        "11111111-1111-1111-1111-111111111403",
+        json!([{"type": "text", "text": "finished"}]),
+        None,
+    );
+    let lines = vec![tool.clone(), text, fallback, tool];
+    let (whole, _) = run(&lines);
+    assert_eq!(
+        messages(&whole)
+            .iter()
+            .map(|row| row.block_index)
+            .collect::<Vec<_>>(),
+        [Some(2), Some(1), Some(3), Some(2)]
+    );
+    for split in 0..=lines.len() {
+        assert_eq!(run_with_checkpoint(&lines, split), whole);
+    }
+}
+
+#[test]
+fn native_response_position_limits_do_not_wrap_or_reuse_a_slot() {
+    for (native, expected) in [(u64::from(u32::MAX), u32::MAX), (u64::MAX, 0)] {
+        let mut first = assistant_record(
+            "msg_position_limit",
+            "11111111-1111-1111-1111-111111111411",
+            json!([{"type": "text", "text": "first"}]),
+            None,
+        );
+        first["apiBlockIndex"] = json!(native);
+        let second = assistant_record(
+            "msg_position_limit",
+            "11111111-1111-1111-1111-111111111412",
+            json!([{"type": "text", "text": "second"}]),
+            None,
+        );
+        let lines = vec![first, second];
+        let (whole, _) = run(&lines);
+        let rows = messages(&whole);
+        assert_eq!(rows[0].block_index, Some(expected));
+        assert_eq!(rows[1].block_index, Some(if expected == 0 { 1 } else { 0 }));
+        assert_eq!(run_with_checkpoint(&lines, 1), whole);
+    }
+}
+
+#[test]
 fn revisited_response_reuses_native_block_identity_after_checkpoint() {
     let first_uuid = "11111111-1111-1111-1111-111111111301";
     let repeated_uuid = "11111111-1111-1111-1111-111111111302";

@@ -147,6 +147,16 @@ export const endpoints = [
     notes: ['This projection excludes private prose and tool rows. It is distinct from the member’s full timeline.', 'Use /ws/collaboration/{id} for a live shared-conversation view.'],
   },
   {
+    id: 'artifacts', group: 'Content & assets', method: 'GET', path: '/api/artifacts', title: 'List HTML artifacts',
+    description: 'Browse explicitly presented HTML deliverables across admitted sessions, including publications whose content could not be captured.',
+    source: 'crates/server/src/http/artifacts.rs',
+    query: [p('q', 'string', 'Case-insensitive substring of the title, filename, or source session title. At most 512 bytes.'), p('agent', 'string', 'Exact agent family, such as claude-code or codex. At most 256 bytes.'), p('project', 'string', 'Canonical project id. At most 256 bytes.'), p('artifact_id', 'string', 'Artifact identity from a publication. Set to list its presentation history; omit to return only the latest presentation of each identity. At most 256 bytes.'), p('cursor', 'string', 'Opaque next_cursor from the previous page. At most 4,096 bytes; URL-encode it as a query value.'), p('limit', 'integer', 'Page size. Defaults to 50; clamped to 1–100.')],
+    exampleQuery: '?limit=50', response: 'ArtifactPage',
+    sdk: 'await client.artifacts({\n  q: null, agent: null, project: null, artifact_id: null,\n  cursor: null, limit: 50,\n})',
+    notes: ['Entries are ordered newest first. Follow next_cursor until it is null, keeping the same filters. Invalid or mismatched cursors return 400; a changed projection epoch or revision returns 410 cursor_expired. Discard the old scan and restart without a cursor.', 'canonical_ready is false while initial ingestion can still grow the library. Pending sessions remain withheld until admission.', 'availability describes the captured content. captured_at and recovered_from describe an observed copy, without asserting that it is the original published revision. publication.url retains a recorded hosted link independently of local availability; the server does not fetch that page.', 'publication.session_id and publication.timeline_id identify the originating session and transcript entry. Use publication.id with the content endpoint, and publication.artifact_id to query history.', 'In authenticated mode this global catalog requires the daemon bearer. A session read grant cannot enumerate it.'],
+    related: ['reference/artifact-content', 'types/ArtifactListRequest', 'types/ArtifactEntry', 'readiness'],
+  },
+  {
     id: 'command', group: 'Content & assets', method: 'GET', path: `${rowPath}/command`, title: 'Read a command body',
     description: 'Recover the exact shell or code source deliberately omitted from a timeline row, lazily from the raw ledger.',
     response: 'CommandResponse', sdk: 'await client.command(sessionId, timelineId)', grant: 'read',
@@ -177,10 +187,18 @@ export const endpoints = [
     notes: ['Returns text/markdown or application/json with private, no-store caching. Use the exact source reference from TimelineMeta.'],
   },
   {
+    id: 'artifact-content', group: 'Content & assets', method: 'GET', path: `${sessionPath}/artifacts/{publication_id}/content`, title: 'Read captured HTML',
+    description: 'Read the captured HTML bytes belonging to one publication in its originating session.',
+    source: 'crates/server/src/http/artifacts.rs',
+    response: 'binary', sdk: 'await client.readArtifact(sessionId, publicationId)', grant: 'read',
+    notes: ['Use publication.id and publication.session_id from the artifact library, or the html_publication reference in TimelineMeta. Encode each path segment. The SDK returns a Uint8Array.', 'Content is checked against its recorded size and BLAKE3 digest, with a 16 MiB ceiling. It is returned as application/octet-stream with Content-Disposition: attachment; filename=artifact.html, X-Content-Type-Options: nosniff, Cache-Control: private, no-store, and Content-Security-Policy: sandbox; default-src \'none\'. Render any interactive preview in an isolated surface.', 'A read grant must match the owning session; it does not need the files capability because this reads captured bytes. An unknown publication, a different session, withheld content, or an unavailable captured member returns 404. Invalid stored content returns 500.', 'The route does not read the current source file or redirect to a hosted page. When captured HTML is unavailable, a client can offer the separately recorded publication.url as an explicit external link.'],
+    related: ['reference/artifacts', 'types/TimelineMetaArtifactSource', 'authentication'],
+  },
+  {
     id: 'asset', group: 'Content & assets', method: 'GET', path: '/api/assets/{name}', title: 'Read a projection asset',
     description: 'Read immutable, content-addressed media or oversized canonical text referenced by a transcript.',
     query: imageQuery, response: 'binary', sdk: 'await client.readAsset(asset)', grant: 'read',
-    notes: ['name is a 64-character lowercase BLAKE3 digest plus .png, .jpg, .gif, .webp, .pdf, .json, or .txt. Follow the stored AssetRef.url instead of constructing a name.', 'Original members are checked against their digest and returned with private, max-age=31536000, immutable caching. Image renditions support conditional requests.', 'A valid read grant can open a known asset digest without a session comparison. For images use imageAssetUrl(); readTextAsset() is for canonical oversized text.'],
+    notes: ['name is a 64-character lowercase BLAKE3 digest plus .png, .jpg, .gif, .webp, .pdf, .json, or .txt. Follow the stored AssetRef.url instead of constructing a name.', 'Captured HTML uses the session-scoped artifact content endpoint; this generic route does not serve .html members.', 'Original members are checked against their digest and returned with private, max-age=31536000, immutable caching. Image renditions support conditional requests.', 'A valid read grant can open a known asset digest without a session comparison. For images use imageAssetUrl(); readTextAsset() is for canonical oversized text.'],
   },
   {
     id: 'search', group: 'Search', method: 'GET', path: '/api/search', title: 'Search agent history',

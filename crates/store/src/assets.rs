@@ -331,7 +331,9 @@ fn magic_matches(media_type: &str, bytes: &[u8]) -> bool {
         "application/vnd.rosetta.canonical-document+json" => {
             serde_json::from_slice::<serde_json::Value>(bytes).is_ok()
         }
-        "text/plain; charset=utf-8" => std::str::from_utf8(bytes).is_ok(),
+        "text/plain; charset=utf-8" | "text/html; charset=utf-8" => {
+            std::str::from_utf8(bytes).is_ok()
+        }
         _ => false,
     }
 }

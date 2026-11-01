@@ -361,13 +361,12 @@ fn exchange() -> Vec<Value> {
 }
 
 #[test]
-fn fields_added_by_writers_2_1_257_to_2_1_283_are_ledger_only() {
+fn unprojected_fields_added_by_writers_2_1_257_to_2_1_283_are_ledger_only() {
     let plain = exchange();
     let mut dressed = exchange();
     dressed[0] = with(
         dressed[0].clone(),
         json!({
-            "apiBlockIndex": 0,
             "perTurnEffort": "x",
             "advisorModel": "claude-opus-5-5",
             "serverClassifierRequest": "x",

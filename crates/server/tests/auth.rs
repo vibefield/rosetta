@@ -675,6 +675,7 @@ async fn a_grant_opens_its_own_session_and_nothing_else() {
         "/api/sessions",
         "/api/search?q=hello",
         "/api/search?q=hello&session=s1",
+        "/api/artifacts",
         "/api/projects/p1/heatmap",
     ] {
         let reply = server.get(path, &[("authorization", &header)]).await;
@@ -878,6 +879,7 @@ async fn every_allow_listed_route_is_a_real_route_a_grant_opens() {
             .replace("{id}", "s1")
             .replace("{timeline_id}", "t1")
             .replace("{revision}", "1")
+            .replace("{publication_id}", "missing")
             .replace("{name}", "00.png");
         // Past the credential check: the handler answers (200, 404, or a
         // plain GET on an upgrade route), never 401.

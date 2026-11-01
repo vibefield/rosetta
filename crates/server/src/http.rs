@@ -38,6 +38,7 @@ use rosetta_store::{assets, queries, timeline_meta};
 use crate::hub::Hub;
 
 mod activity;
+mod artifacts;
 mod images;
 mod ingestions;
 
@@ -318,6 +319,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/assets/{name}", get(asset))
         .route("/api/search", get(search))
+        .route("/api/artifacts", get(artifacts::list))
+        .route(
+            "/api/sessions/{id}/artifacts/{publication_id}/content",
+            get(artifacts::content),
+        )
         .route("/ws/meta", get(crate::ws::meta).route_layer(origin_guard()))
         .route(
             "/ws/sessions/{id}",

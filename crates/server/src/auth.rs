@@ -54,7 +54,7 @@ pub const MAX_CREDENTIAL_BYTES: usize = 4096;
 /// Deliberately absent: the lists, search, `/ws/meta`, status and the writes.
 /// The recorded-file route is not here either: it is [`GRANT_FILE_ROUTE`],
 /// which needs a second scope.
-pub const GRANT_SESSION_ROUTES: [&str; 10] = [
+pub const GRANT_SESSION_ROUTES: [&str; 11] = [
     "/ws/sessions/{id}",
     "/ws/collaboration/{id}",
     "/api/sessions/{id}",
@@ -65,6 +65,7 @@ pub const GRANT_SESSION_ROUTES: [&str; 10] = [
     "/api/sessions/{id}/timeline/{timeline_id}/work",
     "/api/sessions/{id}/timeline/{timeline_id}/plan",
     "/api/sessions/{id}/plans/revisions/{revision}",
+    "/api/sessions/{id}/artifacts/{publication_id}/content",
 ];
 /// Content-addressed transcript images. Any live read grant opens them: the
 /// URL is learned from a timeline, and its digest names bytes, not a session.

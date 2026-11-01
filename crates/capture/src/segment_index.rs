@@ -149,6 +149,9 @@ pub fn rebuild_segment_index(dir: &Path) -> Result<usize, CaptureError> {
                 LedgerEntry::Raw {
                     source, generation, ..
                 }
+                | LedgerEntry::Document {
+                    source, generation, ..
+                }
                 | LedgerEntry::GenerationComplete {
                     source, generation, ..
                 } => note(&source, generation),

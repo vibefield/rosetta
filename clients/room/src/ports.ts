@@ -4,6 +4,8 @@
 // hands it adapters over its own daemon's doors. The room never knows which.
 import type {
   AssetRef,
+  ArtifactListRequest,
+  ArtifactPage,
   CollaborationSubscriptionHandlers,
   CommandResponse,
   DayUsageResponse,
@@ -91,6 +93,12 @@ export interface CatalogPort {
   /** One day of that project, hour by hour. */
   dayUsage(projectId: string, day: string, offsetMinutes: number, signal?: AbortSignal): Promise<DayUsageResponse>;
   search(request: CatalogSearch, signal?: AbortSignal): Promise<SearchResponse>;
+  /** Explicitly presented HTML deliverables across the index. Optional for
+   * hosts that expose only a session or use an older catalog. */
+  readonly artifacts?: {
+    list(request: ArtifactListRequest, signal?: AbortSignal): Promise<ArtifactPage>;
+    read(sessionId: string, publicationId: string, signal?: AbortSignal): Promise<Uint8Array>;
+  };
   /** Advisory: read this still-queued session next. Optional — a grant never
    * opens a write, so only a host that holds the daemon's bearer offers it;
    * without it the index keeps its own order. */
@@ -131,6 +139,7 @@ export interface SessionClient {
     signal?: AbortSignal,
   ): Promise<Uint8Array>;
   readPlan(sessionId: string, source: TimelineMetaPlanSource, signal?: AbortSignal): Promise<Uint8Array>;
+  readArtifact?(sessionId: string, publicationId: string, signal?: AbortSignal): Promise<Uint8Array>;
   readTextAsset(asset: AssetRef, signal?: AbortSignal): Promise<string>;
   readAsset(asset: AssetRef, signal?: AbortSignal): Promise<Uint8Array>;
 }
@@ -232,6 +241,9 @@ export interface HostPort {
   /** Hand the exact HTML/SVG bytes to the chosen installed browser. Omitting
    * the id retains the default-browser action for hosts without discovery. */
   openInBrowser(name: string, bytes: Uint8Array, browserId?: string): Promise<boolean>;
+  /** Render one bounded HTML document into a cached static PNG data URL.
+   * Hosts without a screenshot renderer leave the grid preview unavailable. */
+  artifactThumbnail?(html: string): Promise<string | null>;
   /** Re-read installed browsers. Absent on hosts with only a default action. */
   browsers?(): Promise<readonly InstalledBrowser[]>;
   /** One site's own icon as an image URL, or null for every honest no — a

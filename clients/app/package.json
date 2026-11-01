@@ -25,6 +25,8 @@
     "test:history-window": "electron test/history-window.electron.mjs",
     "test:worktree-actions": "electron test/worktree-actions.electron.mjs",
     "test:file-viewer-browsers": "electron test/file-viewer-browsers.electron.mjs",
+    "test:artifacts": "electron test/artifacts.electron.mjs",
+    "test:ingestion": "electron test/ingestion.electron.mjs",
     "test:activity-chart": "electron test/activity-chart.electron.mjs",
     "test:models-chart": "electron test/models-chart.electron.mjs",
     "test:room-host": "electron test/room-host.electron.mjs",

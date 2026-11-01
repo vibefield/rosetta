@@ -46,7 +46,29 @@ impl AgentAdapter for CodexAdapter {
         // aggregates, missing tier key = unset (2026-09-23 audit).
         // 18: image members are WebP with bounded display renditions.
         // 19: recorded tool images use durable optimized attachment members.
-        19
+        // 20: explicitly presented HTML deliverables with transcript anchors.
+        // 21: capture can recover presented HTML from the recorded workspace.
+        21
+    }
+
+    fn html_artifact_hints(
+        &self,
+        ctx: &NormalizeCtx,
+        publication: &rosetta_core::html_artifacts::HtmlArtifactPublication,
+        _root: &str,
+    ) -> rosetta_adapter_support::html_artifacts::CaptureHints {
+        let roots = ctx
+            .state
+            .as_deref()
+            .and_then(|s| s.downcast_ref::<crate::normalize::CodexState>())
+            .and_then(|s| s.tool_cwd.clone())
+            .into_iter()
+            .collect();
+        rosetta_adapter_support::html_artifacts::CaptureHints {
+            roots,
+            urls: publication.url.iter().cloned().collect(),
+            ..Default::default()
+        }
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

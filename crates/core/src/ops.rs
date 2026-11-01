@@ -28,6 +28,10 @@ pub enum IngestOp {
     ProjectionAsset {
         asset: ProjectionAsset,
     },
+    /// An explicitly presented HTML review/design deliverable.
+    HtmlArtifact(crate::html_artifacts::HtmlArtifactPublication),
+    /// Captured bytes and availability for a publication's exact file locator.
+    HtmlArtifactContent(crate::html_artifacts::HtmlArtifactContent),
     Runtime(RuntimeRow),
     Project(ProjectRow),
     /// Meta-phase upsert. Stream normalization never mutates session identity,

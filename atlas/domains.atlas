@@ -72,6 +72,19 @@ domain media "Images & assets" {
   see "docs/ARCHITECTURE.md#412-authored-images-2026-09-09"
 }
 
+domain artifacts "HTML review deliverables" {
+  intent "Explicit HTML presentations, archived source observations, a global review library, and exact session links."
+  contains mod:rosetta_core::html_artifacts, mod:rosetta_adapter_support::html_artifacts
+  contains mod:rosetta_pipeline::html_artifacts, mod:rosetta_store::html_artifacts
+  contains mod:rosetta_server::http::artifacts
+  contains path:crates/adapters/*/src/html_artifacts.rs
+  contains path:crates/adapters/*/src/html_recovery.rs
+  contains path:clients/room/src/components/artifacts/, file:clients/room/src/styles/artifacts.css
+  contains file:clients/app/electron/{artifact-thumbnails, artifact-thumbnail-renderer}.mjs
+  touches mod:rosetta_capture::ledger::document
+  see "docs/ARCHITECTURE.md#html-review-artifacts-2026-10-30"
+}
+
 domain auth "Access control" {
   contains mod:rosetta_server::{auth, grant}, mod:rosettad::auth_files
   contains file:clients/ts/grants.ts, file:clients/ts/base64url.ts, path:tools/auth/

@@ -2,6 +2,67 @@ use tempfile::TempDir;
 
 use super::*;
 
+#[test]
+fn document_observations_round_trip_through_async_and_compressed_ledgers() {
+    for codec in [
+        crate::SegmentCodec::Plain,
+        crate::SegmentCodec::ZstdFrames { level: 1 },
+    ] {
+        for asynchronous in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let mut ledger = Ledger::open(dir.path())
+                .unwrap()
+                .with_codec(codec)
+                .with_max_segment_bytes(128);
+            if asynchronous {
+                ledger = ledger.into_async_bounded(128);
+            }
+            let source = source("review.jsonl");
+            let document = CapturedDocument {
+                path: "/tmp/review.html".into(),
+                captured_at: 99,
+                recovered_from: Some("/archive/review.html".into()),
+                status: DocumentCaptureStatus::Captured,
+                bytes: b"<h1>Exact review bytes</h1>".to_vec(),
+            };
+            ledger
+                .append_raw(&source, 2, [(20, b"publication".as_slice())])
+                .unwrap();
+            ledger
+                .append_document(&source, 2, 20, document.clone())
+                .unwrap();
+            ledger.complete_generation(&source, 2, 1, true).unwrap();
+            ledger.flush().unwrap();
+            let scanned = scan(dir.path()).unwrap();
+            assert_eq!(scanned.torn_segments, 0);
+            assert!(scanned.entries.iter().any(|entry| matches!(entry,LedgerEntry::Document {source:parent,generation:2,start_offset:20,document:observed} if parent==&source && observed==&document)));
+            let verified = verify::verify(dir.path()).unwrap();
+            assert_eq!(verified.tally.documents, 1);
+            assert_eq!(verified.tally.document_bytes, document.bytes.len() as u64);
+        }
+    }
+}
+
+#[test]
+fn document_metadata_reads_legacy_frames_and_rejects_invalid_recovery_provenance() {
+    let metadata = br#"["/tmp/review.html",99,"captured"]"#;
+    let mut legacy = (metadata.len() as u32).to_be_bytes().to_vec();
+    legacy.extend_from_slice(metadata);
+    legacy.extend_from_slice(b"<h1>Legacy review</h1>");
+    let mut document = CapturedDocument::decode(&legacy).unwrap();
+    assert_eq!(document.recovered_from, None);
+    assert_eq!(document.bytes, b"<h1>Legacy review</h1>");
+    assert_eq!(document.encode().unwrap(), legacy);
+    document.recovered_from = Some("/archive/review.html".into());
+    assert_eq!(
+        CapturedDocument::decode(&document.encode().unwrap()),
+        Some(document.clone())
+    );
+    document.status = DocumentCaptureStatus::Missing;
+    document.bytes.clear();
+    assert!(CapturedDocument::decode(&document.encode().unwrap()).is_none());
+}
+
 fn source(path: &str) -> SourceDef {
     SourceDef {
         ledger_only: false,
@@ -500,7 +561,9 @@ fn reopening_continues_in_a_new_segment_and_redefines_sources() {
         .iter()
         .filter_map(|entry| match entry {
             LedgerEntry::Raw { payload, .. } => Some(payload.as_slice()),
-            LedgerEntry::Meta { .. } | LedgerEntry::GenerationComplete { .. } => None,
+            LedgerEntry::Meta { .. }
+            | LedgerEntry::GenerationComplete { .. }
+            | LedgerEntry::Document { .. } => None,
         })
         .collect();
     assert_eq!(raw, [b"first".as_slice(), b"second"]);

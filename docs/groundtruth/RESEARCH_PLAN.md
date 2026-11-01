@@ -458,6 +458,22 @@ GitHub repo is issues + changelog only). Near-daily releases; npm dist-tags `sta
   and 2026-09-03 censuses, now migrated), and per-call keys inside configured MCP tool
   inputs. The census policy removes all three. This is Channel-4 evidence only: no pinned
   fixture from a writer at or after 2.1.257 exists, because the farm needs an isolated runner.
+- **Workflow journal drift (2026-10-30, normalizer 37):** the canonical declares
+  `started` and `result`; their required worker key no longer constrains unfamiliar
+  journal event types. Unknown events remain raw-ledger evidence and emit `unknown_type`
+  drift without inventing lifecycle semantics or marking the session unclean. Malformed
+  JSON, invalid discriminators and malformed known events remain hard errors. Synthetic
+  adapter tests cover both shapes, and daemon recovery tests separately prove that an
+  actual malformed record in a sealed staged ledger does not block resume/publication.
+- **Response positions (2026-10-30, normalizer 36):** the canonical's optional
+  `assistant.apiBlockIndex` is now projected for single-block records. A retained-history
+  diagnosis found one response split between a workflow child transcript and the same
+  child's ordinary transcript: native slots 0/1 in one source and 2 in the other. The
+  previous per-file visible-block counter assigned both prose and the tool slot 0, violating
+  the canonical uniqueness constraint. Native positions now survive hidden blocks, source
+  boundaries, and checkpoint resume. Older unstamped records retain identity-based ordered
+  positions after known slots. Synthetic adapter and pipeline tests cover the split source,
+  streamed cold apply, live append, and raw-ledger replay; private history is not a fixture.
 
 ### 5.7 Codex CLI (OpenAI) — **Tier A**
 
@@ -923,3 +939,53 @@ design may begin — when no roster agent remains blocked and, for every agent:
 5. the drift pipeline has been exercised at least once (a release bump PR was produced).
 
 Only then does Phase 2 (cross-agent pattern synthesis) freeze the canonical model.
+
+### HTML artifact publication audit (2026-10-30)
+
+- [Claude Code artifacts](https://code.claude.com/docs/en/artifacts) documents
+  explicit publication, stable URLs, per-publication versions, temporary
+  source files, and updates from other sessions. Artifacts are self-contained
+  pages; the current product also accepts Markdown, which is outside this
+  HTML-only library's admission rule.
+- `groundtruth/claude-code/groundtruth.json` records both the older
+  `Artifact(file_path, title, description)` request and requests with `action`,
+  object-valued `files`, `root`, and `label`. Results include `artifact_id`,
+  `path`, `url`, `version`, and `updated`. Reading/listing/watching an artifact
+  is not publication. A failed publication is not an ingested deliverable.
+- [OpenAI file previews](https://learn.chatgpt.com/docs/artifacts-viewer)
+  documents interactive HTML/HTM previews and the CLI's file-path delivery.
+  [Visualizations](https://learn.chatgpt.com/docs/visualizations) is the related
+  presentation surface. The installed visualize output contract explicitly
+  presents a local HTML fragment with a `visualize` content reference whose
+  JSON contains `path`, optional `title`, and optional `mode`.
+- Codex persists assistant presentation text in rollout message records.
+  Publication recognition belongs in its Rust adapter, including that exact
+  visualization reference and explicit local HTML delivery links. Tool-call
+  source, quoted examples, code blocks, user messages, and ordinary file edits
+  must not manufacture artifact publications.
+A content-free corroboration over 80 recent Rosetta Codex rollouts found one
+assistant `response_item` with `phase: final_answer`, `content[].type:
+output_text`, and the exact visualization reference. Tests use synthetic paths
+and HTML, never local transcript contents.
+
+Implemented recognition and durable capture are described in
+[HTML review artifacts](../ARCHITECTURE.md#html-review-artifacts-2026-10-30).
+The explicit product scope is presented HTML review/design deliverables, not
+every HTML file an agent touches. A single native inline HTML member is preserved
+from transcript evidence. Multi-page bundles and agent-host-specific preview
+APIs remain outside the current single-file capture contract; they must not be
+inferred by treating inline strings as local filenames or by fetching a
+published remote URL during replay.
+
+The artifact recovery pass also uses the canonical Claude file-history mappings:
+`snapshot.trackedFileBackups` and delta `trackingPath` / `backup.backupFileName`.
+Names are session-scoped locators, not hashes guessed from a filename; a null
+backup name does not authorize reading another file. Successful `Write` inputs
+can provide source bytes through a checksum-bound raw-record coordinate, using
+the existing Rust parser. Only coordinates, paths, and checksums are checkpointed.
+Synthetic tests cover a checkpoint between writing and publishing, failed writes,
+backup capture, native URL aliases, archived manifest history, conflicting copies,
+and replay after the original files and projection assets are removed.
+These sources recover a copy without asserting that it is the exact published
+revision. Publication URLs remain independent metadata and provide the external
+browser fallback; `SendUserFile` alone does not imply a hosted publication URL.

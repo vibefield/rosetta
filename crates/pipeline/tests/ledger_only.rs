@@ -505,6 +505,9 @@ fn old_archives_rebuild_without_empty_review_headers_and_resume_capture() {
     let mut old = Ledger::open(&old_dir).unwrap();
     for entry in scan_ledger(&f.ledger_dir).unwrap().entries {
         match entry {
+            LedgerEntry::Document { .. } => {
+                panic!("ledger-only usage source must not capture HTML")
+            }
             LedgerEntry::Meta {
                 schema_version,
                 payload,

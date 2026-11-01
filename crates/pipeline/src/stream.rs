@@ -491,6 +491,10 @@ pub(crate) fn ingest_file(
                     ledger.append_raw_owned(&source, raw.generation, raw.records)?;
                     wrote = true;
                 }
+                for (offset, document) in raw.documents {
+                    ledger.append_document(&source, raw.generation, offset, document)?;
+                    wrote = true;
+                }
                 if let Some(clean) = raw.seal {
                     ledger.complete_generation(
                         &source,
