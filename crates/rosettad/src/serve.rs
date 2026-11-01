@@ -1199,10 +1199,16 @@ fn run_resumed_fresh_serve(
             )
             .map_err(|error| format!("replaying {name} staged ledger: {error}"))?;
             if report.hard_errors != 0 {
-                return Err(format!(
-                    "{name} staged ledger replay had {} hard normalization errors",
+                // Recovery is the same private build as fresh capture. Replay
+                // retains the raw evidence and holds affected sessions
+                // Streaming; a per-record parse failure must not prevent the
+                // remaining sources from catching up and publishing. Structural
+                // replay errors still propagate above, and finite rebuild keeps
+                // its strict normalization gate.
+                println!(
+                    "{name}: tolerated staged ledger normalization errors (hard_errors={}); raw records retained and affected sessions stay Streaming",
                     report.hard_errors
-                ));
+                );
             }
             if report.torn_segments != 0 {
                 println!(

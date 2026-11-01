@@ -313,6 +313,110 @@ fn a_resumed_start_publishes_past_a_malformed_record() {
     assert_eq!(active, highest, "no generation is left staged");
 }
 
+/// A malformed record already in the sealed recovery evidence must be just as
+/// tolerable as one first encountered during source catch-up. Exercise the
+/// actual serve path, including publication and the final readiness state.
+#[test]
+fn a_resumed_start_publishes_past_a_malformed_record_in_its_staged_ledger() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let claude = claude_home(&home);
+    let transcript = find_jsonl(&claude.join("projects"));
+    let text = std::fs::read(&transcript).unwrap();
+    let first = text.iter().position(|byte| *byte == b'\n').unwrap() + 1;
+    let mut dirty = text[..first].to_vec();
+    dirty.extend_from_slice(b"{not json\n");
+    dirty.extend_from_slice(&text[first..]);
+    std::fs::write(&transcript, dirty).unwrap();
+    let db = temp.path().join("archive/rosetta.db");
+    assert_success(&run_serve(&home, &db, "claude-code"));
+    let timelines = "SELECT timeline_id FROM message ORDER BY timeline_id";
+    let before = column(&db, timelines);
+    assert!(!before.is_empty());
+    let staged = stage_ledger(&db, &claude);
+
+    let resumed = assert_success(&run_serve(&home, &db, "claude-code"));
+    assert!(resumed.contains("resuming cold generation"), "{resumed}");
+    assert!(resumed.contains("milestone: canonical-ready"), "{resumed}");
+    assert!(
+        resumed.contains("tolerated staged ledger normalization errors (hard_errors=1)"),
+        "{resumed}"
+    );
+    assert!(!staged.exists());
+    assert_eq!(column(&db, timelines), before);
+    assert_eq!(
+        stream_state(&db, &native_id(&transcript)).as_deref(),
+        Some("streaming")
+    );
+    let ledger = db.with_extension("ledger").join("claude-code");
+    assert_eq!(jsonl_seals(&ledger), [(1, false)]);
+    assert!(
+        scan_ledger(&ledger)
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::Raw { payload, .. } if payload.starts_with(b"{not json"))),
+        "recovery retains the malformed raw record"
+    );
+}
+
+#[test]
+fn unknown_workflow_journal_events_stay_indexed_through_resume() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let claude = claude_home(&home);
+    let transcript = find_jsonl(&claude.join("projects"));
+    let native = native_id(&transcript);
+    let journal = transcript
+        .parent()
+        .unwrap()
+        .join(&native)
+        .join("subagents/workflows/wf_future/journal.jsonl");
+    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    std::fs::write(
+        &journal,
+        concat!(
+            "{\"type\":\"started\",\"key\":\"worker\",\"agentId\":\"agent-child\"}\n",
+            "{\"type\":\"future_checkpoint\"}\n",
+            "{\"type\":\"future_worker_event\",\"key\":\"worker\",\"agentId\":\"agent-child\"}\n",
+            "{\"type\":\"result\",\"key\":\"worker\",\"result\":\"done\"}\n",
+        ),
+    )
+    .unwrap();
+    let db = temp.path().join("archive/rosetta.db");
+    assert_success(&run_serve(&home, &db, "claude-code"));
+    assert_eq!(stream_state(&db, &native).as_deref(), Some("indexed"));
+    let before = column(&db, "SELECT timeline_id FROM message ORDER BY timeline_id");
+    let staged = stage_ledger(&db, &claude);
+
+    let resumed = assert_success(&run_serve(&home, &db, "claude-code"));
+    assert!(resumed.contains("milestone: canonical-ready"), "{resumed}");
+    assert!(!resumed.contains("tolerated staged ledger"), "{resumed}");
+    assert!(!staged.exists());
+    assert_eq!(stream_state(&db, &native).as_deref(), Some("indexed"));
+    assert_eq!(
+        column(&db, "SELECT timeline_id FROM message ORDER BY timeline_id"),
+        before
+    );
+    assert_eq!(
+        column(
+            &db,
+            "SELECT DISTINCT record_kind FROM drift_agg
+             WHERE stream = 'workflow-journal' AND error_code = 'unknown_type'
+             ORDER BY record_kind",
+        ),
+        ["future_checkpoint", "future_worker_event"]
+    );
+    assert!(
+        scan_ledger(&db.with_extension("ledger").join("claude-code"))
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::Raw { payload, .. } if payload == b"{\"type\":\"future_checkpoint\"}")),
+        "unknown event bytes survive recovery"
+    );
+}
+
 struct ChildGuard(Child);
 
 impl Drop for ChildGuard {

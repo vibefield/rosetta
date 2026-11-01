@@ -55,7 +55,9 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // 32: cumulative cost-state totals reconcile missing session-tree usage.
         // 33: image members are WebP with bounded display renditions.
         // 34: recorded tool images use durable optimized attachment members.
-        34
+        // 36: native API block positions survive responses split across files.
+        // 37: unknown workflow journal events are soft drift, not unclean sources.
+        37
     }
 
     fn init_state(&self) -> Option<Box<dyn Any + Send>> {

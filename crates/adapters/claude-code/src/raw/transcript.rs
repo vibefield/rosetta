@@ -395,9 +395,11 @@ pub struct AssistantLine {
     pub attribution_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_error: Option<String>,
-    // Writers 2.1.257–2.1.283 (census 2.1.283); ledger-only.
+    /// Native response position, including blocks absent from this source.
+    /// Writers 2.1.257–2.1.283 (census 2.1.283).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_block_index: Option<u64>,
+    // Remaining writer 2.1.257–2.1.283 additions stay ledger-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_turn_effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

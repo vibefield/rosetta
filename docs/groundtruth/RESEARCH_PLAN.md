@@ -458,6 +458,22 @@ GitHub repo is issues + changelog only). Near-daily releases; npm dist-tags `sta
   and 2026-09-03 censuses, now migrated), and per-call keys inside configured MCP tool
   inputs. The census policy removes all three. This is Channel-4 evidence only: no pinned
   fixture from a writer at or after 2.1.257 exists, because the farm needs an isolated runner.
+- **Workflow journal drift (2026-10-30, normalizer 37):** the canonical declares
+  `started` and `result`; their required worker key no longer constrains unfamiliar
+  journal event types. Unknown events remain raw-ledger evidence and emit `unknown_type`
+  drift without inventing lifecycle semantics or marking the session unclean. Malformed
+  JSON, invalid discriminators and malformed known events remain hard errors. Synthetic
+  adapter tests cover both shapes, and daemon recovery tests separately prove that an
+  actual malformed record in a sealed staged ledger does not block resume/publication.
+- **Response positions (2026-10-30, normalizer 36):** the canonical's optional
+  `assistant.apiBlockIndex` is now projected for single-block records. A retained-history
+  diagnosis found one response split between a workflow child transcript and the same
+  child's ordinary transcript: native slots 0/1 in one source and 2 in the other. The
+  previous per-file visible-block counter assigned both prose and the tool slot 0, violating
+  the canonical uniqueness constraint. Native positions now survive hidden blocks, source
+  boundaries, and checkpoint resume. Older unstamped records retain identity-based ordered
+  positions after known slots. Synthetic adapter and pipeline tests cover the split source,
+  streamed cold apply, live append, and raw-ledger replay; private history is not a fixture.
 
 ### 5.7 Codex CLI (OpenAI) — **Tier A**
 

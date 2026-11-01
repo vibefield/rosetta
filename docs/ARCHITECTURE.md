@@ -149,6 +149,10 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > `<kind>: tolerated per-file imperfections (vanished=…, unfinished=…, unidentified=…,
 > missing=…, unstable=…, hard_errors=…, incomplete=…)`, and the profile counts files vanished
 > during metadata, unidentified, unfinished, missing at capture, and unstable under every retry.
+> Recovery also tolerates normalization errors already present in the staged raw ledger,
+> reports their count separately from source catch-up, and preserves their raw records and
+> Streaming readiness. The daemon regression exercises a malformed sealed record through
+> resume and canonical publication, not only a malformed suffix first read during catch-up.
 > A start still refuses what no later read can repair: a truncated discovery or metadata walk
 > (the file cap), a checkpoint conflict, a record past the raw frame limit (§3.5), a resumed
 > start's interrupted source that is gone (its reserved generation can never finish), and what
@@ -961,6 +965,13 @@ user-facing semantic projection. These are deliberately different jobs:
   parent invocation, system cycle, or synthetic group. Group and optional response derivation
   (`native`, `parent_linked`, `ordered`, or `synthetic`) prevents clients from presenting an
   inferred boundary as exact source evidence.
+
+Claude's single-block assistant records use their native `apiBlockIndex` when present
+(normalizer 36). One response can continue from a workflow transcript into an ordinary
+subagent transcript for the same session; a counter restarted per file cannot identify its
+response slots. Native positions retain gaps for hidden or absent blocks and survive
+checkpoint resume. Older unstamped records keep the identity-based ordered fallback,
+allocated after known positions; the unique response-block constraint remains enforced.
 
 A tool opener, progressive snapshots, and terminal update fold into one `ToolInteraction`
 with a deterministic adapter correlation key, optional native id, namespace/name/provider,

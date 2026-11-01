@@ -134,7 +134,13 @@ impl ClaudeCodeState {
     /// each containing only newly materialized blocks. A branch replay may then
     /// repeat a prior record with the same UUID and a different parent. Stable
     /// block identities make that a last-writer update, not a new response slot.
-    fn enter_response(&mut self, id: &str, block_identities: &[String]) -> ResponseProjection {
+    /// Native API positions survive a response continuing in another source;
+    /// file-local counting is only a fallback for older unstamped records.
+    fn enter_response(
+        &mut self,
+        id: &str,
+        block_identities: &[(String, Option<u32>)],
+    ) -> ResponseProjection {
         let response = self.responses.entry(id.to_owned()).or_default();
         // Every block already known: the record repeats one seen before (an
         // in-file replay, or a branch revisit with a new parent). Its rows
@@ -142,19 +148,26 @@ impl ClaudeCodeState {
         let replayed = !block_identities.is_empty()
             && block_identities
                 .iter()
-                .all(|identity| response.blocks.contains(identity));
+                .all(|(identity, _)| response.blocks.contains_key(identity));
         let mut block_indices = Vec::with_capacity(block_identities.len());
-        for identity in block_identities {
-            let index = response
-                .blocks
-                .iter()
-                .position(|known| known == identity)
-                .and_then(|index| u32::try_from(index).ok())
+        for (identity, native_index) in block_identities {
+            let index = native_index
+                .or_else(|| response.blocks.get(identity).copied())
                 .unwrap_or_else(|| {
-                    let index = u32::try_from(response.blocks.len()).unwrap_or(u32::MAX);
-                    response.blocks.push(identity.clone());
+                    let mut index = response
+                        .blocks
+                        .values()
+                        .max()
+                        .and_then(|index| index.checked_add(1))
+                        .unwrap_or_default();
+                    // A valid native u32::MAX must not make a later legacy
+                    // record reuse that slot through saturating arithmetic.
+                    while response.blocks.values().any(|known| *known == index) {
+                        index = index.wrapping_add(1);
+                    }
                     index
                 });
+            response.blocks.insert(identity.clone(), index);
             block_indices.push(index);
         }
         ResponseProjection {
@@ -500,8 +513,8 @@ const TASK_NOTIFICATION_CALL_LIMIT: usize = 1_024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ClaudeResponseState {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    blocks: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    blocks: BTreeMap<String, u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     usage: Option<ClaudeResponseUsage>,
 }
@@ -870,6 +883,12 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
         // Split rows share the record's uuid, so the block index is what makes
         // the timeline id unique within the session.
         let discriminator = format!("{}#{index}", line.uuid);
+        // The native stamp describes a persisted single-block delta. Do not
+        // infer an array's starting position from that field on other shapes.
+        let native_index = line
+            .api_block_index
+            .filter(|_| line.message.content.len() == 1)
+            .and_then(|index| u32::try_from(index).ok());
         match block {
             AssistantContentBlock::Known(KnownAssistantBlock::Text { text, .. })
                 if !text.trim().is_empty() =>
@@ -877,7 +896,7 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 let mut row = emit.row(&seed, MessageKind::Agent, &discriminator);
                 row.content = Some(text.clone());
                 rows.push((row, None));
-                block_identities.push(discriminator);
+                block_identities.push((discriminator, native_index));
             }
             AssistantContentBlock::Known(KnownAssistantBlock::Thinking { thinking, .. })
                 if !thinking.trim().is_empty() =>
@@ -885,7 +904,7 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 let mut row = emit.row(&seed, MessageKind::Thinking, &discriminator);
                 row.content = Some(thinking.clone());
                 rows.push((row, None));
-                block_identities.push(discriminator);
+                block_identities.push((discriminator, native_index));
             }
             AssistantContentBlock::Known(KnownAssistantBlock::ToolUse {
                 id, name, input, ..
@@ -980,7 +999,7 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                 }
                 let edit = file_edit(&row, name, input, ts);
                 rows.push((row, edit));
-                block_identities.push(discriminator);
+                block_identities.push((discriminator, native_index));
             }
             // Empty prose/reasoning and `fallback` (an in-response model switch)
             // carry no user-visible timeline content. Unfamiliar kinds land in
@@ -1609,7 +1628,7 @@ impl<'a> Emit<'a> {
     fn response_projection(
         &mut self,
         response_id: &str,
-        block_identities: &[String],
+        block_identities: &[(String, Option<u32>)],
         fallback_first_block: u32,
     ) -> ResponseProjection {
         self.ctx
@@ -1621,10 +1640,14 @@ impl<'a> Emit<'a> {
             // Keeping a deterministic ordinal fallback makes direct trait use
             // degrade to collision-free output instead of panicking.
             .unwrap_or(ResponseProjection {
-                block_indices: (0..block_identities.len())
-                    .map(|index| {
-                        fallback_first_block
-                            .saturating_add(u32::try_from(index).unwrap_or(u32::MAX))
+                block_indices: block_identities
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (_, native_index))| {
+                        native_index.unwrap_or_else(|| {
+                            fallback_first_block
+                                .saturating_add(u32::try_from(index).unwrap_or(u32::MAX))
+                        })
                     })
                     .collect(),
                 usage: None,
