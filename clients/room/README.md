@@ -66,9 +66,10 @@ host paints) · `portalContainer` (where the dialogs and the search sheet
 portal; their sizes are percentages of what holds them) · `edgeInset`,
 `scrollFoot`, `floatingFoot` · `onSelect` (the selected session's id, native id,
 folder and the host's key when it gave one, on mount and on every change) · `storagePrefix` and `storage` ·
-`initialSummaryTab` · `unavailable` and `consent` (the host's words and its
-consent screen) · `emptyPrompt` (the empty transcript's sentence in the host's
-words; absent, the room's own, below) · `search` (the room's own strip and
+`initialSummaryTab` · `unavailable`, `unavailableTitle` and `connectingTitle`
+(the disconnected face, below) · `consent` (the host's consent screen) ·
+`emptyPrompt` (the empty transcript's sentence in the host's words; absent,
+the room's own, below) · `search` (the room's own strip and
 sheet, with the host owning the open state; absent, neither is drawn). The ref
 handle offers `openAt({ sessionId, timelineId? })` and `stepMatch(delta)`.
 
@@ -90,6 +91,21 @@ room search (VibeField, whose search is its own Peek) can still name its own
 key there. A host that passes `search` binds ⌘G and ⌘⇧G (Ctrl G and Ctrl Shift
 G off a Mac) to the handle's `stepMatch(1)` and `stepMatch(-1)`, because the
 match stepper the sheet leaves in the transcript's head names those keys.
+
+**The disconnected face can be all the host's words.** While the catalog has
+delivered no rows, the room draws one face: a title, a sentence under it, and
+a meter. Every part a host leaves out stays the room's own, so rosetta's app
+reads as it always has; a host that never names its daemon to a person gives
+both titles and its sentence.
+
+| While | The title |
+|---|---|
+| the room is still reaching the index | `connectingTitle`, else "Connecting to rosettad" |
+| the index has stopped answering | `unavailableTitle`, else "rosettad is not answering" |
+
+The sentence under either title is the `unavailable` prop until a `status`
+ask fails; from then on it is the catalog's `unavailable()`, else that ask's
+own error. The reader takes `unavailableTitle` and `unavailable` too (below).
 
 ## What a host may add (`RoomHostInputs`)
 
@@ -193,6 +209,10 @@ address, and draws the room's own document with nothing around it.
   no day menu, no "Latest" pill, no dialog (a long message shows in full) —
   no thread navigation, no key bound, and nothing written back to a room. A
   delegated thread is read inside its root, as the room opens it.
+- **Its not-answering face takes the host's words**, as the room's does:
+  `unavailableTitle` (else "The index is not answering") and, under it, the
+  catalog's `unavailable()`, else the `unavailable` prop. Its opening face,
+  "Opening the session", names no process and stays its own.
 - **It asks only what reading needs:** one `subscribeMeta` while mounted, and
   one `open`/`close` of the session it shows. No status, figures or search.
 - **The mark's look is the host's.** Three tokens on any element around the

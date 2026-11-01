@@ -6,12 +6,14 @@ import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { HistoryRoom } from "../../room/src/HistoryRoom";
+import { TranscriptReader } from "../../room/src/TranscriptReader";
 import { createDemoPorts, createRoomDemo } from "../../room/src/fixtures";
 import "../renderer/src/styles/tokens.css";
 import "../../room/src/styles/room.css";
 import "../../room/src/styles/ingest.css";
 import "../../room/src/styles/transcript.css";
 import "../../room/src/styles/search.css";
+import "../../room/src/styles/reader.css";
 
 const demo = createRoomDemo();
 const firstPrompt = demo.timelines.get("s0")[0];
@@ -41,7 +43,7 @@ const engineDesktop = {
 function ports(scenario) {
   const base = createDemoPorts(demo);
   const catalog = { ...base.catalog };
-  if (scenario === "disconnected") {
+  if (scenario.includes("disconnected")) {
     catalog.subscribeMeta = (handlers) => { queueMicrotask(() => handlers.onStatus?.("closed")); return { close() {} }; };
     catalog.status = () => new Promise(() => {});
   }
@@ -108,6 +110,12 @@ function Fixture() {
     ? "repeating-linear-gradient(45deg, #2b4a8a 0 40px, #8a2b5e 40px 80px)" : "";
   // A host may seat the room in less than its window.
   const width = name === "narrow-host" ? 1200 : name === "wide-host" ? 1400 : null;
+  // The reader, as a host's Peek mounts it over the same ports.
+  if (name.startsWith("reader")) {
+    return <div style={{ height: "100%" }}><TranscriptReader key={key} {...p} at={{ sessionId: "s0" }}
+      {...(name === "reader-disconnected-titled" ? { unavailableTitle: "History isn't answering", unavailable: <span data-host-words="">VibeField is restarting it.</span> } : {})}
+    /></div>;
+  }
   return <div style={{ height: "100%", ...(width === null ? {} : { width }) }}><HistoryRoom key={key} ref={room} {...p}
     onSelect={(selection) => log.selections.push(selection)}
     {...(name === "sized" ? { edgeInset: { top: 12, right: 8, bottom: 8, left: 8 }, scrollFoot: "48px", floatingFoot: "40px" } : {})}
@@ -117,6 +125,7 @@ function Fixture() {
     {...(name === "worded" ? { emptyPrompt: <span data-host-prompt="">Find one from the Peek.</span> } : {})}
     {...(name === "prefixed" ? { storagePrefix: "vf.history.", storage: recordingStore } : {})}
     {...(name === "disconnected" ? { unavailable: <span data-host-words="">The index is resting.</span> } : {})}
+    {...(name === "disconnected-titled" ? { unavailableTitle: "History isn't answering", connectingTitle: "Opening History", unavailable: <span data-host-words="">VibeField is restarting it.</span> } : {})}
     {...(name === "consent" ? { consent: <div data-consent="">Choose your agents</div> } : {})}
     {...(name === "glass" ? { surface: "host", portalContainer: document.getElementById("host-layer") } : {})}
   /></div>;

@@ -11,6 +11,7 @@
 // `--ah-match-line`, set on any element around the reader); unset, it is the
 // room's own neutral match.
 import { useCallback, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import type { RoomPorts } from "./ports";
 import type { KeyValueStore } from "./lib/room-storage";
 import { RoomProvider, useRoom } from "./room-context";
@@ -38,6 +39,12 @@ export interface TranscriptReaderProps extends RoomPorts {
   /** As the room's: the fold preference and the site icons are kept here. */
   readonly storagePrefix?: string | undefined;
   readonly storage?: KeyValueStore | null | undefined;
+  /** As the room's `unavailableTitle`: the title once the index has stopped
+   * answering, in the host's words. Absent: "The index is not answering". */
+  readonly unavailableTitle?: ReactNode;
+  /** As the room's `unavailable`: the host's words under that title when the
+   * catalog itself has none. */
+  readonly unavailable?: ReactNode;
 }
 
 /** One session's transcript, read-only, at a line. */
@@ -49,7 +56,12 @@ export function TranscriptReader(props: TranscriptReaderProps) {
   );
   return (
     <RoomProvider ports={ports} options={{ storagePrefix: props.storagePrefix, storage: props.storage }}>
-      <ReaderBody at={props.at} surface={props.surface ?? "paper"} />
+      <ReaderBody
+        at={props.at}
+        surface={props.surface ?? "paper"}
+        unavailableTitle={props.unavailableTitle ?? "The index is not answering"}
+        unavailable={props.unavailable ?? null}
+      />
     </RoomProvider>
   );
 }
@@ -59,7 +71,17 @@ function focusOf(at: ReaderAddress): ThreadFocus | null {
   return timelineId === null ? null : { sessionId: at.sessionId, timelineId };
 }
 
-function ReaderBody({ at, surface }: { readonly at: ReaderAddress; readonly surface: "paper" | "host" }) {
+function ReaderBody({
+  at,
+  surface,
+  unavailableTitle,
+  unavailable,
+}: {
+  readonly at: ReaderAddress;
+  readonly surface: "paper" | "host";
+  readonly unavailableTitle: ReactNode;
+  readonly unavailable: ReactNode;
+}) {
   const { catalog, sessions, host } = useRoom();
   const { meta, status } = useMeta(catalog);
 
@@ -106,10 +128,10 @@ function ReaderBody({ at, surface }: { readonly at: ReaderAddress; readonly surf
           style={{ flex: 1 }}
           title={
             meta === null
-              ? status === "closed" ? "The index is not answering" : "Opening the session"
+              ? status === "closed" ? unavailableTitle : "Opening the session"
               : status === "live" ? "That session is not in this index" : "Opening the session"
           }
-          description={meta === null && status === "closed" ? (catalog.unavailable?.() ?? null) : null}
+          description={meta === null && status === "closed" ? (catalog.unavailable?.() ?? unavailable) : null}
         />
       ) : (
         <ReaderModeProvider value>

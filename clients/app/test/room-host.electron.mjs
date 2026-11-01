@@ -245,6 +245,18 @@ async function run() {
     await mount('disconnected');
     await until(() => document.querySelector('.ah-empty strong')?.textContent === 'rosettad is not answering', 'disconnected title');
     assert.equal(await check(() => document.querySelector('.ah-empty [data-host-words]')?.textContent), 'The index is resting.');
+    // #27: a host that names no daemon to a person titles the face itself.
+    await mount('disconnected-titled');
+    await until(() => document.querySelector('.ah-empty strong')?.textContent === "History isn't answering", 'the host\'s disconnected title');
+    assert.equal(await check(() => document.querySelector('.ah-empty [data-host-words]')?.textContent), 'VibeField is restarting it.');
+    assert.equal(await check(() => document.querySelector('.ah-frame').textContent.includes('rosettad')), false, 'no daemon named');
+    // The reader keeps its own title unless the host gives one.
+    await mount('reader-disconnected');
+    await until(() => document.querySelector('.ah-reader .ah-empty strong')?.textContent === 'The index is not answering', 'the reader\'s own title');
+    assert.equal(await check(() => document.querySelector('.ah-reader .ah-empty p').textContent), '', 'no words of the host\'s');
+    await mount('reader-disconnected-titled');
+    await until(() => document.querySelector('.ah-reader .ah-empty strong')?.textContent === "History isn't answering", 'the host\'s reader title');
+    assert.equal(await check(() => document.querySelector('.ah-reader .ah-empty [data-host-words]')?.textContent), 'VibeField is restarting it.');
 
     // Consent is the host's screen when it has one, an honest line when not.
     await mount('consent');
@@ -254,7 +266,7 @@ async function run() {
 
     writeFileSync(path.join(temporary, 'room.png'), (await win.webContents.capturePage()).toPNG());
     assert.deepEqual(errors, []);
-    console.log(`PASS: the room behind its ports on the demo set — catalog and one session open, every image through the asset source, the overlay mark, its own tokens, no host's honest faces, a host without an engine, a host's surface and container, openAt and the selection, the host's inset and feet, the guest by the room's width, the storage prefix, a fetching and a refusing source, the search option, the search key only as the host binds it (RO-14), unavailable words, consent. Screenshot: ${temporary}/room.png`);
+    console.log(`PASS: the room behind its ports on the demo set — catalog and one session open, every image through the asset source, the overlay mark, its own tokens, no host's honest faces, a host without an engine, a host's surface and container, openAt and the selection, the host's inset and feet, the guest by the room's width, the storage prefix, a fetching and a refusing source, the search option, the search key only as the host binds it (RO-14), unavailable words and the host's titles over them in the room and the reader (#27), consent. Screenshot: ${temporary}/room.png`);
   } catch (error) {
     console.error(error);
     process.exitCode = 1;
