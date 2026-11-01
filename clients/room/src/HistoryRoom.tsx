@@ -136,9 +136,17 @@ export interface HistoryRoomProps extends RoomPorts, RoomHostInputs {
   readonly search?: HistoryRoomSearch | undefined;
   /** The chart the project panel opens on. */
   readonly initialSummaryTab?: SummaryTab | undefined;
-  /** The host's words under "rosettad is not answering" when the catalog
-   * itself has none — rosetta's app says where it looked and how to start one. */
+  /** The host's words under the disconnected face's title, until a status ask
+   * fails and the catalog's own `unavailable()` (else the ask's error) takes
+   * over — rosetta's app says where it looked and how to start one. */
   readonly unavailable?: ReactNode;
+  /** The disconnected face's title once the index has stopped answering, in
+   * the host's words (VibeField: "History isn't answering"). Absent: the
+   * room's own, "rosettad is not answering". */
+  readonly unavailableTitle?: ReactNode;
+  /** The same face's title while the room is still reaching the index.
+   * Absent: the room's own, "Connecting to rosettad". */
+  readonly connectingTitle?: ReactNode;
   /** What the room shows while the index waits for consent to read anything.
    * Absent: the room says it is waiting. */
   readonly consent?: ReactNode;
@@ -251,6 +259,8 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
         surface={props.surface ?? "paper"}
         search={props.search ?? null}
         unavailable={props.unavailable ?? null}
+        unavailableTitle={props.unavailableTitle ?? "rosettad is not answering"}
+        connectingTitle={props.connectingTitle ?? "Connecting to rosettad"}
         consent={props.consent ?? null}
         emptyPrompt={props.emptyPrompt}
         onSelect={props.onSelect}
@@ -270,6 +280,8 @@ function RoomBody({
   surface,
   search: searchOption,
   unavailable,
+  unavailableTitle,
+  connectingTitle,
   consent,
   emptyPrompt,
   onSelect,
@@ -279,6 +291,8 @@ function RoomBody({
   readonly surface: "paper" | "host";
   readonly search: HistoryRoomSearch | null;
   readonly unavailable: ReactNode;
+  readonly unavailableTitle: ReactNode;
+  readonly connectingTitle: ReactNode;
   readonly consent: ReactNode;
   /** undefined: the room's own sentence. */
   readonly emptyPrompt: ReactNode;
@@ -724,11 +738,7 @@ function RoomBody({
         {disconnected && !coldStarting ? (
           <EmptyState
             style={{ flex: 1 }}
-            title={
-              metaStatus === "closed"
-                ? "rosettad is not answering"
-                : "Connecting to rosettad"
-            }
+            title={metaStatus === "closed" ? unavailableTitle : connectingTitle}
             description={connectionError ?? unavailable}
           >
             <div className="ah-meter">
