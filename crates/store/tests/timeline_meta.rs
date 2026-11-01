@@ -11,8 +11,7 @@ use rosetta_core::timeline::{
 };
 use rosetta_core::{IngestOp, ids};
 use rosetta_store::timeline_meta::{
-    TimelineMetaArtifactSource, TimelineMetaPlanSource, read, revision_plan_document,
-    timeline_plan_document,
+    TimelineMetaPlanSource, read, revision_plan_document, timeline_plan_document,
 };
 use rosetta_store::{Batch, Store};
 
@@ -58,6 +57,57 @@ fn base_batch() -> Batch {
         ],
         ..Batch::default()
     }
+}
+
+#[test]
+fn html_artifacts_retain_a_known_url_in_the_library_and_session_index() {
+    use rosetta_core::html_artifacts::{HtmlArtifactPublication, identity};
+    use rosetta_store::html_artifacts::{ArtifactListRequest, list};
+    use rosetta_store::timeline_meta::TimelineMetaArtifactSource;
+
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let url = "https://claude.ai/artifact/review";
+    let older = HtmlArtifactPublication {
+        id: identity(&["first"]),
+        artifact_id: identity(&["review"]),
+        session_id: "s1".into(),
+        timeline_id: "old-review".into(),
+        title: "Review".into(),
+        filename: "review.html".into(),
+        path: Some("/tmp/review.html".into()),
+        url: Some(url.into()),
+        native_id: Some("review".into()),
+        version: None,
+        published_at: Some(100),
+        source_offset: 100,
+    };
+    let latest = HtmlArtifactPublication {
+        id: identity(&["second"]),
+        timeline_id: "new-review".into(),
+        url: None,
+        published_at: Some(200),
+        source_offset: 200,
+        ..older.clone()
+    };
+    store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::HtmlArtifact(older),
+                IngestOp::HtmlArtifact(latest.clone()),
+            ],
+            ..Batch::default()
+        })
+        .unwrap();
+    let library = list(store.conn(), &ArtifactListRequest::default(), false).unwrap();
+    assert_eq!(library.entries.len(), 1);
+    assert_eq!(library.entries[0].publication.id, latest.id);
+    assert_eq!(library.entries[0].publication.url.as_deref(), Some(url));
+    assert_eq!(library.entries[0].presentations, 2);
+    let meta = read(store.conn(), "s1").unwrap();
+    assert!(matches!(&meta.artifacts[0].source,
+        TimelineMetaArtifactSource::HtmlPublication { publication_id, url: Some(link), .. }
+        if publication_id == &latest.id && link == url));
 }
 
 fn workflow_child(id: &str, native_id: &str) -> SessionRow {
@@ -363,18 +413,10 @@ fn one_read_builds_complete_deduplicated_work_indexes_without_bodies() {
             )
     }));
 
-    assert_eq!(meta.artifacts.len(), 1, "a repeated resource is one file");
-    assert_eq!(meta.artifacts[0].name, "report.md");
-    assert_eq!(
-        meta.artifacts[0].created_at,
-        Some(1_000),
-        "later artifact activity must not rewrite its creation time"
+    assert!(
+        meta.artifacts.is_empty(),
+        "generic file/media activity is not HTML publication"
     );
-    assert!(matches!(
-        &meta.artifacts[0].source,
-        TimelineMetaArtifactSource::TimelineFile { timeline_id, target_index: 0, .. }
-            if timeline_id == "artifact-new"
-    ));
 
     let stored_plan = revision_plan_document(store.conn(), "s1", 2)
         .unwrap()

@@ -51,6 +51,50 @@
     "truncated": false,
     "until_ms": 1791547200000
   },
+  "artifact_page": {
+    "canonical_ready": true,
+    "entries": [
+      {
+        "agent": "claude-code",
+        "asset": {
+          "byte_len": 15,
+          "digest": "b021628460d2357f190d4ac60ede1802a460d7b3c4c3273f75524ada4a737b6e",
+          "media_type": "text/html; charset=utf-8",
+          "url": "/api/assets/b021628460d2357f190d4ac60ede1802a460d7b3c4c3273f75524ada4a737b6e.html"
+        },
+        "availability": "captured",
+        "captured_at": 3700000,
+        "presentations": 2,
+        "project_id": "p1",
+        "project_name": "Rosetta",
+        "publication": {
+          "artifact_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "filename": "checkout.html",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "native_id": "review",
+          "path": "/tmp/checkout.html",
+          "published_at": 3608000,
+          "session_id": "s1",
+          "source_offset": 4096,
+          "timeline_id": "artifact-message-1",
+          "title": "Checkout design review",
+          "url": "https://claude.ai/code/artifact/review",
+          "version": "2"
+        },
+        "recovered_from": "/archive/checkout.html",
+        "session_title": "Review checkout"
+      }
+    ],
+    "next_cursor": "opaque"
+  },
+  "artifact_request": {
+    "agent": "claude-code",
+    "artifact_id": null,
+    "cursor": null,
+    "limit": 50,
+    "project": "p1",
+    "q": "checkout"
+  },
   "boost_request": {
     "session_id": "s1"
   },
@@ -205,7 +249,7 @@
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 27,
+      "protocol_version": 29,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -413,6 +457,22 @@
         "artifacts": [
           {
             "artifact_kind": "document",
+            "byte_len": 15,
+            "created_at": 3608000,
+            "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "media_type": "text/html; charset=utf-8",
+            "name": "Checkout design review",
+            "source": {
+              "availability": "captured",
+              "filename": "checkout.html",
+              "publication_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "timeline_id": "artifact-message-1",
+              "type": "html_publication",
+              "url": "https://claude.ai/code/artifact/review"
+            }
+          },
+          {
+            "artifact_kind": "document",
             "byte_len": null,
             "created_at": 3608000,
             "id": "file:/w/rosetta/report.md",
@@ -526,6 +586,22 @@
       },
       "timeline_meta": {
         "artifacts": [
+          {
+            "artifact_kind": "document",
+            "byte_len": 15,
+            "created_at": 3608000,
+            "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "media_type": "text/html; charset=utf-8",
+            "name": "Checkout design review",
+            "source": {
+              "availability": "captured",
+              "filename": "checkout.html",
+              "publication_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "timeline_id": "artifact-message-1",
+              "type": "html_publication",
+              "url": "https://claude.ai/code/artifact/review"
+            }
+          },
           {
             "artifact_kind": "document",
             "byte_len": null,
@@ -1263,7 +1339,7 @@
       }
     ]
   },
-  "protocol_version": 27,
+  "protocol_version": 29,
   "runtimes": {
     "runtimes": [
       {
@@ -1489,7 +1565,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 27,
+    "protocol_version": 29,
     "schema_version": 16,
     "search": {
       "progress": null,

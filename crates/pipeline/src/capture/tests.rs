@@ -76,6 +76,48 @@ impl Config {
 
 const SERIAL: Config = config(0, None);
 
+#[test]
+fn html_capture_survives_pooled_compression_and_streamed_source_admission() {
+    let home = TempDir::new().unwrap();
+    let root = home.path().join(".codex");
+    let source = root.join("sessions/2026/10/01/rollout-artifact.jsonl");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let page = home.path().join("review.html");
+    let html = b"<h1>Preserved pooled review</h1>";
+    std::fs::write(&page, html).unwrap();
+    let header = serde_json::json!({"timestamp":"2026-10-01T00:00:00Z","type":"session_meta","payload":{"id":"review-session","timestamp":"2026-10-01T00:00:00Z","cwd":home.path(),"originator":"codex_exec","cli_version":"0.150.1","source":"cli","model_provider":"openai"}});
+    let marker = format!(
+        "visualize{}",
+        serde_json::json!({"path":page,"title":"Pooled review"})
+    );
+    let message = serde_json::json!({"timestamp":"2026-10-01T00:00:01Z","type":"response_item","payload":{"type":"message","id":"review","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":marker}]}});
+    std::fs::write(source, format!("{header}\n{message}\n")).unwrap();
+    for mode in [SERIAL, config(2, None).zstd_frames()] {
+        let ledger = TempDir::new().unwrap();
+        let captured = capture_into(
+            &CodexAdapter,
+            home.path(),
+            &tiny_batches(1),
+            mode,
+            ledger.path(),
+        );
+        assert_eq!(captured.result, Ok(()));
+        let rows = captured
+            .canonical
+            .get("html_artifact")
+            .expect("artifact table is projected");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(
+            rows[0].contains("availability=Text(\"captured\")"),
+            "{rows:?}"
+        );
+        let entries = scan_ledger(ledger.path()).unwrap();
+        assert!(entries.entries.iter().any(
+            |entry| matches!(entry,LedgerEntry::Document {document,..} if document.bytes==html)
+        ));
+    }
+}
+
 const MATRIX: [Config; 9] = [
     SERIAL,
     config(1, None),

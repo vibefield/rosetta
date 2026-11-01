@@ -6,6 +6,9 @@
 //! the golden with `UPDATE_WIRE_GOLDEN=1 cargo test -p rosetta-protocol`.
 
 use rosetta_core::TaskStatus;
+use rosetta_core::html_artifacts::{
+    HTML_MEDIA_TYPE, HtmlArtifactAvailability, HtmlArtifactPublication,
+};
 use rosetta_core::timeline::{
     ArtifactKind, CanonicalText, CollaborationChannel, CollaborationEvent, CollaborationEventKind,
     CollaborationStatus, CorrelationDerivation, GroupDerivation, GroupKind, NativeToolRef, Notice,
@@ -29,8 +32,50 @@ use rosetta_protocol::{
     TimelineMetaArtifactSource, TimelineMetaPlan, TimelineMetaPlanSource, TimelineMetaTask,
     TimelineMetaWorkflow, TimelinePage, TokenSnapshot, UsageResponse,
 };
+use rosetta_protocol::{ArtifactEntry, ArtifactListRequest, ArtifactPage};
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
+
+fn html_artifact() -> ArtifactEntry {
+    ArtifactEntry {
+        publication: HtmlArtifactPublication {
+            id: "a".repeat(64),
+            artifact_id: "b".repeat(64),
+            session_id: "s1".into(),
+            timeline_id: "artifact-message-1".into(),
+            title: "Checkout design review".into(),
+            filename: "checkout.html".into(),
+            path: Some("/tmp/checkout.html".into()),
+            url: Some("https://claude.ai/code/artifact/review".into()),
+            native_id: Some("review".into()),
+            version: Some("2".into()),
+            published_at: Some(3_608_000),
+            source_offset: 4096,
+        },
+        availability: HtmlArtifactAvailability::Captured,
+        captured_at: Some(3_700_000),
+        recovered_from: Some("/archive/checkout.html".into()),
+        asset: Some(
+            rosetta_core::ProjectionAsset::new(HTML_MEDIA_TYPE, b"<h1>Review</h1>".to_vec())
+                .unwrap()
+                .reference(),
+        ),
+        agent: "claude-code".into(),
+        session_title: Some("Review checkout".into()),
+        project_id: Some("p1".into()),
+        project_name: Some("Rosetta".into()),
+        presentations: 2,
+    }
+}
+
+#[cfg(feature = "ts")]
+#[test]
+fn export_artifact_wire_bindings() {
+    use ts_rs::TS;
+    let config = ts_rs::Config::from_env();
+    ArtifactPage::export_all(&config).unwrap();
+    ArtifactListRequest::export_all(&config).unwrap();
+}
 
 fn runtime_row() -> RuntimeRow {
     RuntimeRow {
@@ -358,6 +403,21 @@ fn timeline_meta() -> TimelineMeta {
         ],
         artifacts: vec![
             TimelineMetaArtifact {
+                id: "a".repeat(64),
+                name: "Checkout design review".into(),
+                artifact_kind: ArtifactKind::Document,
+                created_at: Some(3_608_000),
+                byte_len: Some(15),
+                media_type: Some(HTML_MEDIA_TYPE.into()),
+                source: TimelineMetaArtifactSource::HtmlPublication {
+                    publication_id: "a".repeat(64),
+                    timeline_id: "artifact-message-1".into(),
+                    filename: "checkout.html".into(),
+                    availability: HtmlArtifactAvailability::Captured,
+                    url: Some("https://claude.ai/code/artifact/review".into()),
+                },
+            },
+            TimelineMetaArtifact {
                 id: "file:/w/rosetta/report.md".into(),
                 name: "report.md".into(),
                 artifact_kind: ArtifactKind::Document,
@@ -594,6 +654,11 @@ fn exemplars() -> serde_json::Value {
         "projects": ProjectsResponse { projects: vec![project_row()] },
         "sessions": SessionsResponse { sessions: vec![session_row()] },
         "session": SessionResponse { session: session_row() },
+        "artifact_request": ArtifactListRequest {
+            q: Some("checkout".into()), agent: Some("claude-code".into()), project: Some("p1".into()),
+            artifact_id: None, cursor: None, limit: Some(50),
+        },
+        "artifact_page": ArtifactPage { entries: vec![html_artifact()], next_cursor: Some("opaque".into()), canonical_ready: true },
         "timeline_page": TimelinePage {
             watermark: "1.2.3".into(),
             entries: vec![timeline_entry(), collaboration_entry()],

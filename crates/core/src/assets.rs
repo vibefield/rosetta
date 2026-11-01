@@ -123,6 +123,7 @@ fn extension(media_type: &str) -> Option<&'static str> {
         "application/pdf" => Some("pdf"),
         "application/vnd.rosetta.canonical-document+json" => Some("json"),
         "text/plain; charset=utf-8" => Some("txt"),
+        "text/html; charset=utf-8" => Some("html"),
         _ => None,
     }
 }

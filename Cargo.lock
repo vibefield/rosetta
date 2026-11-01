@@ -1201,6 +1201,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulldown-cmark"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
+dependencies = [
+ "bitflags",
+ "memchr",
+ "unicase",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1328,6 +1339,7 @@ name = "rosetta-adapter-claude-code"
 version = "0.1.2"
 dependencies = [
  "base64",
+ "blake3",
  "rosetta-adapter-support",
  "rosetta-core",
  "serde",
@@ -1426,6 +1438,8 @@ version = "0.1.2"
 dependencies = [
  "base64",
  "blake3",
+ "percent-encoding",
+ "pulldown-cmark",
  "rosetta-core",
  "rosetta-media",
  "serde",
@@ -1486,6 +1500,9 @@ name = "rosetta-pipeline"
 version = "0.1.2"
 dependencies = [
  "blake3",
+ "libc",
+ "percent-encoding",
+ "pulldown-cmark",
  "rosetta-adapter-antigravity",
  "rosetta-adapter-claude-code",
  "rosetta-adapter-codex",
@@ -2276,6 +2293,12 @@ dependencies = [
  "quote",
  "syn 3.0.4",
 ]
+
+[[package]]
+name = "unicase"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
 
 [[package]]
 name = "unicode-ident"

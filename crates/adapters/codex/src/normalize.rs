@@ -91,7 +91,7 @@ pub struct CodexState {
     header_seen: bool,
     /// Current execution cwd used only to resolve relative tool arguments.
     /// The canonical session cwd is selected independently during meta ingest.
-    tool_cwd: Option<String>,
+    pub(crate) tool_cwd: Option<String>,
     pub(crate) model: Option<String>,
     effort: Option<String>,
     /// The latest surviving assistant row created since the previous token
@@ -408,7 +408,17 @@ fn response_item(
             }
             if kind == MessageKind::Agent {
                 stamp_model(&mut row, state);
+                let artifacts = if item
+                    .phase
+                    .as_deref()
+                    .is_none_or(|phase| phase == "final_answer")
+                {
+                    crate::html_artifacts::presented(ctx, &row, state.tool_cwd.as_deref())
+                } else {
+                    Vec::new()
+                };
                 push_response(state, row, ops);
+                ops.extend(artifacts);
             } else {
                 IngestOp::push_message(ops, row);
             }
@@ -429,7 +439,17 @@ fn response_item(
             row.subtype = Some("agent_message".to_owned());
             row.content = block_text(item.content.as_deref());
             stamp_model(&mut row, state);
+            let artifacts = if item
+                .phase
+                .as_deref()
+                .is_none_or(|phase| phase == "final_answer")
+            {
+                crate::html_artifacts::presented(ctx, &row, state.tool_cwd.as_deref())
+            } else {
+                Vec::new()
+            };
             push_response(state, row, ops);
+            ops.extend(artifacts);
             LineStatus::Parsed
         }
         "function_call" | "custom_tool_call" => {

@@ -786,6 +786,7 @@ fn cursor_has_projection(tx: &Transaction, cursor_id: i64) -> Result<bool, Store
                EXISTS(SELECT 1 FROM session_usage WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session_usage_total WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM workflow_run WHERE src_cursor = ?1 LIMIT 1) OR
+               EXISTS(SELECT 1 FROM html_artifact WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM workflow_journal WHERE src_cursor = ?1 LIMIT 1) OR
                EXISTS(SELECT 1 FROM session       WHERE title_src_cursor = ?1 LIMIT 1)",
         )?
@@ -840,6 +841,7 @@ fn remove_cursor_projection(
         "DELETE FROM git_commit WHERE src_cursor = ?1",
         "DELETE FROM task WHERE src_cursor = ?1",
         "DELETE FROM plan WHERE src_cursor = ?1",
+        "DELETE FROM html_artifact WHERE src_cursor = ?1",
         "DELETE FROM session_usage WHERE src_cursor = ?1",
         "DELETE FROM session_usage_total WHERE src_cursor = ?1",
         "DELETE FROM workflow_journal WHERE src_cursor = ?1",
@@ -1274,6 +1276,8 @@ fn timeline_meta_session(op: &IngestOp) -> Option<&str> {
     match op {
         IngestOp::Task(row) => Some(&row.session_id),
         IngestOp::Plan(row) => Some(&row.session_id),
+        IngestOp::HtmlArtifact(row) => Some(&row.session_id),
+        IngestOp::HtmlArtifactContent(row) => Some(&row.session_id),
         IngestOp::WorkflowRun { session_id, .. } | IngestOp::WorkflowJournal { session_id, .. } => {
             Some(session_id)
         }
@@ -1317,6 +1321,12 @@ fn apply_op(
     }
     match op {
         IngestOp::ProjectionAsset { .. } => {}
+        IngestOp::HtmlArtifact(row) => {
+            crate::html_artifacts::apply_publication(tx, row, src_cursor)?
+        }
+        IngestOp::HtmlArtifactContent(row) => {
+            crate::html_artifacts::apply_content(tx, row, src_cursor)?
+        }
         IngestOp::Runtime(row) => profile_other(stats, || apply_runtime(tx, row))?,
         IngestOp::Project(row) => profile_other(stats, || apply_project(tx, row))?,
         IngestOp::SessionMeta(row) => profile_other(stats, || apply_session(tx, row))?,

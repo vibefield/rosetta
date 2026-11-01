@@ -8,8 +8,9 @@ use std::io::{ErrorKind, Read};
 use std::path::Path;
 
 use super::{
-    CHECKSUM_BYTES, LedgerEntry, MAX_FRAME_BYTES, SourceDef, TAG_DEFINE, TAG_GENERATION_COMPLETE,
-    TAG_META, TAG_META_VERSIONED, TAG_RAW, TAG_RAW_BATCH, segment_files,
+    CHECKSUM_BYTES, CapturedDocument, LedgerEntry, MAX_FRAME_BYTES, SourceDef, TAG_DEFINE,
+    TAG_DOCUMENT, TAG_GENERATION_COMPLETE, TAG_META, TAG_META_VERSIONED, TAG_RAW, TAG_RAW_BATCH,
+    segment_files,
 };
 use crate::segment::SegmentReader;
 use crate::{CaptureError, io_error};
@@ -226,7 +227,7 @@ where
                 };
                 defined.insert(id, source);
             }
-            TAG_RAW => {
+            TAG_RAW | TAG_DOCUMENT => {
                 if body_len < 20 {
                     return Ok(false);
                 }
@@ -237,12 +238,24 @@ where
                     // A raw record before its define: not a valid segment.
                     return Ok(false);
                 };
-                visitor(LedgerEntry::Raw {
-                    source: source.clone(),
-                    generation,
-                    start_offset,
-                    payload: body[20..].to_vec(),
-                })?;
+                if tag == TAG_DOCUMENT {
+                    let Some(document) = CapturedDocument::decode(&body[20..]) else {
+                        return Ok(false);
+                    };
+                    visitor(LedgerEntry::Document {
+                        source: source.clone(),
+                        generation,
+                        start_offset,
+                        document,
+                    })?;
+                } else {
+                    visitor(LedgerEntry::Raw {
+                        source: source.clone(),
+                        generation,
+                        start_offset,
+                        payload: body[20..].to_vec(),
+                    })?;
+                }
             }
             TAG_RAW_BATCH => {
                 if body_len < 16 {

@@ -23,11 +23,12 @@ const EXTENSION_BY_MEDIA_TYPE: ReadonlyMap<string, string> = new Map([
   ["application/json", "json"],
   ["text/markdown", "md"],
   ["text/plain", "txt"],
+  ["text/html", "html"],
 ]);
 
 function nameWithType(name: string, mediaType: string | null): string {
   if (resolveKind(name).viewer.id !== "binary" || mediaType === null) return name;
-  const extension = EXTENSION_BY_MEDIA_TYPE.get(mediaType.toLowerCase());
+  const extension = EXTENSION_BY_MEDIA_TYPE.get(mediaType.toLowerCase().split(";")[0]!.trim());
   return extension === undefined ? name : `${name}.${extension}`;
 }
 
@@ -61,6 +62,14 @@ export async function handleForTimelineMetaArtifact(
   artifact: TimelineMetaArtifact,
 ): Promise<FileHandle> {
   const source = artifact.source;
+  if (source.type === "html_publication") {
+    if (source.availability !== "captured") throw new Error("This artifact's HTML was not captured. Its publication remains in the session.");
+    const bytes = await sessions.run(sessionId, (client) => {
+      if (!client.readArtifact) throw new Error("This host cannot read captured artifacts");
+      return client.readArtifact(sessionId, source.publication_id);
+    });
+    return handle(`html-artifact:${source.publication_id}`, source.filename, null, bytes);
+  }
   if (source.type === "timeline_file") {
     const bytes = await sessions.run(sessionId, (client) => client.readFileTarget(
       sessionId,
@@ -69,7 +78,7 @@ export async function handleForTimelineMetaArtifact(
     ));
     return handle(
       `timeline-meta:artifact:${sessionId}:${artifact.id}`,
-      nameWithType(artifact.name, artifact.media_type),
+      source.path.split(/[\\/]/).at(-1) || nameWithType(artifact.name, artifact.media_type),
       source.path,
       bytes,
     );

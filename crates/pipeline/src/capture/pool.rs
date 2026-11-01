@@ -147,7 +147,20 @@ impl Event {
                 .frames
                 .as_ref()
                 .map_or(0, PrebuiltFrames::held_bytes)
-                .saturating_add(output.deltas.payload_bytes),
+                .saturating_add(output.deltas.payload_bytes)
+                .saturating_add(
+                    output
+                        .batch
+                        .ops
+                        .iter()
+                        .filter_map(|op| match op {
+                            rosetta_core::IngestOp::ProjectionAsset { asset } => {
+                                Some(asset.materialized_byte_len() as u64)
+                            }
+                            _ => None,
+                        })
+                        .sum::<u64>(),
+                ),
             Self::Finished { .. } | Self::Failed(_) => 0,
         }
     }
@@ -848,6 +861,9 @@ fn compressor_at(
 fn frame(key: u32, raw: RawOut, normalizer_version: u32) -> Result<PrebuiltFrames, PipelineError> {
     let mut frames = PrebuiltFrames::new(key, raw.generation);
     frames.push_records(raw.records)?;
+    for (offset, document) in raw.documents {
+        frames.push_document(offset, &document)?;
+    }
     if let Some(clean) = raw.seal {
         frames.push_seal(normalizer_version, clean);
     }

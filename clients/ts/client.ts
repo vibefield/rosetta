@@ -16,6 +16,8 @@ import type { IngestionControlRequest } from "./generated/IngestionControlReques
 import type { ApiError } from "./generated/ApiError";
 import type { ImageVariant } from "./generated/ImageVariant";
 import type { AssetRef } from "./generated/AssetRef";
+import type { ArtifactListRequest } from "./generated/ArtifactListRequest";
+import type { ArtifactPage } from "./generated/ArtifactPage";
 import type { BoostResponse } from "./generated/BoostResponse";
 import type { ContributionResponse } from "./generated/ContributionResponse";
 import type { CommandResponse } from "./generated/CommandResponse";
@@ -556,6 +558,19 @@ export class RosettaClient {
         ? `/api/sessions/${encodeURIComponent(sessionId)}/plans/revisions/${source.revision}`
         : `/api/sessions/${encodeURIComponent(sessionId)}/timeline/${encodeURIComponent(source.timeline_id)}/plan`;
     const response = await this.response(path, withSignal(signal));
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  artifacts(request: ArtifactListRequest, signal?: AbortSignal): Promise<ArtifactPage> {
+    return this.request(`/api/artifacts${queryString({ ...request })}`, withSignal(signal));
+  }
+
+  /** Exact captured bytes, authorized through the publication's session. */
+  async readArtifact(sessionId: string, publicationId: string, signal?: AbortSignal): Promise<Uint8Array> {
+    const response = await this.response(
+      `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(publicationId)}/content`,
+      withSignal(signal),
+    );
     return new Uint8Array(await response.arrayBuffer());
   }
 

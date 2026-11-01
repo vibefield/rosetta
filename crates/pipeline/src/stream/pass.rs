@@ -50,6 +50,7 @@ pub(crate) struct PassOutput {
 pub(crate) struct RawOut {
     pub(crate) generation: u64,
     pub(crate) records: Vec<(u64, Vec<u8>)>,
+    pub(crate) documents: Vec<(u64, rosetta_capture::CapturedDocument)>,
     /// `Some(generation_clean)` when this batch completes a raw-complete
     /// generation that is not already active.
     pub(crate) seal: Option<bool>,
@@ -414,6 +415,7 @@ impl IngestPass {
         }
 
         let mut ops: Vec<IngestOp> = Vec::with_capacity(batch.items.len());
+        let mut documents = Vec::new();
         for item in &batch.items {
             opts.check_cancelled()?;
             match item {
@@ -445,7 +447,7 @@ impl IngestPass {
                     }
                     self.ctx.src_offset = Some(record.start_offset as i64);
                     self.ctx.source_generation = self.source_generation;
-                    let outcome = instrument.time(Metric::NormalizeNanos, || {
+                    let mut outcome = instrument.time(Metric::NormalizeNanos, || {
                         adapter
                             .ingest_line(&mut self.ctx, &file.stream_id, &record.payload)
                             .into_projection()
@@ -471,6 +473,17 @@ impl IngestPass {
                         &record.payload,
                         &outcome,
                     );
+                    if !file.ledger_only {
+                        documents.extend(crate::html_artifacts::capture(
+                            &mut outcome.ops,
+                            self.ledgered_through,
+                            adapter,
+                            &self.ctx,
+                            &runtime.data_root,
+                            Some(&self.path),
+                            &opts.artifact_recovery,
+                        ));
+                    }
                     ops.extend(outcome.ops);
                 }
                 TailItem::Oversized { start_offset, .. } => {
@@ -606,6 +619,7 @@ impl IngestPass {
             raw: RawOut {
                 generation: self.source_generation,
                 records,
+                documents,
                 seal,
             },
             batch: write,
@@ -720,6 +734,7 @@ impl IngestPass {
             raw: RawOut {
                 generation: self.source_generation,
                 records: Vec::new(),
+                documents: Vec::new(),
                 seal: self
                     .generation_raw_complete
                     .then_some(self.generation_clean),

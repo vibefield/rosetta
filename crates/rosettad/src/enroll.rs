@@ -223,7 +223,15 @@ impl Enrollment {
     }
 
     pub fn ingest_options(enrollment: Option<&Self>) -> IngestOptions {
+        let mut artifact_recovery = rosetta_pipeline::ArtifactRecovery::default();
+        if let Some(roots) = std::env::var_os("ROSETTA_ARTIFACT_ROOTS") {
+            artifact_recovery.search_roots = std::env::split_paths(&roots)
+                .filter(|p| p.is_absolute())
+                .take(16)
+                .collect();
+        }
         IngestOptions {
+            artifact_recovery,
             exclude_cwds: enrollment
                 .map(|file| file.exclude_cwds.clone())
                 .unwrap_or_default(),

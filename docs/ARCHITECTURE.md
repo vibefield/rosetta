@@ -2555,3 +2555,125 @@ layer's design is frozen.
 | Aggregate samples on tiered models | a counted aggregate is estimated as equal requests at its average prompt (2026-09-23); an uncounted one prices only when its prompt tokens cannot have crossed a tier start, otherwise it is unpriced (2026-09-22) | a producer starts reporting per-request usage, or an uncounted producer exposes a count |
 | Residency and regional premiums | a `route` qualifier prices only through a cited overlay premium; otherwise the record is unpriced (2026-09-22) | such routes appear in real data |
 | Rediscover without restart | roll-call discovery runs once at start; a kind installed later is seen on the next start (2026-09-12) | the app wants a "rescan" affordance, or the supervisor needs to enroll into a running daemon |
+
+## HTML review artifacts (2026-10-30)
+
+An artifact is an HTML review/design deliverable explicitly presented by an
+agent. Creating, editing, or reading an HTML source file is not sufficient.
+Media attachments keep their existing ingestion and presentation path.
+
+
+1. Adapters emit typed HTML publication facts with their exact session and
+   transcript anchor. Native artifact identity/version are retained when
+   actually recorded; a path-derived identity is session-scoped.
+2. Publication rows are canonical user-facing records, not a normalized
+   reconciliation journal. They follow their source generation's ordinary
+   activation, replacement, exclusion, and deletion rules.
+3. Capture snapshots only explicitly presented HTML, from its recorded path
+   or an identified recovery source, with bounded, stable regular-file reads.
+   Filename equality alone never establishes identity. The raw ledger retains these bytes and their
+   source coordinates before a projection can expose them. Rebuild never
+   reads today's filesystem to invent historical content.
+4. Snapshot observation time is distinct from publication time. Importing an
+   old transcript can capture today's available file, but cannot claim those
+   bytes are the original published revision. Missing, changed, oversized,
+   or unsupported content must be represented honestly.
+5. Captured HTML is a content-addressed canonical member. Open it through an
+   isolated preview, without the app's privileged bridge, alongside source
+   and session navigation. Do not execute artifact markup in the host DOM.
+6. The global query is bounded and paginated, honors session admission and
+   authorization, and includes the source session/agent/project information.
+   Repeated publications retain revision history while the list shows the
+   current entry for an artifact identity.
+
+Recognition is deliberately evidence-based. Claude Code emits a publication
+after a successful `Artifact` publish or `SendUserFile` result, and for explicit
+local HTML links in authored assistant text. Native publish correlation survives
+adapter checkpoints. `Artifact` read/list/watch/quickstart actions and failed
+results are excluded. Direct `file_path`/`path` inputs and a files map with one
+HTML `from` source are supported. A single inline HTML member is preserved
+directly from the native request after publication succeeds; string values are
+content, never paths to read. Inline content has no invented file-observation
+timestamp and rebuilds from the original transcript records. Multi-page bundles
+are not yet projected. Codex recognizes its exact `visualize` content reference and explicit
+local HTML Markdown links in final assistant messages (including older records
+without a phase). CommonMark parsing excludes code, quoted examples, images,
+remote URLs and links with source-line anchors. Ordinary file tools do not
+create library entries. These recognition rules currently cover Claude Code
+and Codex; other adapters keep their existing media behavior.
+
+The capture layer writes a `Document` ledger frame (tag 7) containing the
+original bytes, status, observation time and source offset before checkpointing
+or sealing the source. Plain, compressed, synchronous, asynchronous and pooled
+capture use the same record. Adapters remain pure. A read is limited to a stable
+regular file of at most 16 MiB, accepts UTF-8 or BOM-marked UTF-16LE, and rejects
+symlink files and network locators. UTF-16LE is converted to UTF-8 only in the
+disposable projection; the ledger preserves the source encoding. Projection
+assets participate in the streamed queue's byte budget. Source-generation
+election controls both publications and observations during replay.
+
+Schema 29 keeps source-owned `html_artifact` rows and adds `recovered_from`,
+the selected copy's location, without storing candidate lists. The `HtmlArtifact` and
+`HtmlArtifactContent` ingest facts project publication and observation data;
+there is no additional durable normalized-op journal. Normalizer versions are
+Claude Code 38 and Codex 21. Existing databases require the usual schema rebuild.
+Replaying an older ledger preserves embedded HTML and discovers file-based
+presentation metadata, but leaves file content `not_captured` when there is no
+document frame, even if the file exists today.
+A fresh source capture can observe a still-existing file; its capture timestamp
+is shown separately and does not establish the original historical revision.
+Missing, oversized, unsupported and changed-during-read observations are retained.
+
+When the original file is missing, capture can recover a copy through:
+
+- Claude's recorded successful `Write` source: only its raw-record offset and
+  checksum survive the adapter checkpoint. Capture re-reads that bounded record,
+  verifies its checksum, and uses the same Rust parser to extract the HTML.
+- Claude's exact `file-history-snapshot` / `file-history-delta` path-to-backup
+  mapping, resolved under the enrolled data root and native session.
+- The original repository-relative path in linked worktrees or Git history.
+- A Markdown archive entry associating one local HTML link with the recorded
+  publication URL. Claude supplies the older UUID URL alias when a short URL
+  was recorded. Bounded Git history of those manifests preserves associations
+  lost during republication, paired with the HTML from that same commit.
+
+Copies with conflicting contents under an archive/worktree association are left
+unresolved. Recovery never selects a file merely because its filename or title
+matches. Recovery is a copy observation, not proof of the exact published revision;
+the UI labels it accordingly. Selected bytes and `recovered_from` are ledgered in
+the owning source generation, and replay makes no filesystem or network probes.
+Legacy three-field document metadata remains readable and retains its encoding.
+
+Discovery uses the recorded workspace and linked checkouts. Extra archive folders,
+including SSD folders, can be supplied in `ROSETTA_ARTIFACT_ROOTS` (an OS path list;
+colon-separated on macOS/Linux) when starting the daemon/app. The shared RAM index
+is bounded to 16 roots per lookup, 20,000 entries / depth 12 / 128 Markdown documents
+per root, 512 KiB per manifest, and four manifest histories of four commits each.
+Git subprocesses have bounded output and a 750 ms timeout; dependency and build
+directories are skipped. Indexes expire after five minutes and never become a
+second durable catalog. This is bounded recovery, not a whole-disk search. A
+fresh native-source capture can add recovery evidence; a ledger-only rebuild
+cannot recover bytes that were never captured.
+
+Protocol 29 exposes this recovery provenance and the publication URL in session
+artifact metadata. `GET /api/artifacts` has text, agent, project and artifact
+identity filters. It returns the latest presentation per identity by default;
+an identity filter returns presentation history. Keyset pagination is bounded
+to 100 entries and cursors bind the query, projection epoch and revision. A
+changed projection expires the cursor. Results include agent, project, source
+session, transcript anchor and capture availability, and honor pending-source
+admission. A session read grant cannot enumerate the global library.
+
+`GET /api/sessions/{id}/artifacts/{publication_id}/content` checks the owning
+session and serves only captured, size- and digest-verified bytes as an inert
+attachment. Session grants may read their own publications. Generic asset URLs
+do not serve HTML.
+
+Later deliveries retain the known native artifact identity and published URL;
+queries can fill a missing URL from another admitted presentation of that same
+identity, never by matching a title or basename.
+
+Hermetic tests cover recognition and exclusions, native checkpoint correlation,
+source replacement, missing content, UTF-16 conversion, compressed/pooled raw
+capture, replay after deleting source and projected assets, old-ledger behavior,
+filters/cursor expiry, HTTP/session authorization and the generated wire contract.

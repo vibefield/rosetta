@@ -11,6 +11,7 @@
 
 pub mod assets;
 pub mod fold;
+pub mod html_artifacts;
 pub mod ids;
 pub mod ops;
 pub mod rows;

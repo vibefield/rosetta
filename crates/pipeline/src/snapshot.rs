@@ -404,7 +404,35 @@ pub(crate) fn apply_snapshot_records(
                 instrument.add(Metric::LinesHardError, 1);
             }
         }
-        ops.extend(outcome.ops);
+        let mut record_ops = outcome.ops;
+        if !file.ledger_only {
+            let documents = crate::html_artifacts::capture(
+                &mut record_ops,
+                0,
+                adapter,
+                &ctx,
+                &runtime.data_root,
+                None,
+                &opts.artifact_recovery,
+            );
+            if !documents.is_empty()
+                && let Some(raw_ledger) = ledger.as_deref_mut()
+            {
+                let source = rosetta_capture::SourceDef {
+                    ledger_only: file.ledger_only,
+                    relative_path: file.relative_path.clone(),
+                    stream_id: file.stream_id.clone(),
+                    session_id: file.session_id.clone(),
+                    native_session_id: file.native_session_id.clone(),
+                    agent_version: file.agent_version.clone(),
+                };
+                for (offset, document) in documents {
+                    raw_ledger.append_document(&source, generation, offset, document)?;
+                }
+                raw_ledger.checkpoint()?;
+            }
+        }
+        ops.extend(record_ops);
 
         let last = index + 1 == records.len();
         if !last && ops.len() < CHUNK_OPS {

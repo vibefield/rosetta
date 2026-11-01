@@ -4,6 +4,8 @@
 // hands it adapters over its own daemon's doors. The room never knows which.
 import type {
   AssetRef,
+  ArtifactListRequest,
+  ArtifactPage,
   CollaborationSubscriptionHandlers,
   CommandResponse,
   DayUsageResponse,
@@ -91,6 +93,12 @@ export interface CatalogPort {
   /** One day of that project, hour by hour. */
   dayUsage(projectId: string, day: string, offsetMinutes: number, signal?: AbortSignal): Promise<DayUsageResponse>;
   search(request: CatalogSearch, signal?: AbortSignal): Promise<SearchResponse>;
+  /** Explicitly presented HTML deliverables across the index. Optional for
+   * hosts that expose only a session or use an older catalog. */
+  readonly artifacts?: {
+    list(request: ArtifactListRequest, signal?: AbortSignal): Promise<ArtifactPage>;
+    read(sessionId: string, publicationId: string, signal?: AbortSignal): Promise<Uint8Array>;
+  };
   /** Advisory: read this still-queued session next. Optional — a grant never
    * opens a write, so only a host that holds the daemon's bearer offers it;
    * without it the index keeps its own order. */
@@ -131,6 +139,7 @@ export interface SessionClient {
     signal?: AbortSignal,
   ): Promise<Uint8Array>;
   readPlan(sessionId: string, source: TimelineMetaPlanSource, signal?: AbortSignal): Promise<Uint8Array>;
+  readArtifact?(sessionId: string, publicationId: string, signal?: AbortSignal): Promise<Uint8Array>;
   readTextAsset(asset: AssetRef, signal?: AbortSignal): Promise<string>;
   readAsset(asset: AssetRef, signal?: AbortSignal): Promise<Uint8Array>;
 }

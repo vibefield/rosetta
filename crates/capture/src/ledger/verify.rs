@@ -13,7 +13,7 @@
 //! Metadata entries carry run-dependent values (a runtime row's discovery
 //! time, for one), so two builds of the same inputs never share an entry
 //! digest. The same encoding is therefore also split in two: a source digest
-//! over the raw and seal entries alone — the captured content, which two
+//! over the raw, document and seal entries — the captured content, which two
 //! builds of read-only inputs must reproduce — and a meta digest over the
 //! metadata entries alone.
 
@@ -29,6 +29,7 @@ use super::{FramePrefix, LedgerEntry, SourceDef, frame_prefix, scan_segment, seg
 const ENTRY_RAW: u8 = 1;
 const ENTRY_SEAL: u8 = 2;
 const ENTRY_META: u8 = 3;
+const ENTRY_DOCUMENT: u8 = 4;
 
 /// What one segment decodes to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +57,8 @@ pub struct EntryTally {
     pub entries: u64,
     pub raw_records: u64,
     pub raw_payload_bytes: u64,
+    pub documents: u64,
+    pub document_bytes: u64,
     pub seals: u64,
     pub metas: u64,
 }
@@ -66,7 +69,8 @@ pub struct LedgerVerify {
     pub segments: Vec<SegmentVerify>,
     pub tally: EntryTally,
     pub entry_digest: blake3::Hash,
-    /// The entry encoding of the raw and seal entries alone.
+    /// Source content (raw records, document observations, seals). Document
+    /// observation timestamps are excluded so stable inputs compare across captures.
     pub source_digest: blake3::Hash,
     /// The entry encoding of the metadata entries alone.
     pub meta_digest: blake3::Hash,
@@ -129,6 +133,28 @@ impl EntryDigest {
                 self.put(false, &generation.to_be_bytes());
                 self.put(false, &start_offset.to_be_bytes());
                 self.bytes(false, payload);
+            }
+            LedgerEntry::Document {
+                source,
+                generation,
+                start_offset,
+                document,
+            } => {
+                self.tally.documents += 1;
+                self.tally.document_bytes += document.bytes.len() as u64;
+                self.put(false, &[ENTRY_DOCUMENT]);
+                self.source(source);
+                self.put(false, &generation.to_be_bytes());
+                self.put(false, &start_offset.to_be_bytes());
+                self.bytes(false, document.path.as_bytes());
+                self.all.update(&document.captured_at.to_be_bytes());
+                self.bytes(
+                    false,
+                    serde_json::to_string(&document.status)
+                        .expect("enum")
+                        .as_bytes(),
+                );
+                self.bytes(false, &document.bytes);
             }
             LedgerEntry::GenerationComplete {
                 source,

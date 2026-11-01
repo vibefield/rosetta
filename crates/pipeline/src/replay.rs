@@ -665,7 +665,7 @@ pub fn rebuild_runtime_with_options(
                         *slot = (generation, source);
                     }
                 }
-                LedgerEntry::Meta { .. } => {}
+                LedgerEntry::Meta { .. } | LedgerEntry::Document { .. } => {}
             }
             Ok(())
         })?;
@@ -901,6 +901,28 @@ pub fn rebuild_runtime_with_options(
                         &mut report,
                         instrument,
                     )?;
+                }
+            }
+            LedgerEntry::Document {
+                mut source,
+                generation,
+                start_offset,
+                document,
+            } => {
+                admission.project_source(&mut source);
+                if !source.ledger_only
+                    && surviving
+                        .get(&source.relative_path)
+                        .is_some_and(|(elected, _)| generation == *elected)
+                    && !already_projected.contains(&source.relative_path)
+                    && let Some(file) = files.get_mut(&source.relative_path)
+                {
+                    crate::html_artifacts::project(
+                        &source.session_id,
+                        start_offset,
+                        &document,
+                        &mut file.ops,
+                    );
                 }
             }
             LedgerEntry::GenerationComplete {
@@ -1194,6 +1216,27 @@ pub fn prepare_runtime(
                     }
                 }
                 file.ops.extend(outcome.ops);
+            }
+            LedgerEntry::Document {
+                mut source,
+                generation,
+                start_offset,
+                document,
+            } => {
+                election.admission.project_source(&mut source);
+                if !source.ledger_only
+                    && surviving
+                        .get(&source.relative_path)
+                        .is_some_and(|(elected, _)| generation == *elected)
+                    && let Some(file) = files.get_mut(&source.relative_path)
+                {
+                    crate::html_artifacts::project(
+                        &source.session_id,
+                        start_offset,
+                        &document,
+                        &mut file.ops,
+                    );
+                }
             }
             LedgerEntry::GenerationComplete {
                 mut source,

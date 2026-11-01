@@ -30,12 +30,14 @@ use crate::segment::{MAGIC_LEN, SegmentCodec, SegmentWriter};
 use crate::segment_index::{self, IndexedSource, SegmentIndexLine};
 use crate::{CaptureError, io_error};
 
+mod document;
 mod frames;
 mod raw;
 mod read;
 mod verify;
 mod worker;
 
+pub use document::{CapturedDocument, DocumentCaptureStatus};
 pub use frames::PrebuiltFrames;
 use frames::{frame_checksum, frame_head, seal_body};
 #[cfg(test)]
@@ -57,6 +59,7 @@ const TAG_META_VERSIONED: u8 = 5;
 /// retain `TAG_RAW` support forever; new writers amortize framing and syscalls
 /// across the capture batch they already received.
 const TAG_RAW_BATCH: u8 = 6;
+const TAG_DOCUMENT: u8 = 7;
 const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
 /// The largest raw record one `TAG_RAW` frame holds, and so the largest the
 /// ledger keeps whole: the tailer's default capture limit.
@@ -90,6 +93,14 @@ impl SourceDef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LedgerEntry {
+    /// Exact bytes (or a failed observation) of a document explicitly named
+    /// by the raw record at this source coordinate. Never a normalized op.
+    Document {
+        source: SourceDef,
+        generation: u64,
+        start_offset: u64,
+        document: CapturedDocument,
+    },
     /// One raw source record, exactly as framed from the agent's file.
     Raw {
         source: SourceDef,

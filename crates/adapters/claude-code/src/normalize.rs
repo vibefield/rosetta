@@ -61,6 +61,12 @@ const INVALID_JSON: &str = "<invalid-json>";
 /// Adapter-private per-file response-fold state.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ClaudeCodeState {
+    #[serde(default)]
+    pub(crate) html_recovery: crate::html_recovery::RecoveryState,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    html_publications: BTreeMap<String, crate::html_artifacts::PendingPublication>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    published_html: BTreeMap<String, crate::html_artifacts::PublishedIdentity>,
     /// `cost-state` has no timestamp. Attribute its otherwise undated
     /// correction to the latest preceding timestamp, including on resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -536,9 +542,25 @@ pub fn ingest(ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutco
     }
 
     match parse_line(text) {
-        Ok(ParsedLine::Known(record)) => normalize(ctx, stream_id, &record),
+        Ok(ParsedLine::Known(record)) => {
+            if let Some(state) = ctx
+                .state
+                .as_deref_mut()
+                .and_then(|s| s.downcast_mut::<ClaudeCodeState>())
+            {
+                state.html_recovery.record(&record, ctx.src_offset, line);
+            }
+            normalize(ctx, stream_id, &record)
+        }
         Ok(ParsedLine::UnknownType { rtype, value }) => {
             let kind = rtype.as_deref().unwrap_or(NO_TYPE);
+            if let Some(state) = ctx
+                .state
+                .as_deref_mut()
+                .and_then(|s| s.downcast_mut::<ClaudeCodeState>())
+            {
+                state.html_recovery.history(kind, &value);
+            }
             // A type the canonical declares is handled — we simply project
             // nothing from it. Only an UNDECLARED type is drift, otherwise the
             // most common record in the corpus (`attachment`) would raise the
@@ -986,6 +1008,24 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                     state.web_calls.insert(id.clone(), tool.action.clone());
                 }
                 row.tool = Some(tool);
+                if let Some(publication) = crate::html_artifacts::request(
+                    emit.ctx,
+                    &row.timeline_id,
+                    name,
+                    input,
+                    &line.cwd,
+                    ts,
+                ) && let Some(state) = emit
+                    .ctx
+                    .state
+                    .as_mut()
+                    .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+                {
+                    if state.html_publications.len() >= 256 {
+                        state.html_publications.pop_first();
+                    }
+                    state.html_publications.insert(id.clone(), publication);
+                }
                 // A native name is not enough to establish canonical
                 // delegation. In particular, an unpinned writer is projected
                 // as Unknown; remembering that opener as a delegate would make
@@ -1086,7 +1126,36 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
     let mut dropped_owner = false;
     for (row, edit) in rows {
         let timeline_id = row.timeline_id.clone();
+        let mut artifacts = if row.kind == MessageKind::Agent {
+            rosetta_adapter_support::html_artifacts::presented_links(
+                emit.ctx,
+                &row,
+                Some(&line.cwd),
+            )
+        } else {
+            Vec::new()
+        };
+        if let Some(state) = emit
+            .ctx
+            .state
+            .as_ref()
+            .and_then(|state| state.downcast_ref::<ClaudeCodeState>())
+        {
+            for op in &mut artifacts {
+                if let IngestOp::HtmlArtifact(row) = op
+                    && let Some(identity) = row
+                        .path
+                        .as_ref()
+                        .and_then(|path| state.published_html.get(path))
+                {
+                    identity.apply(row);
+                }
+            }
+        }
         let survived = emit.push_row(row);
+        if survived {
+            emit.ops.extend(artifacts);
+        }
         if !survived
             && plan
                 .as_ref()
@@ -2049,6 +2118,51 @@ impl<'a> Emit<'a> {
             result.is_error
         };
         let failed = effective_error == Some(true);
+        let publication = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .and_then(|state| state.html_publications.remove(result.tool_use_id));
+        if let Some(publication) = publication {
+            let mut publications = crate::html_artifacts::confirmed(
+                self.ctx,
+                publication,
+                single_result.then_some(result.tool_use_result).flatten(),
+                failed,
+                at,
+            );
+            if let Some(state) = self
+                .ctx
+                .state
+                .as_mut()
+                .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            {
+                for op in &mut publications {
+                    if let IngestOp::HtmlArtifact(row) = op
+                        && row.native_id.is_none()
+                        && row.url.is_none()
+                        && let Some(identity) =
+                            row.path.as_ref().and_then(|p| state.published_html.get(p))
+                    {
+                        identity.apply(row);
+                    }
+                    if let IngestOp::HtmlArtifact(row) = op
+                        && (row.native_id.is_some() || row.url.is_some())
+                        && let Some(path) = &row.path
+                    {
+                        if state.published_html.len() >= 256 {
+                            state.published_html.pop_first();
+                        }
+                        state.published_html.insert(
+                            path.clone(),
+                            crate::html_artifacts::PublishedIdentity::of(row),
+                        );
+                    }
+                }
+            }
+            self.ops.extend(publications);
+        }
         let diagnostic = failed.then(|| result_text(result.content)).flatten();
         let notification_call = self.notification_call(result.tool_use_id);
         let notification_continues = notification_call

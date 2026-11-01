@@ -16,7 +16,8 @@
 //! [`Ledger::append_prebuilt`]: super::Ledger::append_prebuilt
 
 use super::{
-    CHECKSUM_BYTES, CaptureError, MAX_FRAME_BYTES, TAG_GENERATION_COMPLETE, TAG_RAW, TAG_RAW_BATCH,
+    CHECKSUM_BYTES, CaptureError, CapturedDocument, MAX_FRAME_BYTES, TAG_DOCUMENT,
+    TAG_GENERATION_COMPLETE, TAG_RAW, TAG_RAW_BATCH,
 };
 use crate::segment::{FrameCompressor, SMALLEST_COMPRESSED_BATCH};
 
@@ -107,6 +108,24 @@ pub struct PrebuiltFrames {
 }
 
 impl PrebuiltFrames {
+    pub fn push_document(
+        &mut self,
+        offset: u64,
+        document: &CapturedDocument,
+    ) -> Result<(), CaptureError> {
+        self.check_open();
+        let payload = document.encode()?;
+        let fixed = raw_fixed(self.key, self.generation, offset);
+        let head = frame_head(TAG_DOCUMENT, fixed.len() + payload.len());
+        let checksum = frame_checksum(&head, &[&fixed, &payload]);
+        self.bytes.extend_from_slice(&head);
+        self.bytes.extend_from_slice(&fixed);
+        self.bytes.extend_from_slice(&payload);
+        self.bytes.extend_from_slice(&checksum);
+        self.frames += 1;
+        Ok(())
+    }
+
     pub fn new(key: u32, generation: u64) -> Self {
         Self {
             key,
