@@ -225,10 +225,14 @@ function useLayoutWidth(ref: RefObject<HTMLElement | null>): number | null {
 
 /** The room. A host hands it its ports; everything inside reads them from context. */
 export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(function HistoryRoom(props, ref) {
-  const { catalog, sessions, assets, host } = props;
+  const { catalog, sessions, assets, ingestion, host } = props;
   const ports = useMemo<RoomPorts>(
-    () => ({ catalog, sessions, assets, ...(host === undefined ? {} : { host }) }),
-    [catalog, sessions, assets, host],
+    () => ({
+      catalog, sessions, assets,
+      ...(ingestion === undefined ? {} : { ingestion }),
+      ...(host === undefined ? {} : { host }),
+    }),
+    [catalog, sessions, assets, ingestion, host],
   );
   return (
     <RoomProvider

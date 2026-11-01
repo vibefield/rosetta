@@ -7,7 +7,7 @@
 }
 .ah-ingest-status__eyebrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--vf-text-secondary); font-size: 9px; font-weight: 600; letter-spacing: .045em; }
 .ah-ingest-status h3 { margin: 7px 0 5px; font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: -.015em; }
-.ah-ingest-status .ah-ingest-status__detail { margin: 0 0 13px; color: var(--vf-text-secondary); font-size: 11px; line-height: 1.5; }
+.ah-ingest-status .ah-ingest-status__detail { margin: 0 0 13px; color: var(--vf-text-secondary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .ah-ingest-status__amount { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 7px; line-height: 1.4; }
 .ah-ingest-status__amount b { font-size: 11px; font-weight: 500; }
 .ah-ingest-meter { overflow: hidden; height: 4px; border-radius: 4px; background: var(--vf-hairline-strong); }
