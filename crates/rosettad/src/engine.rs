@@ -153,6 +153,78 @@ pub(crate) fn absorb_effects(store: &mut Store, hub: &Hub) -> Result<usize, Stri
     Ok(fanned)
 }
 
+/// Where [`absorb_around`] fans committed effects out: the hub, or a probe
+/// that records the order of the three steps.
+pub(crate) trait Fanout {
+    fn absorb_rows(
+        &self,
+        conn: &rusqlite::Connection,
+        effects: rosetta_store::Effects,
+        now: i64,
+    ) -> Result<usize, String>;
+    fn invalidate(&self, sessions: &[String], now: i64) -> u64;
+    fn absorb_meta(
+        &self,
+        conn: &rusqlite::Connection,
+        effects: rosetta_store::MetaEffects,
+    ) -> Result<usize, String>;
+}
+
+impl Fanout for Hub {
+    fn absorb_rows(
+        &self,
+        conn: &rusqlite::Connection,
+        effects: rosetta_store::Effects,
+        now: i64,
+    ) -> Result<usize, String> {
+        let report = self
+            .absorb(conn, effects, now)
+            .map_err(|error| format!("absorbing row effects: {error}"))?;
+        Ok(usize::try_from(report.session_mutations + report.meta_events).unwrap_or(0))
+    }
+
+    fn invalidate(&self, sessions: &[String], now: i64) -> u64 {
+        self.invalidate_sessions(sessions.iter().map(String::as_str), now)
+    }
+
+    fn absorb_meta(
+        &self,
+        conn: &rusqlite::Connection,
+        effects: rosetta_store::MetaEffects,
+    ) -> Result<usize, String> {
+        self.absorb_meta(conn, effects)
+            .map_err(|error| format!("absorbing metadata effects: {error}"))
+    }
+}
+
+/// Publish a commit that made `invalidate` readable, or changed rows a reader
+/// may hold (R1 D10): absorb the **row** effects first, so every ring
+/// mutation of the commit is delivered before the barrier and discarded by
+/// it; then raise each watched session's resync barrier; then absorb the
+/// **metadata** effects, so `/ws/meta` announces a session's new
+/// `stream_state` only after its socket's barrier is up. Returns the items
+/// fanned out.
+pub(crate) fn absorb_around(
+    store: &mut Store,
+    fanout: &impl Fanout,
+    invalidate: &[String],
+    now: i64,
+) -> Result<usize, String> {
+    let mut fanned = 0_usize;
+    let rows = store.drain_effects();
+    if !rows.is_empty() {
+        fanned += fanout.absorb_rows(store.conn(), rows, now)?;
+    }
+    if !invalidate.is_empty() {
+        fanout.invalidate(invalidate, now);
+    }
+    let effects = store.drain_meta_effects();
+    if !effects.is_empty() {
+        fanned += fanout.absorb_meta(store.conn(), effects)?;
+    }
+    Ok(fanned)
+}
+
 pub(crate) fn acknowledge_search(
     store: &mut Store,
     worker: &Fts5SearchWorker,
@@ -614,6 +686,10 @@ impl ColdEngine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "engine_absorb_tests.rs"]
+mod absorb_tests;
 
 #[cfg(test)]
 mod tests {

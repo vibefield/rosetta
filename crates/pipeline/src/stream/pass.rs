@@ -120,6 +120,18 @@ pub(crate) struct IngestPass {
     budget_records: u64,
     /// [`IngestOptions::private_build`].
     private_build: bool,
+    /// The logical end each read stops at ([`IngestOptions::cut_bounded`]):
+    /// the source's metadata cut, until a rewrite drops it for the rest of
+    /// the pass.
+    ceiling: Option<u64>,
+    /// The last read stopped at the ceiling before any complete record, with
+    /// bytes past it: the cut falls at or inside the opening record. The
+    /// skim's one-record identity fallback reads a fresh handle, so it can
+    /// name a session from bytes past the cut; nothing of that session's
+    /// content is inside the cut. Like an unfinished record, this holds the
+    /// pass short of complete (the session publishes Streaming), and the
+    /// live runner lands the rest.
+    cut_before_first_record: bool,
     retries: u32,
     force_replay: bool,
     staged: Option<Staged>,
@@ -260,6 +272,8 @@ impl IngestPass {
             budget_bytes: 0,
             budget_records: 0,
             private_build: opts.private_build,
+            ceiling: opts.cut_bounded.then_some(file.cut_len).flatten(),
+            cut_before_first_record: false,
             retries: 0,
             force_replay,
             staged: None,
@@ -361,7 +375,12 @@ impl IngestPass {
                 _ => tailer,
             };
             let read = instrument.time(Metric::ReadNanos, || {
-                read_tailer.read(&self.path, self.tail.as_ref(), self.force_replay)
+                read_tailer.read_cut(
+                    &self.path,
+                    self.tail.as_ref(),
+                    self.force_replay,
+                    self.ceiling,
+                )
             })?;
             match read {
                 TailRead::Missing => {
@@ -382,6 +401,16 @@ impl IngestPass {
         };
         self.force_replay = false;
         instrument.add(Metric::BytesRead, batch.bytes_read);
+        if matches!(
+            batch.transition,
+            Transition::Truncated | Transition::IdentityChanged | Transition::PrefixMismatch
+        ) {
+            // A rewrite: the cut measured content that is gone, so the
+            // replacement reads to its end for the rest of the pass.
+            self.ceiling = None;
+        }
+        self.cut_before_first_record =
+            batch.cut_applied && !batch.more_available && batch.checkpoint.committed_offset == 0;
 
         if batch.transition.starts_new_generation()
             && !matches!(batch.transition, Transition::Initial)
@@ -519,7 +548,9 @@ impl IngestPass {
             .next_source_sequence
             .checked_add(ops.len() as u64)
             .ok_or_else(|| PipelineError::Config("source sequence overflowed".to_string()))?;
-        let complete = !batch.more_available && batch.checkpoint.incomplete_suffix_len == 0;
+        let complete = !batch.more_available
+            && batch.checkpoint.incomplete_suffix_len == 0
+            && !self.cut_before_first_record;
         // The partial-record stop: all that is left is a record its writer
         // has not finished, and a private build must end its generation
         // anyway ([`IngestOptions::private_build`]). Every rule below reads it
@@ -529,7 +560,8 @@ impl IngestPass {
         // later arrives as ordinary append growth. A replacement generation
         // ends here too: unlike a budget pause it has read every complete
         // record the file holds, and a private build has published no
-        // generation of the source for it to hide.
+        // generation of the source for it to hide. A cut that falls at or
+        // inside the opening record ends the same way, with nothing framed.
         let partial_stop = self.private_build && !batch.more_available && !complete;
         let ended = complete || partial_stop;
         // The slice boundary: enough clean bytes and complete records are
@@ -751,10 +783,14 @@ impl IngestPass {
             .tail
             .as_ref()
             .map(|checkpoint| checkpoint.incomplete_suffix_len);
-        if self.private_build && active_clean && suffix.is_some_and(|len| len > 0) {
-            // Stopped before a record its writer has not finished: the clean
-            // prefix is active, and the record is append growth for a later
-            // pass. Deliberate, like a budget pause — never a failure.
+        if self.private_build
+            && active_clean
+            && (suffix.is_some_and(|len| len > 0) || self.cut_before_first_record)
+        {
+            // Stopped before a record its writer has not finished, or at a
+            // cut before the opening record: the clean prefix is active, and
+            // the rest is append growth for a later pass. Deliberate, like a
+            // budget pause — never a failure.
             return FilePass::Paused;
         }
         FilePass::Finished(active_clean && suffix == Some(0))

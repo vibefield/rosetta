@@ -6,238 +6,29 @@
 //! column, every message ordinal — while never exposing a runtime before its
 //! admission and never folding another runtime's facts.
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+mod support;
 
-use rosetta_adapter_antigravity::AntigravityAdapter;
+use std::collections::HashMap;
+use std::path::Path;
+
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_codex::CodexAdapter;
-use rosetta_adapter_copilot::CopilotAdapter;
 use rosetta_adapter_grok::GrokAdapter;
-use rosetta_adapter_hermes::HermesAdapter;
-use rosetta_adapter_kimi_code::KimiCodeAdapter;
-use rosetta_adapter_opencode::OpenCodeAdapter;
-use rosetta_adapter_pi::PiAdapter;
 use rosetta_adapter_support::AgentAdapter;
-use rosetta_core::rows::RuntimeRow;
 use rosetta_pipeline::{
-    ClosedSource, EarlyToolReport, IngestOptions, Instrument, PollEvidence, PreparedAdmission,
-    SessionFile, StreamedPreparer, StreamedRuntime, apply_prepared_runtime, discover,
-    expand_data_root, meta_ingest_inventory_into, prepare_captured_runtime, stream_backfill,
-    stream_closed_sources_into, streamed_setup,
+    BlockingEmit, ColdWalkOptions, EarlyToolReport, Instrument, PollEvidence, StreamedPreparer,
+    StreamedRuntime, apply_prepared_runtime, expand_data_root, prepare_captured_runtime,
+    stream_backfill, stream_closed_sources_into, streamed_setup,
 };
 use rosetta_store::Store;
-use rusqlite::types::Value;
 use tempfile::TempDir;
 
-fn adapters() -> Vec<&'static dyn AgentAdapter> {
-    vec![
-        &AntigravityAdapter,
-        &ClaudeCodeAdapter,
-        &CodexAdapter,
-        &CopilotAdapter,
-        &GrokAdapter,
-        &HermesAdapter,
-        &KimiCodeAdapter,
-        &OpenCodeAdapter,
-        &PiAdapter,
-    ]
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    let mut entries = std::fs::read_dir(from)
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    for entry in entries {
-        let source = entry.path();
-        let destination = to.join(entry.file_name());
-        if source.is_dir() {
-            copy_tree(&source, &destination);
-        } else {
-            std::fs::copy(source, destination).unwrap();
-        }
-    }
-}
-
-/// Every recorded fixture scenario of one adapter: `(name, data root)`.
-fn fixture_roots(kind: &str) -> Vec<(String, PathBuf)> {
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../groundtruth")
-        .join(kind)
-        .join("fixtures");
-    let mut roots = Vec::new();
-    for version in std::fs::read_dir(&fixtures).unwrap() {
-        let version = version.unwrap().path();
-        for scenario in std::fs::read_dir(&version).unwrap() {
-            let scenario = scenario.unwrap().path();
-            let data = std::fs::read_dir(&scenario)
-                .unwrap()
-                .map(|entry| entry.unwrap().path())
-                .find(|path| path.is_dir())
-                .unwrap_or_else(|| panic!("{} has no data root", scenario.display()));
-            roots.push((
-                scenario.file_name().unwrap().to_string_lossy().into_owned(),
-                data,
-            ));
-        }
-    }
-    roots.sort();
-    roots
-}
-
-/// A home holding one fixture's data root where the adapter looks for it.
-fn home_with(adapter: &dyn AgentAdapter, data: &Path) -> TempDir {
-    let home = TempDir::new().unwrap();
-    copy_tree(
-        data,
-        &expand_data_root(&adapter.layout().data_root, home.path()),
-    );
-    home
-}
-
-struct Planned {
-    adapter: &'static dyn AgentAdapter,
-    runtime: RuntimeRow,
-    root: PathBuf,
-    planner: Store,
-    files: Vec<SessionFile>,
-    opts: IngestOptions,
-}
-
-/// Discover, open a cold planner, skim metadata, and publish the metadata to
-/// the canonical store — fresh serve's steps before capture.
-fn plan(adapter: &'static dyn AgentAdapter, home: &Path, canonical: &mut Store) -> Planned {
-    plan_with(adapter, home, canonical, IngestOptions::default())
-}
-
-fn plan_with(
-    adapter: &'static dyn AgentAdapter,
-    home: &Path,
-    canonical: &mut Store,
-    opts: IngestOptions,
-) -> Planned {
-    let instrument = Instrument::new();
-    let discovery = discover(&[adapter], home, &opts, &instrument)
-        .unwrap()
-        .pop()
-        .unwrap();
-    let mut runtime = discovery.runtime;
-    runtime.enabled = true;
-    let mut planner = Store::open_in_memory_for_cold_planning().unwrap();
-    let (_, files) = meta_ingest_inventory_into(
-        adapter,
-        &runtime,
-        &discovery.root,
-        &mut planner,
-        &discovery.inventory,
-        discovery.walk_truncated,
-        &opts,
-        &instrument,
-        None,
-    )
-    .unwrap();
-    for batch in planner.planned_metadata_batches().unwrap() {
-        canonical.apply(&batch).unwrap();
-    }
-    Planned {
-        adapter,
-        runtime,
-        root: discovery.root,
-        planner,
-        files,
-        opts,
-    }
-}
-
-fn cold_store() -> Store {
-    let mut store = Store::open_in_memory_for_rebuild().unwrap();
-    store.use_precomputed_bulk_ordinals().unwrap();
-    store
-}
-
-/// The retained reference: capture everything, prepare, apply, fold.
-fn retained(planned: Planned, canonical: &mut Store) {
-    let Planned {
-        adapter,
-        runtime,
-        root,
-        mut planner,
-        files,
-        opts,
-    } = planned;
-    let instrument = Instrument::new();
-    let stream = stream_backfill(
-        adapter,
-        &runtime,
-        &root,
-        &mut planner,
-        &files,
-        &opts,
-        &instrument,
-    )
-    .unwrap();
-    let mut prepared =
-        prepare_captured_runtime(adapter, &runtime, &files, &mut planner, &stream).unwrap();
-    prepared.mark_metadata_preapplied();
-    apply_prepared_runtime(adapter, &runtime, prepared, canonical, &instrument).unwrap();
-}
-
-/// Capture and prepare one runtime's closed sources without applying them.
-fn capture(
-    planned: Planned,
-    preparer: fn(&[SessionFile]) -> StreamedPreparer,
-) -> (
-    StreamedSetupAndSources,
-    &'static dyn AgentAdapter,
-    RuntimeRow,
-) {
-    let Planned {
-        adapter,
-        runtime,
-        root,
-        mut planner,
-        files,
-        opts,
-    } = planned;
-    let instrument = Instrument::new();
-    let setup = streamed_setup(&files, &mut planner).unwrap();
-    let mut preparer = preparer(&files);
-    let mut emitted: Vec<Vec<ClosedSource>> = Vec::new();
-    stream_closed_sources_into(
-        adapter,
-        &runtime,
-        &root,
-        &mut planner,
-        &files,
-        &opts,
-        &instrument,
-        None,
-        &mut |mut sources| {
-            preparer.prepare(&mut sources)?;
-            emitted.push(sources);
-            Ok(())
-        },
-    )
-    .unwrap();
-    (
-        StreamedSetupAndSources {
-            setup: Some(setup),
-            emitted,
-            prepared: preparer.finish().unwrap(),
-        },
-        adapter,
-        runtime,
-    )
-}
-
-struct StreamedSetupAndSources {
-    setup: Option<rosetta_pipeline::StreamedSetup>,
-    emitted: Vec<Vec<ClosedSource>>,
-    prepared: PreparedAdmission,
-}
+use support::fixtures::{HEAL_JOURNAL, HEAL_TRANSCRIPT, restarting_home};
+use support::harness::{
+    Planned, adapters, capture, cold_store, copy_tree, fixture_roots, home_with, plan, plan_with,
+    retained, stream_runtime, walkdir,
+};
+use support::projection_dump::{assert_same_projection, assert_same_projection_ignoring};
 
 /// The streamed path for one runtime as fresh serve runs it, applying each
 /// emission as it arrives after the producer-side preparer has ranked it and
@@ -257,45 +48,6 @@ fn streamed_fold(planned: Planned, canonical: &mut Store) {
 fn streamed_early(planned: Planned, canonical: &mut Store) -> (String, EarlyToolReport) {
     let (runtime_id, _, report) = stream_runtime(planned, canonical, StreamedPreparer::new);
     (runtime_id, report)
-}
-
-fn stream_runtime(
-    planned: Planned,
-    canonical: &mut Store,
-    preparer: fn(&[SessionFile]) -> StreamedPreparer,
-) -> (String, HashMap<String, PollEvidence>, EarlyToolReport) {
-    let Planned {
-        adapter,
-        runtime,
-        root,
-        mut planner,
-        files,
-        opts,
-    } = planned;
-    let instrument = Instrument::new();
-    let setup = streamed_setup(&files, &mut planner).unwrap();
-    let mut writer =
-        StreamedRuntime::open(adapter, &runtime, setup, canonical, &instrument).unwrap();
-    let mut preparer = preparer(&files);
-    stream_closed_sources_into(
-        adapter,
-        &runtime,
-        &root,
-        &mut planner,
-        &files,
-        &opts,
-        &instrument,
-        None,
-        &mut |mut sources| {
-            preparer.prepare(&mut sources)?;
-            writer.apply(canonical, sources, &instrument).map(|_| ())
-        },
-    )
-    .unwrap();
-    let evidence = writer.take_poll_evidence();
-    let prepared = preparer.finish().unwrap();
-    writer.admit(canonical, &instrument, &prepared).unwrap();
-    (runtime.id, evidence, prepared.report())
 }
 
 /// The live runner trusts its seed as if it had read each cursor row: after
@@ -326,144 +78,6 @@ fn assert_seed_matches_cursors(
             Some(PollEvidence::read(store, runtime_id, path).unwrap()),
             "{label}: {path}"
         );
-    }
-}
-
-/// Every canonical table with surrogate ids mapped to stable identities —
-/// the same normalization as the frozen-snapshot digest.
-fn dump_ignoring(store: &Store, ignored: &[(&str, &str)]) -> BTreeMap<String, Vec<String>> {
-    let conn = store.conn();
-    let cursors: BTreeMap<i64, String> = conn
-        .prepare("SELECT id, runtime_id, path FROM ingest_cursor")
-        .unwrap()
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                format!("{}|{}", row.get::<_, String>(1)?, row.get::<_, String>(2)?),
-            ))
-        })
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let messages: BTreeMap<i64, String> = conn
-        .prepare("SELECT id, timeline_id FROM message")
-        .unwrap()
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let tables: Vec<String> = conn
-        .prepare(
-            "SELECT name FROM sqlite_master
-             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'source_audit'
-             ORDER BY name",
-        )
-        .unwrap()
-        .query_map([], |row| row.get(0))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let mut out = BTreeMap::new();
-    for table in tables {
-        let columns: Vec<String> = conn
-            .prepare(&format!("PRAGMA table_info(\"{table}\")"))
-            .unwrap()
-            .query_map([], |row| row.get::<_, String>(1))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap()
-            .into_iter()
-            .filter(|column| {
-                !((table == "message" || table == "ingest_cursor") && column == "id")
-                    && !(table == "projection_state" && column == "projection_epoch")
-                    && !(table == "agent_runtime" && column == "discovered_at")
-                    && !ignored.contains(&(table.as_str(), column.as_str()))
-            })
-            .collect();
-        let select = columns
-            .iter()
-            .map(|column| format!("\"{column}\""))
-            .collect::<Vec<_>>()
-            .join(",");
-        let mut statement = conn
-            .prepare(&format!("SELECT {select} FROM \"{table}\""))
-            .unwrap();
-        let mut rows = statement
-            .query_map([], |row| {
-                let mut fields = Vec::with_capacity(columns.len());
-                for (index, column) in columns.iter().enumerate() {
-                    let value: Value = row.get(index)?;
-                    let text = match (&value, column.as_str()) {
-                        (Value::Integer(id), name) if name.ends_with("cursor") => cursors
-                            .get(id)
-                            .cloned()
-                            .unwrap_or_else(|| format!("<dangling cursor {id}>")),
-                        (Value::Integer(id), "message_id") => messages
-                            .get(id)
-                            .cloned()
-                            .unwrap_or_else(|| format!("<dangling message {id}>")),
-                        _ => format!("{value:?}"),
-                    };
-                    fields.push(format!("{column}={text}"));
-                }
-                Ok(fields.join(" | "))
-            })
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        rows.sort();
-        out.insert(table, rows);
-    }
-    out
-}
-
-fn assert_same_projection(label: &str, reference: &Store, candidate: &Store) {
-    assert_same_projection_ignoring(label, reference, candidate, &[]);
-}
-
-fn dump(store: &Store) -> BTreeMap<String, Vec<String>> {
-    dump_ignoring(store, &[])
-}
-
-fn assert_same_projection_ignoring(
-    label: &str,
-    reference: &Store,
-    candidate: &Store,
-    ignored: &[(&str, &str)],
-) {
-    let (reference, candidate) = if ignored.is_empty() {
-        (dump(reference), dump(candidate))
-    } else {
-        (
-            dump_ignoring(reference, ignored),
-            dump_ignoring(candidate, ignored),
-        )
-    };
-    assert_eq!(
-        reference.keys().collect::<Vec<_>>(),
-        candidate.keys().collect::<Vec<_>>(),
-        "{label}: table sets differ"
-    );
-    for (table, expected) in &reference {
-        let actual = &candidate[table];
-        if expected != actual {
-            let missing = expected
-                .iter()
-                .filter(|row| !actual.contains(row))
-                .take(3)
-                .collect::<Vec<_>>();
-            let extra = actual
-                .iter()
-                .filter(|row| !expected.contains(row))
-                .take(3)
-                .collect::<Vec<_>>();
-            panic!(
-                "{label}: table {table} differs ({} reference rows, {} streamed rows)\n\
-                 only in reference: {missing:#?}\nonly in streamed: {extra:#?}",
-                expected.len(),
-                actual.len()
-            );
-        }
     }
 }
 
@@ -883,97 +497,6 @@ fn admitting_one_runtime_never_folds_another_runtimes_facts() {
     assert_same_projection("claude+codex interleaved", &reference, &candidate);
 }
 
-/// Rewrites one source the first time capture reports bytes for it — after
-/// its first batch was framed and before the next read — so the tailer sees
-/// a changed anchor and restarts the generation mid-pass.
-#[derive(Debug)]
-struct RewriteOnce {
-    root: PathBuf,
-    target: String,
-    replacement: String,
-    done: std::sync::atomic::AtomicBool,
-}
-
-impl rosetta_pipeline::progress::ColdProgressObserver for RewriteOnce {
-    fn source_bytes(&self, file: &SessionFile, _bytes: u64) {
-        if file.relative_path == self.target
-            && !self.done.swap(true, std::sync::atomic::Ordering::SeqCst)
-        {
-            std::fs::write(self.root.join(&self.target), &self.replacement).unwrap();
-        }
-    }
-
-    fn reading_finished(&self) {}
-}
-
-fn claude_user(uuid: &str, content: &str) -> String {
-    serde_json::json!({
-        "parentUuid": null,
-        "isSidechain": false,
-        "type": "user",
-        "message": {"role": "user", "content": content},
-        "uuid": uuid,
-        "timestamp": "2026-08-25T02:35:19.054Z",
-        "userType": "external",
-        "cwd": "/w/heal",
-        "sessionId": "heal-session",
-        "version": "2.1.241",
-        "gitBranch": "main"
-    })
-    .to_string()
-}
-
-const HEAL_TRANSCRIPT: &str = "projects/-w-heal/heal-session.jsonl";
-const HEAL_JOURNAL: &str =
-    "projects/-w-heal/heal-session/subagents/workflows/wf_heal/journal.jsonl";
-
-/// A two-transcript session (transcript + workflow journal) whose transcript
-/// is rewritten between its first and second capture batch.
-fn restarting_home() -> (TempDir, IngestOptions) {
-    let home = TempDir::new().unwrap();
-    let root = expand_data_root(&ClaudeCodeAdapter.layout().data_root, home.path());
-    let lines = |prefix: &str| {
-        (1..=5)
-            .map(|index| {
-                claude_user(
-                    &format!("{prefix}-{index}"),
-                    &format!("{prefix} line {index}"),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n"
-    };
-    let transcript = root.join(HEAL_TRANSCRIPT);
-    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
-    std::fs::write(&transcript, lines("old")).unwrap();
-    let journal = root.join(HEAL_JOURNAL);
-    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
-    std::fs::write(
-        &journal,
-        [
-            r#"{"type":"started","key":"worker-1","agentId":"agent-1"}"#,
-            r#"{"type":"result","key":"worker-1","result":{"ok":true}}"#,
-        ]
-        .join("\n")
-            + "\n",
-    )
-    .unwrap();
-    let mut tail = rosetta_capture::TailConfig::json_lines();
-    tail.max_records_per_batch = 2;
-    let opts = IngestOptions {
-        tail,
-        progress: Some(std::sync::Arc::new(RewriteOnce {
-            root,
-            target: HEAL_TRANSCRIPT.into(),
-            replacement: lines("new"),
-            done: std::sync::atomic::AtomicBool::new(false),
-        })),
-        ..IngestOptions::default()
-    };
-    (home, opts)
-}
-
 #[test]
 fn a_restarted_session_heals_before_its_sources_stream() {
     let (reference_home, reference_opts) = restarting_home();
@@ -1038,7 +561,9 @@ fn a_restarted_session_heals_before_its_sources_stream() {
         &opts,
         &instrument,
         None,
-        &mut |mut sources| {
+        None,
+        &ColdWalkOptions::default(),
+        &mut BlockingEmit(|_, mut sources| {
             emissions.push(
                 sources
                     .iter()
@@ -1049,7 +574,7 @@ fn a_restarted_session_heals_before_its_sources_stream() {
             writer
                 .apply(&mut candidate, sources, &instrument)
                 .map(|_| ())
-        },
+        }),
     )
     .unwrap();
     assert_eq!(
@@ -1291,21 +816,4 @@ fn streamed_rows_stay_behind_the_pending_barrier_until_admission() {
         &format!("/api/sessions/{session}/plans/revisions/0"),
     );
     assert_eq!(status, 200);
-}
-
-fn walkdir(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(path) = stack.pop() {
-        for entry in std::fs::read_dir(&path).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                stack.push(path);
-            } else {
-                out.push(path);
-            }
-        }
-    }
-    out.sort();
-    out
 }

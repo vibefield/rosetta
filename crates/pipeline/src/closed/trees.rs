@@ -278,6 +278,6 @@ impl<'a> Sets<'a> {
 }
 
 #[cfg(test)]
-mod harness;
+pub(crate) mod harness;
 #[cfg(test)]
 mod tests;

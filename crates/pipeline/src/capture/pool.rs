@@ -9,8 +9,10 @@
 //! (frame bytes plus framed payload, the proxy for its normalized ops): `G`
 //! over all runtimes' look-ahead; a share of `G` per runtime, so one runtime
 //! stuck behind a giant head cannot starve the others; and `H` over the
-//! head's own queue. A task over its bound is PARKED: it keeps its pass and
-//! workers take other work.
+//! head's own queue. A look-ahead step still running counts against them by
+//! the payload it may still read, so workers starting steps together cannot
+//! overshoot them by a batch each. A task over its bound is PARKED: it keeps
+//! its pass and workers take other work.
 //!
 //! Workers wait only for a runnable task, a step is one bounded tail batch,
 //! and the head is runnable whenever its queue is empty — ahead of anything
@@ -18,6 +20,14 @@
 //! points back into the pool. And when a sequencer is blocked downstream
 //! (the writer's budget, its ledger queue, an inline group), its look-ahead
 //! fills, its tasks park, and the workers go elsewhere or idle.
+//!
+//! A pool runtime is one sequencer lane: a runtime admitted whole registers
+//! one, a root-tree runtime one per lane that has pool units. A lane is
+//! `Shared` (HEAD's rule: a share of what `G` leaves) or `Reserved` (a root-
+//! tree runtime's small lane: a fixed slice of `G`, so big-lane overshoot
+//! cannot starve it). Head grants are fair: among runnable heads the one
+//! granted least recently goes first, so a lane's head never waits behind
+//! another lane's head that keeps becoming runnable again.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -36,10 +46,13 @@ use crate::meta::SessionFile;
 use crate::stream::{FilePass, IngestPass, PassMode, PassOutput, PassStep, RawOut, ReportDelta};
 use crate::{IngestOptions, PipelineError};
 
+mod lanes;
+use lanes::Bounds;
+
 const MIB: u64 = 1024 * 1024;
 const POISONED: &str = "capture pool poisoned";
 /// How long a waiting sequencer sleeps before it rechecks cancellation.
-const WAIT_SLICE: Duration = Duration::from_millis(100);
+pub(crate) const WAIT_SLICE: Duration = Duration::from_millis(100);
 
 /// The pool's look-ahead bounds, in bytes of queued output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +73,22 @@ impl PoolBudgets {
         runtime_floor_bytes: 64 * MIB,
         head_bytes: 64 * MIB,
     };
+
+    /// A `Reserved` lane's slice of `G`: 64 MiB at the default bounds.
+    pub fn small_lane_bytes(&self) -> u64 {
+        self.runtime_floor_bytes
+            .min(self.look_ahead_bytes / 8)
+            .max(1)
+    }
+}
+
+/// How a lane's look-ahead is bounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LaneClass {
+    /// A share of what the reserved slices leave of `G`.
+    Shared,
+    /// A fixed slice of `G` ([`PoolBudgets::small_lane_bytes`]).
+    Reserved,
 }
 
 impl Default for PoolBudgets {
@@ -86,6 +115,12 @@ pub struct PoolStats {
     pub idle_nanos: u64,
     pub peak_look_ahead_bytes: u64,
     pub peak_head_bytes: u64,
+    /// The most look-ahead `Shared` lanes held at once.
+    pub peak_shared_look_ahead_bytes: u64,
+    /// The most look-ahead `Reserved` lanes held at once.
+    pub peak_reserved_look_ahead_bytes: u64,
+    /// The most output queued on every lane's head at once.
+    pub peak_head_bytes_total: u64,
 }
 
 /// What workers read to step one runtime's sources.
@@ -185,6 +220,17 @@ struct State {
     closed: bool,
     /// `G`'s account: output queued on sources that are not their head.
     look_ahead: u64,
+    /// The part of `look_ahead` that `Shared` lanes hold.
+    shared_look_ahead: u64,
+    /// What `Shared` lanes' look-ahead steps still running may add.
+    shared_running: u64,
+    /// Output queued on every lane's head.
+    head_bytes: u64,
+    /// Head grants so far: the stamp of the latest.
+    head_grants: u64,
+    /// Bumped by [`CapturePool::notify_output`], so a waiter that read it
+    /// before a release cannot miss the wake.
+    output_epoch: u64,
     idle_workers: usize,
     rng: u64,
     stats: PoolStats,
@@ -202,8 +248,15 @@ struct Runtime {
     running: usize,
     /// This runtime's share of `G`'s account.
     look_ahead: u64,
+    /// What its look-ahead steps still running may add to it.
+    running_reserved: u64,
     /// Source bytes not read yet — the scheduler's estimate of work left.
     remaining: u64,
+    class: LaneClass,
+    /// The pool's head-grant stamp when this lane's head was last granted.
+    last_head_grant: u64,
+    /// Since when the head's queue holds output the sequencer has not taken.
+    ready_since: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -216,6 +269,9 @@ struct Source {
     queue: VecDeque<(u64, Event)>,
     queued: u64,
     unread: u64,
+    /// What its running look-ahead step may add, counted against the bounds
+    /// until the step returns.
+    reserved: u64,
 }
 
 struct Task {
@@ -262,9 +318,10 @@ impl CapturePool {
 
     /// The equivalence tests' scheduler: every bound one byte, so nearly
     /// every task parks, picks random among runnable tasks, and random short
-    /// pauses between them.
-    #[cfg(test)]
-    pub(crate) fn chaos(workers: usize, seed: u64) -> Self {
+    /// pauses between them. Tests only (the integration harness too); no
+    /// flag reaches it.
+    #[doc(hidden)]
+    pub fn chaos(workers: usize, seed: u64) -> Self {
         let budgets = PoolBudgets {
             look_ahead_bytes: 1,
             runtime_floor_bytes: 1,
@@ -282,6 +339,11 @@ impl CapturePool {
                 runtimes: Vec::new(),
                 closed: false,
                 look_ahead: 0,
+                shared_look_ahead: 0,
+                shared_running: 0,
+                head_bytes: 0,
+                head_grants: 0,
+                output_epoch: 0,
                 idle_workers: 0,
                 // xorshift must not start at zero.
                 rng: seed.unwrap_or(0) | 1,
@@ -387,18 +449,21 @@ impl CapturePool {
         }
     }
 
-    /// Register a runtime's sources; its sequencer consumes them through the
-    /// returned lane, which withdraws the runtime when dropped.
-    pub(crate) fn register(&self, shared: Shared) -> Lane<'_> {
+    /// Register one lane's sources: a runtime admitted whole is one
+    /// `Shared` lane. Its sequencer consumes them through the returned lane,
+    /// which withdraws them when dropped. What is left to read of each
+    /// source is its [`SessionFile::read_len`]: a root-tree pass stops at
+    /// the metadata cut.
+    pub(crate) fn register_lane(&self, shared: Shared, class: LaneClass) -> Lane<'_> {
         let units = shared
             .units
             .iter()
             .map(|unit| Source {
-                unread: unit.file.size,
+                unread: unit.file.read_len(),
                 ..Source::default()
             })
             .collect();
-        let remaining = shared.units.iter().map(|unit| unit.file.size).sum();
+        let remaining = shared.units.iter().map(|unit| unit.file.read_len()).sum();
         let mut state = self.lock();
         let runtime = state.runtimes.len();
         state.runtimes.push(Some(Runtime {
@@ -409,7 +474,11 @@ impl CapturePool {
             ready: BTreeSet::new(),
             running: 0,
             look_ahead: 0,
+            running_reserved: 0,
             remaining,
+            class,
+            last_head_grant: 0,
+            ready_since: None,
         }));
         state.stats.runtimes += 1;
         if state.idle_workers > 0 {
@@ -452,22 +521,14 @@ impl State {
     }
 
     fn pick(&mut self, budgets: &PoolBudgets, chaos: bool) -> Option<Task> {
-        let open = self
-            .registered()
-            .filter(|(_, runtime)| runtime.has_steps_left())
-            .count()
-            .max(1) as u64;
-        let share = budgets
-            .runtime_floor_bytes
-            .max(budgets.look_ahead_bytes / open);
-        let room = self.look_ahead < budgets.look_ahead_bytes;
+        let bounds = self.bounds(budgets);
         let (runtime, unit) = if chaos {
             let mut runnable = Vec::new();
             for (index, runtime) in self.registered() {
                 if let Some(unit) = runtime.runnable_head(budgets.head_bytes) {
                     runnable.push((index, unit));
                 }
-                if room && runtime.look_ahead < share {
+                if bounds.eligible(runtime) {
                     runnable.extend(
                         runtime
                             .ready
@@ -486,28 +547,31 @@ impl State {
             let choice = (self.random() % runnable.len() as u64) as usize;
             runnable[choice]
         } else {
-            self.by_priority(budgets.head_bytes, room, share)?
+            self.by_priority(budgets.head_bytes, &bounds)?
         };
         Some(self.take(runtime, unit))
     }
 
-    fn by_priority(&self, head_bytes: u64, room: bool, share: u64) -> Option<(usize, usize)> {
-        // 1. A runnable head, the runtime with the most left first.
+    fn by_priority(&self, head_bytes: u64, bounds: &Bounds) -> Option<(usize, usize)> {
+        // 1. A runnable head: the lane granted a head least recently, then
+        //    the one with the most left.
         let head = self
             .registered()
             .filter_map(|(index, runtime)| {
-                Some((index, runtime.runnable_head(head_bytes)?, runtime.remaining))
+                Some((index, runtime.runnable_head(head_bytes)?, runtime))
             })
-            .max_by(|a, b| a.2.cmp(&b.2).then(b.0.cmp(&a.0)));
+            .min_by(|a, b| {
+                a.2.last_head_grant
+                    .cmp(&b.2.last_head_grant)
+                    .then(b.2.remaining.cmp(&a.2.remaining))
+                    .then(a.0.cmp(&b.0))
+            });
         if let Some((index, unit, _)) = head {
             return Some((index, unit));
         }
-        if !room {
-            return None;
-        }
         let candidates: Vec<(usize, usize, &Runtime)> = self
             .registered()
-            .filter(|(_, runtime)| runtime.look_ahead < share)
+            .filter(|(_, runtime)| bounds.eligible(runtime))
             .filter_map(|(index, runtime)| Some((index, runtime.look_ahead_candidate()?, runtime)))
             .collect();
         // 2. A runtime nothing is stepping, the one with the least left
@@ -534,6 +598,10 @@ impl State {
         let entry = self.runtimes[runtime]
             .as_mut()
             .expect("a picked runtime is registered");
+        if unit == entry.head {
+            self.head_grants += 1;
+            entry.last_head_grant = self.head_grants;
+        }
         let pass = if unit == entry.next_dispatch {
             entry.next_dispatch += 1;
             None
@@ -547,6 +615,9 @@ impl State {
             )
         };
         entry.running += 1;
+        if unit != entry.head {
+            entry.reserve(unit, &mut self.shared_running);
+        }
         Task {
             runtime,
             unit,
@@ -570,6 +641,7 @@ impl State {
             return false;
         };
         entry.running -= 1;
+        entry.release(unit, &mut self.shared_running);
         let source = &mut entry.units[unit];
         if source.abandoned {
             return false;
@@ -595,13 +667,43 @@ impl State {
             }
         }
         if unit == entry.head {
+            if source.queue.len() == 1 {
+                entry.ready_since = Some(Instant::now());
+            }
+            self.head_bytes += bytes;
             self.stats.peak_head_bytes = self.stats.peak_head_bytes.max(queued);
+            self.stats.peak_head_bytes_total =
+                self.stats.peak_head_bytes_total.max(self.head_bytes);
             return true;
         }
         entry.look_ahead += bytes;
         self.look_ahead += bytes;
-        self.stats.peak_look_ahead_bytes = self.stats.peak_look_ahead_bytes.max(self.look_ahead);
+        if entry.class == LaneClass::Shared {
+            self.shared_look_ahead += bytes;
+        }
+        self.note_look_ahead_peaks();
         false
+    }
+
+    /// Pop the head's next event of lane `runtime`, if one is queued.
+    fn pop_head(&mut self, runtime: usize, unit: usize) -> Option<(Event, Option<Instant>)> {
+        let entry = self.runtimes[runtime]
+            .as_mut()
+            .expect("a lane's runtime stays registered");
+        assert_eq!(
+            entry.head, unit,
+            "a lane's sources are consumed in its order"
+        );
+        let source = &mut entry.units[unit];
+        let (bytes, event) = source.queue.pop_front()?;
+        source.queued -= bytes;
+        self.head_bytes -= bytes;
+        let since = entry.ready_since.take();
+        if !source.queue.is_empty() {
+            // The rest waits from now: the sequencer has just served the lane.
+            entry.ready_since = Some(Instant::now());
+        }
+        Some((event, since))
     }
 }
 
@@ -652,13 +754,7 @@ impl Lane<'_> {
             if current.closed {
                 return Err(PipelineError::Config("capture pool closed".to_string()));
             }
-            let entry = current.runtimes[self.runtime]
-                .as_mut()
-                .expect("a lane's runtime stays registered");
-            assert_eq!(entry.head, unit, "sources are consumed in path order");
-            let source = &mut entry.units[unit];
-            if let Some((bytes, event)) = source.queue.pop_front() {
-                source.queued -= bytes;
+            if let Some((event, _)) = current.pop_head(self.runtime, unit) {
                 if current.idle_workers > 0 {
                     self.pool.work.notify_one();
                 }
@@ -683,9 +779,13 @@ impl Lane<'_> {
         let entry = state.runtimes[self.runtime]
             .as_mut()
             .expect("a lane's runtime stays registered");
-        assert_eq!(entry.head, unit, "sources are consumed in path order");
+        assert_eq!(
+            entry.head, unit,
+            "a lane's sources are consumed in its order"
+        );
         let source = &mut entry.units[unit];
         source.queue.clear();
+        state.head_bytes -= source.queued;
         source.queued = 0;
         if !source.finished {
             source.finished = true;
@@ -697,10 +797,20 @@ impl Lane<'_> {
             source.unread = 0;
         }
         entry.head += 1;
+        entry.ready_since = None;
         if let Some(next) = entry.units.get(entry.head) {
             entry.look_ahead -= next.queued;
             state.look_ahead -= next.queued;
+            if entry.class == LaneClass::Shared {
+                state.shared_look_ahead -= next.queued;
+            }
+            state.head_bytes += next.queued;
+            if !next.queue.is_empty() {
+                entry.ready_since = Some(Instant::now());
+            }
             state.stats.peak_head_bytes = state.stats.peak_head_bytes.max(next.queued);
+            state.stats.peak_head_bytes_total =
+                state.stats.peak_head_bytes_total.max(state.head_bytes);
         }
         if state.idle_workers > 0 {
             self.pool.work.notify_one();
@@ -719,6 +829,14 @@ impl Drop for Lane<'_> {
             let withdrawn = state.runtimes[self.runtime].take();
             if let Some(runtime) = &withdrawn {
                 state.look_ahead -= runtime.look_ahead;
+                if runtime.class == LaneClass::Shared {
+                    state.shared_look_ahead -= runtime.look_ahead;
+                    state.shared_running -= runtime.running_reserved;
+                }
+                state.head_bytes -= runtime
+                    .units
+                    .get(runtime.head)
+                    .map_or(0, |source| source.queued);
             }
             // Freed look-ahead may unpark other runtimes' work.
             self.pool.work.notify_all();
@@ -873,3 +991,8 @@ fn frame(key: u32, raw: RawOut, normalizer_version: u32) -> Result<PrebuiltFrame
 pub(super) fn elapsed_nanos(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
+
+#[cfg(test)]
+mod cut_tests;
+#[cfg(test)]
+mod tests;

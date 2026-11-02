@@ -1,6 +1,6 @@
 import { useId } from "react";
 import { AgentMark, agentLabel } from "../lib/agents";
-import { runtimeActivity } from "../lib/ingest-activity";
+import { phaseHeading, readySuffix, runtimeActivity } from "../lib/ingest-activity";
 import type { IngestActivity } from "../lib/ingest-activity";
 import { IngestionControls } from "./IngestionControls";
 
@@ -31,6 +31,9 @@ export function IngestStatus({ activity }: { readonly activity: IngestActivity |
       </div>
       <h3 id={titleId} aria-live="polite" aria-atomic="true">
         {interrupted ? "Progress updates paused" : phase.title}
+        {/* The count moves with every tree the import opens: drawn, but kept
+            out of what the live region announces (the meter names it). */}
+        {!interrupted && phase.ready ? <span aria-hidden="true">{readySuffix(phase)}</span> : null}
       </h3>
       <p className="ah-ingest-status__detail">
         {interrupted ? "Waiting for the background service. Reconnecting automatically…" : phase.detail}
@@ -39,7 +42,7 @@ export function IngestStatus({ activity }: { readonly activity: IngestActivity |
         <span>{phase.amount}</span>
         {phase.fraction !== null && !ready && <b>{Math.floor(phase.fraction * 100)}%</b>}
       </div>
-      <ProgressMeter key={phase.key} value={phase.fraction} label={phase.title} paused={paused} />
+      <ProgressMeter key={phase.key} value={phase.fraction} label={phaseHeading(phase)} paused={paused} />
       <div className="ah-ingest-status__footer">
         <span title={feed.connectionError ?? (footer.includes("No new") ? "The service is connected; its work counters have not changed." : undefined)}>{footer}</span>
         <span>{elapsed}</span>

@@ -86,9 +86,15 @@ export function ProjectListItem({
       ? backfill.sessions_done >= backfill.sessions_total
         ? "Preparing activity summaries"
         : runtimeStates?.includes("streaming")
-          ? ingestFill !== null
-            ? `Reading conversations · ${Math.floor(ingestFill * 100)}%`
-            : `Reading conversations · ${progressBytes(backfill.bytes_streamed)}`
+          // Each conversation tree opens as it closes, so the card
+          // counts what is readable. Before the first one, and through a
+          // resumed build whose board counts nothing until it publishes, it
+          // keeps the byte meter's words rather than claim "0 of T".
+          ? backfill.sessions_done > 0
+            ? `Reading conversations · ${backfill.sessions_done.toLocaleString()} of ${backfill.sessions_total.toLocaleString()} ready`
+            : ingestFill !== null
+              ? `Reading conversations · ${Math.floor(ingestFill * 100)}%`
+              : `Reading conversations · ${progressBytes(backfill.bytes_streamed)}`
           : runtimeStates?.some((state) => state === "preparing" || state === "applying")
             ? "Organizing conversations" : "Waiting for conversations"
       : project.readiness === "ready" ? "Preparing activity summaries" : "Waiting for conversations"

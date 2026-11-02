@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;

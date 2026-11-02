@@ -10,7 +10,8 @@ use rosetta_adapter_support::{LineOutcome, LineStatus};
 use rosetta_capture::{Ledger, LedgerWriteStats};
 use rosetta_core::IngestOp;
 use rosetta_store::{
-    ApplyStats, Batch, BulkLoadStats, ColdReconciliation, Store, StoreError, StreamedSource,
+    ApplyStats, Batch, BulkLoadStats, ColdAdmission, ColdReconciliation, ResolvedSession, Store,
+    StoreError, StreamedSource,
 };
 use serde_json::{Value, json};
 
@@ -586,6 +587,57 @@ impl Instrument {
         });
         if let Ok(stats) = &result {
             self.record_apply_stats(stats);
+        }
+        result
+    }
+
+    /// One Stage slice of a chunked streamed source, attributed like the
+    /// source's other transactions.
+    pub fn apply_streamed_slice(
+        &self,
+        store: &mut Store,
+        state: &mut ColdReconciliation,
+        slice: StreamedSource,
+    ) -> Result<ApplyStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || {
+            store.apply_streamed_slice(state, slice)
+        });
+        if let Ok(stats) = &result {
+            self.record_apply_stats(stats);
+        }
+        result
+    }
+
+    /// One resolved-row slice of a chunked streamed source.
+    pub fn apply_resolved_slice(
+        &self,
+        store: &mut Store,
+        session: &mut ResolvedSession,
+        max_bytes: u64,
+    ) -> Result<(ApplyStats, bool), StoreError> {
+        let result = self.time(Metric::ApplyNanos, || {
+            store.apply_resolved_slice(session, max_bytes)
+        });
+        if let Ok((stats, _)) = &result {
+            self.record_apply_stats(stats);
+        }
+        result
+    }
+
+    /// One streamed admission transaction: a batch of trees, or a
+    /// runtime's remainder.
+    pub fn admit_cold_units(
+        &self,
+        store: &mut Store,
+        fold: ColdReconciliation,
+        renumber: &[String],
+        states: &[(String, rosetta_core::rows::StreamState)],
+    ) -> Result<ColdAdmission, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || {
+            store.admit_cold_units(fold, renumber, states)
+        });
+        if let Ok(admitted) = &result {
+            self.record_apply_stats(&admitted.stats);
         }
         result
     }

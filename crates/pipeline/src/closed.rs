@@ -4,41 +4,59 @@
 //! cursor CAS chain, generations, raw-ledger order, and restart detection are
 //! the same control plane [`crate::stream_backfill_into`] drives. What changes
 //! is retention. Instead of holding every normalized batch until the runtime
-//! closes, the producer walks the roster in source-path order — the order the
-//! sole canonical writer applies a runtime's sources in, so every
-//! order-sensitive canonical upsert resolves exactly as it would for the whole
-//! runtime at once — and hands each source to the writer as a closed source
-//! (terminal generation, final checkpoint, validated contiguous ops) as soon as
-//! nothing can supersede it. Only a JSONL transcript whose session still has an
-//! uncaptured transcript is held back: a later restart of that session would
-//! force-replay its siblings into replacement generations, and the writer only
-//! ever sees one terminal generation per source.
+//! closes, the producer walks the roster and hands each source to the writer
+//! as a closed source (terminal generation, final checkpoint, validated
+//! contiguous ops) as soon as nothing can supersede it. Only a JSONL
+//! transcript whose session still has an uncaptured transcript is held back:
+//! a later restart of that session would force-replay its siblings into
+//! replacement generations, and the writer only ever sees one terminal
+//! generation per source.
+//!
+//! A runtime admitted whole walks in source-path order — the order the sole
+//! canonical writer applies its sources in, so every order-sensitive
+//! canonical upsert resolves exactly as it would for the whole runtime at
+//! once. A runtime admitted per root tree walks its newest trees first, in
+//! lanes ([`walk_order`]), each lane emitting its own closed sources
+//! ([`ColdEmit`]).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use rosetta_adapter_support::{AgentAdapter, StreamDriver};
-use rosetta_capture::{SourceDef, Tailer};
+use rosetta_adapter_support::AgentAdapter;
+use rosetta_capture::SourceDef;
 use rosetta_core::IngestOp;
-use rosetta_core::rows::{RuntimeRow, StreamState};
+use rosetta_core::rows::RuntimeRow;
 use rosetta_store::{Batch, SourceMode, Store, queries};
 
-use crate::capture::{CapturePool, Pooled};
+use crate::capture::{CapturePool, LaneClass};
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::live::PollEvidence;
 use crate::meta::SessionFile;
-use crate::stream::{
-    FilePass, PassMode, StreamReport, fresh_cursor, ingest_file, rotating_audit_paths,
-};
+use crate::stream::{FilePass, StreamReport, fresh_cursor};
 use crate::{IngestOptions, PipelineError};
 
+mod emit;
+mod frontier;
+mod lane_profile;
 mod setup;
 pub mod trees;
+mod walk;
+pub mod walk_order;
+pub use emit::{BlockingEmit, ColdEmit, EmitOutcome};
+pub use lane_profile::{LaneProfile, Samples, WalkProfile};
 pub use setup::{StreamedSetup, streamed_setup, streamed_setup_for};
 pub use trees::{SessionLink, Tree, TreeId, TreeMap};
+pub use walk_order::{
+    BIG_LANES, BIG_SOURCE_BYTES, ColdWalkOptions, LaneId, WalkOrder, WalkSource, WalkSummary,
+    walk_summary,
+};
+#[doc(hidden)]
+pub use walk_order::{ProbeCounters, ProbeView, WalkOverride, WalkProbe};
+
+use walk_order::{path_ordered, walk_plan_for};
 
 /// One source whose generation is terminal: exactly what
 /// [`crate::prepare_captured_runtime`] computes per file, ready for the
@@ -63,6 +81,8 @@ pub struct ClosedSource {
     /// What [`crate::StreamedPreparer`] did to the source as it was emitted;
     /// the writer applies only prepared sources.
     pub(crate) prepared: Option<crate::early::Prepared>,
+    /// The walk span that emitted it ([`LaneId::Path`] on the path walk).
+    pub(crate) lane: LaneId,
 }
 
 impl ClosedSource {
@@ -76,8 +96,68 @@ impl ClosedSource {
         (!self.source.ledger_only).then_some(self.source.session_id.as_str())
     }
 
-    /// Framed payload bytes this source consumed — the producer's in-flight
-    /// budget unit.
+    /// The walk span that emitted it.
+    pub fn lane(&self) -> LaneId {
+        self.lane
+    }
+
+    /// The source's ops as captured (before the preparer withholds any):
+    /// the integration harness's closure audit reads them.
+    #[doc(hidden)]
+    pub fn ops(&self) -> &[IngestOp] {
+        &self.ops
+    }
+
+    /// The writer-budget unit of this source (R1 D22): its
+    /// [`ClosedSource::payload_bytes`] plus the approx bytes of the facts
+    /// withheld from earlier emissions that it carries to the writer.
+    pub fn budget_bytes(&self) -> u64 {
+        self.payload_bytes().saturating_add(
+            self.prepared
+                .as_ref()
+                .map_or(0, |prepared| prepared.carried_bytes),
+        )
+    }
+
+    /// A synthetic closed source for writer-scheduling tests: an activated,
+    /// unprepared generation of `session_id` at `path` holding `ops`, whose
+    /// framed payload measured `payload_bytes`. Never reaches a store.
+    #[doc(hidden)]
+    pub fn synthetic(
+        path: &str,
+        session_id: &str,
+        ops: Vec<IngestOp>,
+        payload_bytes: u64,
+        lane: LaneId,
+    ) -> Self {
+        Self {
+            source: SourceDef {
+                ledger_only: false,
+                relative_path: path.to_owned(),
+                stream_id: "transcript".to_owned(),
+                session_id: session_id.to_owned(),
+                native_session_id: session_id.to_owned(),
+                agent_version: None,
+            },
+            generation: 1,
+            ops,
+            checkpoint: String::new(),
+            evidence: PollEvidence::of(None),
+            activate: true,
+            complete: true,
+            payload_bytes,
+            prepared: None,
+            lane,
+        }
+    }
+
+    /// Whether the source's terminal abandons its generation (a skipped
+    /// source does not).
+    pub fn abandons(&self) -> bool {
+        !self.activate && !self.skipped()
+    }
+
+    /// Framed payload bytes this source consumed, assets included.
     pub fn payload_bytes(&self) -> u64 {
         self.payload_bytes.saturating_add(
             self.ops
@@ -139,6 +219,7 @@ fn close_file(
                 complete: false,
                 payload_bytes,
                 prepared: None,
+                lane: LaneId::Path,
             });
         }
         return Err(PipelineError::Config(format!(
@@ -225,13 +306,17 @@ fn close_file(
         complete,
         payload_bytes,
         prepared: None,
+        lane: LaneId::Path,
     })
 }
 
 /// Close every source of one capture unit from the batches the planner
 /// retained for it, with each one's health as its pass reported it and
-/// whether the unit's source could not be read at all. Anything retained for
-/// a source outside the unit is a broken planner invariant.
+/// whether the unit's source could not be read at all — both from the unit's
+/// own report, never another unit's. Each member's batches are drained by
+/// its cursor; afterwards, anything still retained must belong to `open`,
+/// the cursors of other lanes' sources mid-capture, or the planner broke an
+/// invariant.
 #[allow(clippy::too_many_arguments)]
 fn close_unit(
     adapter: &dyn AgentAdapter,
@@ -241,26 +326,37 @@ fn close_unit(
     payload_bytes: u64,
     file_health: &BTreeMap<String, bool>,
     lost: bool,
+    open: &BTreeSet<i64>,
     instrument: &Instrument,
 ) -> Result<Vec<ClosedSource>, PipelineError> {
     let started = Instant::now();
-    let mut by_cursor: HashMap<i64, Vec<Batch>> = HashMap::new();
-    for batch in planner.drain_planned_batches()? {
-        if let Some(source) = batch.source.as_ref() {
-            by_cursor.entry(source.cursor_id).or_default().push(batch);
-        }
-    }
     let count = u64::try_from(members.len().max(1)).unwrap_or(u64::MAX);
-    let mut closed = Vec::with_capacity(members.len());
+    // Every member's cursor, then one drain for all of them: a physical
+    // group's members close in one pass over what the planner retained. A
+    // lost cursor still fails at its member's turn, as when every batch was
+    // drained up front.
+    let mut cursors = Vec::with_capacity(members.len());
     for file in members {
-        let cursor = queries::cursor_state(planner.conn(), &runtime.id, &file.relative_path)?
-            .ok_or_else(|| {
-                PipelineError::Config(format!(
-                    "cold planner lost cursor for {}",
-                    file.relative_path
-                ))
-            })?;
-        let batches = by_cursor.remove(&cursor.id).unwrap_or_default();
+        cursors.push(
+            queries::cursor_state(planner.conn(), &runtime.id, &file.relative_path)?.ok_or_else(
+                || {
+                    PipelineError::Config(format!(
+                        "cold planner lost cursor for {}",
+                        file.relative_path
+                    ))
+                },
+            ),
+        );
+    }
+    let ids: Vec<i64> = cursors
+        .iter()
+        .filter_map(|cursor| cursor.as_ref().ok().map(|cursor| cursor.id))
+        .collect();
+    let mut drained = planner.drain_planned_batches_for_cursors(&ids)?.into_iter();
+    let mut closed = Vec::with_capacity(members.len());
+    for (file, cursor) in members.iter().zip(cursors) {
+        let cursor = cursor?;
+        let batches = drained.next().unwrap_or_default();
         closed.push(close_file(
             adapter,
             file,
@@ -274,7 +370,11 @@ fn close_unit(
             lost,
         )?);
     }
-    if let Some(cursor_id) = by_cursor.keys().next() {
+    if let Some(cursor_id) = planner
+        .planned_batch_cursors()?
+        .into_iter()
+        .find(|cursor| !open.contains(cursor))
+    {
         return Err(PipelineError::Config(format!(
             "cold planner retained unknown cursor {cursor_id}"
         )));
@@ -284,158 +384,6 @@ fn close_unit(
         u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
     );
     Ok(closed)
-}
-
-struct Slot {
-    session_id: String,
-    transcript: bool,
-    closed: Option<ClosedSource>,
-}
-
-/// Emits closed sources in source-path order. A transcript waits while its
-/// session still has an uncaptured transcript or a pending sibling heal;
-/// everything behind a waiting slot waits with it, so the writer's order is
-/// always the canonical path order.
-struct Frontier {
-    slots: Vec<Slot>,
-    position: HashMap<String, usize>,
-    next: usize,
-    transcripts_left: HashMap<String, usize>,
-    restarted: BTreeSet<String>,
-}
-
-impl Frontier {
-    fn new(ordered: &[&SessionFile]) -> Self {
-        let mut transcripts_left: HashMap<String, usize> = HashMap::new();
-        let mut slots = Vec::with_capacity(ordered.len());
-        let mut position = HashMap::with_capacity(ordered.len());
-        for (index, file) in ordered.iter().enumerate() {
-            let transcript = file.driver == StreamDriver::JsonLines;
-            if transcript {
-                *transcripts_left.entry(file.session_id.clone()).or_default() += 1;
-            }
-            position.insert(file.relative_path.clone(), index);
-            slots.push(Slot {
-                session_id: file.session_id.clone(),
-                transcript,
-                closed: None,
-            });
-        }
-        Self {
-            slots,
-            position,
-            next: 0,
-            transcripts_left,
-            restarted: BTreeSet::new(),
-        }
-    }
-
-    fn settled(&self, slot: &Slot) -> bool {
-        !slot.transcript
-            || (self
-                .transcripts_left
-                .get(&slot.session_id)
-                .is_none_or(|left| *left == 0)
-                && !self.restarted.contains(&slot.session_id))
-    }
-
-    /// Record a source closed by the main pass.
-    fn captured(&mut self, closed: ClosedSource) -> Result<(), PipelineError> {
-        let index = self.slot_index(closed.relative_path())?;
-        let slot = &mut self.slots[index];
-        if slot.closed.is_some() || index < self.next {
-            return Err(PipelineError::Config(format!(
-                "cold source {} closed twice",
-                closed.relative_path()
-            )));
-        }
-        if slot.transcript
-            && let Some(left) = self.transcripts_left.get_mut(&slot.session_id)
-        {
-            *left = left.saturating_sub(1);
-        }
-        slot.closed = Some(closed);
-        Ok(())
-    }
-
-    /// Replace a held transcript with the replacement generation its sibling
-    /// heal produced. Held means never emitted: the writer sees one terminal
-    /// generation per source.
-    fn healed(&mut self, closed: ClosedSource) -> Result<(), PipelineError> {
-        let index = self.slot_index(closed.relative_path())?;
-        if index < self.next || self.slots[index].closed.is_none() {
-            return Err(PipelineError::Config(format!(
-                "healed cold source {} was not held for its session",
-                closed.relative_path()
-            )));
-        }
-        self.slots[index].closed = Some(closed);
-        Ok(())
-    }
-
-    /// Keep a held transcript whose sibling heal could not read it again, but
-    /// no longer as complete.
-    fn held_incomplete(&mut self, path: &str) -> Result<(), PipelineError> {
-        let index = self.slot_index(path)?;
-        match self.slots[index].closed.as_mut() {
-            Some(closed) if index >= self.next => {
-                closed.complete = false;
-                Ok(())
-            }
-            _ => Err(PipelineError::Config(format!(
-                "healed cold source {path} was not held for its session"
-            ))),
-        }
-    }
-
-    fn slot_index(&self, path: &str) -> Result<usize, PipelineError> {
-        self.position.get(path).copied().ok_or_else(|| {
-            PipelineError::Config(format!("closed cold source {path} is not in the roster"))
-        })
-    }
-
-    fn transcripts_left(&self, session_id: &str) -> usize {
-        self.transcripts_left.get(session_id).copied().unwrap_or(0)
-    }
-
-    fn emit_ready(
-        &mut self,
-        emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
-    ) -> Result<(), PipelineError> {
-        let mut ready = Vec::new();
-        while self.next < self.slots.len() {
-            let slot = &self.slots[self.next];
-            if slot.closed.is_none() || !self.settled(slot) {
-                break;
-            }
-            ready.push(self.slots[self.next].closed.take().expect("checked above"));
-            self.next += 1;
-        }
-        if ready.is_empty() {
-            Ok(())
-        } else {
-            emit(ready)
-        }
-    }
-
-    fn finish(
-        &mut self,
-        emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
-    ) -> Result<(), PipelineError> {
-        self.emit_ready(emit)?;
-        if self.next < self.slots.len() {
-            let path = self
-                .position
-                .iter()
-                .find(|(_, index)| **index == self.next)
-                .map(|(path, _)| path.clone())
-                .unwrap_or_default();
-            return Err(PipelineError::Config(format!(
-                "cold source {path} never closed"
-            )));
-        }
-        Ok(())
-    }
 }
 
 fn record_outcome(
@@ -476,23 +424,30 @@ fn virtual_parent(file: &SessionFile) -> Result<&str, PipelineError> {
 }
 
 /// [`crate::stream_backfill_into`] for the streamed fresh-cold build: the
-/// same capture drivers and planner control plane, walked in source-path
-/// order, with each source handed to `emit` as a [`ClosedSource`] once it can
-/// no longer be superseded. `emit` receives every roster source exactly once,
-/// in path order. The planner must be a cold-capture planner whose metadata
-/// batches were already taken by [`streamed_setup`].
+/// same capture drivers and planner control plane, walked by `trees`' plan
+/// ([`walk_order`]), with each source handed to `emit` as a [`ClosedSource`]
+/// once it can no longer be superseded. `emit` receives every roster source
+/// exactly once: in path order for a runtime admitted whole (`trees` is
+/// `None`), else in each lane's order, every emission blocking — this is the
+/// serial driver, which walks the plan's global order. The planner must be a
+/// cold-capture planner whose metadata batches were already taken by
+/// [`streamed_setup`].
 ///
 /// Every roster source's cursor is created before the walk, in one planner
-/// transaction and in path order — the order the walk would have created
-/// them one at a time, so each cursor gets the rowid it always had. The
-/// ledger's file id for each source is its index in that order (its roster
-/// key), in every segment.
+/// transaction and in path order — the order the path walk would have
+/// created them one at a time, so each cursor gets the rowid it always had,
+/// whatever the walk. The ledger's file id for each source is its index in
+/// that order (its roster key), in every segment.
 ///
 /// Every pass of the walk runs as part of a private build
 /// ([`IngestOptions::private_build`]): a source whose writer is mid-append,
 /// or that vanishes or keeps changing after part of it was read, still ends at
 /// a terminal generation, and an unclean one activates its parseable rows. A
 /// source that cannot be read at all is emitted skipped.
+///
+/// `trees` is the runtime's [`StreamedSetup::trees`]: `Some` for a runtime
+/// admitted per root tree, whose transcripts are then read only up to their
+/// metadata cut ([`IngestOptions::cut_bounded`]).
 #[allow(clippy::too_many_arguments)]
 pub fn stream_closed_sources_into(
     adapter: &dyn AgentAdapter,
@@ -503,9 +458,12 @@ pub fn stream_closed_sources_into(
     opts: &IngestOptions,
     instrument: &Instrument,
     mut ledger: Option<&mut rosetta_capture::Ledger>,
-    emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
+    trees: Option<&TreeMap>,
+    walk: &ColdWalkOptions,
+    emit: &mut dyn ColdEmit,
 ) -> Result<StreamReport, PipelineError> {
-    let opts = &closed_pass_options(opts);
+    let opts = &closed_pass_options(opts, trees);
+    let plan = walk_plan_for(adapter, files, trees, walk);
     let ordered = path_ordered(files);
     set_up_roster(
         adapter,
@@ -515,17 +473,23 @@ pub fn stream_closed_sources_into(
         instrument,
         ledger.as_deref_mut(),
     )?;
-    walk_closed_sources(
-        adapter, runtime, root, planner, &ordered, opts, instrument, ledger, None, emit,
-    )
+    let walker = walk::Walker::new(adapter, runtime, root, planner, &ordered, opts, instrument)?;
+    match plan.order {
+        WalkOrder::Path { .. } => walker.walk_path(&ordered, ledger, None, emit),
+        WalkOrder::Recency => walker.walk_lanes(&plan, ledger, None, walk, emit),
+    }
 }
 
 /// [`stream_closed_sources_into`] with its sources captured on a shared
 /// [`CapturePool`]: this thread becomes the runtime's sequencer. Workers
-/// read, normalize and frame the JSONL sources ahead of it, and it commits
-/// their output to the planner and the ledger strictly in path order, so
-/// the ledger bytes, the planner and every emitted source are those of the
-/// serial walk, whatever the pool's size or schedule.
+/// read, normalize and frame the JSONL sources ahead of it. On the path walk
+/// it commits their output to the planner and the ledger strictly in path
+/// order, so the ledger bytes, the planner and every emitted source are those
+/// of the serial walk, whatever the pool's size or schedule. On a recency
+/// walk each lane is its own pool runtime, and the sequencer merges the lanes
+/// one event at a time, whichever lane's head is ready first: the planner and
+/// each source's ledger content are the serial walk's, while the interleaving
+/// of different sources' ledger frames follows the schedule.
 #[allow(clippy::too_many_arguments)]
 pub fn stream_closed_sources_pooled(
     pool: &CapturePool,
@@ -537,9 +501,12 @@ pub fn stream_closed_sources_pooled(
     opts: &IngestOptions,
     instrument: &Instrument,
     mut ledger: Option<&mut rosetta_capture::Ledger>,
-    emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
+    trees: Option<&TreeMap>,
+    walk: &ColdWalkOptions,
+    emit: &mut dyn ColdEmit,
 ) -> Result<StreamReport, PipelineError> {
-    let opts = &closed_pass_options(opts);
+    let opts = &closed_pass_options(opts, trees);
+    let plan = walk_plan_for(adapter, files, trees, walk);
     let ordered = path_ordered(files);
     set_up_roster(
         adapter,
@@ -549,37 +516,36 @@ pub fn stream_closed_sources_pooled(
         instrument,
         ledger.as_deref_mut(),
     )?;
-    let pooled = crate::capture::register(
-        pool,
-        adapter,
-        runtime,
-        root,
-        planner,
-        &ordered,
-        opts,
-        instrument,
-        ledger.as_deref().map(rosetta_capture::Ledger::codec),
-    )?;
-    walk_closed_sources(
-        adapter,
-        runtime,
-        root,
-        planner,
-        &ordered,
-        opts,
-        instrument,
-        ledger,
-        Some(pooled),
-        emit,
-    )
+    let walker = walk::Walker::new(adapter, runtime, root, planner, &ordered, opts, instrument)?;
+    match plan.order {
+        WalkOrder::Path { .. } => {
+            let pooled = walker.register(
+                pool,
+                adapter,
+                &ordered,
+                &plan,
+                LaneClass::Shared,
+                ledger.as_deref(),
+            )?;
+            walker.walk_path(&ordered, ledger, pooled, emit)
+        }
+        WalkOrder::Recency => walker.walk_lanes(&plan, ledger, Some((pool, adapter)), walk, emit),
+    }
 }
 
 /// The options every closed-source pass runs under: the walk hands the writer
 /// only terminal generations ([`close_file`]) of a build nothing of which is
-/// published yet, so a pass never leaves one staged.
-fn closed_pass_options(opts: &IngestOptions) -> IngestOptions {
+/// published yet, so a pass never leaves one staged. A runtime admitted per
+/// root tree (`trees` is `Some` only for one that asked for
+/// [`rosetta_adapter_support::ColdAdmission::RootTree`] and did not fall
+/// back) also reads each transcript only up to its metadata cut, so a tree
+/// is complete as of the metadata it was listed with. Runtime admission —
+/// declared, fallen back to, or forced by the kill switch, which declares
+/// it for every adapter — reads to the end, as before.
+fn closed_pass_options(opts: &IngestOptions, trees: Option<&TreeMap>) -> IngestOptions {
     IngestOptions {
         private_build: true,
+        cut_bounded: trees.is_some(),
         ..opts.clone()
     }
 }
@@ -615,12 +581,6 @@ fn roster_keys(ordered: &[&SessionFile]) -> Result<HashMap<SourceDef, u32>, Pipe
         .collect()
 }
 
-fn path_ordered(files: &[SessionFile]) -> Vec<&SessionFile> {
-    let mut ordered: Vec<&SessionFile> = files.iter().collect();
-    ordered.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    ordered
-}
-
 /// Create the fresh cursor of every roster source that has none, in one
 /// planner transaction, in path order. Cursor ids are rowids allocated in
 /// insertion order, so each id equals the one creation at the source's turn
@@ -650,275 +610,6 @@ fn create_roster_cursors(
         )?;
     }
     Ok(())
-}
-
-/// The walk behind [`stream_closed_sources_into`], over the roster in path
-/// order. A source without a cursor gets one at its turn. A source `pooled`
-/// captures is committed from its workers' output; every other source is
-/// captured here.
-#[allow(clippy::too_many_arguments)]
-fn walk_closed_sources(
-    adapter: &dyn AgentAdapter,
-    runtime: &RuntimeRow,
-    root: &Path,
-    planner: &mut Store,
-    ordered: &[&SessionFile],
-    opts: &IngestOptions,
-    instrument: &Instrument,
-    mut ledger: Option<&mut rosetta_capture::Ledger>,
-    pooled: Option<Pooled<'_>>,
-    emit: &mut dyn FnMut(Vec<ClosedSource>) -> Result<(), PipelineError>,
-) -> Result<StreamReport, PipelineError> {
-    let tailer = Tailer::new(opts.tail.clone())?;
-    let transcripts: Vec<&SessionFile> = ordered
-        .iter()
-        .copied()
-        .filter(|file| file.driver == StreamDriver::JsonLines)
-        .collect();
-    let audit_paths =
-        rotating_audit_paths(planner, &runtime.id, &transcripts, opts.audit_files_per_run)?;
-    let audit_set: BTreeSet<&str> = audit_paths.iter().map(String::as_str).collect();
-
-    let mut report = StreamReport::default();
-    let mut session_health: BTreeMap<String, bool> = ordered
-        .iter()
-        .map(|file| (file.session_id.clone(), true))
-        .collect();
-    let mut file_health: BTreeMap<String, bool> = BTreeMap::new();
-    let mut restarted_files: BTreeSet<String> = BTreeSet::new();
-    let mut frontier = Frontier::new(ordered);
-
-    let mut index = 0;
-    while index < ordered.len() {
-        opts.check_cancelled()?;
-        let file = ordered[index];
-        if file.driver == StreamDriver::JsonLines {
-            report.files += 1;
-            let restarts_before = report.generations_restarted;
-            let payload_before = report.payload_bytes;
-            let lost_before = lost_sources(&report);
-            let mode = if audit_set.contains(file.relative_path.as_str()) {
-                PassMode::Audit
-            } else {
-                PassMode::Normal
-            };
-            let outcome = match pooled
-                .as_ref()
-                .and_then(|pooled| Some((pooled, pooled.unit(index)?)))
-            {
-                Some((pooled, unit)) => crate::capture::consume(
-                    pooled,
-                    unit,
-                    file,
-                    planner,
-                    ledger.as_deref_mut(),
-                    &mut report,
-                    instrument,
-                    opts,
-                )?,
-                None => ingest_file(
-                    adapter,
-                    runtime,
-                    root,
-                    planner,
-                    file,
-                    &tailer,
-                    opts,
-                    instrument,
-                    &mut report,
-                    mode,
-                    ledger.as_deref_mut(),
-                )?,
-            };
-            if report.generations_restarted > restarts_before {
-                restarted_files.insert(file.relative_path.clone());
-                frontier.restarted.insert(file.session_id.clone());
-            }
-            record_outcome(
-                outcome,
-                file,
-                &mut report,
-                &mut file_health,
-                &mut session_health,
-            );
-            let payload = report.payload_bytes - payload_before;
-            for closed in close_unit(
-                adapter,
-                runtime,
-                planner,
-                &[file],
-                payload,
-                &file_health,
-                lost_sources(&report) > lost_before,
-                instrument,
-            )? {
-                frontier.captured(closed)?;
-            }
-
-            // A generation restart swept and rebuilt that file's rows, but
-            // merge ops a sibling contributed into them died with the old
-            // rows. Once the session's last transcript is captured, force one
-            // replay of its other transcripts so cross-file merges re-derive —
-            // the same heal `stream_backfill_into` runs after its JSONL pass.
-            if frontier.transcripts_left(&file.session_id) == 0
-                && frontier.restarted.contains(&file.session_id)
-            {
-                for sibling in transcripts.iter().copied().filter(|sibling| {
-                    sibling.session_id == file.session_id
-                        && !restarted_files.contains(&sibling.relative_path)
-                }) {
-                    opts.check_cancelled()?;
-                    report.siblings_healed += 1;
-                    let payload_before = report.payload_bytes;
-                    let lost_before = lost_sources(&report);
-                    let generations_before =
-                        queries::cursor_state(planner.conn(), &runtime.id, &sibling.relative_path)?
-                            .map(|cursor| cursor.highest_generation);
-                    let outcome = ingest_file(
-                        adapter,
-                        runtime,
-                        root,
-                        planner,
-                        sibling,
-                        &tailer,
-                        opts,
-                        instrument,
-                        &mut report,
-                        PassMode::ForceHeal,
-                        ledger.as_deref_mut(),
-                    )?;
-                    let lost = lost_sources(&report) > lost_before;
-                    record_outcome(
-                        outcome,
-                        sibling,
-                        &mut report,
-                        &mut file_health,
-                        &mut session_health,
-                    );
-                    if lost
-                        && queries::cursor_state(
-                            planner.conn(),
-                            &runtime.id,
-                            &sibling.relative_path,
-                        )?
-                        .map(|cursor| cursor.highest_generation)
-                            == generations_before
-                    {
-                        // The sibling could not be read again at all, so
-                        // nothing was staged: the generation it was held with
-                        // stays, held Streaming like a live heal that lost
-                        // its file.
-                        frontier.held_incomplete(&sibling.relative_path)?;
-                        continue;
-                    }
-                    let payload = report.payload_bytes - payload_before;
-                    for closed in close_unit(
-                        adapter,
-                        runtime,
-                        planner,
-                        &[sibling],
-                        payload,
-                        &file_health,
-                        lost,
-                        instrument,
-                    )? {
-                        frontier.healed(closed)?;
-                    }
-                }
-                frontier.restarted.remove(&file.session_id);
-            }
-            index += 1;
-        } else {
-            // One physical document or database: its virtual members are
-            // contiguous in path order and read from one snapshot.
-            let parent = virtual_parent(file)?;
-            let mut end = index + 1;
-            while end < ordered.len()
-                && ordered[end].driver == file.driver
-                && virtual_parent(ordered[end])? == parent
-            {
-                end += 1;
-            }
-            let group = &ordered[index..end];
-            let payload_before = report.payload_bytes;
-            let lost_before = lost_sources(&report);
-            if file.driver == StreamDriver::DocumentSnapshot {
-                crate::document::stream_document_group(
-                    adapter,
-                    runtime,
-                    root,
-                    planner,
-                    parent,
-                    group,
-                    opts,
-                    instrument,
-                    &mut ledger,
-                    &mut report,
-                    &mut file_health,
-                    &mut session_health,
-                )?;
-            } else {
-                crate::snapshot::stream_snapshot_group(
-                    adapter,
-                    runtime,
-                    root,
-                    planner,
-                    parent,
-                    group,
-                    opts,
-                    instrument,
-                    &mut ledger,
-                    &mut report,
-                    &mut file_health,
-                    &mut session_health,
-                )?;
-            }
-            let payload = report.payload_bytes - payload_before;
-            for closed in close_unit(
-                adapter,
-                runtime,
-                planner,
-                group,
-                payload,
-                &file_health,
-                lost_sources(&report) > lost_before,
-                instrument,
-            )? {
-                frontier.captured(closed)?;
-            }
-            index = end;
-        }
-        frontier.emit_ready(emit)?;
-    }
-    frontier.finish(emit)?;
-
-    let mut last_completed_audit = None;
-    for path in &audit_paths {
-        if file_health.get(path).copied() != Some(true) {
-            break;
-        }
-        last_completed_audit = Some(path.as_str());
-        report.files_audited += 1;
-    }
-    if let Some(path) = last_completed_audit {
-        planner.set_audit_path(&runtime.id, path)?;
-    }
-    if let Some(progress) = &opts.progress {
-        progress.reading_finished();
-    }
-    // The planner's own readiness badges, kept for the report's accounting;
-    // canonical readiness is the writer's admission flip.
-    for (session_id, complete) in session_health {
-        let next = if complete {
-            StreamState::Indexed
-        } else {
-            StreamState::Streaming
-        };
-        if planner.set_session_stream_state(&session_id, next)? && complete {
-            report.sessions_indexed += 1;
-        }
-    }
-    Ok(report)
 }
 
 #[cfg(test)]

@@ -33,7 +33,10 @@ tokio.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
+futures-util.workspace = true
 http-body-util.workspace = true
 image.workspace = true
 rosetta-bench-corpus = { path = "../bench-corpus" }
+# The shared-cache readers test reads the WS snapshots of a bound server.
+tokio-tungstenite = "0.29"
 tower.workspace = true

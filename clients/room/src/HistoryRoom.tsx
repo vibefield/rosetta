@@ -63,6 +63,7 @@ import {
 import type { ProjectViewModel } from "./lib/model";
 
 import { compareOrderedSessions } from "./lib/activity-order";
+import { importCourse, parentIds } from "./lib/import-state";
 import { useActivityOrder } from "./lib/use-activity-order";
 import { createSearchResultsViewModel } from "./lib/search-results";
 import {
@@ -409,6 +410,8 @@ function RoomBody({
   // One pass over the sessions per metadata change; every project and the
   // selected project's list read their own slice of it.
   const sessionsByProject = useMemo(() => indexSessionsByProject(meta?.sessions ?? []), [meta]);
+  // A metadata-only row is known by its children, which may sit in any project.
+  const sessionParents = useMemo(() => parentIds(meta?.sessions ?? []), [meta]);
   const projectViewModels: ProjectViewModel[] = useMemo(
     () =>
       projectRows.map((p) =>
@@ -822,6 +825,7 @@ function RoomBody({
               }
               onToggleWorktree={worktree.toggle}
               onSessionSelect={(selectedSession) => { setSessionId(selectedSession.id); setInspectedThread(null); }}
+              parentIds={sessionParents}
               hostActs={projectId === null ? null : (hostProjectActs?.(projectId, { folder: shownFolderKey }) ?? null)}
               hostCard={projectId === null || hostProjectCard === undefined ? null : hostProjectCard(projectId)}
             />
@@ -841,6 +845,7 @@ function RoomBody({
             <TranscriptColumn
               session={session}
               duringBackfill={ingestActive}
+              importCourse={importCourse(ingest?.run, activity?.feed.resumed === true)}
               sessions={meta?.sessions ?? []}
               project={session ? (projectById.get(projectKey(session)) ?? null) : null}
               feed={feed}

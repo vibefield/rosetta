@@ -9,6 +9,11 @@ export interface ActivityFeed {
   readonly startedAt: number | null;
   readonly uptimeMs: number;
   readonly receivedAt: number | null;
+  /** This daemon start's run was seen restoring saved progress (`resumedRun`).
+   * A resumed build's board counts nothing done until it publishes, while the
+   * conversations a reader could open before stay open, so its card counts
+   * nothing. Absent means a fresh build. */
+  readonly resumed?: boolean;
 }
 
 export interface ActivityPhase {
@@ -22,6 +27,11 @@ export interface ActivityPhase {
   readonly unit: "bytes" | "files" | "documents" | "records" | null;
   readonly fraction: number | null;
   readonly active: boolean;
+  /** Conversations the import has made readable, drawn after the title as
+   * "· N ready" (`phaseHeading`); absent, or null, when there are none to
+   * count. Apart from the title, so its live region announces the step and
+   * not every count. */
+  readonly ready?: number | null;
 }
 
 const number = (value: number) => value.toLocaleString();
@@ -41,6 +51,37 @@ export function progressDuration(ms: number): string {
   if (seconds < 3_600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   return `${Math.floor(seconds / 3_600)}h ${Math.floor((seconds % 3_600) / 60)}m`;
 }
+
+/** The sessions whose import finished: the board advances them as each
+ * conversation tree opens, or as each runtime closes. */
+export function readySessions(ingest: IngestProgress | null): number {
+  return (ingest?.projects ?? []).reduce((sum, row) => sum + row.sessions_done, 0);
+}
+
+/** " · 12 ready" after the title, or nothing when there is no count. */
+export function readySuffix(phase: ActivityPhase): string {
+  return phase.ready ? ` · ${number(phase.ready)} ready` : "";
+}
+
+/** The title as drawn: "Importing your newest conversations first · 12 ready". */
+export function phaseHeading(phase: ActivityPhase): string {
+  return `${phase.title}${readySuffix(phase)}`;
+}
+
+/** The run key once this daemon start's run is seen restoring, kept until the
+ * import goes live: a resumed build reads, reconciles and publishes as one,
+ * so its card says so. A room that opens after the restoring
+ * phase cannot tell, and reads the fresh copy without a count. */
+export function resumedRun(previous: string | null, feed: ActivityFeed): string | null {
+  const ingest = feed.ingest;
+  if (ingest === null || ingest.phase === "live") return null;
+  const key = `${feed.startedAt ?? ""}:${ingest.run?.id ?? ""}`;
+  if (ingest.phase === "restoring") return key;
+  return previous === key ? key : null;
+}
+
+const BORN_DURING_IMPORT = "Conversations you start now appear when the import finishes.";
+const ARCHIVE_PAUSE = "Conversations may pause for a few seconds while the archive is saved.";
 
 /** Percentages describe the named step, never an invented overall ETA. */
 export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
@@ -70,8 +111,10 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
   if (ingest?.phase === "restoring") {
     const current = runtimes.filter((row) => row.state === "streaming")
       .reduce((sum, row) => sum + row.records, 0);
+    // The board starts again at zero here, so the copy counts nothing: any
+    // conversation a reader could open before stays open.
     return { ...base, key: "restoring", title: "Restoring saved progress",
-      detail: "Recovering saved conversations so your import can continue.",
+      detail: "Picking up where the import stopped. Conversations you can open now stay open.",
       amount: `${number(current)} items restored`, current, unit: "records" };
   }
   if (ingest?.phase === "metadata_ready") return {
@@ -83,8 +126,8 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
     ...base, key: ingest.phase, step: 3,
     title: ingest.phase === "publishing" ? "Saving your archive" : "Finishing your archive",
     detail: ingest.phase === "publishing"
-      ? "Saving your history to this device. Search is next."
-      : "Checking conversations and preparing your activity summaries.",
+      ? `Saving your history to this device. ${ARCHIVE_PAUSE}`
+      : `Checking conversations and preparing your activity summaries. ${ARCHIVE_PAUSE}`,
     amount: `${number(sessions)} sessions imported`,
   };
   if (ingest && ingest.phase !== "live") {
@@ -104,9 +147,16 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
       const current = runtimes.reduce((sum, row) => sum + row.bytes_streamed, 0);
       const total = runtimes.some((row) => row.bytes_total === 0 && row.sessions_total > 0) ? 0
         : runtimes.reduce((sum, row) => sum + row.bytes_total, 0);
+      const ready = readySessions(ingest);
       return {
-        ...base, key: "reading", title: "Reading conversations", step: 2,
-        detail: "You can browse conversations as each agent becomes ready.",
+        ...base, key: "reading", step: 2,
+        // Newest trees import first and each opens as it closes. A
+        // resumed build opens nothing new before it publishes.
+        title: feed.resumed ? "Finishing the import" : "Importing your newest conversations first",
+        ready: feed.resumed || ready === 0 ? null : ready,
+        detail: feed.resumed
+          ? "Conversations you can open now stay open. The rest, and any you start now, appear when the import finishes."
+          : `Older history fills in while you browse. ${BORN_DURING_IMPORT}`,
         amount: `${progressBytes(current)} processed`, current, total, unit: "bytes",
         fraction: fraction(current, total),
       };

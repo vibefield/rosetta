@@ -74,6 +74,7 @@ import type { RoomHeadActs } from "../host-inputs";
 import { HostAct } from "./HostAct";
 import { activityCuts } from "./transcript/activity-plan";
 import { ReadingSessionProvider, useRoom } from "../room-context";
+import type { ImportCourse } from "../lib/import-state";
 
 export type { ThreadFocus } from "./transcript/thread-index";
 
@@ -106,6 +107,8 @@ export interface TranscriptColumnProps {
   readonly session: SessionRow | null;
   /** The cold backfill is running — threaded to every watermark. */
   readonly duringBackfill: boolean;
+  /** When the running import opens a session it has not reached. */
+  readonly importCourse?: ImportCourse | undefined;
   /** Full metadata topology. Only roots are navigable, but descendants are
    * needed here to build the embedded thread tree. */
   readonly sessions: readonly SessionRow[];
@@ -148,6 +151,7 @@ export function TranscriptColumn(props: TranscriptColumnProps) {
 function SessionTranscript({
   session,
   duringBackfill,
+  importCourse,
   sessions,
   project,
   feed,
@@ -551,6 +555,7 @@ function SessionTranscript({
                 model={model}
                 feed={feed}
                 duringBackfill={duringBackfill}
+                importCourse={importCourse}
                 index={index}
                 focus={focus}
                 highlightedTimelineId={highlightedTimelineId}

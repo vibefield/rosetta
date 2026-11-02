@@ -587,21 +587,64 @@ impl TailRings {
 /// pass would ever mention them again — a permanent, silent disagreement
 /// between the mirror and its subscribers. Failing before the first mutation
 /// keeps the failed pass repeatable instead.
+///
+/// While a fresh build's RAM generation is unpublished the mirror can hold
+/// the admission barrier ([`Self::set_hide_pending`]): a session's activity
+/// is a rollup of payload rows, so a Pending session carries none and no
+/// rollup counts a Pending member. Identity rows stay whole either way.
 #[derive(Debug, Default)]
 pub struct MetaMirror {
     sessions: HashMap<String, SessionRow>,
     projects: HashMap<String, ProjectRow>,
     runtimes: HashMap<String, RuntimeRow>,
+    hide_pending: bool,
 }
 
 impl MetaMirror {
+    /// Hold (or drop) the admission barrier for every later read. Lifting it
+    /// re-reads nothing; [`Self::reveal_pending`] lifts it and re-reads the
+    /// rows it shaped.
+    pub fn set_hide_pending(&mut self, hide: bool) {
+        self.hide_pending = hide;
+    }
+
+    pub fn hides_pending(&self) -> bool {
+        self.hide_pending
+    }
+
+    /// Lift the admission barrier at publication. The only resident rows it
+    /// shaped are sessions still Pending and their ancestors, whose rollups
+    /// skipped them; exactly those are re-read, so the mirror ends where one
+    /// that never held the barrier would. The barrier decides activity, never
+    /// residency, so rows the projection no longer holds and sessions that
+    /// were never resident are left alone; the effects that track them are
+    /// [`Self::refresh`]'s and [`Self::refresh_meta`]'s. Read-then-absorb: a
+    /// failed read keeps the barrier and the mirror untouched.
+    pub fn reveal_pending(&mut self, conn: &Connection) -> Result<Vec<Mutation>, StoreError> {
+        if !self.hide_pending {
+            return Ok(Vec::new());
+        }
+        let pending = queries::pending_session_ids(conn)?;
+        let mut shaped = self.activity_dependents(conn, &pending)?;
+        shaped.retain(|id| self.sessions.contains_key(id));
+        let sessions = fetch_sessions(conn, &shaped, false)?;
+        self.hide_pending = false;
+        let mut events = Vec::new();
+        for (_, row) in sessions {
+            if let Some(row) = row {
+                self.absorb_session(row, &mut events);
+            }
+        }
+        Ok(events)
+    }
+
     /// Load the whole surface, diffing against resident state — startup, and
     /// the effects-overflow path ("the hot tier rebuilds from the projection
     /// the way the projection rebuilds from the ledger").
     pub fn warm(&mut self, conn: &Connection) -> Result<Vec<Mutation>, StoreError> {
         let runtimes = queries::all_runtimes(conn)?;
         let projects = queries::all_projects(conn)?;
-        let sessions = queries::all_sessions(conn)?;
+        let sessions = queries::all_sessions_visible(conn, self.hide_pending)?;
 
         let mut events = Vec::new();
         for row in runtimes {
@@ -632,7 +675,7 @@ impl MetaMirror {
         let runtimes = fetch_named(conn, &effects.touched_runtimes, queries::runtime)?;
         let projects = fetch_named(conn, &effects.touched_projects, queries::project)?;
         let session_ids = self.activity_dependents(conn, &effects.touched_sessions)?;
-        let sessions = fetch_sessions(conn, &session_ids)?;
+        let sessions = fetch_sessions(conn, &session_ids, self.hide_pending)?;
 
         let mut events = Vec::new();
         for (_, row) in runtimes {
@@ -675,7 +718,7 @@ impl MetaMirror {
         let runtimes = fetch_named(conn, &effects.runtimes, queries::runtime)?;
         let projects = fetch_named(conn, &effects.projects, queries::project)?;
         let session_ids = self.activity_dependents(conn, &effects.sessions)?;
-        let sessions = fetch_sessions(conn, &session_ids)?;
+        let sessions = fetch_sessions(conn, &session_ids, self.hide_pending)?;
 
         let mut events = Vec::new();
         for (id, row) in runtimes {
@@ -775,15 +818,19 @@ impl MetaMirror {
 const BULK_SESSION_READ: usize = 64;
 
 /// [`fetch_named`] for sessions: the same rows and answers, read in one pass
-/// once there are many of them.
+/// once there are many of them, behind the mirror's admission barrier when
+/// it holds one.
 fn fetch_sessions<'a>(
     conn: &Connection,
     ids: &'a BTreeSet<String>,
+    hide_pending: bool,
 ) -> Result<Vec<(&'a str, Option<SessionRow>)>, StoreError> {
     if ids.len() > BULK_SESSION_READ {
-        queries::named_sessions(conn, ids)
+        queries::named_sessions_visible(conn, ids, hide_pending)
     } else {
-        fetch_named(conn, ids, queries::session)
+        fetch_named(conn, ids, |conn, id| {
+            queries::session_visible(conn, id, hide_pending)
+        })
     }
 }
 

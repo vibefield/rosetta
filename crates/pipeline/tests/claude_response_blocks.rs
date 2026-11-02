@@ -5,9 +5,9 @@ use std::{fs, io::Write, path::Path};
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_core::{ids, rows::RuntimeRow};
 use rosetta_pipeline::{
-    IngestOptions, Instrument, RebuildOptions, StreamedPreparer, StreamedRuntime,
-    apply_prepared_runtime, meta_ingest_into, prepare_runtime, rebuild_runtime_with_options,
-    stream_backfill_into, stream_closed_sources_into, streamed_setup,
+    BlockingEmit, ColdWalkOptions, IngestOptions, Instrument, RebuildOptions, StreamedPreparer,
+    StreamedRuntime, apply_prepared_runtime, meta_ingest_into, prepare_runtime,
+    rebuild_runtime_with_options, stream_backfill_into, stream_closed_sources_into, streamed_setup,
 };
 use rosetta_store::Store;
 use serde_json::{Value, json};
@@ -136,11 +136,13 @@ fn split_workflow_response_survives_cold_live_resume_and_ledger_replay() {
                 &options,
                 &instrument,
                 Some(&mut ledger),
-                &mut |mut sources| {
+                None,
+                &ColdWalkOptions::default(),
+                &mut BlockingEmit(|_, mut sources| {
                     preparer.prepare(&mut sources)?;
                     writer.apply(&mut store, sources, &instrument)?;
                     Ok(())
-                },
+                }),
             )
             .unwrap();
             writer

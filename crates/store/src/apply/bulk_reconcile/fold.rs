@@ -195,6 +195,100 @@ impl<'a> FoldState<'a> {
         Ok(())
     }
 
+    fn insert_opener(
+        &mut self,
+        key: ToolKey,
+        candidate: BufferedOpener<'a>,
+    ) -> Result<(), StoreError> {
+        let Some(previous) = self.openers.get_mut(&key) else {
+            self.openers.insert(key, candidate);
+            return Ok(());
+        };
+        if previous.row.timeline_id != candidate.row.timeline_id {
+            return Err(StoreError::ProjectionInvalid {
+                message: format!(
+                    "cold tool openers {} and {} share correlation {}/{}",
+                    previous.row.timeline_id,
+                    candidate.row.timeline_id,
+                    key.session_id,
+                    key.correlation_key
+                ),
+            });
+        }
+        if previous.order == candidate.order && *previous.row != *candidate.row {
+            return Err(StoreError::ProjectionInvalid {
+                message: format!(
+                    "cold tool opener {} has conflicting payloads at {}:{}",
+                    candidate.row.timeline_id, candidate.order.path, candidate.order.sequence
+                ),
+            });
+        }
+        // Claude can repeat one native assistant record on a later branch
+        // with the same UUID/tool ID but a different parent. Ordinary SQLite
+        // upsert semantics made the later source position authoritative; the
+        // one-shot fold must preserve that exact behavior.
+        if candidate.order > previous.order {
+            *previous = candidate;
+        }
+        Ok(())
+    }
+
+    /// Fold `other`'s collected sources in with these: what collecting
+    /// both sets of sources into one state would hold. Every step of
+    /// `collect_source` is order-independent, so the merge is too.
+    fn absorb(&mut self, other: FoldState<'a>) -> Result<(), StoreError> {
+        if self.source_keys.is_empty()
+            && self.openers.is_empty()
+            && self.facts.is_empty()
+            && self.tail.is_empty()
+            && self.native_updates.is_empty()
+            && self.session_touches.is_empty()
+        {
+            // The first unit of a batch: nothing to merge with.
+            *self = other;
+            return Ok(());
+        }
+        let FoldState {
+            source_keys,
+            openers,
+            facts,
+            tail,
+            native_updates,
+            session_touches,
+        } = other;
+        for key in source_keys {
+            if !self.source_keys.insert(key) {
+                return Err(StoreError::SourceState {
+                    cursor_id: key.cursor_id,
+                    message: "a streamed cold fold collected one closed source twice".into(),
+                });
+            }
+        }
+        for (key, candidate) in openers {
+            self.insert_opener(key, candidate)?;
+        }
+        for (key, facts) in facts {
+            // Partitions of closure-proven trees never share a correlation:
+            // move the whole set; only bound trees' facts meet here.
+            let key = match self.facts.entry(key) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert(facts);
+                    continue;
+                }
+                std::collections::btree_map::Entry::Occupied(slot) => slot.key().clone(),
+            };
+            for (evidence, fact) in facts {
+                self.insert_fact(key.clone(), evidence, fact)?;
+            }
+        }
+        self.tail.extend(tail);
+        self.native_updates.extend(native_updates);
+        for (session_id, at) in session_touches {
+            note_session_touch(&mut self.session_touches, &session_id, Some(at));
+        }
+        Ok(())
+    }
+
     /// Gather one activated source's deferred ops at `path`. `activation_end`
     /// is the end-exclusive sequence its activation sealed (zero for an
     /// append that began already active: no finalization facts).
@@ -228,39 +322,7 @@ impl<'a> FoldState<'a> {
                         },
                         row,
                     };
-                    if let Some(previous) = self.openers.get_mut(&key) {
-                        if previous.row.timeline_id != candidate.row.timeline_id {
-                            return Err(StoreError::ProjectionInvalid {
-                                message: format!(
-                                    "cold tool openers {} and {} share correlation {}/{}",
-                                    previous.row.timeline_id,
-                                    candidate.row.timeline_id,
-                                    key.session_id,
-                                    key.correlation_key
-                                ),
-                            });
-                        }
-                        if previous.order == candidate.order && *previous.row != *candidate.row {
-                            return Err(StoreError::ProjectionInvalid {
-                                message: format!(
-                                    "cold tool opener {} has conflicting payloads at {}:{}",
-                                    candidate.row.timeline_id,
-                                    candidate.order.path,
-                                    candidate.order.sequence
-                                ),
-                            });
-                        }
-                        // Claude can repeat one native assistant record on a
-                        // later branch with the same UUID/tool ID but a
-                        // different parent. Ordinary SQLite upsert semantics
-                        // made the later source position authoritative; the
-                        // one-shot fold must preserve that exact behavior.
-                        if candidate.order > previous.order {
-                            *previous = candidate;
-                        }
-                    } else {
-                        self.openers.insert(key, candidate);
-                    }
+                    self.insert_opener(key, candidate)?;
                 }
                 DeferredParts::Update {
                     key,
@@ -584,6 +646,13 @@ impl ColdFold {
                 .into_iter()
                 .map(|(sequence, op)| (sequence, split_owned(op))),
         )
+    }
+
+    /// Fold `other` in with this fold: exactly the fold of both sets of
+    /// sources collected together, so facts of one session collected into
+    /// two partitions (bound root trees) still meet before `finish`.
+    pub(crate) fn absorb(&mut self, other: ColdFold) -> Result<(), StoreError> {
+        self.state.absorb(other.state)
     }
 
     /// Resolve and order the collected runtime. Also returns every session

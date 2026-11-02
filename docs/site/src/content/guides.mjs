@@ -87,7 +87,7 @@ export const guides = [
     render: ({ url }) => `
       ${s('two-gates', 'Two independent readiness gates', `<p><code>/api/status</code> exposes <code>canonical_ready</code> and <code>search.readiness</code>. The canonical projection can be readable while the detached search index is still building.</p>${table(['Surface', 'During a fresh cold start'], [
         ['Projects and sessions', 'Metadata appears as bounded runtime skims commit.'],
-        ['Timeline', 'A pending runtime exposes no partial payload. Rows become visible when its readiness commit admits the runtime.'],
+        ['Timeline', 'A pending session exposes no partial payload. Claude Code and Codex make each conversation tree readable, newest first, once all of its files are imported; a tree another tree’s files reference, and every other agent’s sessions, become readable when that agent’s import completes. A resumed import makes sessions readable at publication. An admitted session never becomes pending again.'],
         ['Heatmap, usage, day usage, contribution, pricing', '503 with not_ready until canonical publication.'],
         ['Search', '200 with building readiness and no hits until canonical publication; then the detached index builds.'],
       ])}`)}

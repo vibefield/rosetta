@@ -1628,6 +1628,7 @@ version = "0.1.2"
 dependencies = [
  "axum",
  "blake3",
+ "futures-util",
  "http-body-util",
  "image",
  "libc",
@@ -1654,6 +1655,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tower",
 ]
 

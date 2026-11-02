@@ -39,9 +39,10 @@ use crate::closed::tests::{
     HEAL_JOURNAL, HEAL_TRANSCRIPT, RewriteOnce, adapters, claude_user, copy_tree, fixture_roots,
 };
 use crate::{
-    ClosedSource, EarlyToolReport, IngestOptions, Instrument, PipelineError, StreamedPreparer,
-    StreamedRuntime, discover, expand_data_root, meta_ingest_inventory_into,
-    stream_closed_sources_into, stream_closed_sources_pooled, streamed_setup,
+    BlockingEmit, ClosedSource, ColdWalkOptions, EarlyToolReport, IngestOptions, Instrument,
+    PipelineError, StreamedPreparer, StreamedRuntime, discover, expand_data_root,
+    meta_ingest_inventory_into, stream_closed_sources_into, stream_closed_sources_pooled,
+    streamed_setup,
 };
 
 /// One way to capture: the serial walk (`workers == 0`), or the pool under
@@ -243,13 +244,13 @@ fn capture_into_after(
     // (the sequencer, when pooled), then the writer.
     let mut preparer = StreamedPreparer::new(&files);
     let mut emitted = Vec::new();
-    let mut emit = |mut sources: Vec<ClosedSource>| {
+    let mut emit = BlockingEmit(|_, mut sources: Vec<ClosedSource>| {
         preparer.prepare(&mut sources)?;
         emitted.extend(sources.iter().map(|source| format!("{source:?}")));
         writer
             .apply(&mut canonical, sources, &instrument)
             .map(|_| ())
-    };
+    });
     between();
     let captured = catch_unwind(AssertUnwindSafe(|| {
         if config.workers == 0 {
@@ -262,6 +263,8 @@ fn capture_into_after(
                 opts,
                 &instrument,
                 Some(&mut ledger),
+                None,
+                &ColdWalkOptions::default(),
                 &mut emit,
             );
         }
@@ -280,6 +283,8 @@ fn capture_into_after(
                 opts,
                 &instrument,
                 Some(&mut ledger),
+                None,
+                &ColdWalkOptions::default(),
                 &mut emit,
             )
         })
@@ -1169,5 +1174,6 @@ fn stream_state(canonical: &BTreeMap<String, Vec<String>>, native: &str) -> Stri
 }
 
 mod faults;
+mod lanes;
 mod oversized;
 mod tolerance;

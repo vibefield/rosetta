@@ -59,6 +59,12 @@ impl SessionFile {
     pub(crate) fn projected_session_id(&self) -> Option<String> {
         (!self.ledger_only).then(|| self.session_id.clone())
     }
+
+    /// The bytes a root-tree cold build reads of this source: its metadata
+    /// cut where it has one, else its census size.
+    pub fn read_len(&self) -> u64 {
+        self.cut_len.unwrap_or(self.size)
+    }
 }
 
 #[derive(Debug, Default)]

@@ -21,7 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -29,19 +29,24 @@ use std::time::{Duration, Instant};
 use crate::ingestion_control::ColdControl;
 use rosetta_capture::{NotifyEvents, SourceWake};
 
+#[cfg(test)]
+mod command_stage_tests;
+mod commands;
 pub(crate) mod control;
+#[cfg(test)]
+mod inprocess;
 mod resume;
+#[cfg(test)]
+mod resume_kill_tests;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric,
-    RawCommandLocator, RebuildOptions, SessionFile, SliceBudget, StreamReport,
-    meta_ingest_inventory_into, read_raw_command, rebuild_runtime_with_options,
-    stream_backfill_withholding_health,
+    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, RebuildOptions,
+    SessionFile, SliceBudget, StreamReport, meta_ingest_inventory_into,
+    rebuild_runtime_with_options, stream_backfill_withholding_health,
 };
 use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
     AppState, BoostLedger, ConsentGate, DaemonHealth, EnrolledRuntimes, Hub, HubConfig,
-    IngestCounterSource, IngestCounters, ProjectionReader, RawCommandReader, RuntimeIdentity,
-    RuntimeTick, router,
+    IngestCounterSource, IngestCounters, ProjectionReader, RuntimeIdentity, RuntimeTick, router,
 };
 use rosetta_store::{Store, queries};
 
@@ -51,7 +56,7 @@ use crate::engine::{
 };
 use crate::enroll::{Enrollment, RuntimeTarget, discovered_by_kind, resolve_targets, runtime_name};
 use crate::recovery::restart_incomplete_projection;
-use crate::runtime_ledger::{is_layout_root, ledger_dir, ledger_dir_for, open_runtime_ledger};
+use crate::runtime_ledger::{is_layout_root, ledger_dir, open_runtime_ledger};
 use crate::{
     AppliedColdRuntime, ColdCaptureRequest, Flags, identity_name, install_rebuilt_projection,
     ledger_root, load_enrollment, make_single_file, open_progressive_backfill, parse_flags,
@@ -64,37 +69,6 @@ const CONSENT_POLL: Duration = Duration::from_millis(200);
 #[cfg(test)]
 #[path = "serve_tests.rs"]
 mod tests;
-
-struct LedgerCommandReader {
-    root: PathBuf,
-    adapters: Vec<&'static dyn rosetta_adapter_support::AgentAdapter>,
-}
-
-impl RawCommandReader for LedgerCommandReader {
-    fn read_command(&self, source: &queries::CommandSource) -> Result<Option<String>, String> {
-        let adapter = self
-            .adapters
-            .iter()
-            .copied()
-            .find(|adapter| adapter.kind() == source.agent_kind)
-            .ok_or_else(|| format!("no adapter for {}", source.agent_kind))?;
-        let locator = RawCommandLocator {
-            runtime_id: source.runtime_id.clone(),
-            session_id: source.session_id.clone(),
-            cursor_id: source.cursor_id,
-            relative_path: source.relative_path.clone(),
-            generation: source.generation,
-            offset: source.offset,
-            timeline_id: source.timeline_id.clone(),
-            correlation_key: source.correlation_key.clone(),
-        };
-        // The runtime's ledger directory follows its identity root: the
-        // per-kind directory for a discovered runtime, `<kind>~<digest>` for
-        // a supervisor-enrolled one.
-        let dir = ledger_dir_for(&self.root, &source.agent_kind, &source.data_root);
-        read_raw_command(adapter, &dir, &locator).map_err(|error| error.to_string())
-    }
-}
 
 /// The consented targets a serve mode iterates, in target order.
 fn consented_targets<'a>(
@@ -250,7 +224,12 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // Milestone base for the sweep harness: every `milestone:` line below
     // reports seconds since this instant.
     let started = Instant::now();
-    let flags = parse_flags(args)?;
+    serve(parse_flags(args)?, started)
+}
+
+/// [`cmd_serve`] with its flags parsed. In-crate tests call it directly to
+/// set the hidden knobs no flag spells (a walk probe, the chunk bound).
+pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
     let db = flags.db.clone().ok_or("serve needs --db PATH")?;
     // The starter-slice budget is the tunable under sweep: unset = the
     // blessed default, `--slice-budget 0` = whole files, anything else = a
@@ -391,6 +370,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         health.ingest_live();
     }
     let hub = Arc::new(Hub::new(HubConfig::default(), now_ms() as u64));
+    hub.set_hide_pending(fresh_fast);
     let consent = Arc::new(ConsentGate::new());
     // Only the disk ColdEngine drains boosts (and closes the ledger when its
     // loop ends). Every other mode attaches none, so the route says queued:false.
@@ -433,16 +413,17 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
         });
     }
+    let commands = Arc::new(commands::LedgerCommandReader::new(
+        public_ledgers.clone(),
+        crate::registry(),
+    ));
     let mut state = AppState::with_search(hub.clone(), db.clone(), Arc::new(search.clone()))
         .with_projection(projection_reader.clone())
         .with_daemon_health(health.clone())
         .with_consent(consent.clone())
         .with_enrolled(enrolled_presentation)
         .with_auth(auth.clone())
-        .with_raw_commands(Arc::new(LedgerCommandReader {
-            root: public_ledgers.clone(),
-            adapters: crate::registry(),
-        }));
+        .with_raw_commands(commands.clone());
     if let Some(boost) = &boost {
         state = state.with_boost(boost.clone());
     }
@@ -739,6 +720,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             &stop,
             started,
             control.as_ref().expect("cold serve owns a controller"),
+            &commands,
         );
         let (mut store, absorbed) = match outcome {
             Ok(done) => done,
@@ -1408,6 +1390,7 @@ fn run_resumed_fresh_serve(
         board.session_done(project.as_deref(), session_id);
     }
     let hub = public_hub;
+    hub.set_hide_pending(false);
     hub.rewarm(store.conn())
         .map_err(|error| error.to_string())?;
     health.ingest_metadata_ready(now_ms());
@@ -1609,6 +1592,8 @@ fn run_fresh_fast_serve(
         control,
         None,
     )?;
+    hub.reveal_pending(store.conn())
+        .map_err(|error| error.to_string())?;
     control.succeeded()?;
     println!(
         "milestone: canonical-ready elapsed_s={:.2}",
@@ -1621,6 +1606,7 @@ fn run_fresh_fast_serve(
 
     if flags.json && flags.profile {
         crate::bench::emit_profile("serve-cold", instrument);
+        crate::cold_stream::emit_shared_cache_locks(projection_reader);
     }
 
     // Reattach live ledger handles at their public paths. Watchers and

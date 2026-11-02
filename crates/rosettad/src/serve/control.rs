@@ -29,6 +29,7 @@ pub(super) fn run_fresh(
     stop: &Arc<AtomicBool>,
     started: Instant,
     control: &ColdControl,
+    commands: &commands::LedgerCommandReader,
 ) -> Result<(Store, u64), String> {
     let public_ledgers = ledger_root(flags, db);
     let mut next_store = Some((store, temp));
@@ -47,6 +48,7 @@ pub(super) fn run_fresh(
             &ColdEnrollment::from_targets(consented_targets(current, consented)),
         )?;
         let stage_path = stage.path().to_path_buf();
+        commands.stage(&stage_path);
         let (store, temp) = next_store.take().expect("one canonical writer per attempt");
         let outcome = if recovering {
             run_resumed_fresh_serve(

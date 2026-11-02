@@ -54,6 +54,7 @@ fn closed(path: &str, session_id: &str, ops: Vec<IngestOp>) -> ClosedSource {
         complete: true,
         payload_bytes: 1,
         prepared: None,
+        lane: crate::closed::LaneId::Path,
     }
 }
 
@@ -110,7 +111,7 @@ fn prepared(sources: &[ClosedSource]) -> Vec<(bool, usize, usize)> {
             let prepared = source.prepared.as_ref().expect("prepared");
             (
                 prepared.withheld,
-                prepared.resolved.len(),
+                prepared.to_resolve.len(),
                 prepared.released.len(),
             )
         })

@@ -11,8 +11,10 @@ pub mod assets;
 mod bulk;
 mod cold_stream;
 mod columns;
+mod commit_observer;
 pub mod hot;
 pub mod html_artifacts;
+pub mod lock_order;
 mod message_codec;
 pub mod pricing;
 pub mod queries;
@@ -28,6 +30,7 @@ mod usage_totals;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use rosetta_core::rows::StreamState;
@@ -37,10 +40,13 @@ pub use apply::{
     ApplyProfile, ApplyStats, Batch, CheckpointUpdate, ResolvedSession, SourceMode, SourceWrite,
     WithheldFacts,
 };
-pub use cold_stream::{ColdReconciliation, StreamedSource};
+pub use cold_stream::{ColdAdmission, ColdReconciliation, StreamedSource};
+#[doc(hidden)]
+pub use commit_observer::{CommitKind, CommitObserver};
 pub use hot::{
     Effects, HotConfig, MetaEffects, MetaMirror, Mutation, Replay, RowScope, Stamp, TailRings,
 };
+pub use lock_order::{SharedCacheLockReport, SharedCacheLocks};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct BulkLoadStats {
@@ -127,6 +133,13 @@ pub enum StoreError {
     ProjectionInvalid {
         message: String,
     },
+    /// A shared-cache lock refusal inside a writer transaction on the
+    /// shared RAM generation. The lock discipline (`lock_order`) rules it
+    /// out, so it names a broken order, never ordinary contention.
+    LockOrder {
+        tx: &'static str,
+        source: rusqlite::Error,
+    },
 }
 
 impl fmt::Display for StoreError {
@@ -156,6 +169,9 @@ impl fmt::Display for StoreError {
             }
             Self::BulkLoadState { message } => write!(f, "invalid bulk-load state: {message}"),
             Self::ProjectionInvalid { message } => write!(f, "invalid projection: {message}"),
+            Self::LockOrder { tx, source } => {
+                write!(f, "shared-cache lock-order violation in {tx}: {source}")
+            }
         }
     }
 }
@@ -164,6 +180,7 @@ impl std::error::Error for StoreError {}
 
 impl From<rusqlite::Error> for StoreError {
     fn from(err: rusqlite::Error) -> Self {
+        lock_order::note(&err);
         Self::Sqlite(err)
     }
 }
@@ -198,6 +215,10 @@ pub struct Store {
     /// This is intentionally process-local: raw-ledger replay, not SQLite, is
     /// the recovery path after restart.
     ram_reconciliation: apply::RamReconciliationBuffer,
+    /// `Some` only for the named shared-cache RAM generation that readers
+    /// attach to: its writer transactions follow the lock discipline
+    /// (`lock_order`, W1/W2) and record their waits here.
+    shared_readers: Option<Arc<SharedCacheLocks>>,
     /// Which session owns each model response's usage when copies of the
     /// response exist in several files. Process-local like the buffer above:
     /// a rebuild replays the raw ledger through it (ARCHITECTURE §4.1.3).
@@ -228,6 +249,8 @@ pub struct Store {
     /// identity keys every committed batch may have moved. Cheap enough for
     /// the cold paths, which suppress `effects` above.
     meta_effects: Option<MetaEffects>,
+    /// Tests only: run after every committed writer transaction.
+    commit_observer: Option<commit_observer::CommitObserver>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,6 +297,7 @@ impl Store {
             mode: StoreMode::Live,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
+            shared_readers: None,
             usage_owners: apply::UsageOwners::default(),
             drift: apply::DriftCache::default(),
             bulk_abandoned: false,
@@ -282,6 +306,7 @@ impl Store {
             planned_batches: None,
             effects: None,
             meta_effects: None,
+            commit_observer: None,
         })
     }
 
@@ -300,6 +325,7 @@ impl Store {
             mode: StoreMode::Live,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
+            shared_readers: None,
             usage_owners: apply::UsageOwners::default(),
             drift: apply::DriftCache::default(),
             bulk_abandoned: false,
@@ -308,6 +334,7 @@ impl Store {
             planned_batches: None,
             effects: None,
             meta_effects: None,
+            commit_observer: None,
         })
     }
 
@@ -336,6 +363,7 @@ impl Store {
             },
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
+            shared_readers: None,
             usage_owners: apply::UsageOwners::default(),
             drift: apply::DriftCache::default(),
             bulk_abandoned: false,
@@ -344,6 +372,7 @@ impl Store {
             planned_batches: None,
             effects: None,
             meta_effects: None,
+            commit_observer: None,
         })
     }
 
@@ -410,11 +439,13 @@ impl Store {
         // documented/rusqlite-tested shared-memory flags exactly.
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI;
         let conn = Connection::open_with_flags(uri, flags)?;
-        Self::from_empty_connection_for_rebuild(
+        let mut store = Self::from_empty_connection_for_rebuild(
             conn,
             assets::AssetStore::for_projection(projection),
             true,
-        )
+        )?;
+        store.shared_readers = Some(SharedCacheLocks::for_uri(uri));
+        Ok(store)
     }
 
     /// In-memory control plane for a fresh cold capture. It advances source
@@ -478,6 +509,7 @@ impl Store {
             mode: StoreMode::Bulk,
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
+            shared_readers: None,
             usage_owners: apply::UsageOwners::default(),
             drift: apply::DriftCache::default(),
             bulk_abandoned: false,
@@ -486,6 +518,7 @@ impl Store {
             planned_batches: None,
             effects: None,
             meta_effects: None,
+            commit_observer: None,
         })
     }
 
@@ -505,6 +538,10 @@ impl Store {
     /// checkpoint CAS conflict — nothing is committed, and nothing reaches
     /// the observed effects.
     pub fn apply(&mut self, batch: &Batch) -> Result<ApplyStats, StoreError> {
+        self.apply_in_tx(batch).map_err(self.lock_order("apply"))
+    }
+
+    fn apply_in_tx(&mut self, batch: &Batch) -> Result<ApplyStats, StoreError> {
         validate_source_batch(batch)?;
         if self.planned_batches.is_some() && batch.source.is_some() {
             return self.apply_planning_source(batch.clone());
@@ -530,7 +567,8 @@ impl Store {
         }
         let mut fresh = self.effects.as_ref().map(Effects::scoped_like);
         let mut fresh_meta = self.meta_effects.is_some().then(MetaEffects::default);
-        let tx = self.conn.transaction()?;
+        let (tx, session_lock_wait) =
+            lock_order::writer_tx(&mut self.conn, self.shared_readers.as_deref(), "apply")?;
         let search_before = if self.mode == StoreMode::Live {
             Some(search_sync::before_batch(&tx, canonical_batch)?)
         } else {
@@ -557,6 +595,7 @@ impl Store {
             },
         )?;
         let ram_outcome = self.ram_reconciliation.resolve(&tx, &ram_delta)?;
+        stats.profile.session_lock_wait_nanos = session_lock_wait;
         stats.projection_assets = asset_stats.assets;
         stats.asset_files_written = asset_stats.files_written;
         stats.asset_files_reused = asset_stats.files_reused;
@@ -569,6 +608,7 @@ impl Store {
         tx.commit()?;
         self.drift = drift;
         stats.sqlite_commit_nanos = elapsed_nanos(started);
+        self.committed(CommitKind::Apply);
         if let Some(delta) = bulk_delta {
             self.bulk_reconciliation.commit(delta);
         }
@@ -605,7 +645,11 @@ impl Store {
             checkpoints: batch.checkpoints.clone(),
             source: batch.source.clone(),
         };
-        let tx = self.conn.transaction()?;
+        let (tx, session_lock_wait) = lock_order::writer_tx(
+            &mut self.conn,
+            self.shared_readers.as_deref(),
+            "planner source",
+        )?;
         // No ops: the cache can only forget, so a rollback leaves it true.
         let mut stats = apply::apply_batch(
             &tx,
@@ -621,6 +665,7 @@ impl Store {
                 meta: None,
             },
         )?;
+        stats.profile.session_lock_wait_nanos = session_lock_wait;
         let commit_started = Instant::now();
         tx.commit()?;
         stats.sqlite_commit_nanos = elapsed_nanos(commit_started);
@@ -645,8 +690,11 @@ impl Store {
         &mut self,
         batches: Vec<Batch>,
     ) -> Result<ApplyStats, StoreError> {
-        let (totals, deltas) =
-            self.apply_closed_source_sql(batches.into_iter().map(Into::into).collect(), true)?;
+        let (totals, deltas) = self.apply_closed_source_sql(
+            batches.into_iter().map(Into::into).collect(),
+            true,
+            cold_stream::ClosedTx::Terminal,
+        )?;
         for (delta, _) in deltas {
             self.bulk_reconciliation.commit(delta);
         }
@@ -658,6 +706,11 @@ impl Store {
     /// Calling this outside private rebuild mode is a harmless no-op so the
     /// pipeline can place the boundary at the end of any runtime stream.
     pub fn flush_bulk_reconciliation(&mut self) -> Result<ApplyStats, StoreError> {
+        self.flush_bulk_reconciliation_in_tx()
+            .map_err(self.lock_order("bulk reconciliation"))
+    }
+
+    fn flush_bulk_reconciliation_in_tx(&mut self) -> Result<ApplyStats, StoreError> {
         if self.mode != StoreMode::Bulk {
             return Ok(ApplyStats::default());
         }
@@ -669,7 +722,11 @@ impl Store {
             return Ok(ApplyStats::default());
         }
 
-        let tx = self.conn.transaction()?;
+        let (tx, session_lock_wait) = lock_order::writer_tx(
+            &mut self.conn,
+            self.shared_readers.as_deref(),
+            "bulk reconciliation",
+        )?;
         let apply_started = Instant::now();
         let mut stats = apply::apply_bulk_reconciliation(
             &tx,
@@ -678,50 +735,16 @@ impl Store {
             &mut self.usage_owners,
         )?;
         stats.profile.tool_reconcile_nanos = reconcile_nanos;
+        stats.profile.session_lock_wait_nanos = session_lock_wait;
         stats.canonical_apply_nanos = elapsed_nanos(apply_started);
         let commit_started = Instant::now();
         tx.commit()?;
         stats.sqlite_commit_nanos = elapsed_nanos(commit_started);
+        self.committed(CommitKind::Fold);
         let cleanup_started = Instant::now();
         self.bulk_reconciliation.committed(&plan);
         reclaim::release(plan);
         stats.profile.tool_reconcile_cleanup_nanos = elapsed_nanos(cleanup_started);
-        Ok(stats)
-    }
-
-    /// Canonicalize presentation ordinals, materialize every derived structure
-    /// for a private cold rebuild, build deferred indexes, analyze the finished
-    /// database, and validate it. Only after this succeeds is the store
-    /// switched to ordinary live semantics.
-    pub fn finish_bulk_load(&mut self) -> Result<BulkLoadStats, StoreError> {
-        if self.mode != StoreMode::Bulk {
-            return Err(StoreError::BulkLoadState {
-                message: "store is not in cold rebuild mode".to_string(),
-            });
-        }
-        if self.bulk_abandoned {
-            return Err(StoreError::BulkLoadState {
-                message: "cold rebuild contains an abandoned source generation".to_string(),
-            });
-        }
-        bulk::validate_complete(&self.conn, &self.retired_sources)?;
-        let _ = self.flush_bulk_reconciliation()?;
-        let tx = self.conn.transaction()?;
-        let mut stats = bulk::finalize(&tx, self.bulk_ordinals_precomputed)?;
-        search_sync::mark_canonical_ready(&tx)?;
-        let started = Instant::now();
-        tx.commit()?;
-        stats.commit_nanos = elapsed_nanos(started);
-        bulk::enable_constraint_validation(&self.conn)?;
-        let started = Instant::now();
-        bulk::validate(&self.conn)?;
-        stats.validate_nanos = elapsed_nanos(started);
-        let started = Instant::now();
-        bulk::restore_live_pragmas(&self.conn)?;
-        stats.pragma_nanos = elapsed_nanos(started);
-        stats.asset_sync_nanos = self.assets.finish_pending()?;
-        self.mode = StoreMode::Live;
-        self.bulk_abandoned = false;
         Ok(stats)
     }
 
@@ -831,28 +854,23 @@ impl Store {
         if states.is_empty() {
             return Ok(0);
         }
-        let tx = self.conn.transaction()?;
-        let mut changed_ids = Vec::new();
-        {
-            let mut update = tx.prepare_cached(
-                "UPDATE session SET stream_state = ?2
-                 WHERE id = ?1 AND stream_state != ?2",
-            )?;
-            for (session_id, state) in states {
-                if update.execute(rusqlite::params![session_id, state.as_str()])? != 0 {
-                    changed_ids.push(session_id.clone());
-                }
-            }
-        }
+        self.set_session_stream_states_in_tx(states)
+            .map_err(self.lock_order("stream states"))
+    }
+
+    fn set_session_stream_states_in_tx(
+        &mut self,
+        states: &[(String, StreamState)],
+    ) -> Result<u64, StoreError> {
+        let (tx, _) = lock_order::writer_tx(
+            &mut self.conn,
+            self.shared_readers.as_deref(),
+            "stream states",
+        )?;
+        let changed_ids = cold_stream::set_stream_states_in(&tx, states)?;
         tx.commit()?;
-        for session_id in &changed_ids {
-            if let Some(effects) = self.effects.as_mut() {
-                effects.touch_session(session_id);
-            }
-            if let Some(meta) = self.meta_effects.as_mut() {
-                meta.note_session(session_id);
-            }
-        }
+        self.committed(CommitKind::StreamStates);
+        self.note_stream_states(&changed_ids);
         Ok(u64::try_from(changed_ids.len()).unwrap_or(u64::MAX))
     }
 
@@ -863,10 +881,17 @@ impl Store {
         projection_epoch: &str,
         through_revision: u64,
     ) -> Result<bool, StoreError> {
-        let tx = self.conn.transaction()?;
-        let accepted = search_sync::acknowledge(&tx, projection_epoch, through_revision)?;
-        tx.commit()?;
-        Ok(accepted)
+        let mut acknowledged = || -> Result<bool, StoreError> {
+            let (tx, _) = lock_order::writer_tx(
+                &mut self.conn,
+                self.shared_readers.as_deref(),
+                "search acknowledgement",
+            )?;
+            let accepted = search_sync::acknowledge(&tx, projection_epoch, through_revision)?;
+            tx.commit()?;
+            Ok(accepted)
+        };
+        acknowledged().map_err(self.lock_order("search acknowledgement"))
     }
 
     /// Start collecting hot-tier effects for every session. The daemon

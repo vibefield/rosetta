@@ -16,6 +16,7 @@ domain ledger "Raw ledger (durable truth)" {
   contains mod:rosetta_pipeline::{replay, command}
   contains mod:rosettad::{runtime_ledger, ledger_cmd, ledger_verify, ledger_compression, cold_stage}
   contains mod:rosettad::maintenance_pace
+  contains mod:rosettad::serve::commands
   see "docs/ARCHITECTURE.md#35-runtime-handoff-watcher-tailer-and-raw-ledger"
 }
 
@@ -25,10 +26,16 @@ domain normalize "Per-agent normalization" {
 }
 
 domain ingest "Cold & live ingestion" {
-  contains mod:rosetta_store::{apply, cold_stream, bulk, reclaim}
-  contains mod:rosetta_server::{health, board, ingestion}
-  contains file:clients/room/src/lib/{ingest, ingest-activity, use-ingest-activity, catalog-status}.ts
+  contains mod:rosetta_store::{apply, cold_stream, bulk, reclaim, lock_order}
+  contains mod:rosetta_pipeline::closed::{walk_order, walk, emit, frontier, lane_profile}
+  contains mod:rosetta_pipeline::capture::pool::lanes, mod:rosetta_pipeline::closed::walk::lane
+  contains mod:rosetta_pipeline::early::closure, mod:rosetta_pipeline::streamed::{item, ordinals, trees}
+  contains mod:rosetta_core::op_scope, mod:rosetta_store::cold_stream::{slices, units}
+  contains mod:rosettad::cold_stream::{emit, walk_report, writer, queues, flips, admit}
+  contains mod:rosetta_server::{health, board, ingestion}, mod:rosetta_server::http::shared_reads
+  contains file:clients/room/src/lib/{ingest, ingest-activity, use-ingest-activity, import-state, catalog-status}.ts
   contains file:clients/room/src/components/{IngestStatus, IngestionControls, ColdStart}.tsx
+  contains file:clients/room/src/components/transcript/ImportState.tsx
   see "CLAUDE.md#current-phase"
   see "docs/ingest-engine.html"
 }

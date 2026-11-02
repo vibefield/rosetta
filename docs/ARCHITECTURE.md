@@ -43,7 +43,16 @@ below the top hold list positions, new insertions, and day membership together;
 row values continue updating. A deferred group whose dates changed says “Activity
 updated” until reconciliation. “Show recent activity” applies pending geometry
 and returns to the top without changing selection. Authoritative removals retain
-a surviving visible scroll anchor. The activity-order and subscription recovery
+a surviving visible scroll anchor. During a cold import (2026-11-02), sessions the
+import has not reached (`Pending`) are drawn last in a “Not imported yet” group
+with no date head, ordered by `updated_at` descending, then id, since no recorded
+activity can rank them yet; a metadata-only placeholder (Pending, no cwd, title,
+summary or delegation, and with children) is left out of it and reads “Transcript
+not available” (`clients/room/src/lib/import-state.ts`). A held list's pill counts
+the imported arrivals (“N conversations imported — show”) and says “older” only
+when every one lands below the reader's anchor; its live region announces a
+count-free sentence (“Newly imported conversations are available in sessions.”),
+so only the button carries the count. The activity-order and subscription recovery
 unit tests run in CI; `pnpm test:list-order` exercises production hooks, lists,
 focus, scroll, themes, and reduced motion against synthetic data in Electron.
 
@@ -115,14 +124,33 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > order, fails the start. Adapters capture,
 > ledger, and normalize concurrently, each through its own private RAM planner (the cursor CAS
 > chain, generations, and restart detection are unchanged; every roster source's cursor is created
-> before the walk, in path order in one planner transaction, so each keeps the id creation at its
-> turn gave it). Nothing is retained per runtime until
-> its capture ends: a producer walks its roster in source-path order and hands each source to the
+> before the walk, in path order in one planner transaction, so its cursor id and its ledger file
+> id are its *path rank* whatever order the walk then takes). Nothing is retained per runtime until
+> its capture ends: a producer walks its roster and hands each source to the
 > sole canonical writer as a *closed source* — terminal generation, final checkpoint, contiguous
-> validated ops — as soon as nothing can supersede it. Only a transcript whose session still has an
+> validated ops — as soon as nothing can supersede it. A runtime admitted whole walks in
+> source-path order. A root-tree runtime (Claude Code and Codex declare
+> `ColdAdmission::RootTree` through `AgentAdapter::cold_admission`; R1, 2026-11-02) walks newest
+> root trees first (`rosetta_pipeline::closed::walk_order`). A *root tree* is one connected
+> component of the runtime's metadata links — a session's parent, its root where that differs
+> from itself, and a ledger-only source's `tree_parent` — found by union-find and named by its
+> smallest session id (`closed/trees.rs`); a Codex `root_session_id` is the immediate parent, so
+> grouping by the raw root would split a family. The walk takes span `P` first, serially and
+> whole: the members of a physical file several trees read (a Codex `state_N.sqlite`), by physical
+> path. Then come lane `S`, every tree whose largest own source is at most 64 MiB, and one big
+> lane `B` for the rest (`BIG_LANES = 1`), sizes measured as `read_len` (the skim's cut, else the
+> census size). Each lane holds whole trees by recency key `k` (the newest skim mtime over the
+> tree's own sources) descending, then tree id, each tree's sources in path order; the serial
+> driver walks `P`, then every lane's trees merged by the same key. A plan that cannot hoist a
+> shared member (one with per-session record queries) or cannot place a source in a tree walks
+> paths instead, and a truncated discovery or metadata walk falls back to runtime admission
+> before the producer starts. Only a transcript whose session still has an
 > uncaptured transcript, or a pending sibling heal after a restart, is held; the heal runs as soon
 > as the restarted session's last transcript is captured, so the writer sees exactly one terminal
-> generation per source, in path order (the order every order-sensitive upsert assumes). Every
+> generation per source, and each session's sources in path order (they are path-ordered members
+> of one tree in its lane): the order every order-sensitive per-session upsert assumes. The only
+> state shared across trees — usage ownership (§4.1.3) and the drift sample (§3.4) — converges in
+> any order. Every
 > pass of the walk is a *private build* pass (`IngestOptions::private_build`, 2026-09-28): nothing
 > of the source is public yet and publication needs it at a terminal generation, so a generation
 > ends wherever the file stops it, by the end-of-file rules — which decide activation and the
@@ -139,7 +167,27 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > generation stays staged until a read completes it, and an unclean replacement abandons so the
 > published generation survives.
 >
-> **Fresh-start tolerance (2026-09-28).** Publication stays runtime-granular, but a fresh or
+> A root-tree runtime's fresh JSONL passes are also *bounded at the metadata cut* (R1,
+> 2026-11-02; `IngestOptions::cut_bounded`, set by `closed_pass_options` whenever the runtime has
+> trees): each transcript is read only up to `SessionFile::cut_len`, the skim's own fstat length
+> (`Tailer::read_cut`). The checkpoint's observed length is the cut, so growth past it is ordinary
+> append growth: the pass seals its generation at the cut, and after publication the live runner
+> appends the rest to that same generation, each record in the raw ledger exactly once. The cut
+> holds on `Initial`, `Continued` and `ForcedReplay` reads — a sibling heal stays capped, even of a
+> file replaced after its own pass, and an atomic rewrite between the skim and capture reads as
+> `Initial` up to the old cut — and is dropped for the rest of the pass on `Truncated`,
+> `IdentityChanged` or `PrefixMismatch`, so a rewrite reads to its new end. A cut inside a record
+> pauses the pass (`Streaming`); since the skim's identity fallback can name a session from bytes
+> past the cut, a cut before any complete record pauses too, and the session publishes `Streaming`
+> with no rows for catch-up to complete. "Complete as of the metadata cut" therefore holds only
+> for these passes. Document members (of them only Claude Code workflow-run documents frame
+> records, so only they can project content newer than the cut), SQLite snapshot members,
+> rewrites, every runtime-admission adapter, the kill switch and a fallen-back runtime, live
+> passes, resumed builds and finite `ingest` read to their capture-time end. The pool's
+> remaining-bytes estimate uses the same `read_len` (the cut, else the census size).
+>
+> **Fresh-start tolerance (2026-09-28).** Publication stays runtime-granular for runtime-admission
+> adapters, and root-tree adapters publish per closure-proven tree (R1, below), but a fresh or
 > resumed start no longer refuses a runtime for per-file imperfections the live path already
 > absorbs: a file that vanished during metadata; a transcript no skim identifies — counted
 > *unfinished* instead when no delimiter ends its first record yet, which makes it not yet a
@@ -165,7 +213,8 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > the prefix was clean, exactly as after a fresh build's cut-short source. The live runner admits
 > the file if it returns. One whose identity changed still refuses.
 > A start still refuses what no later read can repair: a truncated discovery or metadata walk
-> (the file cap), a checkpoint conflict, a record past the raw frame limit (§3.5), and what
+> (the file cap), a checkpoint conflict, a record past the raw frame limit (§3.5), a root-tree
+> source that names a session of another lane's tree or of a tree already closed (below), and what
 > only a bug or corruption leaves — a closed source with a gap in its operation sequence, an
 > undecodable final checkpoint, or no terminal generation. Finite `ingest`, `watch` and the
 > disk-progressive engine keep the strict gate that refuses every shortfall. The
@@ -175,15 +224,36 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > turn) — whose workers
 > step each source's pass a tail batch at a time (read, normalize, checkpoint, and the batch's
 > finished ledger frames under its roster key) ahead of its producer. The producer becomes the
-> runtime's *sequencer*, the only code that touches its planner and ledger, and commits that
-> output strictly in path order, so the ledger bytes, the planner's CAS chain and every closed
-> source are the serial walk's for any worker count or schedule, and an interrupted build leaves
-> the serial walk's prefix. Look-ahead is bounded in bytes of queued output: 512 MiB across all
-> runtimes (`--capture-lookahead`), a per-runtime share of it, and 64 MiB for the source a
-> sequencer commits next, which workers always serve first; work over its bound parks instead of
-> blocking a worker. Snapshot and document groups, sibling heals and non-fresh cursors stay on the
-> sequencer at their path position. The 2026-09-27 sweep on the frozen snapshot (23 runs, M1
-> Max, 10 cores, host load 40–270, snapshot and ledger on one USB SSD), fitted against host load:
+> runtime's *sequencer*, the only code that touches its planner and ledger. For a runtime admitted
+> whole it commits that output strictly in path order, so the ledger bytes, the planner's CAS chain
+> and every closed source are the serial walk's for any worker count or schedule, and an
+> interrupted build leaves the serial walk's prefix. A root-tree runtime registers each lane that
+> has pool units as its own pool runtime, and its sequencer merges lanes
+> (`rosetta_pipeline::closed::walk`): after span `P`, it retries every held emission, takes the
+> ready lane with the lowest global index — a lane whose next item is sequencer-local is always
+> ready, a pool lane when its head has output queued — processes exactly one event of it (ledger
+> frames first, keyed per file id, then the planner), charges the event's counters to that unit's
+> own report, and closes a finished unit from that report alone, draining only its own cursor's
+> planned batches. Its physical ledger frame order and message rowids may therefore differ
+> between runs (decision U-2, 2026-11-02). On any walk, as already at 3ca7410, so may which
+> runtime's block of cursor ids comes first: it follows which runtime checkpoints first. These do
+> not: per-source ledger content (`sourceSetDigest`), cursor ids within each runtime and ledger
+> file ids (path rank), the logical projection, ranked
+> search, the walk digest for a given snapshot and flag set, and whether the build publishes or
+> refuses. `--experiment-cold-admission runtime` reproduces the path walk byte for byte. Look-ahead
+> is bounded in bytes of queued output: 512 MiB across all runtimes (`--capture-lookahead`), a
+> per-runtime share of it, and 64 MiB for the source a sequencer commits next, which workers
+> always serve first; work over its bound parks instead of blocking a worker. A look-ahead step
+> still running counts against those bounds by the payload it may still read (at most one 32 MiB
+> batch), so workers that start steps together no longer overshoot them by a batch each, which
+> on a big-tree lane, where every source is large, they otherwise did (2026-11-02). A root-tree
+> runtime's lane `S` (and span `P`, when it has pool units) is `Reserved`: a fixed slice of
+> `min(floor, G/8)` (64 MiB by default) while it has steps left, so big-lane overshoot cannot
+> starve it; every other pool runtime shares what the slices leave. Head grants are fair: among
+> runnable heads, the lane granted a head step least recently goes first (`capture/pool.rs`).
+> Snapshot and document groups, sibling heals and non-fresh cursors stay on the
+> sequencer at their position in their span. The 2026-09-27 sweep on the frozen snapshot (23 runs,
+> M1 Max, 10 cores, host load 40–270, snapshot and ledger on one USB SSD), fitted against host load:
 > canonical readiness about 131 s / 195 s serial against 102 s / 170 s pooled at load 100 / 200,
 > Claude Code's capture 96 s / 137 s against 63 s / 81 s, at equal CPU and 0.3–0.7 GiB more peak
 > footprint. Four to ten workers were not separable within the noise; eight and ten did slightly
@@ -191,8 +261,26 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > snapshot and the ledger) and then writer-bound: at 8–10 workers the Codex producer waited up to
 > 40 s for the writer's in-flight budget while the writer applied and admitted Claude Code, and the
 > pool's workers parked. In that sweep the sole canonical writer was the next wall; the preparer
-> below has since taken tool resolution off it. A 256 MiB in-flight budget bounds closed sources
-> between producers and the writer. Before a source leaves its producer (its sequencer, when
+> below has since taken the fold of self-contained sessions off its admission, and R1 runs that
+> resolve on the writer outside any transaction, so it never stalls a sequencer's other lanes.
+> A 256 MiB in-flight budget bounds closed
+> sources between producers and the writer, in budget bytes (a source's framed payload and asset
+> bytes plus the approx bytes of withheld facts it carries from earlier emissions), per class
+> (`rosettad/src/cold_stream/emit.rs`): 64 MiB for lane `S` and span `P` of every root-tree
+> runtime, 192 MiB shared by every big lane and every runtime admitted whole; the pre-R1-compatible
+> modes (`--experiment-cold-admission runtime`, `--experiment-cold-lanes 1`) keep one 256 MiB
+> budget. Each class keeps the earlier rule — one item larger than the class moves alone once
+> nothing else of it is in flight — plus a *drain ticket*: the first acquire that does not fit
+> takes it, and every other acquire of the class waits or fails until that one is admitted, so
+> an item that
+> does not fit waits for at most one drain of its class. The writer releases exactly what each
+> step's share of an item acquired (release by remainder; the profile's `budgetResidualBytes` is
+> what a class still holds at the end), and a writer error aborts every class. On a pooled
+> root-tree walk emission never blocks the sequencer: `ProducerEmit` prepares the emission, tries
+> its class, and on a full class holds it — at most one per lane — while that lane alone pauses;
+> a release, or a drain ticket clearing, wakes the sequencers through the pool's output condvar to
+> retry. The path walk and the serial driver emit blocking, as before. Before a source leaves
+> its producer (its sequencer, when
 > pooled), the runtime's `StreamedPreparer` assigns each message its final presentation ordinal
 > incrementally under the whole-runtime precompute's key (a session a later
 > source repeats a timeline into, or one that receives a source out of path order, is re-ranked by
@@ -200,23 +288,83 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > tool openers, lifecycle updates, usage, file edits — out of its batch until the session's last
 > roster source has been emitted. A session is then *self-contained* unless some source crossed
 > it: a row, tool fact, usage or file edit of another session's (or a ledger-only) source that
-> names it, or one of its own sources naming another session. A self-contained session's facts
-> are folded right there, with the admission fold's own collect-and-finish, so the resolved tool
-> rows travel with the source that completed the session; a crossed session gets its withheld
-> facts back unresolved and keeps the admission fold, and a source that names an already resolved
-> session fails the start closed. The writer applies closed sources while capture continues,
-> several queued sources of one runtime per bounded transaction: the same final canonical rows the
-> retained path writes, plus the resolved tool rows of the sessions they completed, each stamped
+> names it, or one of its own sources naming another session. A self-contained session's
+> withheld facts travel with the source that completed it, and the writer resolves them — the
+> admission fold's own collect-and-finish — on that item's first turn, outside any transaction
+> (R1; the preparer's still-pending withheld bytes are reported as `peakPendingWithheldBytes`,
+> unbudgeted); a crossed session gets its withheld facts back unresolved and keeps the admission
+> fold, and a source that names an already resolved session fails the start closed. The writer
+> applies closed sources while capture continues (`rosettad/src/cold_stream/writer.rs`): one
+> queue per (runtime, lane), filled by a non-blocking drain of the channel and served
+> round-robin, one transaction per key per turn, a runtime's span `P` ahead of its own lanes.
+> Small whole sources of one key coalesce while the total stays within 16 MiB and 256 sources —
+> strictly, where the old loop admitted one message past the bound. A source whose budget bytes
+> exceed `CHUNK_BYTES` (16 MiB) is its own item, stepped one transaction per turn
+> (`rosetta_pipeline::streamed::item`, *chunked apply*): Stage slices of its immediate ops, cut
+> greedily by `IngestOp::approx_bytes`; resolved-row slices of the sessions it completes; then the
+> terminal — the last op slice, the checkpoint CAS, Activate, the last resolved rows and the
+> session touches. So every apply transaction during capture writes at most 16 MiB, or one op or
+> resolved row that alone exceeds it (a projected record is at most 32 MiB). A slice moves no
+> checkpoint, active generation or `stream_state`, and its rows stay behind their session's
+> `Pending` barrier; a Stage slice's deferred facts are staged under its cursor
+> (`ColdReconciliation::is_staged`) and merged into the source's one terminal delta, never the
+> fold, so after a source's terminal its cursor holds no staged slice. An Abandon item and a
+> coalesced item are one terminal transaction: an Abandon applies drift only, exactly as a whole
+> Abandon, so no slice's usage claim is ever followed by a provenance sweep.
+> `--experiment-cold-chunks 0` turns slicing off; the kill switch keeps the pre-R1 single FIFO
+> writer, with no chunks and no flips. Each item writes the same final canonical rows the
+> retained path writes, plus the resolved tool rows of the sessions it completed, each stamped
 > with its own source's cursor and written once. What is left — usage no resolved row absorbed,
 > file edits, and every fact of a crossed session — is collected into that runtime's own RAM fold
-> at its original source positions, never another runtime's. When a producer closes, the writer
-> admits its runtime: the fold resolves each remaining correlation once and writes each remaining
-> tool row once, identity-bearing usage is claimed in runtime tail order exactly as before, then
-> one stream-state commit flips every source-backed session out of
-> `Pending`. Pending sessions are the admission barrier: rows of an unadmitted runtime may sit in the
+> at its original source positions, never another runtime's; a root-tree runtime partitions that
+> fold by tree (`store/src/cold_stream/units.rs`).
+>
+> A root-tree runtime admits each *closure-proven* tree on its own (R1, 2026-11-02). The
+> preparer classifies every op of every activated source by the session it writes
+> (`IngestOp::named_session`, an exhaustive match; `pipeline/src/early/closure.rs`). A target in
+> another tree in the same lane binds both trees for admission at the runtime's close while the
+> target tree is still open, and fails the build closed once it has closed; a target in another
+> lane or in span `P` always fails it closed (`cold source {path} addresses session {s} of tree
+> {t} in lane {l}`). Lanes walk in a fixed order, so the outcome depends only on the walk, never
+> on the
+> schedule; every such reference counts in `crossTreeCrossings`. An abandoned terminal taints its
+> tree; a skipped source does not. A tree whose last roster source is emitted unbound and
+> untainted is *closed*, and the writer's `TreeLedger` makes it ready once every one of its sources
+> — the closing one and any other lane's — has committed its terminal transaction
+> (`pipeline/src/streamed/trees.rs`). A flip batch (`rosettad/src/cold_stream/flips.rs`) is one
+> writer transaction, `Store::admit_cold_units`: with the batch's partitions folded beforehand, it
+> checks that no session the fold addresses already holds a tool row, applies those trees' tails
+> (usage for other rows, file edits, the whole fold of a crossed session), renumbers the sessions a
+> cross-source repeat left to canonicalize, and flips the trees' sessions with a public roster
+> source out of `Pending` last — a metadata-only placeholder never flips. The first ready batch of
+> a runtime flips at once, later ones at most once per 100 ms, each capped at 64 trees, 512
+> sessions and 16 MiB of tails (a single tree over a cap flips alone); a due batch takes the
+> writer's next turn. After each batch the hub hears it in one order (`engine::absorb_around`):
+> row effects, then each changed session's resync barrier, then metadata, so `/ws/meta` announces
+> a new `stream_state` only once the session socket's barrier is up; then the progress board and
+> the milestones count the batch's sessions. After every apply step and flip whose usage
+> displacement undid something in an already flipped tree, those sessions are resynced too
+> (U-1, §4.1.3). A flipped tree is never `Pending` again in this process: a later refusal of the
+> build leaves it readable. A runtime's `Closed` waits until its queues are empty and no item of it
+> is between slices; then its ready trees flip regardless of cadence, every unit not taken — bound
+> and tainted trees, trees closed but never flipped, and the whole of a runtime admitted whole or
+> walked by paths — is absorbed into one fold, which folds exactly as a runtime admitted whole, and
+> one more `admit_cold_units` transaction admits that remainder
+> (`StreamedRuntime::admit_remainder`), published in the same order for the sessions it moved and
+> the flipped ones its fold displaced. Every other runtime is admitted that way at its close, in
+> completion order: the fold resolves each remaining correlation once and writes each remaining
+> tool row once, identity-bearing usage is claimed in runtime tail order, and the readiness flip
+> comes last. A resumed build flips nothing per tree (below). Pending sessions are the admission
+> barrier: rows of an unadmitted tree or runtime may sit in the
 > RAM generation, but no timeline, entry, collaboration, plan, file-target or report-work read
-> exposes them, their stubs stay out of the metadata mirror, and no row effects are observed.
-> Admission remains runtime-granular and in completion order. Watched timelines receive one resync
+> exposes them, their stubs stay out of the metadata mirror, and no row effects are observed. A
+> full command checks its own session too: while the build is unpublished, an admitted session's
+> command is read from the staged ledger root, a Pending one answers `not_ready` (“this
+> conversation is still importing”), and a record its capture worker has not appended yet answers
+> `not_ready` (“still saving · retry”). The metadata mirror holds the same barrier
+> (`Hub::set_hide_pending`, set when a fresh build starts): activity rollups, `/api/activity`
+> turns and Workflow child profiles skip Pending members until `Hub::reveal_pending` lifts it at
+> publication. Watched timelines receive one resync
 > barrier and re-snapshot through the ordinary API. No raw record, parser state, candidate value,
 > or reconciliation map enters the read target. Finite `ingest` and replay keep the retained
 > closed-runtime path (`prepare_captured_runtime` → `apply_prepared_runtime`).
@@ -226,18 +374,73 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > are `milestone:` stdout lines whose `elapsed_s` is measured from serve start, like the others:
 > - `runtime-metadata-public runtime=<id> agent=<kind>` as each runtime's metadata becomes public.
 > - `first-session-complete` the first time the writer has applied every roster source of some
->   session: today's counterfactual first-readable. It is an optimistic lower bound for any finer
->   flip, not a moment that session was publishable. A crossed session's facts, a resolved
->   session's leftover usage and file edits, and ordinals still to canonicalize wait for the
->   runtime fold at admission.
-> - `runtime-readable runtime=<id> agent=<kind> sessions=<n>` at each admission.
-> - `first-readable` at the first admission that makes a session non-`Pending`.
+>   session: an optimistic lower bound for a session-granular flip, not a moment that session was
+>   publishable. A crossed session's facts, a resolved session's leftover usage and file edits,
+>   and ordinals still to canonicalize wait for its tree's flip or its runtime's fold.
+> - `runtime-readable runtime=<id> agent=<kind> sessions=<n>` at each runtime's close; `sessions`
+>   counts its flipped trees' sessions plus those its remainder admission moved.
+> - `first-readable` at the first flip or admission that makes a session non-`Pending`.
 > - `recent-ready horizon=24h|7d horizon_sessions=<n>`: the first moment every public roster
 >   session whose newest roster file mtime lies within the horizon of the census cut (the writer's
 >   start) is non-`Pending`. It is decided from session ids and roster mtimes only, once every
->   roster is known and an admission has made a session readable. So it never precedes
+>   roster is known and a flip or admission has made a session readable. So it never precedes
 >   `first-readable`, and a horizon with no sessions reads ready right at it, with
 >   `horizon_sessions=0`.
+> - `recent-ready horizon=24h@newest|7d@newest horizon_sessions=<n>` (2026-11-02,
+>   `ingest_metrics/recency.rs`): the same, for the public roster sessions whose newest source
+>   mtime lies within the span of the newest such session over every roster, not of the census
+>   cut, so a frozen corpus keeps its membership however long ago it was frozen.
+>
+> Three tree milestones cover the root-tree runtimes. "Required" means a tree member with a public
+> roster source, so a metadata-only placeholder (or a session born during the import) never holds
+> a tree back, and a tree with no required session is not ranked. The lines are decided once
+> every roster and every runtime's setup is known, and fire at the flip that makes their last
+> required session readable. Runtime-admission runtimes, a runtime fallen back to that, and every
+> runtime under `--experiment-cold-admission runtime` have no trees and feed only the session
+> horizons.
+> - `newest-trees-ready n=<min(10, trees)>`: every required session of the 10 newest trees, ranked
+>   by recency key `k` descending, then smallest tree id, then runtime id.
+> - `newest-giant-ready tree_bytes=<bytes>`: the newest tree whose largest source exceeds 64 MiB;
+>   absent when there is none.
+> - `small-recent-ready horizon=24h@newest|7d@newest trees=<n>`: every tree whose largest source
+>   is at most 64 MiB and whose `k` lies within the span of the newest ranked tree's `k`.
+>
+> Each milestone added on 2026-11-02 is also a `milestone` JSON event under `--json --profile`
+> (`milestone`, `horizon`, `horizonSessions`, `n`, `treeBytes`, `trees`, `elapsedS`, as they
+> apply).
+>
+> Each runtime also prints one structure-only `walk:` line as its producer starts:
+> `walk: runtime=… agent=… order=recency|path reason=… trees= small= big= lanes= groups_hoisted=
+> big_bytes= digest=`. `reason` is `-` for a recency walk, else `runtime` (admitted whole, the kill
+> switch included, since it makes the runtime so before the plan), `fallback` (a truncated walk),
+> `hoist` or `unmapped` (a plan that walks paths, above); the digest is blake3 over the lane
+> split, the big-lane count, the mode and the (span, path) sequence in global order, and
+> `--json --profile` adds a `walk-plan` event of `[path_rank, lane, tree_index, read_len,
+> age_ms]` per source in global order, with the mode and digest — no path, id or content. The
+> `parallel-stream-prepare` stage profile gains a `lanes` array — per lane `units`, `sources`,
+> `bytes`, `headWaitMs`, `heldMs` and `serviceDelayMs` (each `{count, p50Ms, p99Ms, maxMs}`),
+> `endMs`, `inlineMs` (sequencer-local work charged to the lane it served) and
+> `peakUnemittedHeadBytes` — plus `laneSwitches`, `bigLaneChainMs`, `peakPendingWithheldBytes`,
+> `treesClosed`, `treesBound`, `treesTainted`, `factlessResolved`, `lateSamples`,
+> `crossTreeCrossings` and `bigSourceSplits` (per source over 64 MiB: its read length and the
+> approx bytes of its immediate, relational and asset ops, structure only). A lane's *service
+> delay* runs from "its head unit has an event queued and the lane holds no emission" to "the
+> sequencer takes that event". The `capture-pool` profile gains `peakSharedLookAheadBytes`,
+> `peakReservedLookAheadBytes` and `peakHeadBytesTotal`. The `streamed-writer` profile gains a
+> `lanes` array (per (runtime, lane): `txs`, `stageTxs`, `resolvedSliceTxs`, queue wait
+> p50/p99/max),
+> `longestApplyTxMs` and `maxApplyTxBytes` over the capture window, `resolveMs`,
+> `busyShareOfCapture` ((apply wall + flip wall) / capture wall, where capture runs from the
+> writer's start to the last producer's `Closed`), `budgetResidualBytes {small, shared}`, the flip
+> totals (`flipBatches`, `flipTrees`, `flipSessions`, `flipWallMs`, `longestFlipTxMs`,
+> `treeAdmissionP99Ms`, `maxFlipTailBytes`, `flipRenumberRows`, `flipLockWaitMs`) and
+> `sharedCacheLocks` (the streaming window so far); each flip batch is a `tree-admission` event
+> (`trees`, `sessions`, `tailBytes`, `renumberRows`, `wallMs`, `lockWaitMs`), and `streamed-apply`
+> adds `resolveMs`, `treesFlipped` and `sessionsFlipped`. After publication a `shared-cache-locks`
+> stage profile reports the RAM generation's lock evidence (§6): a `streaming` and a `finalize`
+> window, each with `sessionLockWait`, `readerPrologueWait` and `readerClosureWall` as `{count,
+> totalMs, p50Ms, p99Ms, maxMs}`, plus `readerLockedRetries`, `readerLockedRefusals` and
+> `writerLockOrderViolations`, all expected 0.
 >
 > For each roster the writer also prints one structure-only `census:` line, once that runtime's
 > producer has started (its one store read never delays capture). It counts physical files: the
@@ -245,8 +448,10 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > age is its newest source's. The line gives files; bytes; *cumulative* `files/bytes` per age
 > (`le1h`, `le24h`, `le7d`, `le30d`, then `older`); `shared=files/bytes` for files several
 > sessions' sources share; and the 20 largest file sizes. It adds nearest-rank p50/p90/p99/max,
-> plus the count over 64 MiB, of the bytes each session owns alone and of those per tree
-> (sessions grouped by their settled `root_session_id`). Shared files are charged to no session,
+> plus the count over 64 MiB, of the bytes each session owns alone and of those per root tree
+> (sessions joined by union over parent, root ≠ id and ledger-only source parent links: the same
+> `TreeMap` a root-tree runtime is admitted by; fields `roots=`, `root_p50=`…, `rootBytes`).
+> Shared files are charged to no session,
 > and a session that reads only shared files is not counted. It never prints a path, a session
 > id, or content, and `--json --profile` repeats it as a `census` event.
 >
@@ -259,8 +464,117 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > - `milestone: memory-peak`: peak footprint (including the kernel's lifetime high-water mark),
 >   peak resident and swap, and the host's swap-outs and pageouts since serve start, or `na` where
 >   the platform cannot tell;
-> - `usage-copies: dropped=… displaced=… owned=… unclaimed_usage=…` (§4.1.3, counting rule 2).
->   The streamed-writer stage profile carries the same four counters.
+> - `usage-copies: dropped=… displaced=… owned=… unclaimed_usage=… displaced_visible=…
+>   owner_bytes=…` (§4.1.3, counting rule 2). The streamed-writer stage profile carries the same
+>   counters, `usageDisplacedVisible` and `usageOwnerBytes` included.
+>
+> The footprint also counts freed memory the allocator still holds. On macOS the system allocator
+> keeps the 64 most recently freed blocks over 2 MiB, of any size, dirty for reuse, and a cold
+> build frees gigabytes of them: each capture step frames a batch of up to 32 MiB into one buffer
+> and compresses it into another. The daemon's global allocator on macOS therefore maps every
+> block over 2 MiB on its own and unmaps it when it is freed (`rosettad::large_alloc`); smaller
+> blocks stay with the system allocator. On the frozen R1 corpus, an attribution over six
+> interleaved rounds put its share of the cold build's peak at about 215 MB, and about 315 MB with
+> the look-ahead reservation above (1,091 against 776 MB), at unchanged canonical readiness
+> (2026-11-02). It lowers every mode's peak, the path walk's included.
+>
+> **Newest trees first (R1, 2026-11-02).** The organic MacBook trace of 1301bdb (M1 Max; 21.25 GB
+> of Claude Code in 13,477 files, 8,447 sessions, 1,139 root trees) published metadata at 2.7 s
+> but made nothing readable until 140.8 s — first-readable, both recent horizons and the runtime's
+> admission were one moment — and reached canonical readiness at 173.8 s. Capture took 134.3 s
+> with workers 29% busy and 65% parked (sequencer head wait 76.6 s, writer-budget wait 28.2 s);
+> the writer was busy for about 62 of its 139.7 s, and its longest apply transaction held readers
+> for 2.81 s; peak footprint was 5,835 MB. The mechanism: the pool consumed strictly in path
+> order, so a giant at the head was stepped by one worker at about 58 MB/s while the others filled
+> the 512 MiB look-ahead and parked; each closed source was prepared and budgeted on the sequencer,
+> blocking; a source over the budget waited for an empty writer; and nothing was readable before
+> its runtime's close. A simulator calibrated to that trace (capture, head wait and parked share
+> within 2%) chose R1's design, its scenario (g), described above: newest trees first
+> in lane `S` plus one big lane, a reserved small-lane slice, fair head grants, per-class budgets
+> with drain tickets, non-blocking emission, a round-robin writer, chunked apply including
+> resolved-row slices, tool resolution on the writer, per-tree flips, order-free cross-tree usage
+> and drift, the shared-cache lock order (§6) and reads bounded at the metadata cut. Every other
+> adapter keeps the path walk and runtime admission; three hidden diagnostic flags, never in the
+> usage text, isolate the parts: `--experiment-cold-admission runtime|declared` (`runtime`, the
+> kill switch: the path walk, one blocking 256 MiB budget, the pre-R1 FIFO writer, no chunks and
+> runtime admission, its ledger source digest equal to the path walk's —
+> `crates/rosettad/tests/streamed_switch.rs`), `--experiment-cold-lanes 1|2` (`1`: one strict
+> recency lane and one 256 MiB budget, flips and chunks kept) and `--experiment-cold-chunks 0`
+> (every item one transaction). The simulator's MacBook-shape estimates, which are targets and
+> not gates, are first-readable ≤ 4 s, small trees 24h@newest ≤ 10 s, newest-10 trees ≤ 65 s and
+> canonical readiness ≤ 160 s (179 s hard ceiling), with the longest apply transaction near
+> 0.05 s; giants still serialize in the one big lane. Deferred, each with its trigger: streamed
+> pieces from big-lane heads and a second big lane, which never ships without them (R1.5: a
+> piece frees only a giant's immediate and asset share, while its relational share stays in RAM
+> until the terminal, and pieces need new store holding paths); sliced flip tails (if any run
+> shows `longestFlipTxMs` > 250 ms); asset materialization off the writer (if writer busy reaches
+> 85% of capture); per-tree flips and the cut on resume; and further root-tree adapters, one at a
+> time on their own closure evidence. Two product decisions bound the contract. **U-1:** a fork
+> copy's per-row usage badge may empty once, when its older origin imports after the copy's tree
+> flipped; it is counted (`usage_displaced_visible`, with rows), the session is resynced, and there
+> is no wire flag — revisit if more than 1% of 24h-horizon sessions are displaced-visible on the
+> MacBook run. **U-2:** a root-tree runtime's physical ledger frame order and message rowids may
+> vary between runs, and on any walk so may which runtime's block of cursor ids comes first (it
+> follows which runtime checkpoints first, as it did at 3ca7410); the logical projection,
+> `sourceSetDigest`, cursor ids in path rank within each runtime, ledger file ids, ranked search
+> and the publish-or-refuse outcome may not. One consequence is open: `rosettad
+> rebuild` of a lane-merged ledger projects the same logical rows, but numbers cursors as the
+> ledger first frames each source, so its cursor and message rowids can differ from the fresh
+> build's path ranks; a strict id comparison of a rebuild holds only for path-walk ledgers.
+> Hermetic tests generate every corpus in the test (`crates/rosettad/tests/streamed_*.rs`,
+> `support/`, and in-crate tests on the real `serve` and writer; §9) and pin the invariants: logical equality and `sourceSetDigest` over path,
+> recency, reversed and 20 seeded tree orders, serial and on a chaos pool, chunked; a per-commit
+> audit, through the `#[doc(hidden)]` `Store::set_commit_observer`, that no session ever leaves
+> `Pending` before its rows, tails and renumber; readers served between slices with the next tree
+> still hidden; eight hammering readers through capture, flips, finalization and the disk switch
+> with no 5xx, lock retry or refusal and no session hidden again; resume after a kill at named
+> sequencer states; a refused build whose earlier flips stay readable; and one identical refusal
+> of a cross-lane reference on every seed. The frozen before/after pairs on the M4 Mac mini
+> corpus gate canonical readiness and peak footprint within 1.03× of the binary before the lanes,
+> first-readable within 2 s of metadata readiness, the 24h@newest, newest-10, newest-giant and
+> small-lane recency fractions, apply and flip transactions within 250 ms, lane-`S` service delay
+> p99 within 100 ms, a stress pair against `--experiment-cold-lanes 1`, and reader-load prologue
+> p99 within 500 ms. Measured on 2026-11-02 (campaign `r1-newest-trees-cold-20261102b`, the second,
+> after the memory and drift fixes: every admitted Claude Code and Codex source, 639 files,
+> 1.78 GB, 303 sessions, 31 root trees; interleaved, 11 runs a side for the timed pairs;
+> [retained evidence](../tools/r1-bench/results-2026-11-02-r1.json)), 63 of the 72 gated rows pass
+> and 9 fail. A milestone's fraction is f = (t − T_meta) / (CR_ref − T_meta), where T_meta is
+> metadata readiness and CR_ref the canonical readiness of commit R1-E's path walk (3.87 s), or of
+> `--experiment-cold-lanes 1` under stress flags (3.78 s). Held: the logical projection and
+> `sourceSetDigest` are identical in every run of every pair, from 3ca7410 through R1 (logical
+> TOTAL `3c4c389b…5428`), and so are counts, ranked search, the asset files and R1's walk digest
+> (serial or pooled) wherever measured. Medians that pass: canonical readiness 3.27 s against
+> 3.86 s for the binary before the lanes (commit R1-U, order-free usage; 0.85×); peak footprint
+> 808 against 977 MB (0.83×); first-readable at metadata readiness (0.07 s); 24h@newest and
+> newest-10 at 0.92 s (f 0.22); 7d@newest at 2.71 s (f 0.70, before publication in every run);
+> longest apply and flip transactions 63.6 and 26.6 ms; lane-`S` service delay p99 3.2 ms; tree
+> admission 2.1% of writer wall; no SQLITE_LOCKED, crossing or budget residual. Under stress flags
+> (`--capture-lookahead 240m --capture-workers 9`), canonical readiness is 0.88×
+> `--experiment-cold-lanes 1` and 0.85× the path walk, peak footprint 0.97× and 0.72×, and
+> small-lane 7d@newest 0.49× the one-lane mode. Under reader load canonical readiness is 1.02×,
+> with no 5xx in 595 requests, prologue wait p99 51 ms and closure wall p99 59 ms. The kill
+> switch's ledger source digest equals the path walk's. R1-E is neutral against 3ca7410 (canonical
+> readiness 1.01×, peak 0.98×, the same ledger source digest), and R1-U against R1-E (1.00×,
+> peak 0.99×; it changes no logical row on this corpus). The first campaign
+> (`r1-newest-trees-cold-20261102`) failed peak footprint (1.20× R1-U; 1.15× the path walk under
+> stress flags) and R1-U's canonical readiness (1.05× R1-E, from the drift sample's point reads);
+> the look-ahead reservation, the large-block allocator and the drift cache (§3.4) fixed them. On
+> one binary, root-tree admission still peaks above runtime admission (826 against 701 MB for
+> `--experiment-cold-admission runtime`, three runs each). Failed: newest giant f is 0.63, against
+> ≤ 0.25 (0.64 against ≤ 0.20 under stress flags). This corpus's newest giant is 114 h older than
+> the newest tree and holds one 452 MB transcript. One worker reads it in about 2.45 s, a floor
+> that only splitting a source across workers (R1.5) lifts. Small-lane 24h@newest f is 0.22
+> against ≤ 0.20, and 7d@newest f 0.40 against ≤ 0.30: lane `S` is writer-bound, with writer queue
+> wait p50 about 83 ms against a 3 ms service delay. Under stress flags small-lane 24h@newest is
+> 1.01× the one-lane mode, against ≤ 1.00×: here the 24h set is small trees only, which the
+> one-lane walk also takes first, and the medians differ by one 10 ms step, not significantly
+> (Mann-Whitney p 0.16). Strict cursor-id equality fails in the neutrality, lanes and kill-switch
+> pairs: which runtime's cursor block takes the first rowids follows which runtime checkpoints
+> first (U-2), and the ids stay path rank within each runtime. In the lanes pair, Codex's block
+> came first in 11 of 11 R1 runs and 0 of 11 R1-U runs. A rebuild's strict comparison without
+> surrogate ids fails in 3 of 3: rebuild leaves each checkpoint's file evidence (JSONL tail,
+> SQLite snapshot stamp and revision) null, as it does at 3ca7410. The rebuild's logical rows,
+> counts and every other strict component are equal.
 >
 > Cold JSONL capture transfers owned normalized batches into the RAM planner instead of
 > deep-copying them. Both owned and borrowed entry points enforce the same metadata boundary
@@ -334,7 +648,8 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > plain ledger also made capture wait about 30 s for the ledger queue.
 >
 > After every runtime closes, set-based indexes/rollups, `ANALYZE`, quick/FK checks, and projection
-> validation run against that RAM generation. The named `<ledger>.staged` raw generation is then drained and fsynced;
+> validation run against that RAM generation (the refold and the indexes in two transactions while
+> readers are attached, §6). The named `<ledger>.staged` raw generation is then drained and fsynced;
 > the canonical database is backed up to a same-filesystem private file, synced, installed by
 > atomic rename, and the read router switches RAM → disk before the RAM keeper is released.
 > The backup writes that private file without a rollback journal or SQLite syncs of its own
@@ -347,9 +662,18 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > Watchers were armed before metadata, so source suffixes written during the build feed the live
 > runner after handoff. RAM is a temporary location for the one canonical projection, not a third
 > representation or a recovery source. The app keeps one HTTP/WS contract across the switch.
-> Canonical payload visibility is runtime-granular; exposing a partially reconciled multi-file runtime
-> for cosmetically finer progress is forbidden. A future session-partitioned plan must first prove
-> that every correlation and replacement boundary is closed inside the partition.
+> Canonical payload visibility is never finer than a partition whose every correlation and
+> replacement boundary is proven closed inside it; exposing a partially reconciled multi-file
+> runtime for cosmetically finer progress is forbidden. A runtime-admission adapter's partition is
+> its whole runtime. A root-tree adapter's is the root tree, and R1 (2026-11-02) supplies the proof:
+> closure is declared per adapter (`AgentAdapter::cold_admission`) and checked op by op on the
+> producer through an exhaustive `IngestOp::named_session` match; a cross-tree reference binds
+> both trees within a lane and fails the build closed across lanes or into a closed tree, so the
+> outcome does not depend on the schedule; the only cross-tree state, usage ownership and the
+> drift sample, converges in any order (§4.1.3, §3.4); an abandoned source taints its tree; and
+> replacements cannot cross a tree, because sibling heals stay inside a session. A flip commits
+> after every source of its tree and flips readiness last, so no session leaves `Pending` before
+> its rows, tails and renumber have committed, and none is ever `Pending` again.
 >
 > **Cold progress (2026-09-07, protocol v16).** Observation is independent of publication.
 > Metadata's atomic session count advances with each admitted identity, before ownership settlement
@@ -357,8 +681,9 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > at bounded record-batch boundaries; `PayloadBytes` excludes audit, anchor, and prefix rereads.
 > Fresh and resumed serve populate a shared RAM `ProgressBoard` from metadata's settled ownership.
 > `/api/status` snapshots that board while the writer is busy, and a project's `sessions_done`
-> advances only after the complete runtime becomes public — for a resumed build, whose runtimes
-> are not admitted one by one, at publication. Metadata-only parent placeholders do
+> advances only as sessions become public: per flipped tree for a root-tree runtime (2026-11-02),
+> at its admission for any other runtime, and for a resumed build, whose runtimes are not
+> admitted one by one, at publication. Metadata-only parent placeholders do
 > not overcount the source plan. Database/document payloads and resumed suffixes have an unknown
 > byte denominator (`bytes_total: 0`); serialized records must never be divided by SQLite file size.
 > JSONL byte totals remain source-size estimates, with UI clamping for delimiters and growing files.
@@ -410,7 +735,8 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > cancellation signal separate from process shutdown, join, close their ledger writers,
 > and sync retained evidence before state becomes paused. While paused, the listener, metadata
 > mirror, and existing RAM reader remain available. That reader keeps what the attempt it was attached to
-> left: a fresh build's admitted runtimes stay readable, while a cross-launch resume — the first
+> left: a fresh build's flipped trees and admitted runtimes stay readable, while a cross-launch
+> resume — the first
 > attempt of its process, writing into the reader's RAM — leaves every session `Pending`, since its
 > readiness commits only past the publication fence. In-process resume rebuilds disposable state
 > behind that retained reader, rechecks current inventory, and switches at publication;
@@ -464,6 +790,31 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > polite announcements, native disclosure controls, tabular figures, and reduced-motion styles
 > keep frequent updates readable without repeatedly announcing changing counts.
 >
+> During a fresh import the reading step is titled “Importing your newest conversations first”,
+> with “· N ready” after it (Σ `ProjectBackfill.sessions_done`, so N moves per flipped tree; drawn,
+> but outside the live region); a resumed build (the room saw its `restoring` phase) reads
+> “Finishing the import” and counts nothing, since it opens nothing new before it publishes
+> (`clients/room/src/lib/ingest-activity.ts`, 2026-11-02). A Pending session's transcript says
+> “Not imported yet” with the promise its import's course can keep: fresh, “Your newest
+> conversations import first. This one opens as soon as the import reaches it.”; resumed, “The
+> import picked up where it stopped. This one opens when the import finishes.”; a paused or failed
+> run, “The import stopped before it reached this one. It opens once the import continues.”, with
+> no sweeping meter. A metadata-only placeholder reads “Transcript not available” (above its
+> children: “only the conversations it started”); a real session with children whose skim
+> yielded nothing looks the same and reads so until its tree flips. An open transcript during the
+> import carries
+> “Live updates resume when the import finishes”, since the live watcher starts after publication
+> (`components/transcript/ImportState.tsx`). The catalog and the session socket announce a flip
+> separately, so until rows delivered after the flip replace the empty Pending ones the
+> transcript keeps its not-imported face, never “Nothing readable yet”, and asks again after 3 s if
+> no resync came. A full command's disclosure maps `not_ready` by the server's message — one naming
+> the import gives “available when imported · retry”, one saying saving or naming publication
+> gives “still saving · retry”, any other “couldn’t load · retry” — so the daemon's two messages
+> (“this conversation is still importing”, “still saving · retry”) are a contract. The room has
+> no wire signal of the admission mode, so the newest-first copy also shows for runtime-admission
+> agents, and a room opened after a resume's `restoring` phase cannot tell and shows the fresh
+> copy.
+>
 > **Progress validation.** Campaign `/private/tmp/rosetta-ingest-progress-20260907` retains three
 > before/after fresh-serve pairs on the same read-only 200-file, 316,975,655-byte Claude/Codex
 > corpus (source manifest SHA-256 `f7c85b319eeb1779a0e29f3dba39bc6be29a221cda09a082109c37b3a3b2fb93`)
@@ -499,7 +850,8 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > generation in RAM, and rereads the source strictly above it; its catch-up passes are private
 > build passes like the fresh walk's, and it publishes past the same per-file imperfections.
 > That resumed build writes into the canonical RAM generation the read router already targets,
-> but unlike a fresh build it is not admitted runtime by runtime: it replays in ledger order with
+> but unlike a fresh build it is not admitted tree by tree or runtime by runtime, and its catch-up
+> reads to each source's end with no cut ceiling: it replays in ledger order with
 > its reconciliation deferred, catches up serially, reconciles cross-file tool lifecycle, usage
 > and file edits once after every runtime, and leaves provisional ordinals for finalization to
 > renumber. So no resumed session is public before it is final (2026-11-01): replay
@@ -956,7 +1308,15 @@ capture contract explicit.
   which also ignores segment boundaries, file ids and raw-batch packing. Metadata entries
   carry run-dependent values (a runtime row's `discovered_at`), so the entry digest is also
   reported split: a source digest over the raw and seal entries — what two builds of the
-  same read-only inputs must share — and a meta digest.
+  same read-only inputs must share when they walk in the same order — and a meta digest. It
+  also prints a *source set digest* (2026-11-02; `capture/src/ledger/verify.rs`): each source's
+  raw, document (without `captured_at`) and seal entries hashed separately in entry order, the
+  per-source digests folded in path order as (length, path, digest). It is equal for any
+  interleaving of whole sources and still catches a dropped, duplicated, altered or reordered
+  entry within a source, so it is the equality measure for root-tree runtimes, whose lanes merge
+  sources in a run-dependent order. The text output adds `<runtime> source set digest <hex>` per
+  runtime and `source set digest <hex>` over all of them (folded like the other root digests);
+  JSON carries `sourceSetDigest`.
   Each closed segment also appends one line to `<agent>/.segments` naming the sources and
   generation ranges it holds, so a read scoped to one source generation (the transcript's
   exact-command fetch) opens the owning segments instead of walking the ledger; the index is
@@ -1611,20 +1971,38 @@ its request count, when the agent reports one: Grok's `modelCalls`, Copilot's in
    Code forks, OpenCode fork copies). Across files the adapter stamps every usage op of a
    response with the response's native identity (Claude Code: `message.id:requestId`) and
    the store keeps one owner per identity — the earliest-started session, then the lower
-   session id — dropping later copies on arrival and retracting an earlier-applied copy's
-   usage when its origin lands (`apply::UsageOwners`). The index is process-local like the
-   RAM reconciliation buffer: a rebuild replays the raw ledger through it, and a daemon that
+   session id (`apply::UsageOwners`) — dropping later copies on arrival. The verdict is
+   order-free (R1, 2026-11-02; `apply/usage_owners.rs`, `apply/usage_claims.rs`): each owner keeps
+   a touched set of every row and `session_usage` sample its records wrote, and when an
+   earlier-started session's copy lands, a *Displace* undoes all of them. A row gets NULL usage
+   columns, and its prior model and time come back only while it still holds what the usage wrote
+   (compare-and-restore; a later message upsert's values are what a dropped copy shows, so they
+   stay); a sample row is deleted. Every non-owner copy then equals a dropped copy and the owner is
+   the earliest-started session whatever order the sources land in, which is what lets trees land
+   in any interleaving (one source applied across Stage, resolved-row and terminal transactions
+   converges the same way, since no provenance sweep ever follows a slice). Three residuals
+   remain: `session.updated_at` only rises, so a displaced copy keeps a usage time that exceeds
+   every other time its session reports; a message re-upsert that writes back exactly the stamp
+   the usage wrote cannot be told apart and is undone too; and a row that two identities' usage
+   both targeted loses its usage when either owner is displaced. The index is process-local like
+   the RAM reconciliation buffer: a rebuild replays the raw ledger through it, and a daemon that
    opens a complete projection starts empty, so a copy whose origin was projected in an
    earlier run is caught at the next rebuild. Copies never persist anything (iron rule 5).
    `ApplyStats` counts every claim's outcome: `usage_identities_owned` (an identity's first
    record, or its owner's correction), `usage_copies_dropped` and `usage_copies_displaced` (a
-   displacement can lower a visible session's usage later). It also counts
+   displacement can lower a visible session's usage later). Of the displacements that actually
+   undid a row or sample, `usage_displaced_sessions` names the sessions, and
+   `usage_displaced_visible` (with `usage_displaced_visible_rows`) counts those in a session that
+   had already left `Pending`; a displaced owner whose records never matched anything is left out.
+   A fresh build resyncs such a session when it is readable (decision U-1; status checkpoint,
+   "Newest trees first"). `usage_owner_bytes` gauges the owner index's resident bytes (merging
+   keeps the larger). It also counts
    `usage_identities_unclaimed`: identity-bearing usage records the cold fold merges straight
    onto their dated tool row (`FoldState::finish`), so they never reach the owner index. A cold
    build neither registers nor drops such a copy, while live ingest claims it. The count is of
    records, not rows: each of a row's successive snapshots counts. It only sizes that known
-   cold/live gap and changes nothing. All four reach the profiler and the `usage-copies:` line at
-   canonical readiness.
+   cold/live gap and changes nothing. All four, plus `usage_displaced_visible` and
+   `usage_owner_bytes`, reach the profiler and the `usage-copies:` line at canonical readiness.
 3. *Extra attempts are separate records.* A fallback, compaction or advisor call inside one
    response (Claude `usage.iterations`) becomes its own `session_usage` sample with its own
    model.
@@ -2022,9 +2400,11 @@ than merged row bounds: a tool row's bounds are its request and its completion, 
 inside it is a gap, never presumed work. Sessions come from the mirror's activity bounds; turns
 from one read per tree over `message`'s existing activity indexes, so the route adds no
 schema and reads no payload. A monitor (VibeField's Godview timeline) draws a day of lanes
-from one ask instead of paging every timeline. A Pending session's turns are withheld before
-publication (`turns_withheld`), as its timeline is. The route spans sessions, so a grant never
-opens it.
+from one ask instead of paging every timeline. Before publication a Pending session is behind
+the admission barrier here too (2026-11-02): the mirror withholds its activity bounds, so it is
+not selected, and an admitted root's turns skip its Pending members; a Pending root that is
+selected anyway still answers with `turns_withheld` and no turns. The route spans sessions, so a
+grant never opens it.
 
 The expanded project activity calendar (2026-09-30) selects a recorded day, then
 reads `GET /api/projects/{id}/usage/day?day=YYYY-MM-DD&offset_minutes=N` for its
@@ -2310,6 +2690,34 @@ now does too, through a start-time **enrollment file**:
   identity is captured during meta ingest and written into the ledger before it becomes canonical.
   The store rejects `SessionMeta` in every source-scoped stream batch, making this a write-boundary
   invariant rather than an adapter convention.
+- **The shared-cache RAM generation has one lock order** (R1, 2026-11-02;
+  `store/src/lock_order.rs`, `server/src/http/shared_reads.rs`). A fresh `serve` builds the
+  canonical projection in a named shared-cache memory database while HTTP/WS readers attach to
+  it. Shared cache holds table locks until a transaction ends, and `unlock_notify` answers a
+  waits-for cycle with an immediate `SQLITE_LOCKED`: source transactions lock `ingest_cursor` →
+  `message` → `session` and readers `session` → `message`, and `projection_state`, which
+  artifact-list and watermark reads open with and the finalize refold writes, would close
+  another. Retrying the writer is not an option, since usage ownership, assets and reconciliation
+  mutate RAM inside its transaction. On the shared generation only, therefore: **W1** — every
+  writer transaction opens through `Store::writer_tx` (`lock_order::writer_tx` inside the store),
+  whose first statement is a zero-row `session` UPDATE bound to `''`, taking the `session` write
+  lock; Stage-slice, resolved-row, terminal, flip and remainder transactions all do. **W2** — a
+  DDL transaction opens through `ddl_tx`, runs DDL first and never takes W1 or writes `session`,
+  because DDL waits out every open read, including one parked at its prologue behind W1; so
+  `finish_bulk_load` runs tx A (the refold, under W1) and then tx B (indexes, `ANALYZE`,
+  canonical readiness), and readers between them see refolded rows without indexes, while private
+  and disk rebuilds keep one transaction. **R1** — every reader runs `SELECT 1 FROM session WHERE
+  id = ''` right after `BEGIN DEFERRED`, so its first table lock is `session`. A reader can then
+  wait on the writer but never close a cycle; SQLite takes a statement's table locks in its
+  prologue, before any row matches (`store/tests/shared_cache_lock_order.rs` pins it). A pending
+  W1 stops new read transactions, so a stream of readers cannot starve the writer, and a read
+  that starts mid-transaction waits for at most one apply transaction (≤ 16 MiB), one flip batch
+  or one finalize transaction. A single autocommit statement holds no lock while it waits, so the
+  single-row readiness, consent and audit writes need no W1. The discipline rules
+  `SQLITE_LOCKED` out, so a refusal is a counted bug: one at the prologue retries once on a
+  fresh connection and then answers 503 `not_ready`, and one inside the read — which cannot be
+  retried — answers a counted 503 too. A durable file target is a WAL reader and runs no
+  prologue. `--json --profile` reports the waits (Cold-build measurement, `shared-cache-locks`).
 - **Content-addressed image members** are part of the one canonical projection, not a third
   representation. An adapter may recognize a verified native inline image and decode its
   Base64, but only the store writes the recorded bytes to `<projection>.assets/<blake3>.<ext>`.
@@ -2607,10 +3015,13 @@ still require a driver-specific frozen pair or a declared production-weighted ag
 - Batched writes; prepared-statement caches; mmap reads for big transcripts.
 - Private cold loads capture adapters into independent RAM planners, precompute presentation
   order, and feed closed runtimes to one canonical writer. A normal fresh `serve` streams instead:
-  each source enters the canonical writer as a closed source while capture continues, and each
-  runtime is admitted (fold, final tool rows, Pending flip) when its capture closes. Fresh serve
+  each source enters the canonical writer as a closed source while capture continues; a root-tree
+  runtime (Claude Code, Codex) walks newest trees first and admits each closure-proven tree (fold,
+  final tool rows, Pending flip) once its sources have committed, and everything else is admitted
+  when its runtime's capture closes. Fresh serve
   places that canonical schema in named shared memory: metadata is immediately public and each
-  completed runtime becomes transactionally readable before the global set-based gate. It then
+  flipped tree or completed runtime becomes transactionally readable before the global set-based
+  gate. It then
   installs one validated disk copy and atomically retargets readers. Cross-session aggregates are
   unavailable until that retarget, and the app bounds their post-publication fan-out. Existing
   complete projections enter live maintenance immediately and run only bounded metadata plus forced
@@ -2810,6 +3221,18 @@ Production crates never import development tooling or intermediate evidence.
 4. **Contract goldens**: recorded observe/metrics WS sessions per protocol version.
 5. **Probe in anger**: run `rosetta probe` against the live home dirs after every agent
    update; drift report drives fixture refresh.
+6. **Streamed cold-build harness** (R1, 2026-11-02): `crates/rosettad/tests/streamed_*.rs` over
+   shared `tests/support/` (fixtures and the cross-tree reference adapter generated in each test's
+   own temp home; the path-walk harness; a logical projection dump that maps cursors to paths and
+   message ids to timeline ids; a copy of the round-robin writer loop for in-process builds).
+   Every fixture corpus is built under path, recency, reversed and seeded tree orders, serial and
+   on a chaos pool, and must equal the path walk logically and in `sourceSetDigest`; a commit
+   observer audits visibility after every writer commit; grep tests list every `ORDER BY` over
+   message rowids and every store `transaction()`, failing on a new one. What needs a hidden knob
+   of the real daemon — the walk probe, the writer's counters, scaled budget classes — runs in
+   the crate against the real `serve` and writer (`rosettad/src/serve/resume_kill_tests.rs`,
+   `command_stage_tests.rs`, `cold_stream/writer_e2e_tests.rs`), reusing `tests/support/`. A
+   test's comment names the mutation it must catch, so a reviewer can repeat it.
 
 ## 10. Roadmap — layer by layer, breadth-first
 
@@ -2855,6 +3278,8 @@ layer's design is frozen.
 | Aggregate samples on tiered models | a counted aggregate is estimated as equal requests at its average prompt (2026-09-23); an uncounted one prices only when its prompt tokens cannot have crossed a tier start, otherwise it is unpriced (2026-09-22) | a producer starts reporting per-request usage, or an uncounted producer exposes a count |
 | Residency and regional premiums | a `route` qualifier prices only through a cited overlay premium; otherwise the record is unpriced (2026-09-22) | such routes appear in real data |
 | Rediscover without restart | roll-call discovery runs once at start; a kind installed later is seen on the next start (2026-09-12) | the app wants a "rescan" affordance, or the supervisor needs to enroll into a running daemon |
+| Visible usage displacement (U-1) | DECIDED 2026-11-02: a fork copy's per-row usage badge may empty once, when its older origin imports after the copy's tree flipped; counted as `usage_displaced_visible` (with rows), the session resynced, no wire flag | more than 1% of 24h-horizon sessions are displaced-visible on the MacBook organic run |
+| Root-tree determinism (U-2) | DECIDED 2026-11-02: a root-tree runtime's ledger frame order and message rowids may vary between runs, and on any walk so may which runtime's block of cursor ids comes first (as at 3ca7410); per-source ledger content (`sourceSetDigest`), cursor ids in path rank within each runtime, ledger file ids, the logical projection, ranked search, the walk digest and the publish-or-refuse outcome may not; runtime-admission adapters and `--experiment-cold-admission runtime` stay byte-identical | a consumer needs physical-order or rowid stability across runs |
 
 ## HTML review artifacts (2026-10-30)
 

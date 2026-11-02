@@ -18,7 +18,8 @@ use rosetta_adapter_hermes::HermesAdapter;
 use rosetta_adapter_kimi_code::KimiCodeAdapter;
 use rosetta_adapter_opencode::OpenCodeAdapter;
 use rosetta_adapter_pi::PiAdapter;
-use rosetta_capture::{Ledger, LedgerEntry, SegmentCodec, TailConfig, scan_ledger};
+use rosetta_adapter_support::StreamDriver;
+use rosetta_capture::{Ledger, LedgerEntry, SegmentCodec, TailConfig, Tailer, scan_ledger};
 use rusqlite::types::Value;
 use tempfile::TempDir;
 
@@ -144,10 +145,10 @@ fn capture(
         .with_codec(SegmentCodec::Plain)
         .with_max_segment_bytes(4 * 1024);
     let mut emitted = Vec::new();
-    let mut emit = |sources: Vec<ClosedSource>| {
+    let mut emit = BlockingEmit(|_, sources: Vec<ClosedSource>| {
         emitted.extend(sources.iter().map(|source| format!("{source:?}")));
         Ok(())
-    };
+    });
     if walk == Walk::LazyKeyed {
         let keys = roster_keys(&path_ordered(&files)).unwrap();
         ledger.set_source_keys(Arc::new(keys)).unwrap();
@@ -162,21 +163,22 @@ fn capture(
             opts,
             &instrument,
             Some(&mut ledger),
+            None,
+            &ColdWalkOptions::default(),
             &mut emit,
         )
     } else {
-        walk_closed_sources(
+        let ordered = path_ordered(&files);
+        super::walk::Walker::new(
             adapter,
             &runtime,
             &discovery.root,
             &mut planner,
-            &path_ordered(&files),
+            &ordered,
             opts,
             &instrument,
-            Some(&mut ledger),
-            None,
-            &mut emit,
         )
+        .and_then(|walker| walker.walk_path(&ordered, Some(&mut ledger), None, &mut emit))
     }
     .unwrap();
     ledger.flush().unwrap();
@@ -506,4 +508,208 @@ fn close_file_skips_an_unread_source_and_refuses_what_only_a_bug_leaves() {
         let error = closed.expect_err(label);
         assert!(error.contains(refusal), "{label}: {error}");
     }
+}
+
+/// A frontier that never let a source go names it, and its lane.
+#[test]
+fn a_frontier_that_never_closed_names_its_lane() {
+    let file = |path: &str| SessionFile {
+        ledger_only: false,
+        relative_path: path.into(),
+        stream_id: "transcript".into(),
+        file_format: rosetta_adapter_support::FileFormat::Jsonl,
+        discipline: rosetta_adapter_support::FileDiscipline::AppendOnly,
+        driver: StreamDriver::JsonLines,
+        session_id: path.into(),
+        native_session_id: path.into(),
+        size: 0,
+        modified_ms: 0,
+        agent_version: None,
+        source_missing: false,
+        tree_parent: None,
+        cut_len: None,
+        cut_modified_ms: None,
+    };
+    let (first, second) = (file("p/b.jsonl"), file("p/a.jsonl"));
+    let lane_order = [&first, &second];
+    for (span, expected) in [
+        (
+            LaneId::Small,
+            "cold source p/b.jsonl in lane S never closed",
+        ),
+        (
+            LaneId::Big(0),
+            "cold source p/b.jsonl in lane B0 never closed",
+        ),
+        (LaneId::Path, "cold source p/b.jsonl never closed"),
+    ] {
+        let frontier = super::frontier::Frontier::new(span, &lane_order);
+        assert!(!frontier.finished());
+        let error = frontier.check_finished().unwrap_err().to_string();
+        assert!(error.ends_with(expected), "{error}");
+    }
+}
+
+/// Closing a unit drains only its own cursor's retained batches and drops
+/// the roster's source-less setup batch; what another cursor still retains
+/// must be an open lane head's, or the planner broke an invariant.
+#[test]
+fn a_unit_drains_its_own_cursor_and_refuses_unknown_retained_ones() {
+    let home = TempDir::new().unwrap();
+    let root = expand_data_root(&ClaudeCodeAdapter.layout().data_root, home.path());
+    let project = root.join("projects/-w-drain");
+    std::fs::create_dir_all(&project).unwrap();
+    for session in ["drain-a", "drain-b"] {
+        let body: String = (0..6)
+            .map(|index| claude_user(&format!("{session}-{index}"), "hello") + "\n")
+            .collect();
+        std::fs::write(project.join(format!("{session}.jsonl")), body).unwrap();
+    }
+    let mut tail = TailConfig::json_lines();
+    tail.max_records_per_batch = 2;
+    let opts = IngestOptions {
+        tail,
+        private_build: true,
+        ..IngestOptions::default()
+    };
+    let capture = || {
+        let instrument = Instrument::new();
+        let adapter: &dyn AgentAdapter = &ClaudeCodeAdapter;
+        let discovery = discover(&[adapter], home.path(), &opts, &instrument)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let mut runtime = discovery.runtime;
+        runtime.enabled = true;
+        let mut planner = Store::open_in_memory_for_cold_planning().unwrap();
+        let (_, files) = meta_ingest_inventory_into(
+            adapter,
+            &runtime,
+            &discovery.root,
+            &mut planner,
+            &discovery.inventory,
+            discovery.walk_truncated,
+            &opts,
+            &instrument,
+            None,
+        )
+        .unwrap();
+        streamed_setup(&files, &mut planner).unwrap();
+        let ordered = path_ordered(&files);
+        set_up_roster(adapter, &runtime, &mut planner, &ordered, &instrument, None).unwrap();
+        let tailer = Tailer::new(opts.tail.clone()).unwrap();
+        let mut report = StreamReport::default();
+        for file in &ordered {
+            crate::stream::ingest_file(
+                adapter,
+                &runtime,
+                &discovery.root,
+                &mut planner,
+                file,
+                &tailer,
+                &opts,
+                &instrument,
+                &mut report,
+                crate::stream::PassMode::Normal,
+                None,
+            )
+            .unwrap();
+        }
+        let ids: Vec<i64> = ordered
+            .iter()
+            .map(|file| {
+                queries::cursor_state(planner.conn(), &runtime.id, &file.relative_path)
+                    .unwrap()
+                    .unwrap()
+                    .id
+            })
+            .collect();
+        let files: Vec<SessionFile> = ordered.into_iter().cloned().collect();
+        (runtime, planner, files, ids, instrument)
+    };
+
+    // (a) One cursor's batches, in order; the other's stay.
+    let (_, mut planner, _, ids, _) = capture();
+    assert_eq!(
+        planner.planned_batch_cursors().unwrap(),
+        BTreeSet::from([ids[0], ids[1]])
+    );
+    let drained = planner.drain_planned_batches_for(ids[0]).unwrap();
+    assert!(drained.len() > 1, "{} batches", drained.len());
+    let mut next = 0;
+    for batch in &drained {
+        let source = batch.source.as_ref().unwrap();
+        assert_eq!(source.cursor_id, ids[0]);
+        assert_eq!(source.first_sequence, next);
+        next += batch.ops.len() as u64;
+    }
+    assert_eq!(
+        planner.planned_batch_cursors().unwrap(),
+        BTreeSet::from([ids[1]])
+    );
+    // (b) The roster's source-less setup batch went with the first drain.
+    let rest = planner.drain_planned_batches().unwrap();
+    assert!(!rest.is_empty());
+    assert!(
+        rest.iter()
+            .all(|batch| batch.source.as_ref().map(|source| source.cursor_id) == Some(ids[1])),
+        "only the other cursor's batches remain"
+    );
+
+    // A group's drain: every member's batches in one pass, each in order,
+    // at its member's position; the setup batch goes with it.
+    let (_, mut planner, _, ids, _) = capture();
+    let drained = planner
+        .drain_planned_batches_for_cursors(&[ids[1], ids[0]])
+        .unwrap();
+    assert_eq!(drained.len(), 2);
+    for (batches, id) in drained.iter().zip([ids[1], ids[0]]) {
+        assert!(batches.len() > 1, "{} batches", batches.len());
+        let mut next = 0;
+        for batch in batches {
+            let source = batch.source.as_ref().unwrap();
+            assert_eq!(source.cursor_id, id);
+            assert_eq!(source.first_sequence, next);
+            next += batch.ops.len() as u64;
+        }
+    }
+    assert!(planner.planned_batch_cursors().unwrap().is_empty());
+    assert!(planner.drain_planned_batches().unwrap().is_empty());
+
+    // (c) A retained batch of a cursor that is not an open head.
+    let (runtime, mut planner, files, ids, instrument) = capture();
+    let health = BTreeMap::from([(files[0].relative_path.clone(), true)]);
+    let refused = close_unit(
+        &ClaudeCodeAdapter,
+        &runtime,
+        &mut planner,
+        &[&files[0]],
+        0,
+        &health,
+        false,
+        &BTreeSet::new(),
+        &instrument,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        refused.ends_with(&format!("cold planner retained unknown cursor {}", ids[1])),
+        "{refused}"
+    );
+    // The same close is fine while that cursor is an open head.
+    let (runtime, mut planner, files, ids, instrument) = capture();
+    let closed = close_unit(
+        &ClaudeCodeAdapter,
+        &runtime,
+        &mut planner,
+        &[&files[0]],
+        0,
+        &health,
+        false,
+        &BTreeSet::from([ids[1]]),
+        &instrument,
+    )
+    .unwrap();
+    assert_eq!(closed.len(), 1);
+    assert!(!closed[0].skipped());
 }

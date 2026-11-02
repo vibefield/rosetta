@@ -94,6 +94,8 @@ mod enroll;
 mod image_renditions;
 mod ingest_metrics;
 mod ingestion_control;
+#[cfg(target_os = "macos")]
+mod large_alloc;
 mod ledger_cmd;
 mod ledger_compression;
 mod ledger_verify;
@@ -102,6 +104,13 @@ mod publication;
 mod recovery;
 mod runtime_ledger;
 mod serve;
+#[cfg(test)]
+mod test_support;
+
+/// Freed large blocks leave the footprint at once (`large_alloc`).
+#[cfg(target_os = "macos")]
+#[global_allocator]
+static GLOBAL: large_alloc::DirectLarge = large_alloc::DirectLarge;
 
 fn registry() -> Vec<&'static dyn AgentAdapter> {
     vec![
@@ -326,6 +335,14 @@ struct Flags {
     /// adapter declares. The kill switch and equivalence check for root-tree
     /// admission: it reproduces the runtime-granular build byte for byte.
     experiment_cold_admission_runtime: bool,
+    /// Fresh cold serve: how root-tree runtimes walk — the kill switch above
+    /// (`admission_override`) and the hidden `--experiment-cold-lanes 1`, one
+    /// strict recency lane and one writer budget (the L1 comparator).
+    cold_walk: rosetta_pipeline::ColdWalkOptions,
+    /// Fresh cold serve, hidden: the bound of one apply transaction during
+    /// capture. `None` = the default (16 MiB); `--experiment-cold-chunks 0`
+    /// = no Stage or resolved-row slices (`u64::MAX`); tests set others.
+    cold_chunk_bytes: Option<u64>,
 }
 
 impl Flags {
@@ -386,6 +403,8 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         experiment_async_ledger: false,
         experiment_sqlite_in_memory: false,
         experiment_cold_admission_runtime: false,
+        cold_walk: rosetta_pipeline::ColdWalkOptions::default(),
+        cold_chunk_bytes: None,
     };
     let mut at = 0;
     while at < args.len() {
@@ -553,6 +572,24 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
                         return Err(format!(
                             "--experiment-cold-admission needs runtime or declared, got {other}"
                         ));
+                    }
+                };
+                flags.cold_walk.admission_override = flags.experiment_cold_admission_runtime;
+            }
+            "--experiment-cold-chunks" => {
+                flags.cold_chunk_bytes = match take_value(args, &mut at)?.as_str() {
+                    "0" => Some(u64::MAX),
+                    other => {
+                        return Err(format!("--experiment-cold-chunks needs 0, got {other}"));
+                    }
+                };
+            }
+            "--experiment-cold-lanes" => {
+                flags.cold_walk.single_lane = match take_value(args, &mut at)?.as_str() {
+                    "1" => true,
+                    "2" => false,
+                    other => {
+                        return Err(format!("--experiment-cold-lanes needs 1 or 2, got {other}"));
                     }
                 };
             }
@@ -2734,6 +2771,49 @@ mod tests {
             .err()
             .unwrap();
         assert!(error.contains("runtime or declared"), "{error}");
+    }
+
+    #[test]
+    fn the_cold_walk_flags_set_the_walk_options() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["--db".to_string(), "projection.sqlite".to_string()];
+            args.extend(extra.iter().map(|arg| (*arg).to_string()));
+            parse_flags(&args)
+        };
+        let walk = parse(&[]).unwrap().cold_walk;
+        assert!(!walk.single_lane && !walk.admission_override);
+        let walk = parse(&["--experiment-cold-lanes", "1"]).unwrap().cold_walk;
+        assert!(walk.single_lane && !walk.admission_override);
+        assert!(
+            !parse(&["--experiment-cold-lanes", "2"])
+                .unwrap()
+                .cold_walk
+                .single_lane
+        );
+        let walk = parse(&["--experiment-cold-admission", "runtime"])
+            .unwrap()
+            .cold_walk;
+        assert!(walk.admission_override && !walk.single_lane);
+        let error = parse(&["--experiment-cold-lanes", "3"]).err().unwrap();
+        assert!(error.contains("needs 1 or 2"), "{error}");
+    }
+
+    #[test]
+    fn the_cold_chunks_flag_turns_slicing_off() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["--db".to_string(), "projection.sqlite".to_string()];
+            args.extend(extra.iter().map(|arg| (*arg).to_string()));
+            parse_flags(&args)
+        };
+        assert_eq!(parse(&[]).unwrap().cold_chunk_bytes, None);
+        assert_eq!(
+            parse(&["--experiment-cold-chunks", "0"])
+                .unwrap()
+                .cold_chunk_bytes,
+            Some(u64::MAX)
+        );
+        let error = parse(&["--experiment-cold-chunks", "1"]).err().unwrap();
+        assert!(error.contains("needs 0"), "{error}");
     }
 
     #[test]

@@ -66,6 +66,9 @@ pub struct StreamReport {
     /// generation restart, so cross-file merges land in the rebuilt rows.
     pub siblings_healed: u64,
     pub stats: ApplyStats,
+    /// What a root-tree runtime's lane-merge walk measured per lane: RAM-only
+    /// measurement, never merged into another report.
+    pub walk: Option<Box<crate::closed::WalkProfile>>,
 }
 
 impl StreamReport {

@@ -17,6 +17,8 @@ export interface SessionListItemProps {
   readonly currentTimestamp: number;
   /** A backfill is running — an unindexed session's dot says "indexing". */
   readonly duringBackfill: boolean;
+  /** No transcript of its own was found; see `isMetadataOnly`. */
+  readonly metadataOnly?: boolean;
   readonly onSessionSelect: (session: SessionRow) => void;
 }
 
@@ -27,14 +29,16 @@ export function SessionListItem({
   isSelected,
   currentTimestamp,
   duringBackfill,
+  metadataOnly = false,
   onSessionSelect,
 }: SessionListItemProps) {
-  const status = getSessionStatus(session, duringBackfill);
+  const status = getSessionStatus(session, duringBackfill, metadataOnly);
   // The cooking card: identity is real from the skim; the figure slots are
   // what is still unknown, and they alone carry the processing state. A
   // facts row whose figures have not landed — a cooking session still
   // counting from zero — is not a claim: the shimmer keeps the slot.
-  const cookingState = isSessionCooking(session);
+  // A metadata-only row has nothing to cook: no import will reach it.
+  const cookingState = isSessionCooking(session) && !metadataOnly;
   const landedFacts = facts !== null && (facts.messages > 0 || !cookingState) ? facts : null;
   const isCooking = cookingState && landedFacts === null;
   const title = getSessionTitle(session);

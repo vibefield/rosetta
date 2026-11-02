@@ -23,7 +23,9 @@ use tempfile::TempDir;
 
 use super::{SessionLink, TreeMap};
 use crate::closed::tests::{adapters, copy_tree, fixture_roots};
-use crate::closed::{ClosedSource, stream_closed_sources_into, streamed_setup_for};
+use crate::closed::{
+    BlockingEmit, ClosedSource, ColdWalkOptions, stream_closed_sources_into, streamed_setup_for,
+};
 use crate::instrument::Instrument;
 use crate::meta::SessionFile;
 use crate::{IngestOptions, discover, expand_data_root, meta_ingest_inventory_into};
@@ -40,32 +42,11 @@ fn expected_admission(kind: &str) -> ColdAdmission {
     }
 }
 
-/// The one session an op writes into, if any. Exhaustive on purpose: a new
-/// op variant must say whether it can cross a tree. Links an op merely
-/// carries (a spawned child's id, a handoff target) write nothing there.
+/// The one session an op writes into, if any: [`IngestOp::named_session`],
+/// the exhaustive classification the preparer's closure scan uses. Links an
+/// op merely carries (a spawned child's id, a handoff target) write nothing.
 fn written_session(op: &IngestOp) -> Option<&str> {
-    match op {
-        // Content-addressed bytes and runtime-wide facts belong to no session.
-        IngestOp::ProjectionAsset { .. }
-        | IngestOp::Runtime(_)
-        | IngestOp::Project(_)
-        | IngestOp::Drift(_) => None,
-        IngestOp::HtmlArtifact(publication) => Some(&publication.session_id),
-        IngestOp::HtmlArtifactContent(content) => Some(&content.session_id),
-        IngestOp::SessionMeta(row) => Some(&row.id),
-        IngestOp::SessionTitle(row) => Some(&row.session_id),
-        IngestOp::Message(entry) => Some(&entry.session_id),
-        IngestOp::ToolUpdate { session_id, .. }
-        | IngestOp::Usage { session_id, .. }
-        | IngestOp::WorkflowRun { session_id, .. }
-        | IngestOp::WorkflowJournal { session_id, .. } => Some(session_id),
-        IngestOp::SessionUsage(row) => Some(&row.session_id),
-        IngestOp::SessionUsageTotals(totals) => Some(&totals.session_id),
-        IngestOp::FileEdit(row) => Some(&row.session_id),
-        IngestOp::Plan(row) => Some(&row.session_id),
-        IngestOp::Task(row) => Some(&row.session_id),
-        IngestOp::GitCommit(row) => Some(&row.session_id),
-    }
+    op.named_session()
 }
 
 /// One adapter home, planned as a fresh cold build plans it.
@@ -137,14 +118,14 @@ fn plan_after(
 /// `(source path, its ops)` in emission order.
 fn capture(adapter: &dyn AgentAdapter, planned: &mut Planned) -> Vec<(String, Vec<IngestOp>)> {
     let mut emitted = Vec::new();
-    let mut emit = |sources: Vec<ClosedSource>| {
+    let mut emit = BlockingEmit(|_, sources: Vec<ClosedSource>| {
         emitted.extend(
             sources
                 .into_iter()
                 .map(|source| (source.source.relative_path, source.ops)),
         );
         Ok(())
-    };
+    });
     stream_closed_sources_into(
         adapter,
         &planned.runtime,
@@ -154,6 +135,8 @@ fn capture(adapter: &dyn AgentAdapter, planned: &mut Planned) -> Vec<(String, Ve
         &IngestOptions::default(),
         &Instrument::new(),
         None,
+        None,
+        &ColdWalkOptions::default(),
         &mut emit,
     )
     .unwrap();
@@ -173,7 +156,7 @@ fn home_with(adapter: &dyn AgentAdapter, data: &Path) -> TempDir {
 /// Every home the harness runs `adapter` on: each recorded fixture; for a
 /// root-tree adapter, all its fixtures in one home, then (last) the
 /// generated nested family.
-fn homes(adapter: &dyn AgentAdapter) -> Vec<(String, TempDir)> {
+pub(crate) fn homes(adapter: &dyn AgentAdapter) -> Vec<(String, TempDir)> {
     let mut homes: Vec<(String, TempDir)> = fixture_roots(adapter.kind())
         .into_iter()
         .map(|(name, data)| (name, home_with(adapter, &data)))

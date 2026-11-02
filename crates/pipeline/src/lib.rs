@@ -43,14 +43,18 @@ pub mod streamed;
 pub use capture::{CapturePool, PoolBudgets, PoolStats};
 pub use checkpoint::PipeCheckpoint;
 pub use closed::{
-    ClosedSource, SessionLink, StreamedSetup, Tree, TreeId, TreeMap, stream_closed_sources_into,
-    stream_closed_sources_pooled, streamed_setup, streamed_setup_for,
+    BIG_LANES, BIG_SOURCE_BYTES, BlockingEmit, ClosedSource, ColdEmit, ColdWalkOptions,
+    EmitOutcome, LaneId, LaneProfile, Samples, SessionLink, StreamedSetup, Tree, TreeId, TreeMap,
+    WalkOrder, WalkProfile, WalkSource, WalkSummary, stream_closed_sources_into,
+    stream_closed_sources_pooled, streamed_setup, streamed_setup_for, walk_summary,
 };
+#[doc(hidden)]
+pub use closed::{ProbeCounters, ProbeView, WalkOverride, WalkProbe};
 pub use command::{RawCommandLocator, read_raw_command};
 pub use discover::{
     CensusRoot, Discovery, discover, discover_root, discover_roots, expand_data_root,
 };
-pub use early::{EarlyToolReport, PreparedAdmission, StreamedPreparer};
+pub use early::{BigSourceSplit, ClosedTree, EarlyToolReport, PreparedAdmission, StreamedPreparer};
 pub use exclusions::{CwdExclusions, reserve_retired_generation};
 pub use instrument::{Instrument, InstrumentSnapshot, Metric};
 pub use live::{
@@ -72,7 +76,10 @@ pub use stream::{
     StreamReport, reserve_unsealed_generation, stream_backfill, stream_backfill_into,
     stream_backfill_withholding_health,
 };
-pub use streamed::StreamedRuntime;
+pub use streamed::{
+    ApplyItem, FlipCaps, RemainderAdmission, Step, StepReport, StreamedRuntime, TreeAdmission,
+    TxKind, cut_slices,
+};
 
 /// Version of the canonical-op envelope stored in ledger meta frames. Replay
 /// routes explicitly by this value instead of assuming today's row JSON.
@@ -208,6 +215,16 @@ pub struct IngestOptions {
     /// first two staged until a later read completes them, and lets an unclean
     /// replacement abandon so the published generation survives.
     pub private_build: bool,
+    /// `true` for the closed-source passes of a runtime admitted per root
+    /// tree: each JSONL pass reads a transcript only up to its metadata cut
+    /// ([`SessionFile::cut_len`]), so a session is complete as of the
+    /// metadata it was listed with, and growth past the cut is ordinary
+    /// append growth for the live runner. A rewrite drops the cut for the
+    /// rest of its pass; documents and snapshots have none. Only
+    /// `closed_pass_options` sets it, so runtime admission (declared, fallen
+    /// back to, or forced) and every live, resumed and finite pass read to
+    /// the end, as before.
+    pub cut_bounded: bool,
     /// Process-local cooperative cancellation. It is deliberately not a
     /// checkpoint or canonical fact; cold workers check it at bounded record
     /// batches so app shutdown can discard the private build cleanly.
@@ -245,6 +262,7 @@ impl Default for IngestOptions {
             audit_files_per_run: 1,
             starter_budget: None,
             private_build: false,
+            cut_bounded: false,
             cancel: None,
             progress: None,
         }

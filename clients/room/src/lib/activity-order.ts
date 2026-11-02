@@ -110,6 +110,12 @@ export function activityDay(at: number | null): number | null {
   return Number.isFinite(date.getTime()) ? date.getTime() : null;
 }
 
+/** The import's "Not imported yet" group has no recorded activity to
+ * rank by: its newest source first (`updated_at`), then identity. */
+export function compareNotImported(left: SessionRow, right: SessionRow): number {
+  return right.updated_at - left.updated_at || left.id.localeCompare(right.id);
+}
+
 export function compareOrderedSessions(
   left: SessionRow, right: SessionRow, order: ActivityOrder,
 ): number {

@@ -162,6 +162,10 @@ pub struct ApplyProfile {
     pub tool_reconcile_nanos: u64,
     /// Release committed source trees and the temporary reconciliation plan.
     pub tool_reconcile_cleanup_nanos: u64,
+    /// The writer's wait for the `session` write lock that opens every
+    /// writer transaction on the shared RAM generation (lock discipline W1);
+    /// 0 on every other store.
+    pub session_lock_wait_nanos: u64,
 }
 
 impl ApplyStats {
@@ -223,6 +227,7 @@ impl ApplyProfile {
         self.session_renumber_nanos += batch.session_renumber_nanos;
         self.tool_reconcile_nanos += batch.tool_reconcile_nanos;
         self.tool_reconcile_cleanup_nanos += batch.tool_reconcile_cleanup_nanos;
+        self.session_lock_wait_nanos += batch.session_lock_wait_nanos;
     }
 }
 

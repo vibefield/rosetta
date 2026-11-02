@@ -1,8 +1,15 @@
-import { useEffect, useRef, useState } from "react";
-import { activityIdentity, activityPhase, progressBytes, progressDuration, sampleActivity } from "./ingest-activity";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { activityIdentity, activityPhase, progressBytes, progressDuration, resumedRun, sampleActivity } from "./ingest-activity";
 import type { ActivityFeed, ActivitySamples, IngestActivity } from "./ingest-activity";
 
-export function useIngestActivity(feed: ActivityFeed): IngestActivity | null {
+export function useIngestActivity(given: ActivityFeed): IngestActivity | null {
+  // A resumed build is known by the restoring phase it passed through; the
+  // mark outlives that phase until the import goes live.
+  const [resumedKey, setResumedKey] = useState<string | null>(null);
+  const nextResumedKey = resumedRun(resumedKey, given);
+  if (nextResumedKey !== resumedKey) setResumedKey(nextResumedKey);
+  const resumed = nextResumedKey !== null;
+  const feed = useMemo(() => (resumed ? { ...given, resumed } : given), [given, resumed]);
   const phase = activityPhase(feed);
   const [samples, setSamples] = useState<ActivitySamples | null>(null);
   const [now, setNow] = useState(Date.now);

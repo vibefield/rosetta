@@ -21,7 +21,9 @@ use rosetta_store::hot::{Mutation, Replay};
 use rosetta_store::{queries, timeline_meta};
 
 use crate::enrolled::EnrolledRuntimes;
-use crate::http::{AppState, Failure, ProjectionReader, read_timeline_page, with_read};
+use crate::http::{
+    AppState, Failure, ProjectionReader, behind_admission, read_timeline_page, with_read,
+};
 use crate::hub::{Hub, HubItem, Subscription};
 
 /// Messages in the initial timeline snapshot; older history pages via REST.
@@ -152,11 +154,7 @@ pub(crate) async fn collaboration(
 async fn collaboration_snapshot(state: &AppState, id: String) -> Result<ServerFrame, Failure> {
     let hide_pending = !state.projection.is_published();
     with_read(state.projection.clone(), move |conn| {
-        let session =
-            queries::session(conn, &id).map_err(|error| Failure::internal(error.to_string()))?;
-        let hidden = hide_pending
-            && session
-                .is_some_and(|row| row.stream_state == rosetta_core::rows::StreamState::Pending);
+        let hidden = behind_admission(conn, &id, hide_pending)?;
         let (entries, response_runtimes) = if hidden {
             (vec![], vec![])
         } else {
@@ -242,7 +240,11 @@ pub(crate) async fn run_collaboration_stream<S: FrameSink>(
                     Mutation::Usage { timeline_id, .. } => {
                         let session_id = id.clone();
                         let timeline_id = timeline_id.clone();
+                        let hide_pending = !state.projection.is_published();
                         let Ok(observation) = with_read(state.projection.clone(), move |conn| {
+                            if behind_admission(conn, &session_id, hide_pending)? {
+                                return Ok(None);
+                            }
                             queries::response_runtime(conn, &session_id, &timeline_id)
                                 .map_err(|error| Failure::internal(error.to_string()))
                         })
@@ -271,11 +273,7 @@ async fn timeline_snapshot(
 ) -> Result<ServerFrame, Failure> {
     let hide_pending = !projection.is_published();
     with_read(projection, move |conn| {
-        let session = queries::session(conn, &session_id)
-            .map_err(|error| Failure::internal(format!("{error}")))?;
-        let hidden = hide_pending
-            && session
-                .is_some_and(|row| row.stream_state == rosetta_core::rows::StreamState::Pending);
+        let hidden = behind_admission(conn, &session_id, hide_pending)?;
         let page = read_timeline_page(conn, &session_id, SNAPSHOT_LIMIT, None, hide_pending)?;
         let timeline_meta = if hidden {
             timeline_meta::TimelineMeta::default()
@@ -301,11 +299,7 @@ async fn timeline_meta_snapshot(
 ) -> Result<ServerFrame, Failure> {
     let hide_pending = !projection.is_published();
     with_read(projection, move |conn| {
-        let session = queries::session(conn, &session_id)
-            .map_err(|error| Failure::internal(format!("{error}")))?;
-        let hidden = hide_pending
-            && session
-                .is_some_and(|row| row.stream_state == rosetta_core::rows::StreamState::Pending);
+        let hidden = behind_admission(conn, &session_id, hide_pending)?;
         let timeline_meta = if hidden {
             timeline_meta::TimelineMeta::default()
         } else {
@@ -331,6 +325,16 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
 ) {
     let (sub, stamp, replay) = state.hub.subscribe_resuming(&session_id, resume, now_ms());
     let sub = Arc::new(sub);
+    // A ring gap is payload too: before publication a Pending session's
+    // reconnect takes the (withheld) snapshot rather than replaying rows.
+    let replay = match replay {
+        Some(Replay::Mutations(items))
+            if !items.is_empty() && withheld(&state.projection, &session_id).await =>
+        {
+            None
+        }
+        replay => replay,
+    };
     if sink
         .send(ServerFrame::Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -448,6 +452,21 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
             }
         }
     }
+}
+
+/// Whether `session_id` is behind the cold admission barrier right now. A
+/// failed read answers yes: the caller then takes the snapshot path, which
+/// applies the barrier itself.
+async fn withheld(projection: &Arc<ProjectionReader>, session_id: &str) -> bool {
+    if projection.is_published() {
+        return false;
+    }
+    let session_id = session_id.to_owned();
+    with_read(projection.clone(), move |conn| {
+        behind_admission(conn, &session_id, true)
+    })
+    .await
+    .unwrap_or(true)
 }
 
 enum ItemOrEnd {
