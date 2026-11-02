@@ -34,10 +34,32 @@ pub(crate) enum Skimmed {
     /// A transcript no skim identifies whose first record no delimiter has
     /// ended yet: its writer is still writing it, so it is not yet a session.
     Unfinished,
-    /// A transcript's skim, after any bounded identity or title fallback.
-    Transcript(Box<SkimResult>),
+    /// A transcript's skim, after any bounded identity or title fallback,
+    /// and the file's length and mtime the skim read it at.
+    Transcript(Box<SkimResult>, Cut),
     /// The sessions a stable document snapshot enumerates.
     Document(Vec<SkimResult>),
+}
+
+/// What the skim's own open handle said about a transcript: the metadata cut
+/// ([`crate::SessionFile::cut_len`], `cut_modified_ms`). It costs no extra
+/// syscall (the windows' fstat), and unlike the discovery census it is taken
+/// after the watchers are armed.
+///
+/// Only a JSONL transcript is skimmed through head and tail windows, so only
+/// a transcript has a cut. Every document member (Claude Code subagent and
+/// workflow-run sidecars) and every SQLite snapshot member (Codex
+/// `state_N.sqlite#…`) has none: those are stable whole-content snapshots
+/// taken at capture, so a root-tree build reads them to their capture-time
+/// end, not to the cut. Of those, only a document that frames records (a
+/// Claude Code workflow run) can project content newer than the cut; subagent
+/// sidecars frame none, and Codex declares no snapshot record queries. A
+/// fresh roster holds no transcript without a cut: a transcript the skim
+/// could not open is not admitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cut {
+    pub(crate) len: u64,
+    pub(crate) modified_ms: i64,
 }
 
 /// Read one JSONL transcript: bounded head and tail windows, then the
@@ -66,6 +88,10 @@ pub(crate) fn skim_transcript(
         Metric::BytesRead,
         (windows.head.len() + windows.tail.len()) as u64,
     );
+    let cut = Cut {
+        len: windows.len,
+        modified_ms: windows.modified_ms,
+    };
 
     let stat = FileStat {
         relative_path: file.relative_path.clone(),
@@ -132,7 +158,7 @@ pub(crate) fn skim_transcript(
             }
         }
     }
-    Ok(Skimmed::Transcript(Box::new(skim)))
+    Ok(Skimmed::Transcript(Box::new(skim), cut))
 }
 
 /// Read one rewrite-in-place document as a stable whole-file snapshot and

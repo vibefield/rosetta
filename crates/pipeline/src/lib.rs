@@ -43,8 +43,8 @@ pub mod streamed;
 pub use capture::{CapturePool, PoolBudgets, PoolStats};
 pub use checkpoint::PipeCheckpoint;
 pub use closed::{
-    ClosedSource, StreamedSetup, stream_closed_sources_into, stream_closed_sources_pooled,
-    streamed_setup,
+    ClosedSource, SessionLink, StreamedSetup, Tree, TreeId, TreeMap, stream_closed_sources_into,
+    stream_closed_sources_pooled, streamed_setup, streamed_setup_for,
 };
 pub use command::{RawCommandLocator, read_raw_command};
 pub use discover::{

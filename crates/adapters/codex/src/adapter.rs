@@ -38,6 +38,15 @@ impl AgentAdapter for CodexAdapter {
         Some(&[spec::ROLLOUT])
     }
 
+    /// A rollout writes its own session, except a guardian review's usage,
+    /// which lands on the parent its header names: metadata links the
+    /// guardian to that parent, so both are one tree. The state database is
+    /// shared by every tree but declares no record queries, so its members
+    /// emit no ops (`snapshot_plan`).
+    fn cold_admission(&self) -> rosetta_adapter_support::ColdAdmission {
+        rosetta_adapter_support::ColdAdmission::RootTree
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 17: per-response `token_usage_record` (remote compactions), the
         // first settings snapshot's tier back-applied to the first turn, a

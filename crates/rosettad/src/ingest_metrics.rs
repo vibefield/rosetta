@@ -10,10 +10,11 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rosetta_adapter_support::StreamDriver;
-use rosetta_pipeline::{ClosedSource, Instrument, Metric, SessionFile};
+use rosetta_pipeline::{ClosedSource, Instrument, Metric, SessionFile, SessionLink, TreeMap};
 use rosetta_store::Store;
 use serde_json::{Value, json};
 
@@ -21,12 +22,16 @@ use crate::bench;
 
 mod memory;
 pub(crate) use memory::MemorySampler;
+mod recency;
+use recency::{NewestHorizon, TreeMilestones};
 
 const HOUR_MS: i64 = 60 * 60 * 1_000;
 const DAY_MS: i64 = 24 * HOUR_MS;
 
 /// The recent-ready horizons: a roster session is recent when its newest
-/// source was modified at most this long before the census cut.
+/// source was modified at most this long before the census cut. The
+/// `@newest` horizons ([`recency`]) measure back from the newest session
+/// instead.
 const HORIZONS: [(&str, i64); 2] = [("24h", DAY_MS), ("7d", 7 * DAY_MS)];
 
 /// Census age buckets, cumulative: each counts every file at most that old,
@@ -42,7 +47,8 @@ const AGES: [(&str, i64); 4] = [
 const LARGEST_FILES: usize = 20;
 
 /// A session or tree over this many roster bytes counts as large: the size
-/// the recency plan's big-tree deferral is to be set from.
+/// the recency plan's big-tree deferral is to be set from, and the line
+/// between the newest giant and the small trees of the tree milestones.
 const LARGE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// The streamed writer's milestones, census and horizon bookkeeping. Owned
@@ -64,6 +70,13 @@ pub(crate) struct ColdMilestones {
     remaining: HashMap<String, u32>,
     first_complete: bool,
     horizons: Vec<Horizon>,
+    /// The same horizons measured from the newest roster session.
+    newest: Vec<NewestHorizon>,
+    /// The root-tree milestones of the runtimes admitted per tree.
+    trees: TreeMilestones,
+    /// Every line said and its event, for the tests.
+    #[cfg(test)]
+    said: Vec<(String, Option<Value>)>,
 }
 
 struct Horizon {
@@ -99,7 +112,23 @@ impl ColdMilestones {
                     ready: false,
                 })
                 .collect(),
+            newest: NewestHorizon::all(),
+            trees: TreeMilestones::new(runtimes),
+            #[cfg(test)]
+            said: Vec::new(),
         }
+    }
+
+    /// Print one line, and its JSON event under `--json --profile`.
+    fn say(&mut self, line: String, event: Option<Value>) {
+        println!("{line}");
+        if self.events
+            && let Some(event) = &event
+        {
+            bench::emit(event);
+        }
+        #[cfg(test)]
+        self.said.push((line, event));
     }
 
     fn elapsed(&self) -> f64 {
@@ -119,11 +148,22 @@ impl ColdMilestones {
         kind: &'static str,
         roster: &[SessionFile],
     ) -> RosterCensus {
-        println!(
-            "milestone: runtime-metadata-public runtime={runtime_id} agent={kind} elapsed_s={:.2}",
-            public_at.as_secs_f64()
+        self.say(
+            format!(
+                "milestone: runtime-metadata-public runtime={runtime_id} agent={kind} elapsed_s={:.2}",
+                public_at.as_secs_f64()
+            ),
+            None,
         );
         let (census, per_session) = Census::of(roster.iter().map(CensusFile::from), self.cut_ms);
+        // The one family link no row carries: a ledger-only source's parent.
+        let source_links = roster
+            .iter()
+            .filter_map(|file| {
+                let parent = file.tree_parent.clone()?;
+                Some((file.session_id.clone(), Some(parent), None))
+            })
+            .collect();
         let newest = newest_by_session(roster);
         for horizon in &mut self.horizons {
             for (session, modified_ms) in &newest {
@@ -134,6 +174,13 @@ impl ColdMilestones {
                 }
             }
         }
+        for horizon in &mut self.newest {
+            horizon.roster(&newest);
+        }
+        self.trees.roster(
+            runtime_id,
+            newest.keys().map(|session| (*session).to_owned()).collect(),
+        );
         if !self.first_complete {
             for file in roster.iter().filter(|file| !file.ledger_only) {
                 *self.remaining.entry(file.session_id.clone()).or_default() += 1;
@@ -146,19 +193,30 @@ impl ColdMilestones {
             kind,
             census,
             per_session,
+            source_links,
         }
     }
 
-    /// Print one runtime's census, its sessions grouped into trees by their
-    /// settled roots: a store read, so the writer runs it once the runtime's
-    /// producer has started.
+    /// One runtime's setup is open: its root trees when it is admitted per
+    /// tree, `None` for runtime admission, which contributes to the session
+    /// horizons only. A tree requires each member with a public source in
+    /// the roster [`ColdMilestones::metadata_public`] saw, and the tree
+    /// milestones wait until every runtime's setup is known.
+    pub(crate) fn trees_known(&mut self, runtime_id: &str, trees: Option<Arc<TreeMap>>) {
+        self.trees.known(runtime_id, trees);
+        self.settle();
+    }
+
+    /// Print one runtime's census, its sessions grouped into root trees by
+    /// the [`TreeMap`] of their published metadata links: a store read, so
+    /// the writer runs it once the runtime's producer has started.
     pub(crate) fn census(&self, roster: RosterCensus, store: &Store) {
-        // Settled metadata names each tree's root. Without it every session
-        // is its own tree; a measurement never fails the build.
-        let roots = store
-            .runtime_session_roots(&roster.runtime_id)
-            .unwrap_or_default();
-        let census = roster.census.with_roots(&roster.per_session, &roots);
+        // Without published links every session is its own tree; a
+        // measurement never fails the build.
+        let mut links = session_links(store, &roster.runtime_id).unwrap_or_default();
+        links.extend(roster.source_links);
+        let trees = TreeMap::build(&[], &links);
+        let census = roster.census.with_trees(&roster.per_session, &trees);
         println!("{}", census.line(&roster.runtime_id, roster.kind));
         if self.events {
             bench::emit(&census.event(&roster.runtime_id, roster.kind));
@@ -195,10 +253,11 @@ impl ColdMilestones {
         }
         self.first_complete = true;
         self.remaining = HashMap::new();
-        println!(
+        let line = format!(
             "milestone: first-session-complete elapsed_s={:.2}",
             self.elapsed()
         );
+        self.say(line, None);
     }
 
     /// One runtime was admitted: `sessions` are no longer Pending, and no
@@ -210,50 +269,97 @@ impl ColdMilestones {
         sessions: &[String],
         roster: &[SessionFile],
     ) {
-        let elapsed = self.elapsed();
-        println!(
-            "milestone: runtime-readable runtime={runtime_id} agent={kind} sessions={} elapsed_s={elapsed:.2}",
-            sessions.len()
+        let line = format!(
+            "milestone: runtime-readable runtime={runtime_id} agent={kind} sessions={} elapsed_s={:.2}",
+            sessions.len(),
+            self.elapsed()
         );
-        if !self.first_readable && !sessions.is_empty() {
-            self.first_readable = true;
-            println!("milestone: first-readable elapsed_s={elapsed:.2}");
-        }
-        let done = sessions
-            .iter()
-            .map(String::as_str)
-            .chain(roster.iter().map(|file| file.session_id.as_str()));
-        for session in done {
-            for horizon in &mut self.horizons {
-                horizon.pending.remove(session);
-            }
+        self.say(line, None);
+        self.sessions_readable(runtime_id, sessions);
+        for file in roster {
+            self.mark_readable(runtime_id, &file.session_id);
         }
         self.admitted += 1;
         self.settle();
     }
 
-    /// Print each horizon the first moment it is decided and holds no
-    /// Pending session. Decided means every roster is known and some
-    /// admission made a session readable (or every runtime is admitted), so
-    /// an empty horizon reads ready at the first such admission and never
-    /// before `first-readable`.
+    /// `ids` of one runtime left Pending: every session at its admission
+    /// ([`ColdMilestones::readable`]), or the changed sessions of one batch
+    /// of trees flipped before it.
+    pub(crate) fn sessions_readable(&mut self, runtime_id: &str, ids: &[String]) {
+        if !self.first_readable && !ids.is_empty() {
+            self.first_readable = true;
+            let line = format!("milestone: first-readable elapsed_s={:.2}", self.elapsed());
+            self.say(line, None);
+        }
+        for session in ids {
+            self.mark_readable(runtime_id, session);
+        }
+        self.settle();
+    }
+
+    fn mark_readable(&mut self, runtime_id: &str, session: &str) {
+        for horizon in &mut self.horizons {
+            horizon.pending.remove(session);
+        }
+        for horizon in &mut self.newest {
+            horizon.readable(session);
+        }
+        self.trees.readable(runtime_id, session);
+    }
+
+    /// Print each horizon and tree milestone the first moment it is decided
+    /// and holds no Pending session. Decided means every roster is known and
+    /// some admission made a session readable (or every runtime is
+    /// admitted), so an empty horizon reads ready at the first such
+    /// admission and never before `first-readable`; the tree milestones also
+    /// wait until every runtime's trees are known.
     fn settle(&mut self) {
         let admitted = self.first_readable || self.admitted == self.runtimes;
         if self.rosters_unknown > 0 || !admitted {
             return;
         }
         let elapsed = self.elapsed();
+        let mut said: Vec<(String, Option<Value>)> = Vec::new();
         for horizon in &mut self.horizons {
             if horizon.ready || !horizon.pending.is_empty() {
                 continue;
             }
             horizon.ready = true;
-            println!(
-                "milestone: recent-ready horizon={} horizon_sessions={} elapsed_s={elapsed:.2}",
-                horizon.label, horizon.sessions
-            );
+            said.push((
+                format!(
+                    "milestone: recent-ready horizon={} horizon_sessions={} elapsed_s={elapsed:.2}",
+                    horizon.label, horizon.sessions
+                ),
+                None,
+            ));
+        }
+        for horizon in &mut self.newest {
+            if let Some((line, event)) = horizon.settle(elapsed) {
+                said.push((line, Some(event)));
+            }
+        }
+        for (line, event) in self.trees.settle(elapsed) {
+            said.push((line, Some(event)));
+        }
+        for (line, event) in said {
+            self.say(line, event);
         }
     }
+}
+
+/// Every published session's metadata links of one runtime, exactly the
+/// `SessionMeta` rows its metadata batch applied: what the runtime's producer
+/// builds its own [`TreeMap`] from.
+fn session_links(store: &Store, runtime_id: &str) -> rusqlite::Result<Vec<SessionLink>> {
+    let mut statement = store.conn().prepare(
+        "SELECT id, parent_session_id, root_session_id FROM session WHERE runtime_id = ?1",
+    )?;
+    statement
+        .query_map([runtime_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect()
 }
 
 /// Whether a file modified at `modified_ms` is at most `span_ms` older than
@@ -347,6 +453,8 @@ pub(crate) struct RosterCensus {
     census: Census,
     /// Each public session's own bytes: what its tree sums.
     per_session: Vec<(String, u64)>,
+    /// Ledger-only sources' `tree_parent` links, which no row carries.
+    source_links: Vec<SessionLink>,
 }
 
 /// One runtime's roster, structure only. Every physical file counts once:
@@ -367,14 +475,14 @@ pub(crate) struct Census {
     /// Own bytes per public session: the files it alone reads. A session
     /// that only reads shared files has none and is not counted.
     pub(crate) sessions: Distribution,
-    /// Own bytes per tree: sessions grouped by their settled root. Empty
-    /// until [`Census::with_roots`].
+    /// Own bytes per root tree: sessions grouped by the [`TreeMap`] of their
+    /// metadata links. Empty until [`Census::with_trees`].
     pub(crate) roots: Distribution,
 }
 
 impl Census {
     /// Everything `files` alone tells, plus each public session's own bytes
-    /// for [`Census::with_roots`].
+    /// for [`Census::with_trees`].
     pub(crate) fn of<'a>(
         files: impl IntoIterator<Item = CensusFile<'a>>,
         cut_ms: i64,
@@ -444,24 +552,22 @@ impl Census {
         (census, per_session)
     }
 
-    /// Group `per_session` into trees. `roots` maps a session to its tree's
-    /// root session; an unmapped session is a root.
-    pub(crate) fn with_roots(
-        mut self,
-        per_session: &[(String, u64)],
-        roots: &[(String, String)],
-    ) -> Self {
-        let root_of: HashMap<&str, &str> = roots
-            .iter()
-            .map(|(session, root)| (session.as_str(), root.as_str()))
-            .collect();
-        let mut per_root: HashMap<&str, u64> = HashMap::new();
+    /// Group `per_session` into the root trees of `trees`; a session the map
+    /// does not name is a tree of its own. Union over every link, not the
+    /// settled root, keeps a nested family whole: a Codex child's root is its
+    /// immediate parent.
+    pub(crate) fn with_trees(mut self, per_session: &[(String, u64)], trees: &TreeMap) -> Self {
+        let mut per_tree: HashMap<&str, u64> = HashMap::new();
         for (session, total) in per_session {
-            let root = root_of.get(session.as_str()).copied().unwrap_or(session);
-            let tree = per_root.entry(root).or_default();
+            // A tree's name is a member's id, so an unmapped session's own
+            // id cannot collide with it.
+            let name = trees
+                .tree_of(session)
+                .map_or(session.as_str(), |tree| trees.tree(tree).id.as_str());
+            let tree = per_tree.entry(name).or_default();
             *tree = tree.saturating_add(*total);
         }
-        self.roots = Distribution::of(per_root.into_values().collect());
+        self.roots = Distribution::of(per_tree.into_values().collect());
         self
     }
 

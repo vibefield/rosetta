@@ -40,7 +40,7 @@ use rosetta_capture::Ledger;
 use rosetta_pipeline::{
     CapturePool, ClosedSource, Instrument, InstrumentSnapshot, MetaReport, Metric, PoolBudgets,
     PreparedAdmission, StreamReport, StreamedPreparer, StreamedRuntime, StreamedSetup,
-    stream_closed_sources_into, stream_closed_sources_pooled, streamed_setup,
+    stream_closed_sources_into, stream_closed_sources_pooled, streamed_setup_for,
 };
 use rosetta_server::{BackfillState, DaemonHealth, Hub, ProgressBoard, RuntimeIdentity};
 use rosetta_store::Store;
@@ -194,6 +194,7 @@ fn produce(
         root,
         files,
         discovery_truncated,
+        admission,
         meta,
         mut planner,
         mut ledger,
@@ -204,7 +205,10 @@ fn produce(
         capture_started,
     } = planned;
     let gone = |_| "fresh cold writer stopped".to_string();
-    let setup = streamed_setup(&files, &mut planner).map_err(|error| error.to_string())?;
+    // A truncated walk cannot prove a tree whole: it is admitted per runtime.
+    let truncated = discovery_truncated || meta.walk_truncated;
+    let setup = streamed_setup_for(&files, &mut planner, admission, truncated)
+        .map_err(|error| error.to_string())?;
     sender
         .send(StreamMessage::Opened(Box::new(OpenedColdRuntime {
             adapter,
@@ -673,6 +677,7 @@ fn write(
                     runtime,
                     setup,
                 } = *opened;
+                milestones.trees_known(&runtime.id, setup.trees().cloned());
                 let streamed =
                     StreamedRuntime::open(adapter, &runtime, setup, cx.store, cx.instrument)
                         .map_err(|error| {

@@ -373,23 +373,6 @@ impl Store {
         Ok(owners)
     }
 
-    /// Every session of one runtime that is not its own tree's root, with
-    /// that root as settled metadata recorded it — the cold census's tree
-    /// grouping (any other session is a root). Unordered.
-    pub fn runtime_session_roots(
-        &self,
-        runtime_id: &str,
-    ) -> Result<Vec<(String, String)>, StoreError> {
-        let mut statement = self.conn.prepare_cached(
-            "SELECT id, root_session_id FROM session \
-             WHERE runtime_id = ?1 AND root_session_id <> id",
-        )?;
-        let roots = statement
-            .query_map(params![runtime_id], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(roots)
-    }
-
     /// Canonicalize the named sessions' presentation ordinals from the
     /// ordinals already stored: source path first, then the stored ordinal.
     ///

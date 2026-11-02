@@ -39,7 +39,7 @@ use rosetta_adapter_hermes::HermesAdapter;
 use rosetta_adapter_kimi_code::KimiCodeAdapter;
 use rosetta_adapter_opencode::OpenCodeAdapter;
 use rosetta_adapter_pi::PiAdapter;
-use rosetta_adapter_support::AgentAdapter;
+use rosetta_adapter_support::{AgentAdapter, ColdAdmission};
 use rosetta_capture::{Ledger, NotifyEvents, SourceWake};
 use rosetta_pipeline::{
     IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, MetaReport, Metric,
@@ -321,6 +321,22 @@ struct Flags {
     /// Build the private canonical projection in RAM, then stream its
     /// validated pages once to the staged SQLite file before publication.
     experiment_sqlite_in_memory: bool,
+    /// Fresh cold serve, hidden (`--experiment-cold-admission runtime`):
+    /// admit every runtime whole after a path-order walk, whatever its
+    /// adapter declares. The kill switch and equivalence check for root-tree
+    /// admission: it reproduces the runtime-granular build byte for byte.
+    experiment_cold_admission_runtime: bool,
+}
+
+impl Flags {
+    /// The admission unit a fresh cold build asks for `adapter`'s runtime.
+    pub(crate) fn cold_admission(&self, adapter: &dyn AgentAdapter) -> ColdAdmission {
+        if self.experiment_cold_admission_runtime {
+            ColdAdmission::Runtime
+        } else {
+            adapter.cold_admission()
+        }
+    }
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, String> {
@@ -369,6 +385,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         experiment_cold_completion_order: false,
         experiment_async_ledger: false,
         experiment_sqlite_in_memory: false,
+        experiment_cold_admission_runtime: false,
     };
     let mut at = 0;
     while at < args.len() {
@@ -526,6 +543,18 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--experiment-sqlite-in-memory" => {
                 flags.experiment_sqlite_in_memory = true;
                 at += 1;
+            }
+            "--experiment-cold-admission" => {
+                flags.experiment_cold_admission_runtime = match take_value(args, &mut at)?.as_str()
+                {
+                    "runtime" => true,
+                    "declared" => false,
+                    other => {
+                        return Err(format!(
+                            "--experiment-cold-admission needs runtime or declared, got {other}"
+                        ));
+                    }
+                };
             }
             "--json" => {
                 flags.json = true;
@@ -1021,6 +1050,8 @@ pub(crate) struct ColdCaptureRequest {
     pub(crate) root: PathBuf,
     pub(crate) inventory: Vec<rosetta_capture::ScannedFile>,
     pub(crate) discovery_truncated: bool,
+    /// The admission unit the runtime asks for ([`Flags::cold_admission`]).
+    pub(crate) admission: ColdAdmission,
     pub(crate) ledger_root: PathBuf,
     pub(crate) opts: IngestOptions,
     pub(crate) write_raw_ledger: bool,
@@ -1036,6 +1067,7 @@ pub(crate) struct PlannedColdRuntime {
     pub(crate) root: PathBuf,
     pub(crate) files: Vec<rosetta_pipeline::SessionFile>,
     pub(crate) discovery_truncated: bool,
+    pub(crate) admission: ColdAdmission,
     pub(crate) meta: MetaReport,
     pub(crate) planner: Store,
     pub(crate) ledger: Option<Ledger>,
@@ -1056,6 +1088,7 @@ pub(crate) fn plan_parallel_cold_runtime(
         root,
         inventory,
         discovery_truncated,
+        admission,
         ledger_root,
         opts,
         write_raw_ledger,
@@ -1103,6 +1136,7 @@ pub(crate) fn plan_parallel_cold_runtime(
         root,
         files,
         discovery_truncated,
+        admission,
         meta,
         planner,
         ledger,
@@ -1124,6 +1158,8 @@ pub(crate) fn finish_parallel_cold_runtime(
         root,
         files,
         discovery_truncated,
+        // The retained build admits each runtime whole.
+        admission: _,
         meta,
         mut planner,
         mut ledger,
@@ -1417,6 +1453,8 @@ fn ingest_parallel_cold(
                         root,
                         inventory,
                         discovery_truncated,
+                        // This retained build admits each runtime whole.
+                        admission: ColdAdmission::Runtime,
                         ledger_root,
                         opts,
                         write_raw_ledger,
@@ -1466,6 +1504,8 @@ fn ingest_parallel_cold(
                         root,
                         inventory,
                         discovery_truncated,
+                        // This retained build admits each runtime whole.
+                        admission: ColdAdmission::Runtime,
                         ledger_root,
                         opts,
                         write_raw_ledger,
@@ -2665,6 +2705,35 @@ mod tests {
                 "pi",
             ]
         );
+    }
+
+    #[test]
+    fn the_cold_admission_kill_switch_admits_every_runtime_whole() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["--db".to_string(), "projection.sqlite".to_string()];
+            args.extend(extra.iter().map(|arg| (*arg).to_string()));
+            parse_flags(&args)
+        };
+        for (extra, expected) in [
+            (&[][..], ColdAdmission::RootTree),
+            (
+                &["--experiment-cold-admission", "declared"][..],
+                ColdAdmission::RootTree,
+            ),
+            (
+                &["--experiment-cold-admission", "runtime"][..],
+                ColdAdmission::Runtime,
+            ),
+        ] {
+            let flags = parse(extra).unwrap();
+            assert_eq!(flags.cold_admission(registry()[1]), expected, "{extra:?}");
+            // A runtime-admitted adapter stays runtime-admitted either way.
+            assert_eq!(flags.cold_admission(registry()[0]), ColdAdmission::Runtime);
+        }
+        let error = parse(&["--experiment-cold-admission", "tree"])
+            .err()
+            .unwrap();
+        assert!(error.contains("runtime or declared"), "{error}");
     }
 
     #[test]

@@ -34,6 +34,7 @@ fn request(adapter: &'static dyn AgentAdapter, data_root: &str, root: &Path) -> 
             root: root.to_path_buf(),
             inventory: census.inventory,
             discovery_truncated: census.walk_truncated,
+            admission: adapter.cold_admission(),
             ledger_root: root.join("unused-ledger"),
             opts,
             write_raw_ledger: false,

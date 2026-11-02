@@ -1,7 +1,12 @@
 use rosetta_adapter_support::{FileDiscipline, FileFormat};
+use rosetta_core::IngestOp;
+use rosetta_core::rows::{RuntimeRow, SessionRole, SessionRow, StreamState};
+use rosetta_pipeline::TreeId;
 
 use super::memory::{Peak, Sample};
 use super::*;
+
+use std::sync::Arc;
 
 const CUT: i64 = 1_800_000_000_000;
 const MIB_BYTES: u64 = 1024 * 1024;
@@ -16,13 +21,19 @@ fn file<'a>(path: &'a str, size: u64, age_ms: i64, session: Option<&'a str>) -> 
     }
 }
 
-/// The census of `files` with its trees grouped by `roots`.
-fn census<'a>(
-    files: impl IntoIterator<Item = CensusFile<'a>>,
-    roots: &[(String, String)],
-) -> Census {
+/// The census of `files` with its trees grouped by `links`.
+fn census<'a>(files: impl IntoIterator<Item = CensusFile<'a>>, links: &[SessionLink]) -> Census {
     let (census, per_session) = Census::of(files, CUT);
-    census.with_roots(&per_session, roots)
+    census.with_trees(&per_session, &TreeMap::build(&[], links))
+}
+
+/// A session row's links: `(id, parent, root)`.
+fn link(id: &str, parent: Option<&str>, root: &str) -> SessionLink {
+    (
+        id.to_owned(),
+        parent.map(str::to_owned),
+        Some(root.to_owned()),
+    )
 }
 
 /// A roster source as meta admits it.
@@ -46,6 +57,9 @@ fn roster_file(
         modified_ms: CUT - age_ms,
         agent_version: None,
         source_missing: false,
+        tree_parent: None,
+        cut_len: None,
+        cut_modified_ms: None,
     }
 }
 
@@ -167,22 +181,162 @@ fn a_snapshot_shared_by_several_sessions_counts_once_and_is_charged_to_none() {
 }
 
 #[test]
-fn census_groups_sessions_into_trees_by_their_settled_root() {
+fn census_groups_sessions_into_their_metadata_trees() {
     let files = [
         file("r", 10, 0, Some("root")),
         file("c1", 20, 0, Some("child")),
         file("c2", 5, 0, Some("child")),
+        file("g", 1, 0, Some("grandchild")),
         file("x", 7, 0, Some("alone")),
     ];
-    // The store names only sessions that are not their tree's root.
-    let roots = vec![("child".to_owned(), "root".to_owned())];
-    let census = census(files, &roots);
-    assert_eq!(census.sessions.count, 3);
+    // A Codex child's root is its immediate parent: grouping by root would
+    // make the grandchild a tree of its own.
+    let links = [
+        link("root", None, "root"),
+        link("child", Some("root"), "root"),
+        link("grandchild", Some("child"), "child"),
+    ];
+    let census = census(files, &links);
+    assert_eq!(census.sessions.count, 4);
     assert_eq!(census.sessions.max, 25);
-    // `alone` has no settled row and is its own tree.
+    // `alone` has no row and is its own tree.
     assert_eq!(census.roots.count, 2);
-    assert_eq!(census.roots.max, 35);
+    assert_eq!(census.roots.max, 36);
     assert_eq!(census.roots.p50, 7);
+}
+
+/// What the producer's tree map sums per tree, for comparison.
+fn tree_bytes(per_session: &[(String, u64)], trees: &TreeMap) -> Distribution {
+    let mut sums = vec![0_u64; trees.trees().len()];
+    let mut alone = Vec::new();
+    for (session, bytes) in per_session {
+        match trees.tree_of(session) {
+            Some(tree) => sums[tree as usize] += bytes,
+            None => alone.push(*bytes),
+        }
+    }
+    // A tree of only shared or ledger-only sources owns no bytes.
+    let owned = trees
+        .trees()
+        .iter()
+        .zip(sums)
+        .filter(|(tree, _)| {
+            tree.sessions
+                .iter()
+                .any(|session| per_session.iter().any(|(owned, _)| owned == session))
+        })
+        .map(|(_, sum)| sum);
+    Distribution::of(owned.chain(alone).collect())
+}
+
+#[test]
+fn the_census_histogram_is_the_producers_tree_grouping() {
+    let runtime = "rt";
+    let session = |native: &str| format!("session-{native}");
+    let mut guardian = roster_file(StreamDriver::JsonLines, "x.jsonl", "x", 3, 0);
+    guardian.ledger_only = true;
+    guardian.tree_parent = Some(session("g"));
+    let roster = vec![
+        roster_file(StreamDriver::JsonLines, "r.jsonl", "r", 10, 0),
+        roster_file(StreamDriver::JsonLines, "c.jsonl", "c", 20, 0),
+        roster_file(StreamDriver::JsonLines, "g.jsonl", "g", 30, 0),
+        guardian,
+        roster_file(StreamDriver::JsonLines, "u.jsonl", "u", 40, 0),
+        // A stub: on the roster, with no row.
+        roster_file(StreamDriver::JsonLines, "s.jsonl", "s", 50, 0),
+    ];
+    let row = |native: &str, parent: Option<&str>, root: &str| SessionRow {
+        id: session(native),
+        native_session_id: native.to_owned(),
+        runtime_id: runtime.to_owned(),
+        project_id: None,
+        cwd: None,
+        parent_session_id: parent.map(session),
+        delegation: None,
+        root_session_id: session(root),
+        role: if parent.is_some() {
+            SessionRole::Subagent
+        } else {
+            SessionRole::Main
+        },
+        title: None,
+        summary: None,
+        started_at: 1,
+        updated_at: 1,
+        activity: None,
+        stream_state: StreamState::Pending,
+    };
+    let rows = [
+        row("r", None, "r"),
+        row("c", Some("r"), "r"),
+        row("g", Some("c"), "c"),
+        row("u", None, "u"),
+    ];
+    let mut store = Store::open_in_memory().unwrap();
+    store
+        .apply(&rosetta_store::Batch {
+            ops: std::iter::once(IngestOp::Runtime(RuntimeRow {
+                id: runtime.to_owned(),
+                kind: "codex".into(),
+                data_root: "/codex".into(),
+                enabled: true,
+                account: None,
+                config: None,
+                skills: None,
+                versions_seen: None,
+                discovered_at: 1,
+                label: None,
+                provenance: Default::default(),
+            }))
+            .chain(rows.iter().cloned().map(IngestOp::SessionMeta))
+            .collect(),
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    // The producer's map: the roster and the rows its metadata batch held.
+    let planned: Vec<SessionLink> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.id.clone(),
+                row.parent_session_id.clone(),
+                Some(row.root_session_id.clone()),
+            )
+        })
+        .collect();
+    let producer = TreeMap::build(&roster, &planned);
+
+    let mut milestones = ColdMilestones::new(Instant::now(), CUT, 1, false);
+    let roster_census = milestones.metadata_public(Duration::ZERO, runtime, "codex", &roster);
+    let mut links = session_links(&store, runtime).unwrap();
+    links.extend(roster_census.source_links.clone());
+    let from_store = TreeMap::build(&[], &links);
+    // The same partition: an unmapped session (the stub, which no row
+    // links) is a tree of its own, named by its own id, on either side.
+    for file in &roster {
+        let session = file.session_id.as_str();
+        let name = |map: &TreeMap, tree: Option<TreeId>| {
+            tree.map_or(session.to_owned(), |tree| map.tree(tree).id.clone())
+        };
+        assert_eq!(
+            name(&producer, producer.tree_of_file(file)),
+            name(&from_store, from_store.tree_of(session)),
+            "{session}"
+        );
+    }
+    let grouped = Census::of(roster.iter().map(CensusFile::from), CUT)
+        .0
+        .with_trees(&roster_census.per_session, &from_store);
+    assert_eq!(
+        grouped.roots,
+        tree_bytes(&roster_census.per_session, &producer)
+    );
+    // r, c and g are one tree (the guardian owns no bytes); u and the stub
+    // are their own.
+    assert_eq!((grouped.roots.count, grouped.roots.max), (3, 60));
+    milestones.census(roster_census, &store);
 }
 
 #[test]
@@ -200,10 +354,7 @@ fn the_largest_files_are_capped() {
 
 #[test]
 fn the_census_line_and_event_carry_structure_only() {
-    let roots = vec![(
-        "session-secret".to_owned(),
-        "session-secret-root".to_owned(),
-    )];
+    let roots = vec![link("session-secret", None, "session-secret-root")];
     let census = census(
         [file(
             "/home/secret.jsonl",
@@ -324,5 +475,415 @@ fn the_memory_sampler_runs_only_when_wanted_and_stops_at_once() {
         stopping.elapsed() < std::time::Duration::from_millis(900),
         "{:?}",
         stopping.elapsed()
+    );
+}
+
+/// A roster transcript `age_ms` before `CUT`, of session `session-<native>`.
+fn transcript(native: &str, size: u64, age_ms: i64) -> SessionFile {
+    roster_file(
+        StreamDriver::JsonLines,
+        &format!("{native}.jsonl"),
+        native,
+        size,
+        age_ms,
+    )
+}
+
+fn session(native: &str) -> String {
+    format!("session-{native}")
+}
+
+fn ids(natives: &[&str]) -> Vec<String> {
+    natives.iter().map(|native| session(native)).collect()
+}
+
+/// Session `native`'s row links: its parent, which is also its root.
+fn child_of(native: &str, parent: Option<&str>) -> SessionLink {
+    (
+        session(native),
+        parent.map(session),
+        Some(session(parent.unwrap_or(native))),
+    )
+}
+
+/// The milestone lines said so far that start with `prefix` (a name and
+/// any leading fields), without their `elapsed_s`.
+fn said(milestones: &ColdMilestones, prefix: &str) -> Vec<String> {
+    milestones
+        .said
+        .iter()
+        .map(|(line, _)| line.as_str())
+        .filter(|line| line.starts_with(prefix))
+        .map(|line| {
+            line.split_whitespace()
+                .filter(|field| !field.starts_with("elapsed_s="))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect()
+}
+
+/// One root-tree runtime's metadata, then its open setup.
+fn root_tree_runtime(
+    milestones: &mut ColdMilestones,
+    runtime: &str,
+    roster: &[SessionFile],
+    links: &[SessionLink],
+) {
+    let census = milestones.metadata_public(Duration::ZERO, runtime, "claude-code", roster);
+    drop(census);
+    milestones.trees_known(runtime, Some(Arc::new(TreeMap::build(roster, links))));
+}
+
+/// The `@newest` horizons measure back from the newest roster session, so a
+/// frozen corpus keeps its membership however old it gets, while the census
+/// horizons follow the wall clock.
+#[test]
+fn relative_horizons_ignore_the_wall_clock() {
+    let roster = [
+        transcript("new", 10, HOUR_MS),
+        transcript("day", 10, HOUR_MS + DAY_MS),
+        transcript("week", 10, 3 * DAY_MS),
+        transcript("old", 10, 9 * DAY_MS),
+    ];
+    let sessions = roster
+        .iter()
+        .map(|file| file.session_id.clone())
+        .collect::<Vec<_>>();
+    let run = |cut_ms: i64| {
+        let mut milestones = ColdMilestones::new(Instant::now(), cut_ms, 1, false);
+        let census = milestones.metadata_public(Duration::ZERO, "rt", "codex", &roster);
+        drop(census);
+        milestones.trees_known("rt", None);
+        let members = milestones
+            .newest
+            .iter()
+            .map(|horizon| horizon.members().into_iter().map(str::to_owned).collect())
+            .collect::<Vec<Vec<String>>>();
+        milestones.readable("rt", "codex", &sessions, &roster);
+        (members, milestones)
+    };
+    let (fresh_members, fresh) = run(CUT);
+    let (aged_members, aged) = run(CUT + 30 * DAY_MS);
+    assert_eq!(
+        fresh_members,
+        [ids(&["day", "new"]), ids(&["day", "new", "week"])],
+        "24h@newest, 7d@newest"
+    );
+    assert_eq!(aged_members, fresh_members);
+    for milestones in [&fresh, &aged] {
+        assert_eq!(
+            said(milestones, "milestone: recent-ready horizon=24h@newest "),
+            ["milestone: recent-ready horizon=24h@newest horizon_sessions=2"]
+        );
+        assert_eq!(
+            said(milestones, "milestone: recent-ready horizon=7d@newest "),
+            ["milestone: recent-ready horizon=7d@newest horizon_sessions=3"]
+        );
+    }
+    // From the cut: one session within 24 h, three within 7 d; thirty days
+    // on, the wall-clock sets are empty.
+    assert_eq!(
+        said(&fresh, "milestone: recent-ready horizon=24h "),
+        ["milestone: recent-ready horizon=24h horizon_sessions=1"]
+    );
+    assert_eq!(
+        said(&fresh, "milestone: recent-ready horizon=7d "),
+        ["milestone: recent-ready horizon=7d horizon_sessions=3"]
+    );
+    assert_eq!(
+        said(&aged, "milestone: recent-ready horizon=24h "),
+        ["milestone: recent-ready horizon=24h horizon_sessions=0"]
+    );
+    assert_eq!(
+        said(&aged, "milestone: recent-ready horizon=7d "),
+        ["milestone: recent-ready horizon=7d horizon_sessions=0"]
+    );
+    // Runtime admission has no trees: no tree milestone.
+    assert!(said(&fresh, "milestone: newest-").is_empty());
+    assert!(said(&fresh, "milestone: small-recent-ready").is_empty());
+}
+
+/// "Newest" is over every roster: a later roster with a newer session drops
+/// what an earlier one counted, and a session readable before the horizon
+/// was decided still counts as a member.
+#[test]
+fn a_later_roster_moves_newest_and_keeps_what_was_already_readable() {
+    let older = [
+        transcript("a1", 10, 2 * DAY_MS),
+        transcript("a2", 10, 3 * DAY_MS),
+    ];
+    let newer = [transcript("b1", 10, 0), transcript("b2", 10, 20 * HOUR_MS)];
+    let mut milestones = ColdMilestones::new(Instant::now(), CUT, 2, true);
+    let census = milestones.metadata_public(Duration::ZERO, "a", "codex", &older);
+    drop(census);
+    milestones.trees_known("a", None);
+    // Admitted before the second roster is known: nothing is decided yet.
+    milestones.readable("a", "codex", &ids(&["a1", "a2"]), &older);
+    assert!(said(&milestones, "milestone: recent-ready").is_empty());
+    let census = milestones.metadata_public(Duration::ZERO, "b", "codex", &newer);
+    drop(census);
+    milestones.trees_known("b", None);
+    // a1 is 48 h older than b1, so only b1 and b2 are 24h@newest, all four
+    // 7d@newest; b's sessions are still Pending.
+    assert!(said(&milestones, "milestone: recent-ready horizon=24h@newest").is_empty());
+    milestones.sessions_readable("b", &ids(&["b2"]));
+    assert!(said(&milestones, "milestone: recent-ready horizon=7d@newest").is_empty());
+    milestones.sessions_readable("b", &ids(&["b1"]));
+    assert_eq!(
+        said(&milestones, "milestone: recent-ready horizon=24h@newest"),
+        ["milestone: recent-ready horizon=24h@newest horizon_sessions=2"]
+    );
+    assert_eq!(
+        said(&milestones, "milestone: recent-ready horizon=7d@newest"),
+        ["milestone: recent-ready horizon=7d@newest horizon_sessions=4"]
+    );
+    // Each new line has its JSON event.
+    let (_, event) = milestones
+        .said
+        .iter()
+        .find(|(line, _)| line.starts_with("milestone: recent-ready horizon=7d@newest"))
+        .unwrap();
+    let event = event.as_ref().expect("an event under --json --profile");
+    assert_eq!(event["event"], "milestone");
+    assert_eq!(event["milestone"], "recent-ready");
+    assert_eq!(event["horizon"], "7d@newest");
+    assert_eq!(event["horizonSessions"], 4);
+    assert!(event["elapsedS"].is_f64());
+}
+
+/// A tree requires exactly its members with a public roster source: a
+/// placeholder root (named only by its children's links) never holds its
+/// tree back, while every sourced member, not just the root, must flip.
+#[test]
+fn newest_trees_wait_for_every_required_session() {
+    let roster = [
+        // Tree p: a placeholder root with two sourced children, the newest
+        // tree, and a giant.
+        transcript("p-a", LARGE_BYTES + 1, 0),
+        transcript("p-b", 10, 0),
+        // Tree q: a sourced root and a sourced child.
+        transcript("q-root", 10, HOUR_MS),
+        transcript("q-child", 10, HOUR_MS),
+    ];
+    let links = [
+        child_of("p-a", Some("p-root")),
+        child_of("p-b", Some("p-root")),
+        child_of("p-root", None),
+        child_of("q-root", None),
+        child_of("q-child", Some("q-root")),
+    ];
+    let mut milestones = ColdMilestones::new(Instant::now(), CUT, 1, false);
+    root_tree_runtime(&mut milestones, "rt", &roster, &links);
+
+    milestones.sessions_readable("rt", &ids(&["p-a"]));
+    assert!(said(&milestones, "milestone: newest-").is_empty());
+    // p's sourced members are readable; its placeholder root never is.
+    milestones.sessions_readable("rt", &ids(&["p-b"]));
+    assert_eq!(
+        said(&milestones, "milestone: newest-giant-ready"),
+        [format!(
+            "milestone: newest-giant-ready tree_bytes={}",
+            LARGE_BYTES + 11
+        )]
+    );
+    // q's root alone does not make q ready.
+    milestones.sessions_readable("rt", &ids(&["q-root"]));
+    assert!(said(&milestones, "milestone: newest-trees-ready").is_empty());
+    assert!(said(&milestones, "milestone: small-recent-ready").is_empty());
+    milestones.sessions_readable("rt", &ids(&["q-child"]));
+    assert_eq!(
+        said(&milestones, "milestone: newest-trees-ready"),
+        ["milestone: newest-trees-ready n=2"]
+    );
+    // The giant is not small: each small horizon holds q alone.
+    assert_eq!(
+        said(&milestones, "milestone: small-recent-ready"),
+        [
+            "milestone: small-recent-ready horizon=24h@newest trees=1",
+            "milestone: small-recent-ready horizon=7d@newest trees=1",
+        ]
+    );
+    // Runtime admission later changes nothing that was said.
+    let before = milestones.said.len();
+    let all = roster
+        .iter()
+        .map(|file| file.session_id.clone())
+        .collect::<Vec<_>>();
+    milestones.readable("rt", "claude-code", &all, &roster);
+    assert_eq!(
+        milestones.said[before..]
+            .iter()
+            .filter(|(line, _)| !line.starts_with("milestone: runtime-readable"))
+            .count(),
+        0
+    );
+}
+
+/// The ten newest trees by k, then smallest id, over every root-tree
+/// runtime; a tree with nothing to admit (only ledger-only sources) is not
+/// ranked; and nothing is decided until every runtime's setup is known.
+#[test]
+fn the_newest_ten_trees_rank_by_recency_then_id_over_every_root_tree_runtime() {
+    // Twelve single-session trees in two runtimes: a0..a5 at 0, 0, 1, 1, 2
+    // and 2 h, b0 and b1 at 3 h, and b2..b5 all at 4 h.
+    let first = (0..6)
+        .map(|n| transcript(&format!("a{n}"), 10, (n / 2) * HOUR_MS))
+        .collect::<Vec<_>>();
+    let mut second = (0..6_i64)
+        .map(|n| transcript(&format!("b{n}"), 10, (3 + n.min(2) / 2) * HOUR_MS))
+        .collect::<Vec<_>>();
+    // A newer ledger-only orphan: a tree with no required session.
+    let mut orphan = transcript("orphan", 10, 0);
+    orphan.ledger_only = true;
+    second.push(orphan);
+    let mut milestones = ColdMilestones::new(Instant::now(), CUT, 3, false);
+    root_tree_runtime(&mut milestones, "a", &first, &[]);
+    root_tree_runtime(&mut milestones, "b", &second, &[]);
+    let census = milestones.metadata_public(Duration::ZERO, "c", "codex", &[]);
+    drop(census);
+    milestones.sessions_readable("a", &ids(&["a0", "a1", "a2", "a3", "a4", "a5"]));
+    milestones.sessions_readable("b", &ids(&["b0", "b1", "b4", "b5"]));
+    // The 4 h tie ranks b2 and b3 into the ten, not b4 and b5.
+    milestones.trees_known("c", None);
+    assert!(said(&milestones, "milestone: newest-trees-ready").is_empty());
+    milestones.sessions_readable("b", &ids(&["b2"]));
+    assert!(said(&milestones, "milestone: newest-trees-ready").is_empty());
+    assert!(said(&milestones, "milestone: small-recent-ready").is_empty());
+    milestones.sessions_readable("b", &ids(&["b3"]));
+    assert_eq!(
+        said(&milestones, "milestone: newest-trees-ready"),
+        ["milestone: newest-trees-ready n=10"]
+    );
+    // The orphan is not a tree to wait for, nor counted.
+    assert_eq!(
+        said(&milestones, "milestone: small-recent-ready"),
+        [
+            "milestone: small-recent-ready horizon=24h@newest trees=12",
+            "milestone: small-recent-ready horizon=7d@newest trees=12",
+        ]
+    );
+    assert!(said(&milestones, "milestone: newest-giant-ready").is_empty());
+}
+
+/// Nothing about trees is decided while another runtime's setup could still
+/// hold a newer tree.
+#[test]
+fn tree_milestones_wait_for_every_runtime_setup() {
+    let roster = [transcript("only", 10, 0)];
+    let mut milestones = ColdMilestones::new(Instant::now(), CUT, 2, false);
+    root_tree_runtime(&mut milestones, "a", &roster, &[]);
+    let census = milestones.metadata_public(Duration::ZERO, "b", "codex", &[]);
+    drop(census);
+    milestones.sessions_readable("a", &ids(&["only"]));
+    // The session horizons are decided; the trees are not.
+    assert_eq!(
+        said(&milestones, "milestone: recent-ready horizon=24h@newest"),
+        ["milestone: recent-ready horizon=24h@newest horizon_sessions=1"]
+    );
+    assert!(said(&milestones, "milestone: newest-trees-ready").is_empty());
+    milestones.trees_known("b", None);
+    assert_eq!(
+        said(&milestones, "milestone: newest-trees-ready"),
+        ["milestone: newest-trees-ready n=1"]
+    );
+}
+
+/// Exactly 64 MiB is a small tree; one byte more is the giant. "Newest" is
+/// the newest tree of any size.
+#[test]
+fn newest_giant_and_small_lanes_split_at_large_bytes() {
+    let roster = [
+        transcript("giant", LARGE_BYTES + 1, 0),
+        transcript("small", LARGE_BYTES, 2 * HOUR_MS),
+        // 25 h older than the giant: outside 24h@newest.
+        transcript("older", 10, 25 * HOUR_MS),
+    ];
+    let mut milestones = ColdMilestones::new(Instant::now(), CUT, 1, true);
+    root_tree_runtime(&mut milestones, "rt", &roster, &[]);
+    milestones.sessions_readable("rt", &ids(&["small"]));
+    assert_eq!(
+        said(&milestones, "milestone: small-recent-ready"),
+        ["milestone: small-recent-ready horizon=24h@newest trees=1"]
+    );
+    assert!(said(&milestones, "milestone: newest-giant-ready").is_empty());
+    milestones.sessions_readable("rt", &ids(&["giant"]));
+    assert_eq!(
+        said(&milestones, "milestone: newest-giant-ready"),
+        [format!(
+            "milestone: newest-giant-ready tree_bytes={}",
+            LARGE_BYTES + 1
+        )]
+    );
+    milestones.sessions_readable("rt", &ids(&["older"]));
+    assert_eq!(
+        said(&milestones, "milestone: small-recent-ready"),
+        [
+            "milestone: small-recent-ready horizon=24h@newest trees=1",
+            "milestone: small-recent-ready horizon=7d@newest trees=2",
+        ]
+    );
+    assert_eq!(
+        said(&milestones, "milestone: newest-trees-ready"),
+        ["milestone: newest-trees-ready n=3"]
+    );
+    // Structure only, with JSON twins.
+    let events = milestones
+        .said
+        .iter()
+        .filter(|(line, _)| {
+            line.starts_with("milestone: newest-") || line.starts_with("milestone: small-")
+        })
+        .map(|(_, event)| event.clone().expect("an event"))
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[0]["milestone"], "small-recent-ready");
+    assert_eq!(events[0]["trees"], 1);
+    assert_eq!(events[1]["milestone"], "newest-giant-ready");
+    assert_eq!(events[1]["treeBytes"], LARGE_BYTES + 1);
+    for event in &events {
+        assert!(!event.to_string().contains("session-"), "{event}");
+    }
+}
+
+/// A session no roster names, such as one born during import (R1 D12), is
+/// never a member: reported readable, it joins no `@newest` horizon, makes
+/// no tree ready and is counted by none, even at the runtime's admission. A
+/// member reported twice (a flip, then the admission's roster) counts once.
+#[test]
+fn sessions_outside_every_roster_are_never_counted_or_waited_for() {
+    let roster = [
+        transcript("kept", 10, 0),
+        transcript("kept-child", 10, 0),
+        transcript("other", 10, HOUR_MS),
+    ];
+    let links = [child_of("kept", None), child_of("kept-child", Some("kept"))];
+    let mut milestones = ColdMilestones::new(Instant::now(), CUT, 1, false);
+    root_tree_runtime(&mut milestones, "rt", &roster, &links);
+    milestones.sessions_readable("rt", &ids(&["born"]));
+    assert!(said(&milestones, "milestone: recent-ready horizon=24h@newest").is_empty());
+    assert!(said(&milestones, "milestone: newest-").is_empty());
+    assert!(said(&milestones, "milestone: small-recent-ready").is_empty());
+    milestones.sessions_readable("rt", &ids(&["kept", "other"]));
+    milestones.sessions_readable("rt", &ids(&["kept"]));
+    // kept's tree still waits for kept-child.
+    assert!(said(&milestones, "milestone: newest-trees-ready").is_empty());
+    assert!(said(&milestones, "milestone: small-recent-ready").is_empty());
+    let all = ids(&["kept", "kept-child", "other", "born"]);
+    milestones.readable("rt", "claude-code", &all, &roster);
+    assert_eq!(
+        said(&milestones, "milestone: recent-ready horizon=24h@newest"),
+        ["milestone: recent-ready horizon=24h@newest horizon_sessions=3"]
+    );
+    assert_eq!(
+        said(&milestones, "milestone: newest-trees-ready"),
+        ["milestone: newest-trees-ready n=2"]
+    );
+    assert_eq!(
+        said(&milestones, "milestone: small-recent-ready"),
+        [
+            "milestone: small-recent-ready horizon=24h@newest trees=2",
+            "milestone: small-recent-ready horizon=7d@newest trees=2",
+        ]
     );
 }

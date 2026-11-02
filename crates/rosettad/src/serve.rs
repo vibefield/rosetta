@@ -1535,6 +1535,7 @@ fn run_fresh_fast_serve(
                 root: target.root.clone(),
                 inventory: target.census.inventory.clone(),
                 discovery_truncated: target.census.walk_truncated,
+                admission: flags.cold_admission(target.adapter),
                 ledger_root: ledger_stage.path().to_path_buf(),
                 opts: cold_opts.clone(),
                 write_raw_ledger: true,

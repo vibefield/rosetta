@@ -309,11 +309,18 @@ fn portable_relative(path: &Path) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
-/// The two bounded skim windows of one file.
+/// The two bounded skim windows of one file, and what the open handle's
+/// metadata said when they were read: the file's length and modification time
+/// at the skim. Those are the cut a later full read can be bounded by; the
+/// discovery census sizes may be much older.
 #[derive(Debug, Default)]
 pub struct HeadTail {
     pub head: Vec<u8>,
     pub tail: Vec<u8>,
+    /// The file's length when the windows were read: the end of the tail.
+    pub len: u64,
+    /// The file's modification time when the windows were read, epoch ms.
+    pub modified_ms: i64,
 }
 
 /// Bounded head + tail windows for the meta-phase skim. Never reads more than
@@ -328,10 +335,10 @@ pub fn head_tail(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(io_error("opening", path, error)),
     };
-    let len = file
+    let metadata = file
         .metadata()
-        .map_err(|error| io_error("reading metadata for", path, error))?
-        .len();
+        .map_err(|error| io_error("reading metadata for", path, error))?;
+    let len = metadata.len();
 
     let head_len = (head_bytes as u64).min(len);
     let mut head = vec![0; head_len as usize];
@@ -346,11 +353,18 @@ pub fn head_tail(
         file.read_exact(&mut tail)
             .map_err(|error| io_error("reading the tail of", path, error))?;
     }
-    Ok(Some(HeadTail { head, tail }))
+    Ok(Some(HeadTail {
+        head,
+        tail,
+        len,
+        modified_ms: modified_ms(&metadata),
+    }))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use tempfile::TempDir;
 
     use super::*;
@@ -563,6 +577,36 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn head_and_tail_carry_the_length_and_mtime_they_were_read_at() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("s.jsonl");
+        std::fs::write(&path, b"0123456789").unwrap();
+        let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_millis(1_700_000_000_123);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+
+        let windows = head_tail(&path, 3, 3).unwrap().unwrap();
+        assert_eq!(windows.len, 10);
+        assert_eq!(windows.modified_ms, 1_700_000_000_123);
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(windows.modified_ms, modified_ms(&metadata));
+
+        // Growth after the skim leaves the windows' cut where it was.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"abc")
+            .unwrap();
+        assert_eq!(windows.len, 10);
+        assert_eq!(head_tail(&path, 3, 3).unwrap().unwrap().len, 13);
     }
 
     #[test]

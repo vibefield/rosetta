@@ -324,5 +324,6 @@ a package README with a checked `see "file#slug"`. Authoring guide: the `atlas` 
   `rosettad ledger compact --db PATH [--ledger DIR] [--level N] [--long] [--force] [--dry-run] [--json]`.
 - Ledger evidence (read-only; per-segment decoded digests plus an entry digest that ignores
   containers, segment boundaries, file ids and batch packing, split into source and meta
-  digests because metadata carries discovery times):
+  digests because metadata carries discovery times, plus an order-insensitive `sourceSetDigest`
+  (per-source content folded in path order), the equality gate for root-tree runtimes):
   `rosettad ledger verify --db PATH | --ledger DIR [--json]`.

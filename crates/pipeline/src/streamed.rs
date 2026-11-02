@@ -660,6 +660,9 @@ mod tests {
                 modified_ms: 1,
                 agent_version: None,
                 source_missing: false,
+                tree_parent: None,
+                cut_len: None,
+                cut_modified_ms: None,
             })
             .collect()
     }
@@ -688,6 +691,8 @@ mod tests {
         let setup = StreamedSetup {
             sources: setup_sources,
             metadata_sessions: ["s-a".to_string(), "s-b".to_string()].into(),
+            admission: Default::default(),
+            trees: None,
         };
         let mut writer = StreamedRuntime::open(
             &ClaudeCodeAdapter,

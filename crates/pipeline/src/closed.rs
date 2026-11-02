@@ -35,6 +35,11 @@ use crate::stream::{
 };
 use crate::{IngestOptions, PipelineError};
 
+mod setup;
+pub mod trees;
+pub use setup::{StreamedSetup, streamed_setup, streamed_setup_for};
+pub use trees::{SessionLink, Tree, TreeId, TreeMap};
+
 /// One source whose generation is terminal: exactly what
 /// [`crate::prepare_captured_runtime`] computes per file, ready for the
 /// canonical writer. Process-local and disposable; the raw ledger remains the
@@ -96,21 +101,6 @@ impl ClosedSource {
     }
 }
 
-/// What the canonical writer needs before a streamed runtime's first source:
-/// every roster source (its cursor row and, for a session no metadata batch
-/// named, its session stub), in source-path order.
-#[derive(Debug)]
-pub struct StreamedSetup {
-    pub(crate) sources: Vec<SourceDef>,
-    pub(crate) metadata_sessions: BTreeSet<String>,
-}
-
-impl StreamedSetup {
-    pub fn sources(&self) -> usize {
-        self.sources.len()
-    }
-}
-
 pub(crate) fn source_def(file: &SessionFile) -> SourceDef {
     SourceDef {
         ledger_only: file.ledger_only,
@@ -120,43 +110,6 @@ pub(crate) fn source_def(file: &SessionFile) -> SourceDef {
         native_session_id: file.native_session_id.clone(),
         agent_version: file.agent_version.clone(),
     }
-}
-
-/// Close the planner's metadata phase: take the metadata batches it retained
-/// (the caller has already published identical rows to the canonical store)
-/// and describe the runtime's sources for the writer's setup.
-pub fn streamed_setup(
-    files: &[SessionFile],
-    planner: &mut Store,
-) -> Result<StreamedSetup, PipelineError> {
-    let mut metadata_sessions = BTreeSet::new();
-    for batch in planner.drain_planned_batches()? {
-        if batch.source.is_some() {
-            return Err(PipelineError::Config(
-                "cold planner captured a source before its streamed setup".to_string(),
-            ));
-        }
-        for op in &batch.ops {
-            if let IngestOp::SessionMeta(row) = op {
-                metadata_sessions.insert(row.id.clone());
-            }
-        }
-    }
-    let mut sources = files.iter().map(source_def).collect::<Vec<_>>();
-    sources.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    if let Some(pair) = sources
-        .windows(2)
-        .find(|pair| pair[0].relative_path == pair[1].relative_path)
-    {
-        return Err(PipelineError::Config(format!(
-            "cold roster names source {} more than once",
-            pair[0].relative_path
-        )));
-    }
-    Ok(StreamedSetup {
-        sources,
-        metadata_sessions,
-    })
 }
 
 /// Validate one source's retained planner batches exactly like

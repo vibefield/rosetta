@@ -326,7 +326,27 @@ fn fresh_serve_reports_readiness_milestones_in_order_and_a_structure_only_census
         "recent-ready",
         &["horizon=7d", "horizon_sessions=2"],
     );
+    // Root trees (Claude Code admits per tree): two single-session trees,
+    // three days apart, none over 64 MiB, ready at the runtime's admission.
+    let relative: [(&str, &[&str]); 5] = [
+        (
+            "recent-ready",
+            &["horizon=24h@newest", "horizon_sessions=1"],
+        ),
+        ("recent-ready", &["horizon=7d@newest", "horizon_sessions=2"]),
+        ("newest-trees-ready", &["n=2"]),
+        ("small-recent-ready", &["horizon=24h@newest", "trees=1"]),
+        ("small-recent-ready", &["horizon=7d@newest", "trees=2"]),
+    ];
+    let relative = relative.map(|(name, with)| milestone(&stdout, name, with));
+    assert!(
+        !stdout.contains("milestone: newest-giant-ready"),
+        "{stdout}"
+    );
     let canonical = milestone(&stdout, "canonical-ready", &[]);
+    for ready in relative {
+        assert!(admitted.0 < ready.0 && ready.0 < canonical.0, "{stdout}");
+    }
     let peak = milestone(&stdout, "memory-peak", &[]);
     let order = [
         metadata, complete, admitted, first, day, week, canonical, peak,
@@ -422,6 +442,11 @@ fn a_horizon_without_recent_sessions_is_ready_at_the_first_admission() {
     let first = milestone(&stdout, "first-readable", &[]);
     for horizon in ["horizon=24h", "horizon=7d"] {
         let ready = milestone(&stdout, "recent-ready", &[horizon, "horizon_sessions=0"]);
+        assert!(ready.0 > first.0, "{stdout}");
+    }
+    // Measured from the newest session instead, both are still recent.
+    for horizon in ["horizon=24h@newest", "horizon=7d@newest"] {
+        let ready = milestone(&stdout, "recent-ready", &[horizon, "horizon_sessions=2"]);
         assert!(ready.0 > first.0, "{stdout}");
     }
     let census = stdout

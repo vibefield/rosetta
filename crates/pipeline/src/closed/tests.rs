@@ -414,6 +414,9 @@ fn close_file_skips_an_unread_source_and_refuses_what_only_a_bug_leaves() {
         modified_ms: 0,
         agent_version: None,
         source_missing: false,
+        tree_parent: None,
+        cut_len: None,
+        cut_modified_ms: None,
     };
     let cursor = |active: u64, highest: u64, checkpoint: &str| queries::CursorState {
         id: 7,

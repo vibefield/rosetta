@@ -39,6 +39,14 @@ impl AgentAdapter for ClaudeCodeAdapter {
         Some(&[spec::TRANSCRIPT, spec::SUBAGENT_TRANSCRIPT])
     }
 
+    /// A transcript, a subagent transcript and their sidecars write only the
+    /// session the path and bounded metadata name, and every subagent's
+    /// metadata links it to its parent and root. No source is shared between
+    /// trees, so each root tree is complete once its own sources are.
+    fn cold_admission(&self) -> rosetta_adapter_support::ColdAdmission {
+        rosetta_adapter_support::ColdAdmission::RootTree
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 28: exclusive usage buckets with 1-hour writes, the most final
         // streamed snapshot, iteration samples, no `<synthetic>` usage, and

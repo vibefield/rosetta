@@ -23,6 +23,9 @@ fn file(path: &str, session_id: &str) -> SessionFile {
         modified_ms: 1,
         agent_version: None,
         source_missing: false,
+        tree_parent: None,
+        cut_len: None,
+        cut_modified_ms: None,
     }
 }
 
