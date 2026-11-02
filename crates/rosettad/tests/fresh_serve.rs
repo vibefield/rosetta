@@ -1087,3 +1087,62 @@ fn warm_daemon_append_reaches_sqlite_raw_ledger_and_websocket() {
     child.0.kill().unwrap();
     child.0.wait().unwrap();
 }
+
+/// Serve's stdout is a report (ready line, milestones, census, profiles),
+/// read through a pipe by the app, the trace kit (`| tee | grep`) and
+/// harnesses. A reader that goes away must not panic the sole canonical
+/// writer mid-import (std's `println!` panics on EPIPE: exit 101, nothing
+/// published): the cold build still publishes and serve exits cleanly.
+#[test]
+fn fresh_serve_survives_a_stdout_reader_that_went_away() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../groundtruth/claude-code/fixtures/2.1.241/basic-chat/claude-config"),
+        &home.join(".claude"),
+    );
+    let db = temp.path().join("rosetta.sqlite");
+    // The reader is gone before serve writes its first line.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let output = Command::new(env!("CARGO_BIN_EXE_rosettad"))
+        .args([
+            "serve",
+            "--db",
+            db.to_str().unwrap(),
+            "--home",
+            home.to_str().unwrap(),
+            "--agent",
+            "claude-code",
+            "--addr",
+            "127.0.0.1:0",
+            "--ticks",
+            "0",
+            "--json",
+            "--profile",
+        ])
+        .stdout(writer)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && !stderr.contains("panicked"),
+        "status {:?}\nstderr:\n{stderr}",
+        output.status
+    );
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let (ready, sessions): (i64, i64) = conn
+        .query_row(
+            "SELECT canonical_ready, (SELECT COUNT(*) FROM session)
+               FROM projection_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (ready, sessions),
+        (1, 1),
+        "the cold build published its one session"
+    );
+}

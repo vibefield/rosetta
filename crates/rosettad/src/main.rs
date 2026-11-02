@@ -56,6 +56,32 @@ use rosetta_store::Store;
 use crate::enroll::{Enrollment, RuntimeTarget, resolve_targets};
 use crate::runtime_ledger::{LedgerRuntime, ledger_runtimes, open_runtime_ledger};
 
+/// Stdout is a report (the ready line, milestones, census, profiles), never
+/// control. std's `println!` panics when a write fails: a reader that went
+/// away (EPIPE) would kill the sole canonical writer mid-import with exit
+/// 101 and nothing published. Every module below prints through this one
+/// instead; a line still goes out whole under the stdout lock, and a failed
+/// write is dropped. Tests keep std's, whose output the harness captures.
+#[cfg(not(test))]
+macro_rules! println {
+    () => {
+        $crate::report_line(::std::format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::report_line(::std::format_args!($($arg)*))
+    };
+}
+
+/// [`println!`]'s writer.
+#[cfg(not(test))]
+pub(crate) fn report_line(line: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout
+        .write_fmt(line)
+        .and_then(|()| stdout.write_all(b"\n"));
+}
+
 mod announce;
 mod auth_files;
 mod bench;
