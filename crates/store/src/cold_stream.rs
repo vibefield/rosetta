@@ -142,6 +142,8 @@ impl Store {
 
         let mut totals = ApplyStats::default();
         let tx = self.conn.transaction()?;
+        // Back in the Store only once this transaction commits.
+        let mut drift = std::mem::take(&mut self.drift);
         for (streamed, asset_stats) in sources.into_iter().zip(asset_totals) {
             let StreamedSource {
                 batch,
@@ -159,6 +161,7 @@ impl Store {
                     false,
                     self.bulk_ordinals_precomputed,
                     &mut self.usage_owners,
+                    &mut drift,
                     apply::Observation {
                         rows: None,
                         meta: None,
@@ -219,6 +222,7 @@ impl Store {
         }
         let commit_started = Instant::now();
         tx.commit()?;
+        self.drift = drift;
         for cursor_id in cursor_ids {
             self.retired_sources.remove(&cursor_id);
         }

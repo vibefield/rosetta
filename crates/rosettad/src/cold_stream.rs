@@ -762,6 +762,8 @@ fn write(
             "usageCopiesDropped": usage.dropped,
             "usageCopiesDisplaced": usage.displaced,
             "usageIdentitiesUnclaimed": usage.unclaimed,
+            "usageDisplacedVisible": usage.displaced_visible,
+            "usageOwnerBytes": usage.owner_bytes,
         }));
     }
     Ok(outputs)

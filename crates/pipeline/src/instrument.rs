@@ -99,6 +99,8 @@ pub enum Metric {
     UsageCopiesDropped,
     UsageCopiesDisplaced,
     UsageIdentitiesUnclaimed,
+    UsageVisibleDisplaced,
+    UsageOwnerBytes,
     MessageLookupNanos,
     MessageWriteNanos,
     ToolResultLookupNanos,
@@ -146,7 +148,7 @@ pub enum Metric {
     LiveStreamNanos,
 }
 
-const METRIC_COUNT: usize = 104;
+const METRIC_COUNT: usize = 106;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -234,6 +236,8 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
         Metric::UsageIdentitiesUnclaimed,
         "folded tool-row usage records unclaimed",
     ),
+    (Metric::UsageVisibleDisplaced, "visible owners displaced"),
+    (Metric::UsageOwnerBytes, "usage owner index peak bytes"),
     (Metric::MessageLookupNanos, "message lookup time"),
     (Metric::MessageWriteNanos, "message write time"),
     (Metric::ToolResultLookupNanos, "tool-result lookup time"),
@@ -463,6 +467,11 @@ impl Instrument {
         self.values[index(metric)].load(Ordering::Relaxed)
     }
 
+    /// Raise a gauge metric to `value`: a peak, not a sum.
+    pub fn raise(&self, metric: Metric, value: u64) {
+        self.values[index(metric)].fetch_max(value, Ordering::Relaxed);
+    }
+
     /// Time a closure into a `*Nanos` metric.
     pub fn time<T>(&self, metric: Metric, work: impl FnOnce() -> T) -> T {
         let started = Instant::now();
@@ -610,6 +619,8 @@ impl Instrument {
             Metric::UsageIdentitiesUnclaimed,
             stats.usage_identities_unclaimed,
         );
+        self.add(Metric::UsageVisibleDisplaced, stats.usage_displaced_visible);
+        self.raise(Metric::UsageOwnerBytes, stats.usage_owner_bytes);
         let profile = &stats.profile;
         self.add(Metric::MessageApplyAttempts, profile.message_attempts);
         self.add(

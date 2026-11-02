@@ -363,7 +363,13 @@ fn fresh_serve_reports_readiness_milestones_in_order_and_a_structure_only_census
         .find(|(_, line)| line.starts_with("usage-copies: dropped="))
         .expect("usage-copies line");
     assert!(usage > canonical.0, "{stdout}");
-    for field in [" displaced=", " owned=", " unclaimed_usage="] {
+    for field in [
+        " displaced=",
+        " owned=",
+        " unclaimed_usage=",
+        " displaced_visible=",
+        " owner_bytes=",
+    ] {
         assert!(line.contains(field), "{field}: {line}");
     }
 

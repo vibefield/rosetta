@@ -202,6 +202,8 @@ pub struct Store {
     /// response exist in several files. Process-local like the buffer above:
     /// a rebuild replays the raw ledger through it (ARCHITECTURE §4.1.3).
     usage_owners: apply::UsageOwners,
+    /// Drift apply's RAM lookups, taken out for each writer transaction.
+    drift: apply::DriftCache,
     /// An abandoned generation means the private projection was built from an
     /// incomplete source. Keep accepting batches so callers can finish their
     /// diagnostic pass, but never allow that scratch file to be published.
@@ -273,6 +275,7 @@ impl Store {
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             usage_owners: apply::UsageOwners::default(),
+            drift: apply::DriftCache::default(),
             bulk_abandoned: false,
             retired_sources: BTreeSet::new(),
             bulk_ordinals_precomputed: false,
@@ -298,6 +301,7 @@ impl Store {
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             usage_owners: apply::UsageOwners::default(),
+            drift: apply::DriftCache::default(),
             bulk_abandoned: false,
             retired_sources: BTreeSet::new(),
             bulk_ordinals_precomputed: false,
@@ -333,6 +337,7 @@ impl Store {
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             usage_owners: apply::UsageOwners::default(),
+            drift: apply::DriftCache::default(),
             bulk_abandoned: false,
             retired_sources: BTreeSet::new(),
             bulk_ordinals_precomputed: false,
@@ -474,6 +479,7 @@ impl Store {
             bulk_reconciliation: apply::BulkReconciliationBuffer::default(),
             ram_reconciliation: apply::RamReconciliationBuffer::default(),
             usage_owners: apply::UsageOwners::default(),
+            drift: apply::DriftCache::default(),
             bulk_abandoned: false,
             retired_sources: BTreeSet::new(),
             bulk_ordinals_precomputed: false,
@@ -535,6 +541,7 @@ impl Store {
             StoreMode::Bulk | StoreMode::Progressive => apply::BULK_MAINTENANCE,
         };
         let bulk_load = matches!(self.mode, StoreMode::Bulk | StoreMode::Progressive);
+        let mut drift = std::mem::take(&mut self.drift);
         let mut stats = apply::apply_batch(
             &tx,
             canonical_batch,
@@ -543,6 +550,7 @@ impl Store {
             self.mode == StoreMode::Progressive,
             self.bulk_ordinals_precomputed,
             &mut self.usage_owners,
+            &mut drift,
             apply::Observation {
                 rows: fresh.as_mut(),
                 meta: fresh_meta.as_mut(),
@@ -559,6 +567,7 @@ impl Store {
         }
         let started = Instant::now();
         tx.commit()?;
+        self.drift = drift;
         stats.sqlite_commit_nanos = elapsed_nanos(started);
         if let Some(delta) = bulk_delta {
             self.bulk_reconciliation.commit(delta);
@@ -597,6 +606,7 @@ impl Store {
             source: batch.source.clone(),
         };
         let tx = self.conn.transaction()?;
+        // No ops: the cache can only forget, so a rollback leaves it true.
         let mut stats = apply::apply_batch(
             &tx,
             &control,
@@ -605,6 +615,7 @@ impl Store {
             false,
             false,
             &mut self.usage_owners,
+            &mut self.drift,
             apply::Observation {
                 rows: None,
                 meta: None,

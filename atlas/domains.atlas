@@ -56,7 +56,7 @@ domain observe "Live observation (job 2)" {
 
 domain usage "Usage & spend" {
   contains path:tools/pricing/
-  contains mod:rosetta_core::{fold, usage_totals}, mod:rosetta_store::apply::usage_owners
+  contains mod:rosetta_core::{fold, usage_totals}, mod:rosetta_store::apply::{usage_owners, usage_claims}
   contains mod:rosetta_store::{pricing, usage_sql, usage_totals}
   contains path:crates/adapters/*/src/usage*.rs, path:crates/adapters/copilot/src/usage/
   contains path:clients/room/src/components/charts/

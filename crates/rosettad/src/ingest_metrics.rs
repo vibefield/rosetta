@@ -701,6 +701,10 @@ pub(crate) struct UsageCopies {
     pub(crate) displaced: u64,
     /// Cold-folded tool-row usage records whose identity was never claimed.
     pub(crate) unclaimed: u64,
+    /// Displacements of an already-readable session (decision U-1).
+    pub(crate) displaced_visible: u64,
+    /// Peak approximate resident bytes of the usage owner index.
+    pub(crate) owner_bytes: u64,
 }
 
 impl UsageCopies {
@@ -711,6 +715,8 @@ impl UsageCopies {
             dropped: snapshot.get(Metric::UsageCopiesDropped),
             displaced: snapshot.get(Metric::UsageCopiesDisplaced),
             unclaimed: snapshot.get(Metric::UsageIdentitiesUnclaimed),
+            displaced_visible: snapshot.get(Metric::UsageVisibleDisplaced),
+            owner_bytes: snapshot.get(Metric::UsageOwnerBytes),
         }
     }
 }
@@ -722,8 +728,14 @@ pub(crate) fn after_canonical_ready(started: Instant, instrument: &Instrument) {
     memory::canonical_ready(started);
     let usage = UsageCopies::of(instrument);
     println!(
-        "usage-copies: dropped={} displaced={} owned={} unclaimed_usage={}",
-        usage.dropped, usage.displaced, usage.owned, usage.unclaimed
+        "usage-copies: dropped={} displaced={} owned={} unclaimed_usage={} \
+         displaced_visible={} owner_bytes={}",
+        usage.dropped,
+        usage.displaced,
+        usage.owned,
+        usage.unclaimed,
+        usage.displaced_visible,
+        usage.owner_bytes
     );
 }
 

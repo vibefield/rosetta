@@ -799,7 +799,16 @@ version release":
 A subcommand that scans the live agent directories and reports, without ingesting:
 unmatched files, unknown fields per stream (with counts and sample paths), parse
 failures, and newly observed agent versions. The same detection runs continuously during
-normal ingestion, landing in a `drift_events` table. This is the standing answer to
+normal ingestion, landing aggregated in `drift_agg` (`drift_seen` dedupes events), never one row
+per bad record: each key (runtime, agent version, stream, record kind, error code, shape) keeps a
+count, first and last seen, and one sample location. The sample is the least (cursor path,
+offset) any event offered, an absent path or offset sorting last, compared by path rather than
+cursor id, so
+fresh, interleaved, rebuilt and resumed projections keep the same sample whatever order sources
+land in (`store/src/apply/drift.rs`, R1 2026-11-02). The writer keeps each cursor's path and
+each key's current sample in process RAM, dropped whenever a writer transaction rolls back, so
+only an event that may sort first (or a key's first event) reads its stored sample back from
+SQLite. This is the standing answer to
 "keep up with each agent's updates": run probe after an agent updates, refresh fixtures,
 extend the raw types.
 

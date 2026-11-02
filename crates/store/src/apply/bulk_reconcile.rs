@@ -22,9 +22,10 @@ use rosetta_core::{
 use crate::StoreError;
 
 use super::rows::{
-    BULK_MAINTENANCE, BucketKey, apply_reconciled_tool_message, apply_usage, flush_session_touches,
+    BULK_MAINTENANCE, BucketKey, apply_reconciled_tool_message, flush_session_touches,
     touch_session, update_reconciled_tool,
 };
+use super::usage_claims::{RowUsage, apply_row_usage};
 use super::{ApplyStats, Batch, SourceMode, SourceWrite, apply_op, profile_ordinal_lookup};
 
 mod fold;
@@ -621,6 +622,9 @@ pub(crate) fn apply_plan(
     for existing in &plan.existing {
         update_reconciled_tool(tx, existing.message_id, &existing.tool, &mut stats)?;
     }
+    // A fold carries only what `defers` takes, never drift, so the Store's
+    // drift cache is not threaded here: this one is never consulted.
+    let mut no_drift = super::DriftCache::default();
     for tail in &plan.tail {
         if let IngestOp::Usage {
             session_id,
@@ -636,24 +640,10 @@ pub(crate) fn apply_plan(
                 response: response.clone(),
             };
             plan.usage_seen.insert(key.clone());
-            if let Some(identity) = identity
-                && !super::claim_usage(
-                    tx,
-                    owners,
-                    identity,
-                    session_id,
-                    super::OwnerTarget::Row(response.clone()),
-                    !tokens.is_empty(),
-                    &mut stats,
-                    BULK_MAINTENANCE,
-                    &mut dirty_buckets,
-                    None,
-                )?
-            {
-                continue;
-            }
-            if !apply_usage(
+            let applied = apply_row_usage(
                 tx,
+                owners,
+                identity.as_deref(),
                 session_id,
                 response,
                 *ts,
@@ -663,7 +653,8 @@ pub(crate) fn apply_plan(
                 BULK_MAINTENANCE,
                 &mut dirty_buckets,
                 None,
-            )? {
+            )?;
+            if applied == RowUsage::Unmatched {
                 plan.unmatched_usage.insert(key, tail.clone());
             }
             continue;
@@ -676,6 +667,7 @@ pub(crate) fn apply_plan(
             BULK_MAINTENANCE,
             &mut dirty_buckets,
             owners,
+            &mut no_drift,
             None,
         )?;
     }

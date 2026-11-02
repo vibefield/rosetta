@@ -21,6 +21,7 @@ use crate::StoreError;
 use crate::hot::{Effects, Mutation};
 use crate::{message_codec, tool_codec};
 
+use super::usage_owners::RowStamp;
 use super::{ApplyStats, elapsed_nanos};
 
 /// Derived structures maintained by this apply. A private cold rebuild turns
@@ -892,6 +893,14 @@ pub(super) fn apply_tool_updates(
     Ok(())
 }
 
+/// A usage write's effect on its row's stamp: the model and time the row
+/// showed before, and what the usage left.
+pub(super) struct UsageWrite {
+    pub(super) old: RowStamp<String>,
+    pub(super) next: RowStamp<String>,
+}
+
+/// Write a response row's usage; `None` when the row does not exist.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_usage(
     tx: &Transaction,
@@ -904,14 +913,14 @@ pub(super) fn apply_usage(
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
     effects: Option<&mut Effects>,
-) -> Result<bool, StoreError> {
+) -> Result<Option<UsageWrite>, StoreError> {
     stats.profile.usage_attempts += 1;
     let started = Instant::now();
     let loaded = load_usage_target(tx, response);
     stats.profile.usage_lookup_nanos += elapsed_nanos(started);
     let Some(old) = loaded? else {
         stats.usage_unmatched += 1;
-        return Ok(false);
+        return Ok(None);
     };
     let next_model = model.map(str::to_owned).or_else(|| old.model.clone());
     let next_ts = old.ts.or(Some(ts));
@@ -965,10 +974,19 @@ pub(super) fn apply_usage(
             session_id: session_id.to_string(),
             timeline_id: response.to_owned(),
             ts: next_ts,
-            model: next_model,
+            model: next_model.clone(),
             tokens: Box::new(tokens.clone()),
             cost,
         });
     }
-    Ok(true)
+    Ok(Some(UsageWrite {
+        old: RowStamp {
+            model: old.model,
+            ts: old.ts,
+        },
+        next: RowStamp {
+            model: next_model,
+            ts: next_ts,
+        },
+    }))
 }

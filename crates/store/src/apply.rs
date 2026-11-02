@@ -13,9 +13,7 @@ use std::time::Instant;
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use rosetta_core::IngestOp;
-use rosetta_core::rows::{
-    DriftFact, FileEditRow, GitCommitRow, Ms, PlanRow, SessionUsageRow, TaskRow, TokenSnapshot,
-};
+use rosetta_core::rows::{FileEditRow, GitCommitRow, Ms, PlanRow, TaskRow};
 use rosetta_core::{TimelineBody, ToolAction, WorkflowJournalObservation, WorkflowRun};
 
 use crate::StoreError;
@@ -89,9 +87,23 @@ pub struct ApplyStats {
     /// (`UsageOwners` answered `Claim::DropCopy`).
     pub usage_copies_dropped: u64,
     /// Usage records that displaced the current owner of their identity: the
-    /// record was applied and the previous owner's usage retracted
+    /// record was applied and every target the previous owner wrote undone
     /// (`Claim::Displace`). A visible session's usage can drop by these.
     pub usage_copies_displaced: u64,
+    /// Of `usage_copies_displaced`, those that undid something in a session
+    /// that had already left Pending, so a reader may have seen the usage
+    /// that went away (decision U-1: counted, with no wire flag).
+    pub usage_displaced_visible: u64,
+    /// Rows of such visible sessions whose usage the displacement undid.
+    pub usage_displaced_visible_rows: u64,
+    /// Every session a displacement undid a row or sample for; one whose
+    /// records never matched anything is left out, as nothing changed. A
+    /// caller serving a session's rows invalidates the readable ones (R1,
+    /// decision D10).
+    pub usage_displaced_sessions: BTreeSet<String>,
+    /// Approximate resident bytes of the usage owner index after this apply:
+    /// a gauge, so merging keeps the larger value.
+    pub usage_owner_bytes: u64,
     /// Usage records carrying a response identity that the cold fold merged
     /// straight onto their dated tool row, so they never reached
     /// `UsageOwners`: neither registered nor checked for a copy. Records, not
@@ -125,6 +137,9 @@ pub struct ApplyProfile {
     pub tool_result_attempts: u64,
     pub usage_attempts: u64,
     pub drift_attempts: u64,
+    /// Drift events that read their aggregate's stored sample: those whose
+    /// sample might sort first, or whose aggregate the cache has not seen.
+    pub drift_sample_reads: u64,
     pub other_attempts: u64,
     pub session_touch_attempts: u64,
     pub session_touch_rows: u64,
@@ -166,6 +181,11 @@ impl ApplyStats {
         self.usage_identities_owned += batch.usage_identities_owned;
         self.usage_copies_dropped += batch.usage_copies_dropped;
         self.usage_copies_displaced += batch.usage_copies_displaced;
+        self.usage_displaced_visible += batch.usage_displaced_visible;
+        self.usage_displaced_visible_rows += batch.usage_displaced_visible_rows;
+        self.usage_displaced_sessions
+            .extend(batch.usage_displaced_sessions.iter().cloned());
+        self.usage_owner_bytes = self.usage_owner_bytes.max(batch.usage_owner_bytes);
         self.usage_identities_unclaimed += batch.usage_identities_unclaimed;
         self.drift_recorded += batch.drift_recorded;
         self.bucket_rebuilds += batch.bucket_rebuilds;
@@ -182,6 +202,7 @@ impl ApplyProfile {
         self.tool_result_attempts += batch.tool_result_attempts;
         self.usage_attempts += batch.usage_attempts;
         self.drift_attempts += batch.drift_attempts;
+        self.drift_sample_reads += batch.drift_sample_reads;
         self.other_attempts += batch.other_attempts;
         self.session_touch_attempts += batch.session_touch_attempts;
         self.session_touch_rows += batch.session_touch_rows;
@@ -238,9 +259,11 @@ fn profile_ordinal_lookup<T>(
 }
 
 mod bulk_reconcile;
+mod drift;
 mod metadata;
 mod ram_reconcile;
 mod rows;
+mod usage_claims;
 mod usage_owners;
 
 pub(crate) use bulk_reconcile::{
@@ -248,15 +271,17 @@ pub(crate) use bulk_reconcile::{
     defers as defers_relational,
 };
 pub use bulk_reconcile::{ResolvedSession, WithheldFacts};
+pub(crate) use drift::DriftCache;
+use drift::apply_drift;
 use metadata::{apply_project, apply_runtime, apply_session, apply_session_title};
 pub(crate) use ram_reconcile::RamReconciliationBuffer;
 pub(crate) use rows::{BULK_MAINTENANCE, LIVE_MAINTENANCE, Maintenance};
 use rows::{
-    BucketKey, apply_message, apply_tool_updates, apply_usage, finalize_source_tools,
-    flush_session_touches, mark_bucket, rebuild_bucket, touch_session,
+    BucketKey, apply_message, apply_tool_updates, finalize_source_tools, flush_session_touches,
+    mark_bucket, rebuild_bucket,
 };
+use usage_claims::{apply_row_usage, apply_sample_usage};
 pub(crate) use usage_owners::UsageOwners;
-use usage_owners::{Claim, OwnerTarget};
 
 pub(crate) fn apply_bulk_reconciliation(
     tx: &Transaction,
@@ -264,98 +289,9 @@ pub(crate) fn apply_bulk_reconciliation(
     preserve_message_ordinals: bool,
     owners: &mut UsageOwners,
 ) -> Result<ApplyStats, StoreError> {
-    bulk_reconcile::apply_plan(tx, plan, preserve_message_ordinals, owners)
-}
-
-fn apply_session_usage(
-    tx: &Transaction,
-    row: &SessionUsageRow,
-    src_cursor: Option<i64>,
-    stats: &mut ApplyStats,
-    maintenance: Maintenance,
-    dirty_buckets: &mut BTreeSet<BucketKey>,
-) -> Result<(), StoreError> {
-    // A sample may name another session than its source (a Codex guardian
-    // review attributes its usage to the parent thread). The parent row
-    // exists whenever its rollout was captured; otherwise the sample is out
-    // of coverage, never a foreign-key failure of the whole batch.
-    let known: Option<i64> = tx
-        .prepare_cached("SELECT 1 FROM session WHERE id = ?1")?
-        .query_row(params![row.session_id], |record| record.get(0))
-        .optional()?;
-    if known.is_none() {
-        stats.usage_unmatched += 1;
-        return Ok(());
-    }
-    let previous = tx
-        .prepare_cached(
-            "SELECT ts, model FROM session_usage
-             WHERE session_id = ?1 AND sample_key = ?2",
-        )?
-        .query_row(params![row.session_id, row.key], |record| {
-            Ok((record.get::<_, Ms>(0)?, record.get::<_, Option<String>>(1)?))
-        })
-        .optional()?;
-    if let Some((ts, model)) = previous {
-        mark_bucket(
-            dirty_buckets,
-            maintenance,
-            &row.session_id,
-            Some(ts),
-            model.as_deref(),
-        );
-    }
-    mark_bucket(
-        dirty_buckets,
-        maintenance,
-        &row.session_id,
-        Some(row.ts),
-        row.model.as_deref(),
-    );
-    tx.prepare_cached(
-        "INSERT INTO session_usage
-           (session_id, sample_key, ts, model, in_tokens, out_tokens,
-            cache_r_tokens, cache_w_tokens, think_tokens, src_cursor, scope,
-            cache_w1h_tokens, web_searches, service_tier, route, billed_pusd, requests)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-         ON CONFLICT(session_id, sample_key) DO UPDATE SET
-           ts = excluded.ts, model = excluded.model, scope = excluded.scope,
-           in_tokens = excluded.in_tokens, out_tokens = excluded.out_tokens,
-           cache_r_tokens = excluded.cache_r_tokens,
-           cache_w_tokens = excluded.cache_w_tokens,
-           think_tokens = excluded.think_tokens,
-           cache_w1h_tokens = excluded.cache_w1h_tokens,
-           web_searches = excluded.web_searches,
-           service_tier = excluded.service_tier,
-           route = excluded.route,
-           billed_pusd = excluded.billed_pusd,
-           requests = excluded.requests,
-           src_cursor = excluded.src_cursor",
-    )?
-    .execute(params![
-        row.session_id,
-        row.key,
-        row.ts,
-        row.model,
-        row.tokens.input,
-        row.tokens.output,
-        row.tokens.cache_read,
-        row.tokens.cache_write,
-        row.tokens.thinking,
-        src_cursor,
-        row.tokens.scope.as_str(),
-        row.tokens.cache_write_1h,
-        row.tokens.web_searches,
-        row.tokens
-            .service_tier
-            .map(rosetta_core::ServiceTier::as_str),
-        row.tokens.route,
-        row.tokens.billed_pico_usd,
-        row.tokens.requests,
-    ])?;
-    touch_session(tx, &row.session_id, Some(row.ts), stats)?;
-    stats.usage_applied += 1;
-    Ok(())
+    let mut stats = bulk_reconcile::apply_plan(tx, plan, preserve_message_ordinals, owners)?;
+    stats.usage_owner_bytes = owners.approx_bytes();
+    Ok(stats)
 }
 
 fn apply_file_edit(
@@ -548,81 +484,6 @@ fn apply_git_commit(
     Ok(())
 }
 
-fn apply_drift(
-    tx: &Transaction,
-    fact: &DriftFact,
-    stats: &mut ApplyStats,
-) -> Result<(), StoreError> {
-    stats.profile.drift_attempts += 1;
-    let started = Instant::now();
-    let result = (|| -> Result<(), StoreError> {
-        // Cursor rowids depend on source admission order. The durable dedupe
-        // identity must not: resolve provenance to the cursor's stable path
-        // so private, progressive, and replay projections converge.
-        let sample_path = match fact.sample_cursor {
-            Some(cursor) => tx
-                .prepare_cached("SELECT path FROM ingest_cursor WHERE id = ?1")?
-                .query_row(params![cursor], |row| row.get::<_, String>(0))
-                .optional()?,
-            None => None,
-        };
-        let event_key = serde_json::to_string(&(
-            &fact.runtime_id,
-            &fact.agent_version,
-            &fact.stream,
-            &fact.record_kind,
-            &fact.error_code,
-            &fact.shape_hash,
-            fact.at,
-            sample_path,
-            fact.sample_offset,
-        ))?;
-        let inserted = tx
-            .prepare_cached("INSERT OR IGNORE INTO drift_seen (event_key) VALUES (?1)")?
-            .execute(params![event_key])?;
-        if inserted == 0 {
-            return Ok(());
-        }
-        tx.prepare_cached(
-            "INSERT INTO drift_agg
-               (runtime_id, agent_version, stream, record_kind, error_code, shape_hash,
-                count, first_seen, last_seen, sample_cursor, sample_offset)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7, ?8, ?9)
-             ON CONFLICT(runtime_id, agent_version, stream, record_kind, error_code, shape_hash)
-             DO UPDATE SET
-               count = count + 1,
-               first_seen = CASE
-                 WHEN first_seen IS NULL THEN excluded.first_seen
-                 WHEN excluded.first_seen IS NULL THEN first_seen
-                 ELSE MIN(first_seen, excluded.first_seen) END,
-               last_seen = CASE
-                 WHEN last_seen IS NULL THEN excluded.last_seen
-                 WHEN excluded.last_seen IS NULL THEN last_seen
-                 ELSE MAX(last_seen, excluded.last_seen) END,
-               sample_cursor = COALESCE(sample_cursor, excluded.sample_cursor),
-               sample_offset = COALESCE(sample_offset, excluded.sample_offset)",
-        )?
-        .execute(params![
-            fact.runtime_id,
-            fact.agent_version,
-            fact.stream,
-            fact.record_kind,
-            fact.error_code,
-            fact.shape_hash,
-            fact.at,
-            fact.sample_cursor,
-            fact.sample_offset,
-        ])?;
-        stats.drift_recorded += 1;
-        Ok(())
-    })();
-    stats.profile.drift_apply_nanos = stats
-        .profile
-        .drift_apply_nanos
-        .saturating_add(elapsed_nanos(started));
-    result
-}
-
 fn source_state(
     tx: &Transaction,
     cursor_id: i64,
@@ -682,6 +543,7 @@ fn project_source_ops(
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
     owners: &mut UsageOwners,
+    drift: &mut DriftCache,
     defer_bulk_reconciliation: bool,
     mut projection: DirectProjection<'_>,
 ) -> Result<(), StoreError> {
@@ -769,6 +631,7 @@ fn project_source_ops(
                 maintenance,
                 dirty_buckets,
                 owners,
+                drift,
                 projection.effects.as_deref_mut(),
             )?;
         }
@@ -783,6 +646,7 @@ fn project_source_ops(
             maintenance,
             dirty_buckets,
             owners,
+            drift,
             projection.effects.as_deref_mut(),
         )?;
     }
@@ -1099,6 +963,7 @@ fn activate_cursor(
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
     owners: &mut UsageOwners,
+    drift: &mut DriftCache,
     defer_bulk_reconciliation: bool,
     effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
@@ -1150,6 +1015,7 @@ fn activate_cursor(
                 maintenance,
                 dirty_buckets,
                 owners,
+                drift,
                 None,
             )?,
         }
@@ -1163,6 +1029,7 @@ fn activate_cursor(
             maintenance,
             dirty_buckets,
             owners,
+            drift,
             None,
         )?;
     }
@@ -1176,6 +1043,7 @@ fn activate_cursor(
             maintenance,
             dirty_buckets,
             owners,
+            drift,
             None,
         )?;
     }
@@ -1209,17 +1077,22 @@ fn activate_cursor(
 fn abandon_cursor(
     tx: &Transaction,
     ops: &[IngestOp],
+    drift: &mut DriftCache,
     stats: &mut ApplyStats,
 ) -> Result<(), StoreError> {
     for op in ops {
         if let IngestOp::Drift(fact) = op {
-            apply_drift(tx, fact, stats)?;
+            apply_drift(tx, fact, drift, stats)?;
         }
     }
     Ok(())
 }
 
-fn apply_checkpoint(tx: &Transaction, update: &CheckpointUpdate) -> Result<(), StoreError> {
+fn apply_checkpoint(
+    tx: &Transaction,
+    update: &CheckpointUpdate,
+    drift: &mut DriftCache,
+) -> Result<(), StoreError> {
     let changed = match &update.expected {
         None => tx
             .prepare_cached(
@@ -1256,6 +1129,9 @@ fn apply_checkpoint(tx: &Transaction, update: &CheckpointUpdate) -> Result<(), S
         return Err(StoreError::CheckpointConflict {
             path: update.path.clone(),
         });
+    }
+    if update.expected.is_none() {
+        drift.cursor_created(tx.last_insert_rowid());
     }
     Ok(())
 }
@@ -1332,6 +1208,7 @@ fn apply_op(
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
     owners: &mut UsageOwners,
+    drift: &mut DriftCache,
     mut effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     if let Some(fx) = effects.as_deref_mut() {
@@ -1368,24 +1245,10 @@ fn apply_op(
             tokens,
             identity,
         } => {
-            if let Some(identity) = identity
-                && !claim_usage(
-                    tx,
-                    owners,
-                    identity,
-                    session_id,
-                    OwnerTarget::Row(response.clone()),
-                    !tokens.is_empty(),
-                    stats,
-                    maintenance,
-                    dirty_buckets,
-                    effects.as_deref_mut(),
-                )?
-            {
-                return Ok(());
-            }
-            let _ = apply_usage(
+            apply_row_usage(
                 tx,
+                owners,
+                identity.as_deref(),
                 session_id,
                 response,
                 *ts,
@@ -1397,25 +1260,16 @@ fn apply_op(
                 effects,
             )?;
         }
-        IngestOp::SessionUsage(row) => {
-            if let Some(identity) = &row.identity
-                && !claim_usage(
-                    tx,
-                    owners,
-                    identity,
-                    &row.session_id,
-                    OwnerTarget::Sample(row.key.clone()),
-                    !row.tokens.is_empty(),
-                    stats,
-                    maintenance,
-                    dirty_buckets,
-                    effects,
-                )?
-            {
-                return Ok(());
-            }
-            apply_session_usage(tx, row, src_cursor, stats, maintenance, dirty_buckets)?
-        }
+        IngestOp::SessionUsage(row) => apply_sample_usage(
+            tx,
+            owners,
+            row,
+            src_cursor,
+            stats,
+            maintenance,
+            dirty_buckets,
+            effects,
+        )?,
         IngestOp::SessionUsageTotals(row) => {
             for (ts, model) in crate::usage_totals::replace(tx, row, src_cursor)? {
                 mark_bucket(
@@ -1441,102 +1295,8 @@ fn apply_op(
             apply_workflow_journal(tx, session_id, observation, src_cursor)
         })?,
         IngestOp::GitCommit(row) => profile_other(stats, || apply_git_commit(tx, row, src_cursor))?,
-        IngestOp::Drift(fact) => apply_drift(tx, fact, stats)?,
+        IngestOp::Drift(fact) => apply_drift(tx, fact, drift, stats)?,
     }
-    Ok(())
-}
-
-/// Settle who owns a usage record that carries a response identity
-/// (ARCHITECTURE §4.1.3, counting rule 2). Returns whether the record should
-/// be applied; a copy of usage another session owns is dropped, and a record
-/// from an earlier-started session displaces the current owner, whose usage
-/// is retracted here.
-#[allow(clippy::too_many_arguments)]
-fn claim_usage(
-    tx: &Transaction,
-    owners: &mut UsageOwners,
-    identity: &str,
-    session_id: &str,
-    target: OwnerTarget,
-    carries_usage: bool,
-    stats: &mut ApplyStats,
-    maintenance: Maintenance,
-    dirty_buckets: &mut BTreeSet<BucketKey>,
-    effects: Option<&mut Effects>,
-) -> Result<bool, StoreError> {
-    match owners.claim(tx, identity, session_id, target, carries_usage)? {
-        Claim::Own => {
-            stats.usage_identities_owned += 1;
-            Ok(true)
-        }
-        Claim::DropCopy => {
-            stats.usage_copies_dropped += 1;
-            Ok(false)
-        }
-        Claim::Displace {
-            session_id: displaced,
-            target,
-        } => {
-            stats.usage_copies_displaced += 1;
-            match target {
-                OwnerTarget::Row(timeline_id) => {
-                    apply_usage(
-                        tx,
-                        &displaced,
-                        &timeline_id,
-                        0,
-                        None,
-                        &TokenSnapshot::default(),
-                        stats,
-                        maintenance,
-                        dirty_buckets,
-                        effects,
-                    )?;
-                }
-                OwnerTarget::Sample(key) => {
-                    retract_sample(tx, &displaced, &key, maintenance, dirty_buckets)?;
-                }
-            }
-            Ok(true)
-        }
-    }
-}
-
-/// Blank a session sample's usage in place: the row keeps its key, time and
-/// model, contributes nothing to any rollup, and its hour bucket is redone.
-fn retract_sample(
-    tx: &Transaction,
-    session_id: &str,
-    key: &str,
-    maintenance: Maintenance,
-    dirty_buckets: &mut BTreeSet<BucketKey>,
-) -> Result<(), StoreError> {
-    let previous = tx
-        .prepare_cached(
-            "SELECT ts, model FROM session_usage WHERE session_id = ?1 AND sample_key = ?2",
-        )?
-        .query_row(params![session_id, key], |row| {
-            Ok((row.get::<_, Ms>(0)?, row.get::<_, Option<String>>(1)?))
-        })
-        .optional()?;
-    let Some((ts, model)) = previous else {
-        return Ok(());
-    };
-    tx.prepare_cached(
-        "UPDATE session_usage
-         SET in_tokens = NULL, out_tokens = NULL, cache_r_tokens = NULL,
-             cache_w_tokens = NULL, think_tokens = NULL, cache_w1h_tokens = NULL,
-             web_searches = NULL, billed_pusd = NULL, requests = NULL
-         WHERE session_id = ?1 AND sample_key = ?2",
-    )?
-    .execute(params![session_id, key])?;
-    mark_bucket(
-        dirty_buckets,
-        maintenance,
-        session_id,
-        Some(ts),
-        model.as_deref(),
-    );
     Ok(())
 }
 
@@ -1561,6 +1321,34 @@ pub(crate) fn apply_batch(
     progressive_public: bool,
     precomputed_bulk_ordinals: bool,
     owners: &mut UsageOwners,
+    drift: &mut DriftCache,
+    observed: Observation<'_>,
+) -> Result<ApplyStats, StoreError> {
+    let mut stats = apply_batch_ops(
+        tx,
+        batch,
+        maintenance,
+        bulk_load,
+        progressive_public,
+        precomputed_bulk_ordinals,
+        owners,
+        drift,
+        observed,
+    )?;
+    stats.usage_owner_bytes = owners.approx_bytes();
+    Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_batch_ops(
+    tx: &Transaction,
+    batch: &Batch,
+    maintenance: Maintenance,
+    bulk_load: bool,
+    progressive_public: bool,
+    precomputed_bulk_ordinals: bool,
+    owners: &mut UsageOwners,
+    drift: &mut DriftCache,
     observed: Observation<'_>,
 ) -> Result<ApplyStats, StoreError> {
     let Observation {
@@ -1608,6 +1396,7 @@ pub(crate) fn apply_batch(
                     maintenance,
                     &mut dirty_buckets,
                     owners,
+                    drift,
                     effects.as_deref_mut(),
                 )?;
             }
@@ -1621,6 +1410,7 @@ pub(crate) fn apply_batch(
                     maintenance,
                     &mut dirty_buckets,
                     owners,
+                    drift,
                     effects.as_deref_mut(),
                 )?;
             }
@@ -1699,12 +1489,13 @@ pub(crate) fn apply_batch(
                     maintenance,
                     &mut dirty_buckets,
                     owners,
+                    drift,
                     bulk_load && active_generation == 0 && source.mode != SourceMode::Append,
                     starts_new_generation,
                     active_generation,
                 )?;
                 for checkpoint in &batch.checkpoints {
-                    apply_checkpoint(tx, checkpoint)?;
+                    apply_checkpoint(tx, checkpoint, drift)?;
                 }
                 flush_session_touches(tx, &mut stats)?;
                 fold_dirty_buckets(tx, dirty_buckets, &mut stats)?;
@@ -1772,6 +1563,7 @@ pub(crate) fn apply_batch(
                             maintenance,
                             &mut dirty_buckets,
                             owners,
+                            drift,
                             defer_bulk_reconciliation,
                             DirectProjection {
                                 preserve_message_ordinals: false,
@@ -1818,7 +1610,7 @@ pub(crate) fn apply_batch(
                         // being finalized after an abandon.
                         for op in &batch.ops {
                             if let IngestOp::Drift(fact) = op {
-                                apply_drift(tx, fact, &mut stats)?;
+                                apply_drift(tx, fact, drift, &mut stats)?;
                             }
                         }
                         if cursor_has_projection(tx, source.cursor_id)? {
@@ -1857,6 +1649,7 @@ pub(crate) fn apply_batch(
                             maintenance,
                             &mut dirty_buckets,
                             owners,
+                            drift,
                             defer_bulk_reconciliation,
                             DirectProjection {
                                 preserve_message_ordinals: true,
@@ -1898,6 +1691,7 @@ pub(crate) fn apply_batch(
                             maintenance,
                             &mut dirty_buckets,
                             owners,
+                            drift,
                             defer_bulk_reconciliation,
                             effects,
                         )?;
@@ -1905,7 +1699,7 @@ pub(crate) fn apply_batch(
                     }
                     SourceMode::Abandon => {
                         let started = Instant::now();
-                        abandon_cursor(tx, &batch.ops, &mut stats)?;
+                        abandon_cursor(tx, &batch.ops, drift, &mut stats)?;
                         stats.canonical_apply_nanos += elapsed_nanos(started);
                     }
                 }
@@ -1913,7 +1707,7 @@ pub(crate) fn apply_batch(
         }
     }
     for checkpoint in &batch.checkpoints {
-        apply_checkpoint(tx, checkpoint)?;
+        apply_checkpoint(tx, checkpoint, drift)?;
     }
     flush_session_touches(tx, &mut stats)?;
     fold_dirty_buckets(tx, dirty_buckets, &mut stats)?;
@@ -1957,6 +1751,7 @@ fn project_ledger_only_source(
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
     owners: &mut UsageOwners,
+    drift: &mut DriftCache,
     direct_cold_generation: bool,
     starts_new_generation: bool,
     active_generation: u64,
@@ -1981,7 +1776,7 @@ fn project_ledger_only_source(
         stats.source_sweeps += 1;
     }
     match source.mode {
-        SourceMode::Abandon => abandon_cursor(tx, ops, stats)?,
+        SourceMode::Abandon => abandon_cursor(tx, ops, drift, stats)?,
         SourceMode::Stage | SourceMode::Append | SourceMode::Activate => {
             for op in ops {
                 apply_op(
@@ -1992,6 +1787,7 @@ fn project_ledger_only_source(
                     maintenance,
                     dirty_buckets,
                     owners,
+                    drift,
                     None,
                 )?;
             }
