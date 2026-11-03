@@ -17,6 +17,12 @@ new hashes. The gates and their results are described in `docs/ARCHITECTURE.md` 
 | `fix_ns.py`, `make_structure.py`, `sim-stress/stress_m4_v3.py`, `product-diagnostic-v3.json` | Stress worker count, snapshot structure, pre-registered predictions |
 | `taskc2/run_v2.sh` | The campaign's run order |
 
+**Running in place.** The scripts are CommonJS (`require`) and the repository's root
+`package.json` says `"type": "module"`, so `package.json` here (`{"type": "commonjs"}`, not one
+of the hashed files) lets Node run them where they are; no hashed file changed.
+`tools/ui-bench` uses `verify_r1_snapshot.js`, `r1_snapshot_lib.js`, the digest SQL and
+`r1_ranked.py` by path.
+
 **Snapshot.** The frozen corpus (639 files, 1,778,445,372 bytes, `manifestSha256`
 `818911071fc4…cb6d3`, `walkInputsDigest` `09bddcd040d2…625bb`) is never committed. It lives on
 the bench Mac outside the repository. Check it before use:

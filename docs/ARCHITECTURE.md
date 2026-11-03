@@ -524,6 +524,144 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > the look-ahead reservation above (1,091 against 776 MB), at unchanged canonical readiness
 > (2026-11-02). It lowers every mode's peak, the path walk's included.
 >
+> **UI readiness (2026-11-03).** The progressive cold import is judged by what a reader sees in
+> the app, not only by daemon milestones. `tools/ui-bench` runs the production app (the built
+> `clients/app/dist` renderer and `clients/app/electron/main.mjs`, unchanged) over a frozen
+> snapshot, driven by a versioned reader script, and writes one `ui-run/1` JSON per run
+> (operations: `tools/ui-bench/README.md`). Nothing ships as telemetry: a harness-injected page
+> script (CDP `Page.addScriptToEvaluateOnNewDocument`, before any app script) wraps
+> `WebSocket` and `fetch` transparently, parses `/ws/meta` frames and `/api/status` bodies in a
+> Worker, stamps the first animation frame after each DOM change it watches, and observes long
+> animation frames, event timing and layout shift. It reads the room only through the inert DOM
+> contract (`clients/app/test/dom-contract.test.mjs`), never copy, writes nothing to the DOM,
+> times its own JavaScript self-time on the main thread (budget 1%, structured-clone posts
+> included), and exports only counts, sizes, timings, enums and digests through a CDP binding
+> honoured only from the main frame. Ids, titles, paths and query text stay in page memory; the
+> reader script gets rectangles back. A whitelist schema (`ui-run-1.schema.json`; own keys only)
+> and a scan against every id, native id, title, summary, cwd, name and root in the run's own
+> projection (read after the daemon stops; every rosetta id is 64 hex, the shape of a digest)
+> refuse to write any other string, and the gate fails closed if that list cannot be read.
+> The harness owns the daemon (`serve --home SNAP/home --json
+> --announce --profile`, no `--agent`, so the roll call grants consent, and no `--ticks 0`, so the
+> run outlives publication and search), reads its stdout through a dedicated drain so a slow
+> reader never stalls the sole writer's stdout lock, and digests the run's projection read-only.
+> Declared deviations from production, the same on both sides of any pair: a fresh userData
+> profile; background and occlusion throttling off; the page's focus emulated over CDP (macOS
+> will not activate an app launched in the background); the worktree/git, favicon, file-browser
+> and browser-preview IPC and `shell.openExternal` denied, and every request but the app's own
+> scheme, its renderer files and the run's daemon cancelled, so no git, walker, browser or site
+> fetch ever runs on a path or host the snapshot names; a private announcement directory; one
+> `about:blank` load before the app's, so the debugger is attached first. The window is 1500×940
+> at a forced device scale factor (`--force-device-scale-factor` on Electron's own argv, 2 by
+> default, the MacBook's), and a run whose page reports another fails. The driver stops every
+> child it started on any exit, a signal to it alone included, and deletes the db only once the
+> daemon's exit was seen.
+>
+> *Clock and T0.* The import clock's zero is the daemon's `milestone: consent-granted`, mapped to
+> wall time through `clock: wall_ms` (fallback: `metadata_ready_at` less the metadata-ready
+> `elapsed_s`); a JSON milestone's unrounded `elapsedS` is preferred to the text line's two
+> decimals. Renderer time is `performance.timeOrigin + now()`, aligned to the Electron main
+> process and that to the driver by min-RTT pings at the start and end (applied above 2 ms);
+> each run records the method, the offsets, their drift and an error estimate. App launch is a
+> second clock, reported only (D1 g). *Count unit:* conversations, that is roots
+> (`parent_session_id` null) of the pushed session list, excluding metadata-only placeholders
+> (`data-standing="unavailable"`) and never-rostered roots (still Pending when the import ends;
+> I1 checks that count against the daemon's own: the sessions its skims published less those
+> its roster planned, Σ `sessions_total`). NEWEST is the root with the largest `updated_at`
+> (ties to the smallest id); RECENT24 and RECENT7 are the roots within 24 h / 7 d of it (the
+> `@newest` anchor of the daemon's horizons, so a frozen corpus keeps its membership); all three
+> freeze at the first status that carries `metadata_ready_at`, and the run records whether the
+> final rows give the same sets. Since rostering is known only at the end, the frozen sets keep
+> every candidate; a horizon whose remaining members are still Pending once capture is over
+> (status finalizing) is reached there, and the receipt legs and set sizes are recomputed at the
+> end over the members that were rostered (a never-rostered NEWEST hands H2 to the newest root
+> that was), with the excluded counts recorded. Every value a pair compares carries `reached`:
+> `yes`, `not-reached` (null: the state never happened) or `not-applicable` (the script declares
+> it unexercised, or its set is empty); a value whose precondition never happened is null, never
+> 0, and a scripted step that timed out makes the run `incomplete`.
+>
+> *Catalog* (roles: claim candidate, guard, invariant, report-only). Unless a name says lag,
+> every value is ms on the import clock, ending at the first animation frame that shows the
+> state; the daemon counterpart is reported beside it, never instead of it.
+> - H1 projects on screen (guard): the first frame with a project row and no connecting, roll
+>   call or cold-start face; split into the meta-push part (first project frame received) and
+>   the status-poll part (first post-consent status answer), with the lag after metadata-ready.
+> - H2 NEWEST ready on screen (claim candidate): its row drawn without
+>   `data-standing="not-imported"`; beside it the receipt of the frame that flipped it, the
+>   paint lag (guard; from the later of that receipt and the row's first draw, the raw
+>   difference kept beside it), the time it sat ready under the held "Not imported yet" head,
+>   and its index at first draw.
+> - H3 RECENT24 / RECENT7 ready (claim candidate, 24 h and 7 d declared separately): the receipt
+>   leg (the last member's flip received) and the painted leg (every member in NEWEST's project
+>   drawn ready) as two numbers, with the daemon's `horizon_sessions` and the lag after
+>   `recent-ready …@newest`.
+> - H-all every readable root ready (claim candidate): the last root flip received and the
+>   moment NEWEST's project lists none not imported, against the last `runtime-readable`.
+> - H4 click → first own content (guard): a scripted press on a ready row until
+>   `.tr-stage[data-ready]` holds that session's sittings and no import face, p50 and max, by
+>   phase (reading, finalizing, after canonical readiness); the opened-while-Pending face beside it.
+> - H5 receipt → paint (guard): per root that flips while its row is drawn, p50/p95/max. The wire
+>   leg, tree-admission `publishedS` → first flip frame received, is a diagnostic.
+> - H6 responsiveness (guard): per window — consent → all readable, → canonical readiness,
+>   → search readiness + 5 s — the longest animation frame, blocking time and its share, frames
+>   ≥ 100 ms; scripted input → next paint p98 and max (an interaction Event Timing does not report
+>   counts as 16 ms). Renderer heap, app working set and the probe's own cost are report-only.
+> - H7 stability (guard): rows moving ≥ 8 px with no input in the previous 500 ms, per list, and
+>   held-pill time; selection jumps and aim misses (the script's event-triggered aims) must be 0
+>   (`H7.invariant.pass`, beside I1 in `run.invariantsPass`). Pointer motion counts as input for
+>   now; moves, jumps and I1(3) are also reported counting only presses, wheel and keys, until
+>   that choice is made.
+> - H8 charts and search (guard): the selected project's panel unveiled and its card uncooked,
+>   every visible card, every card, the portfolio panel mounted, each with the lag after
+>   canonical readiness; the first full-text row after the script's fixed queries, timed from
+>   the later of the UI's own search-ready receipt and the query's last key (so the script's
+>   queue never enters it; the import-clock time and its lag after `search-ready` are
+>   report-only); the UI hit digest (sha256 of the drawn rows' order, kind and DOM id per query,
+>   never the query).
+> - I1 honesty (invariant, zero tolerance, any failure voids the run): no root drawn ready before
+>   its non-Pending frame arrived (or Pending drawn ready before the import ended); a ready row
+>   never reverts and no frame retracts a flip; selection changes only within 500 ms of input; no
+>   "Nothing readable yet" before rows; at the end the UI's roots, pending roots and per-project
+>   counts equal the daemon's `/api/sessions`, its Pending sessions equal the daemon's
+>   never-rostered count and its ready ones the roster (Σ `sessions_total`) and Σ
+>   `runtime-readable`, the drawn rows of NEWEST's project equal the daemon's count,
+>   Σ`sessions_done` reaches its total, the frozen sets are stable and exactly claude-code and
+>   codex are enrolled; the not-imported face names the run's course; the document passes the
+>   privacy gate. Each check reports how much it examined. The probe's self-test (a first meta
+>   frame received, both wraps, the parsing Worker and all three observers) must pass too.
+>   Checks (1) and the course check are self-consistency guards: `data-standing` derives from
+>   the same row data.
+> - D1 wait reasons, D2 order honesty, D3 transcript path and cost (report-only): consent →
+>   progress, status RTT and gaps, ready-count lag after flips, the sessions-per-root ratio of
+>   "· N ready", phase-seen lags and app launch; NEWEST's project rank and the unranked count at
+>   H1 + 0/5/30 s, recency inversion time, the newest big tree's root (named only in harness
+>   memory) received and drawn; each open's socket, hello, snapshot bytes, Worker parse, reveal
+>   and cover, re-covers, error covers, second sockets and meta cost.
+>
+> *Pairs* (the pair runner and evaluator come later; the run JSON is shaped for them). A UX
+> commit pins the rosettad binary and varies the renderer dist; a daemon commit (R1.5) pins the
+> dist and varies rosettad; same machine, window and device scale factor, the same script
+> version, interleaved runs a side behind the CPU-idle and swap guards, and the daemon-only R1
+> pair kept as its own gate, since a UI run's daemon carries the renderer's read load (UI
+> milestones are never compared with daemon-only runs). An A/A campaign sets each metric's noise
+> floor before any claim; claims and their thresholds are declared before the campaign; guards
+> hold within the A/A floor (at least one frame, 17 ms; 250 ms for poll-quantized values such as
+> H1's status part and H8); H7's selection jumps and aim misses and I1 are absolute. A pair is
+> void unless the logical digest, `sourceSetDigest`, the ranked digest and the UI hit digest are
+> equal in every run. *Targets* for the MacBook shape are design goals, not measurements: H1 ≤
+> metadata-ready + 0.5 s; H2 ≤ 6 s after R1.5 with paint lag p50 ≤ 150 ms; H3 ≤ 20 s / 60 s with
+> lag ≤ 300 ms; H4 p50 ≤ 300 ms and max ≤ 1 s; H5 p95 ≤ 100 ms and max ≤ 250 ms; H6 longest frame
+> ≤ 100 ms while streaming, input max ≤ 200 ms, blocking ≤ 2%; H7 project moves ≤ 10 per import;
+> H8 selected charts ≤ canonical-ready + 1.5 s, all ≤ + 10 s, first hit ≤ search-ready + 1 s. On
+> the R1 snapshot (first runs, 2026-11-03) every root is readable within about 3 s of consent,
+> about when the roll call's 2.5 s status poll first lets the columns up, so H2's and H3's painted
+> legs time the reader and H5 has no samples; the MacBook-shape corpus is what will move them.
+> One product failure already shows: in every reader-v1 run so far (4 of 4) an aim at a project
+> card missed, because the status answer that ends the import arrives between the rect read and
+> the press and the end-of-import reorder moves the card about 100 px, so H7's invariant fails
+> (with pointer motion not counted as input, the reader's run shows about the same 20 project
+> moves as the passive one).
+>
 > **Newest trees first (R1, 2026-11-02).** The organic MacBook trace of 1301bdb (M1 Max; 21.25 GB
 > of Claude Code in 13,477 files, 8,447 sessions, 1,139 root trees) published metadata at 2.7 s
 > but made nothing readable until 140.8 s — first-readable, both recent horizons and the runtime's

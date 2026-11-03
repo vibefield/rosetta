@@ -129,6 +129,7 @@ domain worktree "Worktree & git column" {
 domain perf "Performance evidence" {
   intent "Frozen before/after pairs authorize optimizations."
   contains mod:rosettad::{bench, brutal}, mod:rosetta_pipeline::instrument, path:tools/ingest-bench/
+  contains path:tools/r1-bench/, path:tools/ui-bench/
   contains mod:rosettad::ingest_metrics::recency
   see "docs/ARCHITECTURE.md#7-performance-playbook"
   see "CLAUDE.md#conventions"

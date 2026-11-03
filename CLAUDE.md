@@ -274,6 +274,8 @@ tools/groundtruth/         LAYER 1 dev tools (stdlib Python): fixture farm,
                            mock model, census, schema merge, HTML render,
                            boundary/artifact checks
 tools/ingest-bench/        local Electron cold-ingest profiler + read-only DB inspector
+tools/r1-bench/            the R1 frozen-pair kit (snapshot check, digests, ranked suite)
+tools/ui-bench/            on-screen readiness runs of the real app over a frozen snapshot
 atlas/                     graded design intent (*.atlas); see "Atlas" below
 crates/                    all Rust crates
   adapter-support/         permissive parser + replay-test primitives

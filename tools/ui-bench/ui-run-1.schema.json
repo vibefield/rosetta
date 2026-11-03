@@ -1,0 +1,768 @@
+{
+  "format": "ui-run-schema/1",
+  "about": "Whitelist schema of ui-run/1 (tools/ui-bench/privacy.mjs). Every key is declared; strings are enums, sha256 digests or identity forms only.",
+  "root": {
+    "obj": {
+      "format": {"enum": ["ui-run/1"]},
+      "script": {"obj": {"name": {"enum": ["reader-v1", "passive-v1"]}, "sha256": "sha256"}},
+      "identity": {
+        "obj": {
+          "rosettadSha256": "sha256", "distSha256": "sha256", "distFiles": "num", "electron": {"id": "version"},
+          "snapshot": {"obj": {"walkInputsDigest": "sha256", "manifestSha256": "sha256", "files": "num", "bytes": "num"}},
+          "harnessSha256": {
+            "map": "sha256",
+            "keys": [
+              "run_ui.mjs", "app-entry.mjs", "reader-context.mjs", "probe.js", "probe-worker.js", "drain.mjs",
+              "daemon-lines.mjs", "metrics.mjs", "privacy.mjs", "digests.mjs", "ui-run-1.schema.json",
+              "scripts/reader-v1.mjs", "scripts/passive-v1.mjs", "r1-bench/verify_r1_snapshot.js",
+              "r1-bench/r1_snapshot_lib.js", "r1-bench/r1_logical_digest.sql", "r1-bench/r1_cursor_order.sql",
+              "r1-bench/r1_ranked.py", "r1-bench/product-diagnostic-v3.json"
+            ]
+          },
+          "machine": {"obj": {"model": {"id": "machine-model"}, "os": {"id": "os-version"}, "cpus": "num", "memGb": "num"}},
+          "windowPx": {"id": "window"}, "dpr": "num?", "dprMeasured": "num?",
+          "deviations": {
+            "arr": {
+              "enum": [
+                "background-throttling-off", "worktree-ipc-denied", "favicon-ipc-denied", "browser-ipc-denied",
+                "external-links-denied", "network-local-only", "announce-dir-private", "fresh-profile",
+                "about-blank-before-load", "focus-emulated", "device-scale-factor-forced"
+              ]
+            },
+            "max": 16
+          },
+          "enrolled": {
+            "arr": {
+              "enum": ["antigravity", "claude-code", "codex", "copilot", "grok", "hermes", "kimi-code", "opencode", "pi"]
+            },
+            "max": 16
+          }
+        }
+      },
+      "run": {
+        "obj": {
+          "startedAt": {"id": "iso-time"},
+          "outcome": {"enum": ["complete", "incomplete", "timeout", "failed"]},
+          "outcomeReasons": {
+            "arr": {
+              "enum": [
+                "app-fatal", "app-exited", "daemon-exited", "script-error", "daemon-did-not-stop", "dpr-mismatch",
+                "script-step-timeout"
+              ]
+            },
+            "max": 16
+          },
+          "wallS": "num",
+          "daemonExit": {"obj": {"code": "num?", "signal": {"enum": ["SIGINT", "SIGKILL", "SIGTERM"], "null": true}}},
+          "electronExit": "num?",
+          "guard": {
+            "obj": {
+              "cpuIdleAtStart": "num", "waitedS": "num", "proceededOverGuard": "bool", "load1": "num",
+              "idleMin": "num", "swapMbBefore": "num?", "swapMbAfter": "num?", "freeGbBefore": "num"
+            }
+          },
+          "snapshotVerify": {"obj": {"ok": "bool", "files": "num", "bytes": "num", "wallMs": "num"}},
+          "scriptOk": "bool", "scriptTimeouts": "num", "selfTestPass": "bool", "invariantsPass": "bool",
+          "stubbed": {
+            "map": "num",
+            "keys": [
+              "ah-worktree-open", "ah-worktree-git-facts", "ah-worktree-file-action", "ah-favicon", "ah-file-browsers",
+              "ah-file-open-browser-preview", "shell-open-external", "network-blocked", "foreign-binding-calls"
+            ],
+            "null": true
+          },
+          "window": {
+            "obj": {"contentW": "num", "contentH": "num", "dpr": "num", "displayW": "num", "displayH": "num"},
+            "null": true
+          },
+          "page": {
+            "obj": {
+              "dpr": "num?", "innerW": "num?", "innerH": "num?", "focusedAtStart": "bool",
+              "focusedAtRollCall": "bool?"
+            },
+            "null": true
+          },
+          "inputs": {"map": "num", "keys": ["move", "down", "up", "wheel", "key", "key-up", "shortcut"]},
+          "marks": {
+            "arr": {
+              "tuple": [
+                "num?",
+                {
+                  "enum": [
+                    "enrolled-ok", "enrolled-mismatch", "consent-begin", "select-newest-project", "open-newest",
+                    "open-pending", "open-recent", "aim-horizon", "reselect", "open-finalizing", "open-post-canonical",
+                    "search-open", "search-query", "search-close", "park", "done", "newest-never-ready",
+                    "horizon-via-all-readable", "timeout-cols", "timeout-frozen", "timeout-newest-ready",
+                    "timeout-open", "timeout-horizon", "timeout-all-readable", "timeout-canonical", "timeout-search",
+                    "timeout-sheet", "timeout-search-ready", "timeout-charts", "absent:begin", "absent:kind",
+                    "absent:newest-project", "absent:other-project", "absent:newest-row", "absent:recent-next",
+                    "absent:ready-next", "absent:pending-row", "absent:park"
+                  ]
+                }
+              ]
+            },
+            "max": 1000
+          },
+          "newestGiantKnown": "bool", "newestGiantTreeBytes": "num?"
+        }
+      },
+      "clocks": {
+        "obj": {
+          "method": {"enum": ["clock-line", "metadata-ready-anchor", "none"]},
+          "t0Kind": {"enum": ["consent-granted", "begin-click", "none"]},
+          "rendererOffsetMs": "num?", "rendererRttMs": "num?", "rendererOffsetApplied": "bool", "mainOffsetMs": "num?",
+          "mainRttMs": "num?", "mainOffsetApplied": "bool", "rendererDriftMs": "num?", "mainDriftMs": "num?",
+          "roundedMilestones": "num",
+          "daemonReceiptLagMs": {"obj": {"min": "num?", "p50": "num?", "n": "num"}},
+          "estimatedErrorMs": "num?"
+        },
+        "null": true
+      },
+      "selfTest": {
+        "obj": {
+          "firstMeta": "bool", "wsWrapped": "bool", "fetchWrapped": "bool",
+          "worker": {"enum": ["none", "worker", "failed"]}, "loaf": "bool", "eventTiming": "bool",
+          "layoutShift": "bool", "pass": "bool"
+        },
+        "null": true
+      },
+      "daemon": {
+        "obj": {
+          "milestonesS": {
+            "map": "num?",
+            "keys": [
+              "consent-granted", "metadata-ready", "first-session-complete", "first-readable", "recent-ready:24h",
+              "recent-ready:7d", "recent-ready:24h@newest", "recent-ready:7d@newest", "newest-trees-ready",
+              "newest-giant-ready", "small-recent-ready:24h@newest", "small-recent-ready:7d@newest",
+              "runtime-metadata-public:claude-code", "runtime-metadata-public:codex", "runtime-readable:claude-code",
+              "runtime-readable:codex", "canonical-ready", "memory-peak", "search-ready", "search-failed"
+            ]
+          },
+          "milestonesMs": {
+            "map": "num?",
+            "keys": [
+              "consent-granted", "metadata-ready", "first-session-complete", "first-readable", "recent-ready:24h",
+              "recent-ready:7d", "recent-ready:24h@newest", "recent-ready:7d@newest", "newest-trees-ready",
+              "newest-giant-ready", "small-recent-ready:24h@newest", "small-recent-ready:7d@newest",
+              "runtime-metadata-public:claude-code", "runtime-metadata-public:codex", "runtime-readable:claude-code",
+              "runtime-readable:codex", "canonical-ready", "memory-peak", "search-ready", "search-failed"
+            ],
+            "null": true
+          },
+          "horizonSessions": {
+            "map": "num?",
+            "keys": [
+              "consent-granted", "metadata-ready", "first-session-complete", "first-readable", "recent-ready:24h",
+              "recent-ready:7d", "recent-ready:24h@newest", "recent-ready:7d@newest", "newest-trees-ready",
+              "newest-giant-ready", "small-recent-ready:24h@newest", "small-recent-ready:7d@newest",
+              "runtime-metadata-public:claude-code", "runtime-metadata-public:codex", "runtime-readable:claude-code",
+              "runtime-readable:codex", "canonical-ready", "memory-peak", "search-ready", "search-failed"
+            ]
+          },
+          "newestGiantTreeBytes": "num?",
+          "treeAdmission": {"obj": {"batches": "num", "roots": "num", "sessions": "num", "maxLockHeldMs": "num"}},
+          "memoryPeak": {
+            "obj": {
+              "footprintMb": "num?", "residentMb": "num?", "swapUsedMb": "num?", "swapouts": "num?",
+              "pageouts": "num?"
+            },
+            "null": true
+          },
+          "runtimeReadableSessions": "num", "metadataPublicSessions": "num?", "unknownMilestones": "num",
+          "stdoutLines": "num", "jsonEvents": "num", "panicLines": "num", "stderrLines": "num",
+          "stderrLockedLines": "num"
+        }
+      },
+      "metrics": {
+        "obj": {
+          "H1": {
+            "obj": {
+              "role": {"enum": ["guard"]}, "ms": "num?", "projects": "num?", "metaPushMs": "num?",
+              "statusPollMs": "num?", "lagVsMetadataReadyMs": "num?",
+              "reached": {"obj": {"ms": {"enum": ["yes", "not-reached", "not-applicable"]}}}
+            }
+          },
+          "H2": {
+            "obj": {
+              "role": {"enum": ["claim-candidate"]}, "ms": "num?", "receiptMs": "num?", "heldReadyMs": "num?",
+              "firstDrawMs": "num?",
+              "firstDrawStanding": {"enum": ["ready", "not-imported", "none"]},
+              "indexAtFirstDraw": "num?", "flippedBeforeDrawn": "bool?", "newestExcluded": "bool",
+              "lag": {"obj": {"role": {"enum": ["guard"]}, "ms": "num?", "rawMs": "num?"}},
+              "reached": {
+                "obj": {
+                  "ms": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "receiptMs": {"enum": ["yes", "not-reached", "not-applicable"]}
+                }
+              }
+            }
+          },
+          "H3": {
+            "obj": {
+              "role": {"enum": ["claim-candidate"]}, "h24": {"ref": "horizon"}, "h7d": {"ref": "horizon"},
+              "reached": {
+                "obj": {
+                  "h24.receiptMs": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "h24.paintedSelMs": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "h7d.receiptMs": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "h7d.paintedSelMs": {"enum": ["yes", "not-reached", "not-applicable"]}
+                }
+              }
+            }
+          },
+          "Hall": {
+            "obj": {
+              "role": {"enum": ["claim-candidate"]}, "receiptMs": "num?", "paintedSelMs": "num?", "daemonMs": "num?",
+              "lagVsDaemonMs": "num?", "neverRostered": "num?", "metadataOnlyRoots": "num?",
+              "reached": {
+                "obj": {
+                  "receiptMs": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "paintedSelMs": {"enum": ["yes", "not-reached", "not-applicable"]}
+                }
+              }
+            }
+          },
+          "H4": {
+            "obj": {
+              "role": {"enum": ["guard"]}, "n": "num", "unresolved": "num", "p50Ms": "num?", "maxMs": "num?",
+              "byPhase": {
+                "obj": {
+                  "reading": {"ref": "phaseStat"}, "finalizing": {"ref": "phaseStat"},
+                  "postCanonical": {"ref": "phaseStat"}
+                }
+              },
+              "pendingFace": {"obj": {"role": {"enum": ["guard"]}, "n": "num", "p50Ms": "num?", "maxMs": "num?"}},
+              "reached": {
+                "obj": {
+                  "samples": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "pendingFace": {"enum": ["yes", "not-reached", "not-applicable"]}
+                }
+              }
+            }
+          },
+          "H5": {
+            "obj": {
+              "role": {"enum": ["guard"]}, "n": "num", "p50Ms": "num?", "p95Ms": "num?", "maxMs": "num?",
+              "reached": {"obj": {"samples": {"enum": ["yes", "not-reached", "not-applicable"]}}}
+            }
+          },
+          "H6": {
+            "obj": {
+              "role": {"enum": ["guard"]}, "loafThresholdMs": "num",
+              "byWindow": {"obj": {"streaming": {"ref": "window"}, "finalizing": {"ref": "window"}, "post": {"ref": "window"}}},
+              "input": {
+                "obj": {
+                  "role": {"enum": ["guard"]}, "scripted": "num", "reported": "num", "p98Ms": "num?", "maxMs": "num?",
+                  "unreportedAsMs": "num"
+                }
+              },
+              "report": {
+                "obj": {
+                  "role": {"enum": ["report-only"]}, "heapPeakMb": "num?", "appWorkingSetPeakMb": "num?",
+                  "probeCostKind": {"enum": ["js-self-time"]}, "probeMainMs": "num?", "probePostMs": "num?",
+                  "probePostMb": "num?", "probePasses": "num?", "probeErrors": "num?", "probeMainPctOfWall": "num?",
+                  "probeBudgetPct": "num", "probeWithinBudget": "bool?", "workerParseMs": "num?"
+                }
+              },
+              "reached": {
+                "obj": {
+                  "longestFrame": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "input": {"enum": ["yes", "not-reached", "not-applicable"]}
+                }
+              }
+            }
+          },
+          "H7": {
+            "obj": {
+              "role": {"enum": ["guard"]}, "projectsMoves": "num?", "projectsPx": "num?", "sessionsMoves": "num?",
+              "sessionsPx": "num?",
+              "discreteInput": {
+                "obj": {
+                  "role": {"enum": ["report-only"]}, "projectsMoves": "num?", "projectsPx": "num?",
+                  "sessionsMoves": "num?", "sessionsPx": "num?", "selectionJumps": "num?"
+                }
+              },
+              "heldMs": {"ref": "twoLists"}, "pillShown": {"ref": "twoLists"}, "layoutShift": "num?",
+              "layoutShiftNoInput": "num?",
+              "invariant": {
+                "obj": {
+                  "role": {"enum": ["invariant"]}, "pass": "bool", "selectionJumps": "num?", "aims": "num",
+                  "aimMisses": "num", "missedOtherRow": "num", "missedNoRow": "num",
+                  "missedTargetShiftPx": {"arr": "num?", "max": 1000}
+                }
+              },
+              "reached": {
+                "obj": {
+                  "moves": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "aims": {"enum": ["yes", "not-reached", "not-applicable"]}
+                }
+              }
+            }
+          },
+          "H8": {
+            "obj": {
+              "role": {"enum": ["guard"]}, "chartsSelectedMs": "num?", "chartsVisibleMs": "num?",
+              "chartsAllMs": "num?", "portfolioMs": "num?", "chartsSelectedLagMs": "num?", "chartsAllLagMs": "num?",
+              "searchLagMs": "num?", "queries": "num", "typedToHitMs": {"arr": "num?", "max": 16},
+              "rows": {"arr": "num?", "max": 16}, "hitDigest": "sha256?",
+              "report": {
+                "obj": {
+                  "role": {"enum": ["report-only"]}, "searchHitMs": "num?", "searchAfterDaemonReadyMs": "num?",
+                  "typedAfterUiReadyMs": "num?"
+                }
+              },
+              "reached": {
+                "obj": {
+                  "chartsSelectedMs": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "chartsVisibleMs": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "chartsAllMs": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "portfolioMs": {"enum": ["yes", "not-reached", "not-applicable"]},
+                  "searchLagMs": {"enum": ["yes", "not-reached", "not-applicable"]}
+                }
+              }
+            }
+          },
+          "I1": {
+            "obj": {
+              "role": {"enum": ["invariant"]}, "pass": "bool",
+              "checks": {
+                "obj": {
+                  "c1ReadyBeforeReceipt": {"obj": {"violations": "num", "exercised": "num", "checkedRows": "num", "pass": "bool"}},
+                  "c2NeverReverts": {"ref": "check"},
+                  "c3SelectionOnlyByInput": {
+                    "obj": {
+                      "violations": "num", "exercised": "num", "selectionChanges": "num",
+                      "violationsDiscreteInput": "num", "pass": "bool"
+                    }
+                  },
+                  "c4NoFlashOfEmpty": {
+                    "obj": {
+                      "violations": "num", "exercised": "num", "emptyShown": "num", "indexingShown": "num",
+                      "pass": "bool"
+                    }
+                  },
+                  "c5EndState": {
+                    "obj": {
+                      "violations": "num", "exercised": "num", "pass": "bool", "pendingRoots": "num?",
+                      "pendingSessions": "num?", "metadataOnlyRoots": "num?", "neverRostered": "num?",
+                      "daemonNeverRosteredSessions": "num?", "daemonMetadataSessions": "num?",
+                      "rosterSessions": "num?", "daemonPendingRoots": "num?", "projectMismatches": "num?",
+                      "newestProjectRoots": "num?", "newestProjectDaemonRoots": "num?",
+                      "renderedNewestProjectRows": "num?", "readyCountDone": "num?", "readyCountTotal": "num?",
+                      "uiReadySessions": "num?", "daemonReadableSessions": "num?", "membershipStable": "bool?",
+                      "enrolledExact": "bool", "daemonListTruncated": "bool?"
+                    }
+                  },
+                  "c6Privacy": {"ref": "check"}, "c7PendingFaceCourse": {"ref": "check"}
+                },
+                "opt": ["c6Privacy"]
+              }
+            }
+          },
+          "D1": {
+            "obj": {
+              "role": {"enum": ["report-only"]}, "consentToProgressMs": "num?", "beginToConsentGrantedMs": "num?",
+              "statusRtt": {"obj": {"n": "num", "p50Ms": "num?", "p99Ms": "num?", "aborted": "num?", "maxGapMs": "num?"}},
+              "readyCountLag": {"ref": "dist"},
+              "countUnitRatio": {"obj": {"at25": "num?", "at50": "num?", "at100": "num?"}},
+              "phases": {
+                "arr": {
+                  "tuple": [
+                    "num?",
+                    {
+                      "enum": [
+                        "disconnected", "complete", "discovering", "metadata", "restoring", "reading", "organizing",
+                        "finalizing", "publishing", "paused", "pausing", "failed", "search_failed", "search_waiting",
+                        "search_indexing", "search_optimizing", "search_validating", "search_publishing", "none",
+                        "other"
+                      ]
+                    }
+                  ]
+                },
+                "max": 200
+              },
+              "phaseSeenLagMs": {"obj": {"finalizing": "num?", "canonical": "num?", "search": "num?"}},
+              "titleRowsAfterSearchMs": "num?",
+              "appLaunch": {
+                "obj": {
+                  "windowMs": "num?", "loadedMs": "num?", "firstFrameMs": "num?", "rollCallMs": "num?",
+                  "rollCallReadyMs": "num?"
+                }
+              }
+            }
+          },
+          "D2": {
+            "obj": {
+              "role": {"enum": ["report-only"]},
+              "newestProjectRank": {"arr": {"tuple": ["num", "num?", "num?", "num?"]}, "max": 8},
+              "inversionSelectedMs": "num?", "inversionCorpusMs": "num?",
+              "newestGiant": {
+                "obj": {"known": "bool", "receiptMs": "num?", "paintMs": "num?", "daemonMs": "num?", "lagVsDaemonMs": "num?"}
+              },
+              "notImportedSelected": {"arr": {"ref": "pair"}, "max": 100000}
+            }
+          },
+          "D3": {
+            "obj": {
+              "role": {"enum": ["report-only"]},
+              "opens": {
+                "arr": {
+                  "obj": {
+                    "standing": {"enum": ["ready", "not-imported", "unavailable"]},
+                    "phase": {"enum": ["reading", "finalizing", "postCanonical"]},
+                    "clickToSocketMs": "num?", "socketToOpenMs": "num?", "openToHelloMs": "num?",
+                    "helloToSnapshotMs": "num?", "snapshotBytes": "num?", "parseMs": "num?",
+                    "snapshotToRevealMs": "num?", "revealToContentMs": "num?", "coverMs": "num?",
+                    "coverLabel": {"enum": ["error", "team", "seeking", "preparing", "loading", "other", "none"]},
+                    "readerWaitMs": "num?"
+                  }
+                },
+                "max": 64
+              },
+              "covers": "num?", "coversOver100": "num?",
+              "coverLabels": {"map": "num", "keys": ["error", "team", "seeking", "preparing", "loading", "other"]},
+              "recovers": "num?", "errorCovers": "num?", "sessionSockets": "num?", "secondSockets": "num?",
+              "sessionResyncs": "num?", "wsErrorFrames": "num?", "http503": "num?", "httpNotOk": "num?",
+              "longestSnapshotWaitMs": "num?",
+              "meta": {
+                "obj": {
+                  "frames": "num?", "snapshots": "num?", "mutations": "num?", "resyncs": "num?", "bytes": "num?",
+                  "flipFrames": "num?", "sockets": "num?"
+                }
+              },
+              "wire": {"ref": "dist"}, "uiLoadTax": "num?"
+            }
+          }
+        },
+        "null": true
+      },
+      "equality": {
+        "obj": {
+          "logicalTotal": "sha256?", "strictTotal": "sha256?", "strictNoidTotal": "sha256?",
+          "strictNoidRTotal": "sha256?", "surrogateTotal": "sha256?", "logicalOutSha256": "sha256?",
+          "cursorOrderOutSha256": "sha256?",
+          "counts": {
+            "map": "num",
+            "keys": [
+              "sessions", "projects", "messages", "tool_rows", "usage_bearing_messages", "session_usage_rows",
+              "session_usage_total_rows", "usage_bucket_rows", "file_edit_rows", "git_commit_rows", "plan_rows",
+              "task_rows", "workflow_run_rows", "workflow_journal_rows", "html_artifact_rows", "drift_agg_rows",
+              "drift_seen_rows", "ingest_cursor_rows", "ingest_cursor_active", "ingest_cursor_sqlite_members_active",
+              "agent_runtime_rows", "rows_with_asset_refs:message.detail", "rows_with_asset_refs:message.tool_detail",
+              "rows_with_asset_refs:html_artifact.asset", "message_type:agent", "message_type:collaboration",
+              "message_type:notice", "message_type:summary", "message_type:thinking", "message_type:tool_use",
+              "message_type:user", "message_type:tool_result", "message_type:reasoning", "message_type:plan",
+              "message_type:task", "message_type:artifact", "session_stream_state:pending",
+              "session_stream_state:streaming", "session_stream_state:indexed", "session_kind:antigravity",
+              "session_kind:claude-code", "session_kind:codex", "session_kind:copilot", "session_kind:grok",
+              "session_kind:hermes", "session_kind:kimi-code", "session_kind:opencode", "session_kind:pi"
+            ],
+            "null": true
+          },
+          "sourceSetDigest": "sha256?", "sourceDigest": "sha256?", "metaDigest": "sha256?", "entryDigest": "sha256?",
+          "ledgerVerifyOk": "bool", "rankedIdsSha256": "sha256?", "rankedSha256": "sha256?", "rankedWarmExit": "num?",
+          "hitDigest": "sha256?", "finalRoots": "num?", "finalReadySessions": "num?"
+        }
+      },
+      "privacy": {
+        "obj": {
+          "schema": {"enum": ["pending", "pass", "fail"]}, "forbiddenScan": {"enum": ["pending", "pass", "fail"]},
+          "forbiddenValues": "num", "forbiddenSource": {"enum": ["run-db", "unavailable"]}, "schemaSha256": "sha256?"
+        },
+        "opt": ["forbiddenSource", "schemaSha256"]
+      },
+      "probe": {
+        "obj": {
+          "format": {"enum": ["ui-probe/1"]},
+          "selfTest": {
+            "obj": {
+              "firstMetaAt": "num?", "wsWrapped": "bool", "fetchWrapped": "bool",
+              "worker": {"enum": ["none", "worker", "failed"]}, "loaf": "bool", "eventTiming": "bool",
+              "layoutShift": "bool"
+            }
+          },
+          "page": {
+            "obj": {
+              "firstFrameAt": "num?", "firstRollCallAt": "num?", "rollCallReadyAt": "num?", "dpr": "num?",
+              "innerW": "num?", "innerH": "num?", "focusedAtStart": "bool", "focusedAtRollCall": "bool?"
+            }
+          },
+          "faces": {
+            "arr": {
+              "tuple": [
+                "num",
+                {
+                  "enum": [
+                    "connecting", "not-answering", "consent", "cold-start", "roll-call-looking", "roll-call-ready",
+                    "roll-call-starting", "cols", "none", "other"
+                  ]
+                }
+              ]
+            },
+            "max": 1000
+          },
+          "states": {
+            "arr": {
+              "tuple": [
+                "num",
+                {
+                  "enum": [
+                    "disconnected", "complete", "discovering", "metadata", "restoring", "reading", "organizing",
+                    "finalizing", "publishing", "paused", "pausing", "failed", "search_failed", "search_waiting",
+                    "search_indexing", "search_optimizing", "search_validating", "search_publishing", "none", "other"
+                  ]
+                }
+              ]
+            },
+            "max": 1000
+          },
+          "readyCount": {"arr": {"ref": "pair"}, "max": 100000},
+          "readyRoots": {"arr": {"ref": "triple"}, "max": 100000},
+          "notImported": {"arr": {"ref": "pair"}, "max": 100000},
+          "marks": {
+            "arr": {
+              "tuple": [
+                "num",
+                {
+                  "enum": [
+                    "enrolled-ok", "enrolled-mismatch", "consent-begin", "select-newest-project", "open-newest",
+                    "open-pending", "open-recent", "aim-horizon", "reselect", "open-finalizing", "open-post-canonical",
+                    "search-open", "search-query", "search-close", "park", "done", "newest-never-ready",
+                    "horizon-via-all-readable", "timeout-cols", "timeout-frozen", "timeout-newest-ready",
+                    "timeout-open", "timeout-horizon", "timeout-all-readable", "timeout-canonical", "timeout-search",
+                    "timeout-sheet", "timeout-search-ready", "timeout-charts", "absent:begin", "absent:kind",
+                    "absent:newest-project", "absent:other-project", "absent:newest-row", "absent:recent-next",
+                    "absent:ready-next", "absent:pending-row", "absent:park"
+                  ]
+                }
+              ]
+            },
+            "max": 1000
+          },
+          "inputs": {"arr": {"tuple": ["num", {"enum": ["pointerdown", "pointerup", "wheel", "keydown"]}]}, "max": 100000},
+          "status": {
+            "obj": {
+              "rtt": {"arr": {"ref": "pair"}, "max": 100000}, "aborted": "num", "firstNonConsentAt": "num?",
+              "firstCanonicalAt": "num?", "firstSearchReadyAt": "num?", "firstLiveAt": "num?",
+              "metaReadyAtWall": "num?",
+              "firstPostConsentPhase": {
+                "enum": [
+                  "discovering", "awaiting_consent", "backfilling", "metadata_ready", "restoring", "finalizing",
+                  "publishing", "live", "none", "other"
+                ],
+                "null": true
+              },
+              "last": {
+                "obj": {
+                  "phase": {
+                    "enum": [
+                      "discovering", "awaiting_consent", "backfilling", "metadata_ready", "restoring", "finalizing",
+                      "publishing", "live", "none", "other"
+                    ]
+                  },
+                  "canonical": "bool",
+                  "search": {"enum": ["ready", "building", "catching-up", "stale", "failed", "none", "other"]},
+                  "done": "num", "total": "num",
+                  "run": {"enum": ["running", "pausing", "paused", "succeeded", "failed", "none", "other"]}
+                },
+                "null": true
+              },
+              "kinds": {
+                "arr": {
+                  "enum": [
+                    "antigravity", "claude-code", "codex", "copilot", "grok", "hermes", "kimi-code", "opencode", "pi",
+                    "other"
+                  ]
+                },
+                "max": 16
+              },
+              "ingestKinds": {
+                "arr": {
+                  "enum": [
+                    "antigravity", "claude-code", "codex", "copilot", "grok", "hermes", "kimi-code", "opencode", "pi",
+                    "other"
+                  ]
+                },
+                "max": 16
+              }
+            }
+          },
+          "meta": {
+            "obj": {
+              "sockets": "num", "firstProjectFrameAt": "num?", "flipFrames": {"arr": "num", "max": 100000},
+              "selFlips": {"arr": "num", "max": 100000}, "retractions": "num"
+            }
+          },
+          "frozen": {
+            "obj": {"at": "num", "roots": "num", "metaOnly": "num", "newestKnown": "bool", "projectRoots": "num"},
+            "null": true
+          },
+          "h1": {"obj": {"paintAt": "num", "projects": "num"}, "null": true},
+          "h2": {
+            "obj": {
+              "firstDrawAt": "num?",
+              "firstDrawStanding": {"enum": ["ready", "not-imported"], "null": true},
+              "indexAtFirstDraw": "num?", "paintReadyAt": "num?", "receiptAt": "num?", "heldReadyMs": "num?",
+              "newestExcluded": "bool"
+            }
+          },
+          "h3": {
+            "obj": {
+              "h24ReceiptAt": "num?", "h7dReceiptAt": "num?", "n24": "num?", "n7d": "num?", "n24Sel": "num?",
+              "n7dSel": "num?", "h24PaintSelAt": "num?", "h7dPaintSelAt": "num?", "excluded24": "num?",
+              "excluded7d": "num?", "excludedSel": "num?", "h24ViaCaptureOver": "bool", "h7dViaCaptureOver": "bool"
+            }
+          },
+          "hall": {"obj": {"paintSelAt": "num?"}},
+          "opens": {
+            "arr": {
+              "obj": {
+                "clickAt": "num",
+                "standing": {"enum": ["ready", "not-imported", "unavailable"]},
+                "phase": {
+                  "enum": [
+                    "discovering", "awaiting_consent", "backfilling", "metadata_ready", "restoring", "finalizing",
+                    "publishing", "live", "none", "other"
+                  ]
+                },
+                "canonical": "bool", "contentAt": "num?", "faceAt": "num?",
+                "course": {"enum": ["none", "newest-first", "resumed", "stopped", "other"]},
+                "coverAt": "num?", "coverEndAt": "num?",
+                "label": {"enum": ["error", "team", "seeking", "preparing", "loading", "other", "none"]},
+                "revealAt": "num?", "wsAt": "num?", "openAt": "num?", "helloAt": "num?", "snapAt": "num?",
+                "snapBytes": "num?", "parseMs": "num?"
+              }
+            },
+            "max": 64
+          },
+          "h5": {"arr": {"ref": "pair"}, "max": 100000}, "loaf": {"arr": {"ref": "triple"}, "max": 100000},
+          "events": {
+            "arr": {
+              "tuple": [
+                "num",
+                "num",
+                {
+                  "enum": [
+                    "pointerdown", "pointerup", "click", "keydown", "keyup", "keypress", "input", "mousedown",
+                    "mouseup"
+                  ]
+                },
+                "num",
+                "num"
+              ]
+            },
+            "max": 100000
+          },
+          "layoutShift": {"obj": {"sum": "num", "sumNoInput": "num", "n": "num"}},
+          "h7": {
+            "obj": {
+              "projects": {"ref": "listMoves"}, "sessions": {"ref": "listMoves"}, "selectionJumps": "num",
+              "selectionJumpsDiscrete": "num",
+              "aims": {
+                "arr": {
+                  "tuple": [
+                    "num",
+                    {
+                      "enum": [
+                        "begin", "kind", "newest-project", "other-project", "newest-row", "recent-next", "ready-next",
+                        "pending-row"
+                      ]
+                    },
+                    "num",
+                    "num?",
+                    {"enum": ["aimed", "other-row", "none"]}
+                  ]
+                },
+                "max": 1000
+              },
+              "heldMs": {"ref": "twoLists"}, "pillShown": {"ref": "twoLists"}
+            }
+          },
+          "h8": {
+            "obj": {
+              "chartsSelectedAt": "num?", "chartsVisibleAt": "num?", "chartsAllAt": "num?", "portfolioAt": "num?",
+              "search": {
+                "arr": {
+                  "obj": {
+                    "q": "num", "beginAt": "num", "typedAt": "num?", "firstFulltextAt": "num?", "firstTitleAt": "num?",
+                    "quietAt": "num?", "rows": "num?", "fulltextRows": "num?", "digest": "sha256?"
+                  }
+                },
+                "max": 16
+              }
+            }
+          },
+          "i1": {
+            "obj": {
+              "c1Before": "num", "c1PendingReady": "num", "c2": "num", "c3": "num", "c3Discrete": "num",
+              "c3ByList": {"ref": "twoLists"}, "c3Frames": "num", "selectionChanges": "num", "c4": "num",
+              "c4Shown": "num", "c4Indexing": "num", "c4Opens": "num", "c7": "num", "c7Faces": "num",
+              "checkedRows": "num"
+            }
+          },
+          "d1": {
+            "obj": {"beginAt": "num?", "progressAt": "num?", "titleRowsAfterSearchMs": "num", "sheetAfterSearch": "bool"}
+          },
+          "d2": {
+            "obj": {
+              "rank": {"arr": {"tuple": ["num", "num?", "num?", "num?"]}, "max": 8},
+              "inversionSelMs": "num", "selShown": "bool", "giantReceiptAt": "num?", "giantPaintAt": "num?",
+              "giantKnown": "bool"
+            }
+          },
+          "d3": {
+            "obj": {
+              "covers": "num", "coversOver100": "num",
+              "labels": {"map": "num", "keys": ["error", "team", "seeking", "preparing", "loading", "other"]},
+              "recovers": "num", "errorCovers": "num", "sockets": "num", "secondSockets": "num",
+              "sessionResyncs": "num", "wsErrorFrames": "num", "http503": "num", "httpNotOk": "num",
+              "longestSnapshotWaitMs": "num?"
+            }
+          },
+          "renderedNewestProjectRows": "num?",
+          "cost": {
+            "obj": {
+              "mainMs": "num", "postMs": "num", "postBytes": "num", "posts": "num", "passes": "num", "passMs": "num",
+              "apiMs": "num", "observerCalls": "num", "errors": "num"
+            }
+          },
+          "end": {
+            "obj": {
+              "rootsSeen": "num?", "readyAll": "num?", "sessionsSeen": "num?", "pendingSessions": "num?",
+              "pendingRoots": "num?", "metaOnlyRoots": "num?", "neverRostered": "num?", "lastRootReady": "num?",
+              "daemonRoots": "num?", "daemonPending": "num?", "projectMismatches": "num?",
+              "newestProjectRoots": "num?", "newestProjectDaemonRoots": "num?", "inversionMs": "num?",
+              "workerParseMs": "num?", "frames": "num?", "snapshots": "num?", "mutations": "num?", "resyncs": "num?",
+              "metaBytes": "num?", "statusBodies": "num?", "retractions": "num?", "daemonTruncated": "bool?",
+              "membershipStable": "bool?"
+            },
+            "null": true
+          },
+          "finishedAt": "num"
+        },
+        "null": true
+      }
+    }
+  },
+  "defs": {
+    "pair": {"tuple": ["num?", "num?"]}, "triple": {"tuple": ["num?", "num?", "num?"]},
+    "dist": {"obj": {"n": "num", "p50Ms": "num?", "p95Ms": "num?", "maxMs": "num?"}},
+    "window": {
+      "obj": {
+        "wallMs": "num?", "longestMs": "num?", "blockingMs": "num?", "blockingPct": "num?", "n100": "num?",
+        "nLoaf": "num?"
+      }
+    },
+    "phaseStat": {"obj": {"n": "num", "p50Ms": "num?", "maxMs": "num?"}},
+    "horizon": {
+      "obj": {
+        "receiptMs": "num?", "paintedSelMs": "num?", "roots": "num?", "rootsInSelected": "num?",
+        "neverRosteredExcluded": "num?", "viaCaptureOver": "bool", "daemonHorizonSessions": "num?", "daemonMs": "num?",
+        "lagVsDaemonMs": "num?"
+      }
+    },
+    "check": {"obj": {"violations": "num", "exercised": "num", "pass": "bool"}},
+    "listMoves": {"obj": {"moves": "num", "px": "num", "movesDiscrete": "num", "pxDiscrete": "num"}},
+    "twoLists": {"obj": {"projects": "num?", "sessions": "num?"}}
+  }
+}
