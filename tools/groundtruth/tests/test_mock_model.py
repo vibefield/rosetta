@@ -191,6 +191,45 @@ class MockModelTests(unittest.TestCase):
         self.assertIn("functionCall", text)
         self.assertIn("run_command", text)
 
+    def test_gemini_tool_call_follows_the_declared_schema(self) -> None:
+        script = _gemini_script(
+            {
+                "contents": [{"role": "user", "parts": [{"text": "please [use-tool]"}]}],
+                "tools": [
+                    {
+                        "functionDeclarations": [
+                            {
+                                "name": "run_command",
+                                "parametersJsonSchema": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "properties": {
+                                        "CommandLine": {"type": "string"},
+                                        "IsDaemon": {"type": "boolean"},
+                                        "WaitMsBeforeAsync": {"type": "integer"},
+                                        "toolSummary": {"type": "string"},
+                                    },
+                                    "required": ["CommandLine", "toolSummary", "WaitMsBeforeAsync"],
+                                },
+                            }
+                        ]
+                    }
+                ],
+            }
+        )
+        self.assertEqual(
+            script,
+            (
+                "function_call",
+                "run_command",
+                {
+                    "CommandLine": "echo rosetta-mock",
+                    "toolSummary": "Echo command check",
+                    "WaitMsBeforeAsync": 5000,
+                },
+            ),
+        )
+
     def test_gemini_function_response_closes_loop(self) -> None:
         script = _gemini_script(
             {
