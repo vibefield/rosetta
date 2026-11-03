@@ -442,7 +442,8 @@ fn project(
             }
         }
         EventPayload::SessionAutopilotObjectiveChanged(_)
-        | EventPayload::SessionUsageCheckpoint(_) => {}
+        | EventPayload::SessionUsageCheckpoint(_)
+        | EventPayload::SessionUsageRecord(_) => {}
         // Permission-mode changes are session settings, not timeline content.
         EventPayload::SessionPermissionsChanged(_) => {}
     }
@@ -973,6 +974,7 @@ fn record_kind(payload: &EventPayload) -> &'static str {
         EventPayload::SessionScheduleRearmed(_) => "session.schedule_rearmed",
         EventPayload::SessionTaskComplete(_) => "session.task_complete",
         EventPayload::SessionUsageCheckpoint(_) => "session.usage_checkpoint",
+        EventPayload::SessionUsageRecord(_) => "session.usage_record",
         EventPayload::SessionWarning(_) => "session.warning",
         EventPayload::SessionError(_) => "session.error",
         EventPayload::SessionWorkspaceFileChanged(_) => "session.workspace_file_changed",

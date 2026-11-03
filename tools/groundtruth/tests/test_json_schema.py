@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from tools.groundtruth.json_schema import (
+    copilot_schema_candidates,
     persisted_session_events,
     schema_shape,
     session_events_writer_doc,
@@ -64,6 +67,30 @@ class JsonSchemaTests(unittest.TestCase):
         document = session_events_writer_doc(schema, agent="copilot", version="1.0.80")
         self.assertEqual(document["evidence"], "writer")
         self.assertEqual(document["streams"][0]["id"], "events")
+
+    def test_copilot_schema_from_shipped_or_self_extracted_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            install = Path(directory)
+            self.assertEqual(copilot_schema_candidates(install, "1.0.105"), [])
+            extracted = (
+                install
+                / "extract-cache/pkg/linux-x64/1.0.105/schemas/session-events.schema.json"
+            )
+            extracted.parent.mkdir(parents=True)
+            extracted.write_text("{}")
+            other = install / "extract-cache/pkg/linux-x64/1.0.104/schemas"
+            other.mkdir(parents=True)
+            (other / "session-events.schema.json").write_text("{}")
+            self.assertEqual(copilot_schema_candidates(install, "1.0.105"), [extracted])
+            shipped = (
+                install
+                / "node_modules/@github/copilot-darwin-arm64/schemas/session-events.schema.json"
+            )
+            shipped.parent.mkdir(parents=True)
+            shipped.write_text("{}")
+            self.assertEqual(
+                copilot_schema_candidates(install, "1.0.105"), [shipped, extracted]
+            )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,217 @@
+[
+  {
+    "op": "message",
+    "timeline_id": "8c217e482bfafcc4de2313c32c1e23b9f011a4292a4a267a1d2f9b70f703bc84",
+    "session_id": "0ed9d0566c5f1d9c88efaff5d9980f35e2a64584009e7352de000b113eb57305",
+    "ordinal": 0,
+    "group": {
+      "id": "8c217e482bfafcc4de2313c32c1e23b9f011a4292a4a267a1d2f9b70f703bc84",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "ba7c865d-bfce-4778-9f0f-44a554cd3a17",
+    "parent_native_id": "2bf56baa-9ad5-4562-aa71-d33c1477da71",
+    "at": 1793733262880,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Run the echo command now. [use-tool]"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": "1.0.105",
+      "src_cursor": 3,
+      "src_offset": 725
+    }
+  },
+  {
+    "op": "drift",
+    "runtime_id": "bf17f75aa2b713a54a2e829fceffaff24d056177d9c881e5ce2e77c56f926921",
+    "agent_version": "1.0.105",
+    "stream": "events",
+    "record_kind": "tool/request/bash",
+    "error_code": "projection_unregistered",
+    "shape_hash": "27f0ba860d5e87c7dad46fe314c87989fbc43ae320eaf587efb24fcbf0a751b4",
+    "at": 1793733262926,
+    "sample_cursor": 7,
+    "sample_offset": 25264
+  },
+  {
+    "op": "message",
+    "timeline_id": "05a4c75e03edb4f0bd23d775e20b988264ced1b30d5056cdd6d645f587053661",
+    "session_id": "0ed9d0566c5f1d9c88efaff5d9980f35e2a64584009e7352de000b113eb57305",
+    "ordinal": 2,
+    "group": {
+      "id": "05a4c75e03edb4f0bd23d775e20b988264ced1b30d5056cdd6d645f587053661",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "baf6996f-26e1-4062-a4ed-16238c8ac579",
+    "parent_native_id": "3ce2b081-2be2-4fa6-b365-ae46c8e0a5e2",
+    "at": 1793733262926,
+    "model": "mock-model",
+    "effort": null,
+    "body": {
+      "type": "tool_use",
+      "tool": {
+        "correlation": {
+          "key": "call_mock_0001",
+          "derivation": "native_id"
+        },
+        "native": {
+          "id": "call_mock_0001",
+          "namespace": null,
+          "name": "bash",
+          "provider": null
+        },
+        "status": {
+          "value": "pending",
+          "basis": "request_observed"
+        },
+        "action": {
+          "type": "unknown"
+        },
+        "failure": null,
+        "timing": null
+      }
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": "1.0.105",
+      "src_cursor": 7,
+      "src_offset": 25264
+    }
+  },
+  {
+    "op": "tool_update",
+    "session_id": "0ed9d0566c5f1d9c88efaff5d9980f35e2a64584009e7352de000b113eb57305",
+    "correlation_key": "call_mock_0001",
+    "evidence": {
+      "source_identity": "direct:bf17f75aa2b713a54a2e829fceffaff24d056177d9c881e5ce2e77c56f926921/0ed9d0566c5f1d9c88efaff5d9980f35e2a64584009e7352de000b113eb57305",
+      "generation": 0,
+      "record_offset": 26288,
+      "mutation_index": 0
+    },
+    "patch": {
+      "native_id": null,
+      "request": null,
+      "outcome": null,
+      "status": {
+        "value": "succeeded",
+        "basis": "native_terminal_record"
+      },
+      "failure": null,
+      "timing": {
+        "started_at": null,
+        "completed_at": 1793733262961,
+        "duration_ms": null
+      }
+    },
+    "at": 1793733262961
+  },
+  {
+    "op": "message",
+    "timeline_id": "588663a8448059864d1a7936d7ef73e67a43b90820cb873de6684bd698f445e0",
+    "session_id": "0ed9d0566c5f1d9c88efaff5d9980f35e2a64584009e7352de000b113eb57305",
+    "ordinal": 3,
+    "group": {
+      "id": "588663a8448059864d1a7936d7ef73e67a43b90820cb873de6684bd698f445e0",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "7e72575c-a7b9-46f4-8f4d-439b1a7f28df",
+    "parent_native_id": "2df4ef3d-f02c-4549-ba26-8542f633a6e6",
+    "at": 1793733262981,
+    "model": "mock-model",
+    "effort": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "The tool ran successfully and printed: rosetta-mock. Scenario complete."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": "1.0.105",
+      "src_cursor": 13,
+      "src_offset": 28687
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "0ed9d0566c5f1d9c88efaff5d9980f35e2a64584009e7352de000b113eb57305",
+    "key": "7860c79d4632cc1d254aaa575f9b338c80820b60aafd1ae1956ef1ee0f620523",
+    "ts": 1793733263012,
+    "model": "mock-model",
+    "tokens": {
+      "input": 256,
+      "output": 64,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "aggregate",
+      "requests": 2
+    }
+  }
+]

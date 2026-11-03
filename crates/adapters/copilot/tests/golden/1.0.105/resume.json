@@ -1,0 +1,230 @@
+[
+  {
+    "op": "message",
+    "timeline_id": "49bc023f5876da093fc1533752742a53c8a04a881b25ec1587f6539447b7b457",
+    "session_id": "516a62ce2d651ba264a195991b785530e5bde815196f844bdd6641c3529e8abe",
+    "ordinal": 0,
+    "group": {
+      "id": "49bc023f5876da093fc1533752742a53c8a04a881b25ec1587f6539447b7b457",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "09588cf5-2b27-4c94-9724-69a67528cd93",
+    "parent_native_id": "b645f3e1-f540-4ed9-9773-25b6be2dedf5",
+    "at": 1793733265478,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Reply with a short greeting."
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": "1.0.105",
+      "src_cursor": 3,
+      "src_offset": 725
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "a311b28b9d23f2ec34acada62613d666964b9df73c8c2c788d9198a5f050759e",
+    "session_id": "516a62ce2d651ba264a195991b785530e5bde815196f844bdd6641c3529e8abe",
+    "ordinal": 2,
+    "group": {
+      "id": "a311b28b9d23f2ec34acada62613d666964b9df73c8c2c788d9198a5f050759e",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "d4b11bdd-9416-463d-a17e-930d0e129984",
+    "parent_native_id": "0bff1e1e-c60c-45a8-9f86-51df391d696a",
+    "at": 1793733265574,
+    "model": "mock-model",
+    "effort": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": "1.0.105",
+      "src_cursor": 7,
+      "src_offset": 25224
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "516a62ce2d651ba264a195991b785530e5bde815196f844bdd6641c3529e8abe",
+    "key": "9892a7b17349a14536fcf75dd30c4663798b07a540de933e3239f3eb8b824c6d",
+    "ts": 1793733265616,
+    "model": "mock-model",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "61cf43c6907ec464e622bc9865e7323f7936dda768a6bccea6f0aa539a9292db",
+    "session_id": "516a62ce2d651ba264a195991b785530e5bde815196f844bdd6641c3529e8abe",
+    "ordinal": 3,
+    "group": {
+      "id": "61cf43c6907ec464e622bc9865e7323f7936dda768a6bccea6f0aa539a9292db",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "93e27a2f-9f21-4a9b-80f0-caa92dbc1b26",
+    "parent_native_id": "988bd66b-4687-4fbd-ab9c-64a0c0b8d8aa",
+    "at": 1793733266752,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Continue: say goodbye."
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": "1.0.105",
+      "src_cursor": 11,
+      "src_offset": 28717
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "316353cf6dd4fc4b9baeb5a64a0952ba453c77ef672522493608499ddb461750",
+    "session_id": "516a62ce2d651ba264a195991b785530e5bde815196f844bdd6641c3529e8abe",
+    "ordinal": 4,
+    "group": {
+      "id": "316353cf6dd4fc4b9baeb5a64a0952ba453c77ef672522493608499ddb461750",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "e9b1be56-efe0-41f2-bd8b-a73a2ffefc84",
+    "parent_native_id": "45d6357d-e08c-4f8f-bcb8-6d87d7097825",
+    "at": 1793733266802,
+    "model": "mock-model",
+    "effort": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": "1.0.105",
+      "src_cursor": 14,
+      "src_offset": 30740
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "516a62ce2d651ba264a195991b785530e5bde815196f844bdd6641c3529e8abe",
+    "key": "3f31231cbc25f6776b72ed4cd1818af580af9eeaa6e454c242589246a8bc4b28",
+    "ts": 1793733266834,
+    "model": "mock-model",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    }
+  }
+]
