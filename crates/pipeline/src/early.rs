@@ -378,12 +378,14 @@ impl StreamedPreparer {
             .get(&source.source.relative_path)?;
         let mut split = BigSourceSplit {
             read_len,
+            capture: source.capture,
             ..BigSourceSplit::default()
         };
         for op in &source.ops {
             let bytes = op.approx_bytes();
             if matches!(op, IngestOp::ProjectionAsset { .. }) {
                 split.asset = split.asset.saturating_add(bytes);
+                split.asset_ops += 1;
             } else if WithheldFacts::is_relational(op) {
                 split.relational = split.relational.saturating_add(bytes);
             } else {

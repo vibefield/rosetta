@@ -52,9 +52,26 @@ pub enum TxKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StepReport {
     pub kind: TxKind,
-    /// Approx bytes the transaction wrote.
+    /// Approx bytes the transaction wrote: its ops' (assets included) and
+    /// its resolved rows'.
     pub approx_bytes: u64,
+    /// Of `approx_bytes`, its `ProjectionAsset` ops' (counted only when the
+    /// runtime measures steps, else zero) and its resolved tool rows'; the
+    /// rest is its other immediate ops' (measurement only).
+    pub asset_bytes: u64,
+    pub resolved_bytes: u64,
+    /// The sources it wrote for: one for a slice, each of a terminal's.
+    pub sources: u32,
     pub wall_nanos: u64,
+}
+
+impl StepReport {
+    /// Approx bytes of its immediate ops other than assets.
+    pub fn immediate_bytes(&self) -> u64 {
+        self.approx_bytes
+            .saturating_sub(self.asset_bytes)
+            .saturating_sub(self.resolved_bytes)
+    }
 }
 
 /// What a source's terminal commit settles on the runtime.
@@ -139,6 +156,22 @@ impl ApplyItem {
         self.last
     }
 
+    /// Measurement only: approx bytes of the `ProjectionAsset` ops the next
+    /// step writes — its Stage slice's, none for a resolved-row slice, else
+    /// the terminal's sources'.
+    pub(super) fn next_asset_bytes(&self) -> u64 {
+        if let Some((slice, _)) = self.stage.front() {
+            asset_bytes(&slice.batch.ops)
+        } else if self.needs_resolved_slice() {
+            0
+        } else {
+            self.terminal
+                .iter()
+                .map(|source| asset_bytes(&source.batch.ops))
+                .fold(0, u64::saturating_add)
+        }
+    }
+
     /// Whether the next step is a resolved-row slice: rows are left and the
     /// terminal would otherwise write more than the chunk bound.
     pub(super) fn needs_resolved_slice(&self) -> bool {
@@ -181,6 +214,14 @@ pub(super) fn resolved_bytes(sources: &[StreamedSource]) -> u64 {
         .iter()
         .flat_map(|source| source.resolved.iter())
         .map(|session| session.rows_bytes())
+        .fold(0, u64::saturating_add)
+}
+
+/// Σ approx bytes of the `ProjectionAsset` ops among `ops`.
+fn asset_bytes(ops: &[IngestOp]) -> u64 {
+    ops.iter()
+        .filter(|op| matches!(op, IngestOp::ProjectionAsset { .. }))
+        .map(IngestOp::approx_bytes)
         .fold(0, u64::saturating_add)
 }
 
@@ -382,5 +423,39 @@ mod tests {
         let lengths: Vec<usize> = slices.iter().map(|(ops, _)| ops.len()).collect();
         assert_eq!(lengths, [1, 1, 1]);
         assert_eq!(cut_slices(Vec::new(), 1_000).len(), 1);
+    }
+
+    /// Measurement only: the next step's asset bytes are its Stage slice's
+    /// while slices are left, then every terminal source's together.
+    #[test]
+    fn the_next_steps_asset_bytes_follow_the_step_order() {
+        let asset = |len| IngestOp::ProjectionAsset {
+            asset: rosetta_core::ProjectionAsset::new("image/png", vec![7; len]).unwrap(),
+        };
+        let source = |ops| {
+            StreamedSource::from(Batch {
+                ops,
+                ..Batch::default()
+            })
+        };
+        let (staged, last, other) = (asset(300), asset(500), asset(40));
+        let staged_bytes = staged.approx_bytes();
+        let terminal_bytes = last.approx_bytes() + other.approx_bytes();
+        assert!(staged_bytes >= 300 && terminal_bytes >= 540);
+        let stage = VecDeque::from([(source(vec![text(10), staged, text(20)]), 0)]);
+        let terminal = vec![source(vec![last, text(30)]), source(vec![other])];
+        let mut item = ApplyItem::new(terminal, Vec::new(), stage, 0, u64::MAX, 0);
+        assert_eq!(item.next_asset_bytes(), staged_bytes);
+        item.stage.pop_front();
+        assert_eq!(item.next_asset_bytes(), terminal_bytes);
+        let plain = ApplyItem::new(
+            vec![source(vec![text(5)])],
+            Vec::new(),
+            VecDeque::new(),
+            0,
+            u64::MAX,
+            0,
+        );
+        assert_eq!(plain.next_asset_bytes(), 0);
     }
 }

@@ -109,6 +109,7 @@ pub(super) struct Merge<'m> {
     pub(super) last_served: Option<usize>,
     pub(super) lane_switches: u64,
     pub(super) big_lane_chain_nanos: u64,
+    pub(super) all_lanes_held_nanos: u64,
 }
 
 impl Merge<'_> {
@@ -178,6 +179,14 @@ impl Merge<'_> {
         }
         if !candidates.is_empty() && candidates.iter().all(|index| lanes[*index].id.is_big()) {
             self.big_lane_chain_nanos += nanos;
+        }
+        // Live: not yet walked to its end, or holding its last emission.
+        let mut live = lanes
+            .iter()
+            .filter(|lane| !lane.exhausted() || lane.held_since.is_some())
+            .peekable();
+        if live.peek().is_some() && live.all(|lane| lane.held_since.is_some()) {
+            self.all_lanes_held_nanos += nanos;
         }
     }
 

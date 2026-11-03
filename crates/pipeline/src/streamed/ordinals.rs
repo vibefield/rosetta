@@ -302,6 +302,7 @@ mod tests {
             payload_bytes: 1,
             prepared: None,
             lane: crate::closed::LaneId::Path,
+            capture: crate::capture::CaptureClock::default(),
         }
     }
 

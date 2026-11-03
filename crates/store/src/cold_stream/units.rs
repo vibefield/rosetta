@@ -240,6 +240,11 @@ pub struct ColdAdmission {
     pub renumber_rows: u64,
     /// The writer's wait for the `session` write lock (W1).
     pub lock_wait_nanos: u64,
+    /// From W1 taken to the commit: how long the transaction held it.
+    /// Measurement only.
+    pub lock_held_nanos: u64,
+    /// The moment the transaction committed. Measurement only.
+    pub committed_at: Option<Instant>,
 }
 
 impl Store {
@@ -286,6 +291,7 @@ impl Store {
             self.shared_readers.as_deref(),
             "cold admission",
         )?;
+        let held_from = Instant::now();
         guard_no_stored_tool_rows(&tx, &addressed)?;
         let apply_started = Instant::now();
         let mut stats = if plan.is_empty() {
@@ -307,7 +313,10 @@ impl Store {
         stats.canonical_apply_nanos = elapsed_nanos(apply_started);
         let commit_started = Instant::now();
         tx.commit()?;
+        let committed_at = Instant::now();
         stats.sqlite_commit_nanos = elapsed_nanos(commit_started);
+        let lock_held_nanos = elapsed_nanos(held_from);
+        stats.profile.session_lock_held_nanos = lock_held_nanos;
         self.committed(CommitKind::Admission);
         let cleanup_started = Instant::now();
         crate::reclaim::release(plan);
@@ -317,6 +326,8 @@ impl Store {
             changed,
             renumber_rows,
             lock_wait_nanos,
+            lock_held_nanos,
+            committed_at: Some(committed_at),
         })
     }
 

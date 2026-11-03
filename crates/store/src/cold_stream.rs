@@ -196,6 +196,7 @@ impl Store {
         };
         let (tx, session_lock_wait) =
             lock_order::writer_tx(&mut self.conn, self.shared_readers.as_deref(), site)?;
+        let held_from = Instant::now();
         totals.profile.session_lock_wait_nanos = session_lock_wait;
         // Back in the Store only once this transaction commits.
         let mut drift = std::mem::take(&mut self.drift);
@@ -276,6 +277,7 @@ impl Store {
         }
         let commit_started = Instant::now();
         tx.commit()?;
+        totals.profile.session_lock_held_nanos = elapsed_nanos(held_from);
         self.drift = drift;
         self.committed(match mode {
             ClosedTx::Terminal => CommitKind::Sources,

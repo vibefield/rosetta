@@ -35,7 +35,7 @@ use super::lane_profile::WalkProfile;
 use super::walk_order::{ColdWalkOptions, LaneId, WalkPlan};
 use super::{close_unit, lost_sources, record_outcome, virtual_parent};
 use crate::capture::{
-    CapturePool, Consumed, Event, LaneClass, Pooled, UnitReport, WAIT_SLICE, consume,
+    CaptureClock, CapturePool, Consumed, Event, LaneClass, Pooled, UnitReport, WAIT_SLICE, consume,
     consume_event, register,
 };
 use crate::instrument::{Instrument, Metric};
@@ -52,6 +52,8 @@ struct Attribution {
     payload: u64,
     lost: bool,
     restarted: bool,
+    /// Its capture steps (measurement only).
+    capture: CaptureClock,
 }
 
 impl Attribution {
@@ -60,6 +62,7 @@ impl Attribution {
             payload: report.payload_bytes,
             lost: lost_sources(report) > 0,
             restarted: report.generations_restarted > 0,
+            capture: report.capture,
         }
     }
 }
@@ -203,7 +206,7 @@ impl<'w> Walker<'w> {
             &mut self.file_health,
             &mut self.session_health,
         );
-        for closed in close_unit(
+        for mut closed in close_unit(
             self.adapter,
             self.runtime,
             self.planner,
@@ -214,6 +217,7 @@ impl<'w> Walker<'w> {
             open,
             self.instrument,
         )? {
+            closed.capture = unit.capture;
             frontier.captured(closed)?;
         }
         // A generation restart swept and rebuilt that file's rows, but merge
@@ -512,6 +516,7 @@ impl<'w> Walker<'w> {
             last_served: None,
             lane_switches: 0,
             big_lane_chain_nanos: 0,
+            all_lanes_held_nanos: 0,
         };
         let mut prefix_walking = prefix_open(&lanes).is_some();
         loop {
@@ -619,6 +624,7 @@ impl<'w> Walker<'w> {
             lanes: Vec::with_capacity(lanes.len()),
             lane_switches: merge.lane_switches,
             big_lane_chain_nanos: merge.big_lane_chain_nanos,
+            all_lanes_held_nanos: merge.all_lanes_held_nanos,
         };
         for lane in lanes {
             lane.frontier.check_finished()?;
@@ -733,14 +739,17 @@ impl<'w> Walker<'w> {
                 payload: now.0 - _before.0,
                 lost: now.1 > _before.1,
                 restarted: now.2 > _before.2,
+                capture: unit.capture,
             };
         }
         unit.deltas.merge_into(&mut self.report);
+        self.report.capture.merge(&unit.capture);
         Attribution {
             payload: unit.deltas.payload_bytes,
             lost: (unit.deltas.files_missing as u64).saturating_add(unit.deltas.retries_exhausted)
                 > 0,
             restarted: unit.deltas.generations_restarted > 0,
+            capture: unit.capture,
         }
     }
 }

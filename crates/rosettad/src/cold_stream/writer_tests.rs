@@ -438,3 +438,6 @@ fn a_forced_lane_split_with_tiny_chunks_reaches_the_runtime_admission_end_state(
 
 #[path = "writer_e2e_tests.rs"]
 mod e2e;
+
+#[path = "writer_measure_tests.rs"]
+mod measure;

@@ -11,6 +11,7 @@ use rosetta_capture::{Ledger, SegmentCodec, Tailer};
 use rosetta_core::rows::RuntimeRow;
 use rosetta_store::{Store, queries};
 
+use super::CaptureClock;
 use super::pool::{CapturePool, Event, Lane, LaneClass, Output, Shared, UnitSpec, elapsed_nanos};
 use crate::closed::source_def;
 use crate::instrument::{Instrument, Metric};
@@ -39,6 +40,8 @@ pub(crate) struct UnitReport {
     pub(crate) deltas: ReportDelta,
     /// The planner refused one of its batches (a checkpoint CAS conflict).
     pub(crate) conflicted: bool,
+    /// Its workers' steps (measurement only).
+    pub(crate) capture: CaptureClock,
 }
 
 /// What one consumed event did to its unit.
@@ -175,9 +178,11 @@ pub(crate) fn consume(
                 outcome,
                 deltas,
                 profile,
+                clock,
             } => {
                 instrument.merge_snapshot(&profile);
                 deltas.merge_into(report);
+                report.capture.merge(&clock);
                 break outcome;
             }
             Event::Failed(error) => return Err(error),
@@ -187,10 +192,12 @@ pub(crate) fn consume(
             batch,
             deltas,
             profile,
+            clock,
             ends,
         } = *output;
         instrument.merge_snapshot(&profile);
         deltas.merge_into(report);
+        report.capture.merge(&clock);
 
         // Ledger-first: the raw bytes are durable before the projection tx
         // may reference them.
@@ -242,9 +249,11 @@ pub(crate) fn consume_event(
             outcome,
             deltas,
             profile,
+            clock,
         } => {
             instrument.merge_snapshot(&profile);
             add_delta(&mut unit_report.deltas, &deltas);
+            unit_report.capture.merge(&clock);
             merge_globally(&deltas, global);
             return finished(outcome);
         }
@@ -255,10 +264,12 @@ pub(crate) fn consume_event(
         batch,
         deltas,
         profile,
+        clock,
         ends,
     } = *output;
     instrument.merge_snapshot(&profile);
     add_delta(&mut unit_report.deltas, &deltas);
+    unit_report.capture.merge(&clock);
     merge_globally(&deltas, global);
     if let Some(ledger) = ledger
         && let Some(frames) = frames.filter(|frames| !frames.is_empty())
@@ -292,6 +303,7 @@ pub(crate) fn add_delta(total: &mut ReportDelta, part: &ReportDelta) {
     total.hard_errors += part.hard_errors;
     total.oversized += part.oversized;
     total.quarantined += part.quarantined;
+    total.max_record_bytes = total.max_record_bytes.max(part.max_record_bytes);
 }
 
 /// Test-only mutations, per thread (the sequencer's), so a test that flips

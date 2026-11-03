@@ -41,6 +41,12 @@ pub struct TreeAdmission {
     pub stats: ApplyStats,
     pub wall_ns: u64,
     pub lock_wait_ns: u64,
+    /// From the transaction's W1 to its commit (measurement only).
+    pub lock_held_ns: u64,
+    /// When the batch's work began, after its trees were chosen, and when
+    /// its transaction committed (measurement only).
+    pub started_at: Option<Instant>,
+    pub committed_at: Option<Instant>,
     /// Approx bytes of the folded tails.
     pub tail_bytes: u64,
     pub renumber_rows: u64,
@@ -237,6 +243,9 @@ impl StreamedRuntime {
             stats: admitted.stats,
             wall_ns: u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
             lock_wait_ns: admitted.lock_wait_nanos,
+            lock_held_ns: admitted.lock_held_nanos,
+            started_at: Some(started),
+            committed_at: admitted.committed_at,
             tail_bytes,
             renumber_rows: admitted.renumber_rows,
         })

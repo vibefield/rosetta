@@ -68,6 +68,9 @@ pub struct StreamedRuntime {
     items_in_progress: u32,
     /// The trees of a runtime admitted per root tree.
     trees: Option<TreeLedger>,
+    /// Measurement only: split each step's bytes by kind (the writer's
+    /// `--json --profile`); off, a step scans none of its ops for it.
+    measure_steps: bool,
 }
 
 impl StreamedRuntime {
@@ -190,7 +193,14 @@ impl StreamedRuntime {
             resolve_nanos: 0,
             items_in_progress: 0,
             trees,
+            measure_steps: false,
         })
+    }
+
+    /// Measurement only: whether each step reports its asset bytes apart
+    /// ([`StepReport::asset_bytes`]; zero when off). Changes no write.
+    pub fn measure_steps(&mut self, on: bool) {
+        self.measure_steps = on;
     }
 
     pub fn runtime_id(&self) -> &str {
@@ -404,7 +414,16 @@ impl StreamedRuntime {
         item: &mut ApplyItem,
         instrument: &Instrument,
     ) -> Result<(Step, u64, ApplyStats), PipelineError> {
+        // Measurement only, when asked: the asset bytes the transaction
+        // writes, read before its clock starts.
+        let assets = if self.measure_steps {
+            item.next_asset_bytes()
+        } else {
+            0
+        };
         let started = Instant::now();
+        // Measurement only: its resolved bytes and sources.
+        let (mut resolved, mut sources) = (0, 1);
         let (kind, approx, stats, release, step) = if let Some((slice, approx)) =
             item.stage.pop_front()
         {
@@ -427,6 +446,7 @@ impl StreamedRuntime {
             let before = session.rows_bytes();
             let (stats, _) = instrument.apply_resolved_slice(store, session, chunk_bytes)?;
             let approx = before.saturating_sub(session.rows_bytes());
+            resolved = approx;
             (
                 TxKind::ResolvedRows,
                 approx,
@@ -435,9 +455,9 @@ impl StreamedRuntime {
                 Step::More,
             )
         } else {
-            let approx = item
-                .terminal_bytes
-                .saturating_add(resolved_bytes(&item.terminal));
+            resolved = resolved_bytes(&item.terminal);
+            sources = u32::try_from(item.terminal.len()).unwrap_or(u32::MAX);
+            let approx = item.terminal_bytes.saturating_add(resolved);
             let stats = self.apply_terminal(store, item, instrument)?;
             (
                 TxKind::Terminal,
@@ -457,6 +477,9 @@ impl StreamedRuntime {
         item.last = Some(StepReport {
             kind,
             approx_bytes: approx,
+            asset_bytes: assets,
+            resolved_bytes: resolved,
+            sources,
             wall_nanos,
         });
         if kind != TxKind::Terminal {

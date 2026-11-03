@@ -61,6 +61,7 @@ impl Store {
             tx.commit()?;
             stats.sqlite_commit_nanos = elapsed_nanos(commit_started);
             stats.profile.session_lock_wait_nanos = lock_wait;
+            stats.profile.session_lock_held_nanos = elapsed_nanos(started);
             Ok((stats, left))
         })()
         .map_err(self.lock_order("resolved-row slice"));

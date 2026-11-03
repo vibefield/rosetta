@@ -29,6 +29,7 @@ use serde_json::{Value, json};
 use super::emit::BudgetClass;
 use super::flips::{CHUNK_BYTES, Flips};
 use super::queues::{Active, Work, WriterQueues, block_for};
+use super::slowest::{OpCounts, Slowest, StepRecord};
 use super::{
     ClosedColdRuntime, OpenedColdRuntime, Producers, StreamMessage, StreamedCold, admit, millis,
     publish_metadata,
@@ -59,6 +60,8 @@ pub(super) struct ApplyRecord {
     pub(super) longest_ns: u64,
     pub(super) max_bytes: u64,
     pub(super) busy_ns: u64,
+    /// The slowest apply steps (under `--json --profile`).
+    pub(super) slowest: Slowest<StepRecord>,
 }
 
 struct ParkedClose {
@@ -123,6 +126,8 @@ pub(super) fn write(
         walk,
     };
     let mut idle_nanos = 0_u64;
+    // The part of it before the last producer's `Closed`.
+    let mut capture_idle_nanos = 0_u64;
     let writer_started = Instant::now();
     let writer_cpu_started = thread_cpu_time();
     while writer.closed < workers {
@@ -170,8 +175,11 @@ pub(super) fn write(
                     .map_err(|_| "fresh cold capture channel closed".to_string())?,
             ),
         };
-        idle_nanos = idle_nanos
-            .saturating_add(u64::try_from(waited.elapsed().as_nanos()).unwrap_or(u64::MAX));
+        let waited = u64::try_from(waited.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        idle_nanos = idle_nanos.saturating_add(waited);
+        if writer.capture_ended.is_none() {
+            capture_idle_nanos = capture_idle_nanos.saturating_add(waited);
+        }
         if let Some(message) = message {
             writer.handle(message, producers, cx)?;
         }
@@ -184,10 +192,28 @@ pub(super) fn write(
             .capture_ended
             .map_or(wall, |end| end.saturating_duration_since(writer_started));
         let usage = UsageCopies::of(cx.instrument);
+        // Busy: apply steps, flips and resolving withheld facts as items
+        // begin. Non-idle: the writer's wall less all its channel waits.
+        // Both span the writer's whole life (the post-capture tail too), so
+        // busy never exceeds non-idle, and both are shares of the capture
+        // window. Within capture: the window less the waits inside it.
         let busy = writer
             .applies
             .busy_ns
-            .saturating_add(writer.flips.stats.wall.total_nanos());
+            .saturating_add(writer.flips.stats.wall.total_nanos())
+            .saturating_add(writer.resolve_ns);
+        let capture_nanos = capture.as_nanos().max(1) as f64;
+        let non_idle = wall.as_nanos().saturating_sub(u128::from(idle_nanos));
+        let non_idle_within = capture
+            .as_nanos()
+            .saturating_sub(u128::from(capture_idle_nanos));
+        let slowest: Vec<Value> = writer
+            .applies
+            .slowest
+            .largest_first()
+            .into_iter()
+            .map(StepRecord::json)
+            .collect();
         let mut event = json!({
             "event": "stage-profile",
             "command": "serve",
@@ -199,8 +225,13 @@ pub(super) fn write(
             "applyCalls": writer.applies.steps,
             "longestApplyTxMs": millis(writer.applies.longest_ns),
             "maxApplyTxBytes": writer.applies.max_bytes,
-            "busyShareOfCapture": busy as f64 / (capture.as_nanos().max(1) as f64),
+            "busyShareOfCapture": busy as f64 / capture_nanos,
+            "nonIdleShareOfCapture": non_idle as f64 / capture_nanos,
+            "nonIdleShareWithinCapture": non_idle_within as f64 / capture_nanos,
+            "captureWallMs": capture.as_secs_f64() * 1_000.0,
+            "captureIdleMs": millis(capture_idle_nanos),
             "resolveMs": millis(writer.resolve_ns),
+            "slowestApplySteps": slowest,
             "lanes": writer.lane_profile(),
             "budgetResidualBytes": budget_residual(producers),
             "usageIdentitiesOwned": usage.owned,
@@ -253,11 +284,13 @@ impl Writer<'_> {
                 } = *opened;
                 self.milestones
                     .trees_known(&runtime.id, setup.trees().cloned());
-                let streamed =
+                let mut streamed =
                     StreamedRuntime::open(adapter, &runtime, setup, cx.store, cx.instrument)
                         .map_err(|error| {
                             format!("opening streamed {} runtime: {error}", adapter.kind())
                         })?;
+                // Measurement only: the slowest steps' byte split.
+                streamed.measure_steps(self.stage_profiles);
                 self.open.insert(runtime.id.clone(), streamed);
                 Ok(())
             }
@@ -363,9 +396,14 @@ impl Writer<'_> {
                     BEGUN_BESIDE_ITEM.with(|count| count.set(count.get() + 1));
                 }
                 let completes = self.milestones.completes_first_session(&sources);
+                // Withheld facts are resolved here, as the item begins.
+                let resolve_before = streamed.resolve_nanos();
                 let item = streamed
                     .begin_item(sources, bytes, chunk_bytes)
                     .map_err(|error| format!("applying streamed {runtime_id} sources: {error}"))?;
+                self.resolve_ns = self
+                    .resolve_ns
+                    .saturating_add(streamed.resolve_nanos().saturating_sub(resolve_before));
                 Active {
                     item,
                     class,
@@ -381,14 +419,11 @@ impl Writer<'_> {
             ));
         }
         let cpu_before = thread_cpu_time();
-        let resolve_before = streamed.resolve_nanos();
+        let step_started = Instant::now();
         let (step, release, stats) = streamed
             .step(cx.store, &mut active.item, cx.instrument)
             .map_err(|error| format!("applying streamed {runtime_id} sources: {error}"))?;
         producers.budgets.release(active.class, release);
-        self.resolve_ns = self
-            .resolve_ns
-            .saturating_add(streamed.resolve_nanos().saturating_sub(resolve_before));
         if let (Some(before), Some(after)) = (cpu_before, thread_cpu_time()) {
             *self.apply_cpu.entry(runtime_id.clone()).or_default() += after.saturating_sub(before);
         }
@@ -397,6 +432,21 @@ impl Writer<'_> {
         self.applies.busy_ns = self.applies.busy_ns.saturating_add(report.wall_nanos);
         self.applies.longest_ns = self.applies.longest_ns.max(report.wall_nanos);
         self.applies.max_bytes = self.applies.max_bytes.max(report.approx_bytes);
+        if self.stage_profiles {
+            self.applies
+                .slowest
+                .offer(report.wall_nanos, || StepRecord {
+                    elapsed_s: step_started
+                        .saturating_duration_since(cx.started)
+                        .as_secs_f64(),
+                    runtime: runtime_id.clone(),
+                    lane: key.1,
+                    report,
+                    ops: OpCounts::of(&stats),
+                    lock_held_ns: stats.profile.session_lock_held_nanos,
+                    lock_wait_ns: stats.profile.session_lock_wait_nanos,
+                });
+        }
         let lane = self.queues.stats_mut(&key);
         lane.txs += 1;
         match report.kind {

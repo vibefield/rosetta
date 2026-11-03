@@ -166,6 +166,10 @@ pub struct ApplyProfile {
     /// writer transaction on the shared RAM generation (lock discipline W1);
     /// 0 on every other store.
     pub session_lock_wait_nanos: u64,
+    /// How long the streamed writer's transaction held what it opened with:
+    /// from W1 taken (its `BEGIN` on every other store) to its commit.
+    /// Measurement only; set by the streamed cold transactions.
+    pub session_lock_held_nanos: u64,
 }
 
 impl ApplyStats {
@@ -228,6 +232,7 @@ impl ApplyProfile {
         self.tool_reconcile_nanos += batch.tool_reconcile_nanos;
         self.tool_reconcile_cleanup_nanos += batch.tool_reconcile_cleanup_nanos;
         self.session_lock_wait_nanos += batch.session_lock_wait_nanos;
+        self.session_lock_held_nanos += batch.session_lock_held_nanos;
     }
 }
 

@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::time::Instant;
 
 use rosetta_adapter_support::{AgentAdapter, StreamDriver};
 use rosetta_capture::Tailer;
@@ -19,6 +20,7 @@ use rosetta_store::{
     ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries,
 };
 
+use crate::capture::CaptureClock;
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::meta::SessionFile;
@@ -69,6 +71,9 @@ pub struct StreamReport {
     /// What a root-tree runtime's lane-merge walk measured per lane: RAM-only
     /// measurement, never merged into another report.
     pub walk: Option<Box<crate::closed::WalkProfile>>,
+    /// What the passes' steps measured (measurement only): one file's when
+    /// the report is that file's own.
+    pub capture: CaptureClock,
 }
 
 impl StreamReport {
@@ -95,6 +100,7 @@ impl StreamReport {
         self.sessions_indexed += part.sessions_indexed;
         self.siblings_healed += part.siblings_healed;
         self.stats.merge_from(&part.stats);
+        self.capture.merge(&part.capture);
     }
 }
 
@@ -518,14 +524,21 @@ pub(crate) fn ingest_file(
         pass.audit(runtime, file, tailer, store, instrument, report)?;
     }
     loop {
-        let output = match pass.step(adapter, runtime, file, tailer, opts, instrument)? {
+        let started = Instant::now();
+        let stepped = pass.step(adapter, runtime, file, tailer, opts, instrument)?;
+        let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let output = match stepped {
             PassStep::Batch(output) => output,
             PassStep::Finished(outcome, deltas) => {
                 deltas.merge_into(report);
+                let step = CaptureClock::step(started, nanos, deltas.max_record_bytes);
+                report.capture.merge(&step);
                 return Ok(outcome);
             }
         };
         output.deltas.merge_into(report);
+        let step = CaptureClock::step(started, nanos, output.deltas.max_record_bytes);
+        report.capture.merge(&step);
 
         // Ledger-first: the raw bytes are durable before the projection tx
         // may reference them.

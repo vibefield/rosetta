@@ -409,6 +409,24 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > (`milestone`, `horizon`, `horizonSessions`, `n`, `treeBytes`, `trees`, `elapsedS`, as they
 > apply).
 >
+> Three anchors serve the UI bench (2026-11-03), measurement only like the rest. Serve's first
+> stdout line is `clock: wall_ms=<Unix ms>`, read right after the instant every `elapsed_s` counts
+> from, so a wall-clock stamp `w` maps to `elapsed_s = (w − wall_ms) / 1000`. Only this line is
+> that base: `/api/status` `daemon.started_at` (and the announcement's `started_at`) is stamped
+> later, after flag parsing and the store's open, so it must not be used as one; the status
+> document's Unix-ms stamps, `daemon.ingest.metadata_ready_at` among them, are on the same wall
+> clock and map through `wall_ms`.
+> `milestone: consent-granted` prints when a roll-call grant ends the consent wait and this start's
+> enrolment is decided; consent from flags, the enrolment file or a standing projection never
+> waits, so it prints nothing. On the fresh and resumed RAM paths, `milestone: search-ready` (or
+> `search-failed`) stamps the detached search worker's first synchronization after canonical
+> readiness that publishes a generation (or fails), on the worker's own clock: a detached observer
+> waits on the worker's latch (`Fts5SearchWorker::first_sync`), so publication, the live runners
+> and shutdown never wait for it, and nothing prints if the worker stops first (as `--ticks 0`
+> usually makes it) or the process exits. The disk path keeps its own search lines. Under `--json`
+> alone (the app passes no `--profile`) the clock is also a `clock` event (`wallMs`) and the grant
+> a `milestone` event (`elapsedS`).
+>
 > Each runtime also prints one structure-only `walk:` line as its producer starts:
 > `walk: runtime=… agent=… order=recency|path reason=… trees= small= big= lanes= groups_hoisted=
 > big_bytes= digest=`. `reason` is `-` for a recency walk, else `runtime` (admitted whole, the kill
@@ -419,23 +437,48 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > age_ms]` per source in global order, with the mode and digest — no path, id or content. The
 > `parallel-stream-prepare` stage profile gains a `lanes` array — per lane `units`, `sources`,
 > `bytes`, `headWaitMs`, `heldMs` and `serviceDelayMs` (each `{count, p50Ms, p99Ms, maxMs}`),
-> `endMs`, `inlineMs` (sequencer-local work charged to the lane it served) and
-> `peakUnemittedHeadBytes` — plus `laneSwitches`, `bigLaneChainMs`, `peakPendingWithheldBytes`,
-> `treesClosed`, `treesBound`, `treesTainted`, `factlessResolved`, `lateSamples`,
-> `crossTreeCrossings` and `bigSourceSplits` (per source over 64 MiB: its read length and the
-> approx bytes of its immediate, relational and asset ops, structure only). A lane's *service
-> delay* runs from "its head unit has an event queued and the lane holds no emission" to "the
-> sequencer takes that event". The `capture-pool` profile gains `peakSharedLookAheadBytes`,
-> `peakReservedLookAheadBytes` and `peakHeadBytesTotal`. The `streamed-writer` profile gains a
+> `heldMsTotal` (every writer-budget hold summed), `endMs`, `inlineMs` (sequencer-local work
+> charged to the lane it served) and `peakUnemittedHeadBytes` — plus `laneSwitches`,
+> `bigLaneChainMs`, `sequencerAllLanesHeldMs` (sequencer waits while every live lane held an
+> emission its writer budget refused), `peakPendingWithheldBytes`, `treesClosed`, `treesBound`,
+> `treesTainted`, `factlessResolved`, `lateSamples`, `crossTreeCrossings` and `bigSourceSplits`
+> (per source over 64 MiB: its read length, the approx bytes of its immediate, relational and
+> asset ops and `assetOps`, their count; and what its capture steps measured — `captureWallMs`
+> from its first step's start to its last step's end, `captureSteps`, `longestStepMs` and
+> `maxRecordBytes`, the largest framed record (JSONL line) a step read; a step is one pool worker
+> step, which reads, normalizes, frames and compresses one batch, or one pass step of the serial
+> driver; structure only). A lane's *service delay* runs from "its head unit has an event queued
+> and the lane holds no emission" to "the sequencer takes that event". The `capture-pool` profile
+> gains `peakSharedLookAheadBytes`, `peakReservedLookAheadBytes` and `peakHeadBytesTotal`. The
+> `streamed-writer` profile gains a
 > `lanes` array (per (runtime, lane): `txs`, `stageTxs`, `resolvedSliceTxs`, queue wait
 > p50/p99/max),
-> `longestApplyTxMs` and `maxApplyTxBytes` over the capture window, `resolveMs`,
-> `busyShareOfCapture` ((apply wall + flip wall) / capture wall, where capture runs from the
-> writer's start to the last producer's `Closed`), `budgetResidualBytes {small, shared}`, the flip
-> totals (`flipBatches`, `flipTrees`, `flipSessions`, `flipWallMs`, `longestFlipTxMs`,
-> `treeAdmissionP99Ms`, `maxFlipTailBytes`, `flipRenumberRows`, `flipLockWaitMs`) and
-> `sharedCacheLocks` (the streaming window so far); each flip batch is a `tree-admission` event
-> (`trees`, `sessions`, `tailBytes`, `renumberRows`, `wallMs`, `lockWaitMs`), and `streamed-apply`
+> `longestApplyTxMs` and `maxApplyTxBytes` over the capture window, `resolveMs` (writer time
+> resolving withheld facts, sampled where that happens, as each item begins: until 2026-11-03 it
+> was sampled around the step and always read 0), `busyShareOfCapture` ((apply wall + flip wall +
+> resolve) / capture wall, where capture runs from the writer's start to the last producer's
+> `Closed`), `nonIdleShareOfCapture` ((writer wall − all its channel waits) / capture wall: like
+> busy it spans the writer's whole life, the post-capture tail included, so busy never exceeds it
+> and their difference is writer time neither counts), `nonIdleShareWithinCapture` ((capture wall
+> − the writer's channel waits within it) / capture wall, at most 1), `captureWallMs`,
+> `captureIdleMs`, `budgetResidualBytes {small, shared}`,
+> the flip totals (`flipBatches`, `flipTrees`, `flipSessions`, `flipWallMs`, `longestFlipTxMs`,
+> `treeAdmissionP99Ms`, `maxFlipTailBytes`, `flipRenumberRows`, `flipLockWaitMs`),
+> `sharedCacheLocks` (the streaming window so far), and the five slowest apply steps and flip
+> transactions, slowest first (`slowestApplySteps`, `slowestFlipTxs`, kept in RAM and printed only
+> here). A step entry gives `elapsedS` at its start, `runtime`, `lane`, `kind` (`Stage`,
+> `ResolvedRows` or `Terminal`), `sources`, `approxBytes` split into `assetBytes` (its asset ops',
+> counted before the step's clock starts and only under `--json --profile`, so no other run scans
+> ops for it), `immediateBytes` and `resolvedBytes`, `ops` (attempted messages, tool updates,
+> usage, drift and other ops, assets, and messages inserted and updated), `wallMs` (the whole
+> step: pre-W1 asset materialization, the transaction and post-commit collection), `lockHeldMs`
+> (W1 taken to commit, inside that wall) and `lockWaitMs`; a flip entry gives `elapsedS`,
+> `runtime`, `kind` `Flip`,
+> `trees`, `sessions`, `roots`, `tailBytes`, `renumberRows`, `ops`, `wallMs`, `lockHeldMs` and
+> `lockWaitMs`. Each flip batch is a `tree-admission` event (`trees`, `sessions`, `roots` — the
+> top-level conversations among them, published with no parent session, as the room lists them —
+> `tailBytes`, `renumberRows`, `wallMs`, `lockWaitMs`, `lockHeldMs`, and on the milestone clock
+> `elapsedS` at its commit and `publishedS` once the hub has absorbed it), and `streamed-apply`
 > adds `resolveMs`, `treesFlipped` and `sessionsFlipped`. After publication a `shared-cache-locks`
 > stage profile reports the RAM generation's lock evidence (§6): a `streaming` and a `finalize`
 > window, each with `sessionLockWait`, `readerPrologueWait` and `readerClosureWall` as `{count,
@@ -457,9 +500,12 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 >
 > A sampler thread probes memory every second. On macOS it reads the `proc_pid_rusage` footprint
 > and resident size, `vm.swapusage`, and the `host_statistics64` pageouts, swap-ins, swap-outs
-> and compressor pages; on Linux it reads procfs, best effort. `--json --profile` emits every
-> sample as a `memory-sample` event for the life of serve. Otherwise the sampler runs only during a
-> cold build, prints a compact `memory:` line at most every 10 s, and stops at canonical
+> and compressor pages; on Linux it reads procfs, best effort. Every platform also reads SQLite's
+> process-wide allocator, `sqlite3_memory_used` and `sqlite3_memory_highwater`, two cheap global
+> reads that bound the in-RAM canonical store's share of the footprint. `--json --profile` emits
+> every sample as a `memory-sample` event for the life of serve, with the SQLite pair as
+> `sqliteMemoryUsedBytes` and `sqliteMemoryHighwaterBytes`. Otherwise the sampler runs only
+> during a cold build, prints a compact `memory:` line at most every 10 s, and stops at canonical
 > readiness. Right after `milestone: canonical-ready`, every cold path prints two more lines:
 > - `milestone: memory-peak`: peak footprint (including the kernel's lifetime high-water mark),
 >   peak resident and swap, and the host's swap-outs and pageouts since serve start, or `na` where

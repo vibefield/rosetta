@@ -154,6 +154,9 @@ struct LaneRun {
     /// Each lane's sources in plan order.
     lanes: BTreeMap<LaneId, Vec<String>>,
     profile: Option<WalkProfile>,
+    /// What each emitted source's capture steps measured, by path: never
+    /// compared between runs.
+    clocks: BTreeMap<String, crate::CaptureClock>,
 }
 
 impl Default for LaneRun {
@@ -171,6 +174,7 @@ impl Default for LaneRun {
             digest: String::new(),
             lanes: BTreeMap::new(),
             profile: None,
+            clocks: BTreeMap::new(),
         }
     }
 }
@@ -277,11 +281,17 @@ fn run_lanes(
         StreamedRuntime::open(adapter, &runtime, setup, &mut canonical, &instrument).unwrap();
     let mut preparer = StreamedPreparer::new(&files);
     let mut emitted = Vec::new();
+    let mut clocks = BTreeMap::new();
     let has_policy = policy.is_some();
     let mut emit = HarnessEmit {
         prepare: Box::new(|sources| preparer.prepare(sources)),
         send: Box::new(|lane, sources| {
             assert!(sources.iter().all(|source| source.lane() == lane));
+            clocks.extend(
+                sources
+                    .iter()
+                    .map(|source| (source.relative_path().to_owned(), source.capture())),
+            );
             emitted.extend(sources.iter().map(|source| {
                 (
                     lane,
@@ -403,6 +413,7 @@ fn run_lanes(
         Err(error) => run.result = Err(error.to_string()),
     }
     run.emitted = emitted;
+    run.clocks = clocks;
     for entry in scan_ledger(ledger_dir.path()).unwrap().entries {
         let (path, line) = match &entry {
             LedgerEntry::Raw {
@@ -835,4 +846,5 @@ fn runtime_adapters_and_the_kill_switch_keep_the_path_walk_byte_for_byte() {
 }
 
 mod attribution;
+mod clock;
 mod schedule;

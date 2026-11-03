@@ -92,6 +92,7 @@ fn batch(bytes: u64) -> Event {
             ..ReportDelta::default()
         },
         profile: Instrument::new().snapshot(),
+        clock: crate::capture::CaptureClock::default(),
         ends: None,
     }))
 }

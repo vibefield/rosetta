@@ -30,7 +30,7 @@ use rosetta_core::IngestOp;
 use rosetta_core::rows::RuntimeRow;
 use rosetta_store::{Batch, SourceMode, Store, queries};
 
-use crate::capture::{CapturePool, LaneClass};
+use crate::capture::{CaptureClock, CapturePool, LaneClass};
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::live::PollEvidence;
@@ -83,6 +83,9 @@ pub struct ClosedSource {
     pub(crate) prepared: Option<crate::early::Prepared>,
     /// The walk span that emitted it ([`LaneId::Path`] on the path walk).
     pub(crate) lane: LaneId,
+    /// What its capture steps measured (measurement only; opaque to
+    /// `Debug`): empty for a source captured in a physical group.
+    pub(crate) capture: CaptureClock,
 }
 
 impl ClosedSource {
@@ -99,6 +102,11 @@ impl ClosedSource {
     /// The walk span that emitted it.
     pub fn lane(&self) -> LaneId {
         self.lane
+    }
+
+    /// What its capture steps measured (measurement only).
+    pub fn capture(&self) -> CaptureClock {
+        self.capture
     }
 
     /// The source's ops as captured (before the preparer withholds any):
@@ -148,6 +156,7 @@ impl ClosedSource {
             payload_bytes,
             prepared: None,
             lane,
+            capture: CaptureClock::default(),
         }
     }
 
@@ -220,6 +229,7 @@ fn close_file(
                 payload_bytes,
                 prepared: None,
                 lane: LaneId::Path,
+                capture: CaptureClock::default(),
             });
         }
         return Err(PipelineError::Config(format!(
@@ -307,6 +317,7 @@ fn close_file(
         payload_bytes,
         prepared: None,
         lane: LaneId::Path,
+        capture: CaptureClock::default(),
     })
 }
 

@@ -24,6 +24,8 @@ mod memory;
 pub(crate) use memory::MemorySampler;
 mod recency;
 use recency::{NewestHorizon, TreeMilestones};
+mod serve_lines;
+pub(crate) use serve_lines::{ServeClock, consent_granted, observe_first_search};
 
 const HOUR_MS: i64 = 60 * 60 * 1_000;
 const DAY_MS: i64 = 24 * HOUR_MS;
@@ -74,6 +76,10 @@ pub(crate) struct ColdMilestones {
     newest: Vec<NewestHorizon>,
     /// The root-tree milestones of the runtimes admitted per tree.
     trees: TreeMilestones,
+    /// Under `events`: every published session with a parent, from the
+    /// census's one metadata read, so a flip batch can count the top-level
+    /// conversations it made readable ([`ColdMilestones::roots_among`]).
+    children: HashSet<String>,
     /// Every line said and its event, for the tests.
     #[cfg(test)]
     said: Vec<(String, Option<Value>)>,
@@ -114,6 +120,7 @@ impl ColdMilestones {
                 .collect(),
             newest: NewestHorizon::all(),
             trees: TreeMilestones::new(runtimes),
+            children: HashSet::new(),
             #[cfg(test)]
             said: Vec::new(),
         }
@@ -210,10 +217,18 @@ impl ColdMilestones {
     /// Print one runtime's census, its sessions grouped into root trees by
     /// the [`TreeMap`] of their published metadata links: a store read, so
     /// the writer runs it once the runtime's producer has started.
-    pub(crate) fn census(&self, roster: RosterCensus, store: &Store) {
+    pub(crate) fn census(&mut self, roster: RosterCensus, store: &Store) {
         // Without published links every session is its own tree; a
         // measurement never fails the build.
         let mut links = session_links(store, &roster.runtime_id).unwrap_or_default();
+        if self.events {
+            self.children.extend(
+                links
+                    .iter()
+                    .filter(|(_, parent, _)| parent.is_some())
+                    .map(|(id, _, _)| id.clone()),
+            );
+        }
         links.extend(roster.source_links);
         let trees = TreeMap::build(&[], &links);
         let census = roster.census.with_trees(&roster.per_session, &trees);
@@ -221,6 +236,19 @@ impl ColdMilestones {
         if self.events {
             bench::emit(&census.event(&roster.runtime_id, roster.kind));
         }
+    }
+
+    /// How many of `sessions` are top-level conversations: published with
+    /// no parent session, as the room lists them. A session no metadata row
+    /// named (a stub) has none. Counted under `events` only; 0 otherwise.
+    pub(crate) fn roots_among(&self, sessions: &[String]) -> usize {
+        if !self.events {
+            return 0;
+        }
+        sessions
+            .iter()
+            .filter(|session| !self.children.contains(*session))
+            .count()
     }
 
     /// Before the writer applies `sources`: whether they complete a session

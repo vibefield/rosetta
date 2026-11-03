@@ -40,7 +40,7 @@ mod snapshot;
 pub mod stream;
 pub mod streamed;
 
-pub use capture::{CapturePool, PoolBudgets, PoolStats};
+pub use capture::{CaptureClock, CapturePool, PoolBudgets, PoolStats};
 pub use checkpoint::PipeCheckpoint;
 pub use closed::{
     BIG_LANES, BIG_SOURCE_BYTES, BlockingEmit, ClosedSource, ColdEmit, ColdWalkOptions,

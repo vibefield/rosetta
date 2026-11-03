@@ -7,8 +7,9 @@
 //! long as serve runs. Otherwise the sampler runs only while a cold build
 //! does, prints a compact `memory:` line at most every 10 s, and stops at
 //! canonical readiness, where `milestone: memory-peak` closes the trace. A
-//! probe is a few system calls; anything the platform cannot report is
-//! missing (`na`, or absent from the event), never an error.
+//! probe is a few system calls and two reads of SQLite's global memory
+//! statistics; anything the platform cannot report is missing (`na`, or
+//! absent from the event), never an error.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -36,11 +37,26 @@ pub(crate) struct Sample {
     pub(crate) swapouts: Option<u64>,
     pub(crate) compressor_pages: Option<u64>,
     pub(crate) page_size: Option<u64>,
+    /// SQLite's process-wide allocator: what it holds now and its high-water
+    /// mark (the canonical RAM generation's pages among them).
+    pub(crate) sqlite_memory_used: Option<u64>,
+    pub(crate) sqlite_memory_highwater: Option<u64>,
 }
 
 impl Sample {
     pub(crate) fn probe() -> Self {
-        platform::probe()
+        let mut sample = platform::probe();
+        // SAFETY: both read SQLite's global memory statistics and take no
+        // pointer; a reset flag of 0 leaves the high-water mark as it is.
+        let (used, highwater) = unsafe {
+            (
+                rusqlite::ffi::sqlite3_memory_used(),
+                rusqlite::ffi::sqlite3_memory_highwater(0),
+            )
+        };
+        sample.sqlite_memory_used = u64::try_from(used).ok();
+        sample.sqlite_memory_highwater = u64::try_from(highwater).ok();
+        sample
     }
 
     fn compressor_bytes(&self) -> Option<u64> {
@@ -64,6 +80,8 @@ impl Sample {
             ("swapouts", self.swapouts),
             ("compressorPages", self.compressor_pages),
             ("compressorBytes", self.compressor_bytes()),
+            ("sqliteMemoryUsedBytes", self.sqlite_memory_used),
+            ("sqliteMemoryHighwaterBytes", self.sqlite_memory_highwater),
         ] {
             if let Some(value) = value {
                 event.insert(key.into(), json!(value));

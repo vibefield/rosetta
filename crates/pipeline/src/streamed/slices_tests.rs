@@ -120,6 +120,7 @@ fn closed(path: &str, session_id: &str, ops: Vec<IngestOp>) -> ClosedSource {
         payload_bytes,
         prepared: None,
         lane: LaneId::Small,
+        capture: crate::capture::CaptureClock::default(),
     }
 }
 

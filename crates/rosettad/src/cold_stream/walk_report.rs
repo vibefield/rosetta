@@ -66,6 +66,7 @@ fn lane(profile: &LaneProfile) -> Value {
         "bytes": profile.bytes,
         "headWaitMs": millis(profile.head_wait_nanos),
         "heldMs": distribution(&mut held),
+        "heldMsTotal": millis(held.total_nanos()),
         "endMs": millis(profile.end_nanos),
         "inlineMs": millis(profile.inline_nanos),
         "serviceDelayMs": distribution(&mut service),
@@ -81,12 +82,14 @@ pub(super) fn lanes(walk: Option<&WalkProfile>) -> Value {
     })
 }
 
-/// Its scalars: `(laneSwitches, bigLaneChainMs)`, `null` for a path walk.
-pub(super) fn scalars(walk: Option<&WalkProfile>) -> (Value, Value) {
-    walk.map_or((Value::Null, Value::Null), |walk| {
+/// Its scalars: `(laneSwitches, bigLaneChainMs, sequencerAllLanesHeldMs)`,
+/// `null` for a path walk.
+pub(super) fn scalars(walk: Option<&WalkProfile>) -> (Value, Value, Value) {
+    walk.map_or((Value::Null, Value::Null, Value::Null), |walk| {
         (
             json!(walk.lane_switches),
             json!(millis(walk.big_lane_chain_nanos)),
+            json!(millis(walk.all_lanes_held_nanos)),
         )
     })
 }

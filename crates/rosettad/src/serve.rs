@@ -222,9 +222,12 @@ fn await_initial_search(
 
 pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // Milestone base for the sweep harness: every `milestone:` line below
-    // reports seconds since this instant.
-    let started = Instant::now();
-    serve(parse_flags(args)?, started)
+    // reports seconds since this instant, and `clock: wall_ms=` anchors it
+    // to the wall clock (measurement only).
+    let clock = crate::ingest_metrics::ServeClock::now();
+    let flags = parse_flags(args)?;
+    clock.announce(flags.json);
+    serve(flags, clock.started())
 }
 
 /// [`cmd_serve`] with its flags parsed. In-crate tests call it directly to
@@ -653,6 +656,7 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
         let granted = consent.arm();
         health.ingest_await_consent();
         println!("no enrolled agents — choose in the app (or pass --all-agents)");
+        let mut grant_arrived = false;
         loop {
             if stop.load(Ordering::SeqCst) {
                 break;
@@ -670,6 +674,7 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
                     // The grant names kinds; each maps to that kind's
                     // discovered target, exactly as the app has always meant.
                     consented.extend(kinds.iter().filter_map(|kind| installed_ids(kind)));
+                    grant_arrived = true;
                     break;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -680,6 +685,9 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
         // an earlier start retired has to be re-enabled here too.
         if enrollment.is_some() {
             apply_file_consent(&mut store, &hub, &persisted_rows, &consented)?;
+        }
+        if grant_arrived {
+            crate::ingest_metrics::consent_granted(started, flags.json);
         }
     }
     for target in consented_targets(&targets, &consented) {
@@ -1403,6 +1411,8 @@ fn run_resumed_fresh_serve(
         started.elapsed().as_secs_f64()
     );
     crate::ingest_metrics::after_canonical_ready(started, instrument);
+    // The detached build's first outcome prints without anything waiting.
+    crate::ingest_metrics::observe_first_search(started, search_worker.first_sync());
     // Before any runner writes: old members and caches nothing names go.
     search_worker.wake();
     crate::image_renditions::prune_after_publication(store.conn(), db);
@@ -1600,6 +1610,8 @@ fn run_fresh_fast_serve(
         started.elapsed().as_secs_f64()
     );
     crate::ingest_metrics::after_canonical_ready(started, instrument);
+    // The detached build's first outcome prints without anything waiting.
+    crate::ingest_metrics::observe_first_search(started, search_worker.first_sync());
     // Before any runner writes: old members and caches nothing names go.
     search_worker.wake();
     crate::image_renditions::prune_after_publication(store.conn(), db);

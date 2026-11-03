@@ -69,6 +69,9 @@ pub(crate) struct ReportDelta {
     pub(crate) hard_errors: u64,
     pub(crate) oversized: u64,
     pub(crate) quarantined: u64,
+    /// The largest framed record the step read (measurement only: the
+    /// capture clock's; no report counter).
+    pub(crate) max_record_bytes: u64,
 }
 
 impl ReportDelta {
@@ -451,6 +454,8 @@ impl IngestPass {
                 TailItem::Record(record) => {
                     deltas.records += 1;
                     deltas.payload_bytes += record.payload.len() as u64;
+                    deltas.max_record_bytes =
+                        deltas.max_record_bytes.max(record.payload.len() as u64);
                     self.budget_records += 1;
                     // The budget counts FRAMED PAYLOAD, mirroring the soft
                     // batch cap — physical amplification (anchor and

@@ -107,4 +107,7 @@ pub struct WalkProfile {
     /// Sequencer waits during which every live lane holding no emission was
     /// a big lane: the big-lane chain the sequencer itself waited on.
     pub big_lane_chain_nanos: u64,
+    /// Sequencer waits during which every live lane held an emission the
+    /// writer's budget refused: the walk stalled on the writer alone.
+    pub all_lanes_held_nanos: u64,
 }

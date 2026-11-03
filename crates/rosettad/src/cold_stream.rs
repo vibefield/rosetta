@@ -65,6 +65,7 @@ mod admit;
 mod emit;
 mod flips;
 mod queues;
+mod slowest;
 mod walk_report;
 mod writer;
 use emit::{BudgetClass, LaneBudgets, ProducerEmit};
@@ -258,7 +259,8 @@ fn produce(
     let closing_started = Instant::now();
     let wall_ms = capture_started.elapsed().as_secs_f64() * 1_000.0;
     if stage_profiles {
-        let (lane_switches, big_lane_chain_ms) = walk_report::scalars(stream.walk.as_deref());
+        let (lane_switches, big_lane_chain_ms, all_lanes_held_ms) =
+            walk_report::scalars(stream.walk.as_deref());
         // Emitted where capture ends, so the harness attributes the writer's
         // queued tail and the admission separately from capture.
         bench::emit(&json!({
@@ -301,6 +303,11 @@ fn produce(
                     "immediateBytes": split.immediate,
                     "relationalBytes": split.relational,
                     "assetBytes": split.asset,
+                    "assetOps": split.asset_ops,
+                    "captureWallMs": millis(split.capture.wall_nanos()),
+                    "captureSteps": split.capture.steps(),
+                    "longestStepMs": millis(split.capture.longest_step_nanos()),
+                    "maxRecordBytes": split.capture.max_record_bytes(),
                 }))
                 .collect::<Vec<_>>(),
             "prepareMs": millis(early.nanos),
@@ -308,6 +315,7 @@ fn produce(
             "lanes": walk_report::lanes(stream.walk.as_deref()),
             "laneSwitches": lane_switches,
             "bigLaneChainMs": big_lane_chain_ms,
+            "sequencerAllLanesHeldMs": all_lanes_held_ms,
         }));
         // Streamed capture closes each source inside the stream wall; no
         // serial plan preparation follows it any more. The closing work is

@@ -763,3 +763,6 @@ fn scalar(db: &Path, sql: &str) -> Option<String> {
 
 #[path = "fresh_serve/live_handoff.rs"]
 mod live_handoff;
+
+#[path = "fresh_serve/measure_lines.rs"]
+mod measure_lines;

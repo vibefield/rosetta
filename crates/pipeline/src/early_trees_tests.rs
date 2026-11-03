@@ -60,6 +60,7 @@ fn closed_in(lane: LaneId, path: &str, session_id: &str, ops: Vec<IngestOp>) -> 
         payload_bytes: 1,
         prepared: None,
         lane,
+        capture: crate::capture::CaptureClock::default(),
     }
 }
 

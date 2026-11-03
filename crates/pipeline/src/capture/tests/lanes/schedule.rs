@@ -391,3 +391,78 @@ fn a_held_prefix_keeps_every_lane_behind_it() {
         assert_lanes_match(&label, &serial, &run);
     }
 }
+
+/// Holds every lane's emission until `lanes` lanes have each held one,
+/// then for `until` more retries.
+struct HoldAll {
+    lanes: usize,
+    held: std::collections::BTreeSet<LaneId>,
+    retries: u64,
+    until: u64,
+}
+
+impl Hold for HoldAll {
+    fn hold(&mut self, lane: LaneId, retry: bool) -> bool {
+        self.held.insert(lane);
+        if self.held.len() < self.lanes {
+            return true;
+        }
+        if retry {
+            self.retries += 1;
+        }
+        self.retries < self.until
+    }
+}
+
+/// Measurement only: the sequencer's waits while every live lane holds an
+/// emission the writer's budget refused are counted apart
+/// (`sequencerAllLanesHeldMs`); a walk whose emissions are never held
+/// counts none.
+#[test]
+fn waits_with_every_lane_held_are_counted_apart() {
+    let home = mixed_home();
+    let opts = tiny_batches(4);
+    let walk = split_at(8 * 1024);
+    let pool = CapturePool::new(2, PoolBudgets::DEFAULT);
+    let mut policy = HoldAll {
+        lanes: 2,
+        held: std::collections::BTreeSet::new(),
+        retries: 0,
+        until: 4,
+    };
+    let run = run_lanes(
+        &ClaudeCodeAdapter,
+        home.path(),
+        &opts,
+        Setup {
+            pool: Some(&pool),
+            walk: walk.clone(),
+            policy: Some(&mut policy),
+            ..Setup::default()
+        },
+    );
+    assert!(run.result.is_ok(), "{:?}", run.result);
+    assert!(policy.retries >= policy.until);
+    let profile = run.profile.unwrap();
+    assert!(profile.all_lanes_held_nanos > 0, "{profile:?}");
+    let held: u64 = profile
+        .lanes
+        .iter()
+        .map(|lane| lane.held.total_nanos())
+        .sum();
+    assert!(held >= profile.all_lanes_held_nanos, "{profile:?}");
+
+    let pool = CapturePool::new(2, PoolBudgets::DEFAULT);
+    let free = run_lanes(
+        &ClaudeCodeAdapter,
+        home.path(),
+        &opts,
+        Setup {
+            pool: Some(&pool),
+            walk,
+            ..Setup::default()
+        },
+    );
+    assert!(free.result.is_ok(), "{:?}", free.result);
+    assert_eq!(free.profile.unwrap().all_lanes_held_nanos, 0);
+}

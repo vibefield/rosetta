@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use rosetta_pipeline::{FlipCaps, ProbeCounters, Samples, StreamedRuntime, TreeAdmission};
 use serde_json::{Value, json};
 
+use super::slowest::{FlipRecord, OpCounts, Slowest};
 use super::{StreamedCold, millis};
 use crate::bench;
 use crate::engine::{absorb_around, now_ms};
@@ -51,12 +52,21 @@ pub(super) struct FlipStats {
     pub(super) max_tail_bytes: u64,
     pub(super) renumber_rows: u64,
     pub(super) lock_wait_ns: u64,
+    /// The slowest flip transactions (under `--json --profile`).
+    pub(super) slowest: Slowest<FlipRecord>,
 }
 
 impl FlipStats {
     pub(super) fn profile(&self) -> Value {
         let mut wall = self.wall.clone();
+        let slowest: Vec<Value> = self
+            .slowest
+            .largest_first()
+            .into_iter()
+            .map(FlipRecord::json)
+            .collect();
         json!({
+            "slowestFlipTxs": slowest,
             "flipBatches": self.batches,
             "flipTrees": self.trees,
             "flipSessions": self.sessions,
@@ -140,6 +150,8 @@ impl Flips {
             }
         }
         absorb_around(cx.store, cx.hub, &invalidate, now_ms())?;
+        // Measurement only: the batch is public on the hub from here.
+        let published = cx.started.elapsed();
         for session_id in &admitted.changed {
             cx.board.session_done(
                 ownership.get(session_id).and_then(Option::as_deref),
@@ -149,6 +161,23 @@ impl Flips {
         milestones.sessions_readable(runtime_id, &admitted.changed);
         self.record(&admitted);
         if stage_profiles {
+            let since = |at: Option<Instant>| {
+                at.map(|at| at.saturating_duration_since(cx.started).as_secs_f64())
+            };
+            let roots = milestones.roots_among(&admitted.changed);
+            self.stats.slowest.offer(admitted.wall_ns, || FlipRecord {
+                elapsed_s: since(admitted.started_at).unwrap_or_default(),
+                runtime: runtime_id.to_owned(),
+                trees: admitted.trees.len(),
+                sessions: admitted.changed.len(),
+                roots,
+                tail_bytes: admitted.tail_bytes,
+                renumber_rows: admitted.renumber_rows,
+                ops: OpCounts::of(&admitted.stats),
+                wall_ns: admitted.wall_ns,
+                lock_held_ns: admitted.lock_held_ns,
+                lock_wait_ns: admitted.lock_wait_ns,
+            });
             bench::emit(&json!({
                 "event": "stage-profile",
                 "command": "serve",
@@ -157,10 +186,14 @@ impl Flips {
                 "runtime": runtime_id,
                 "trees": admitted.trees.len(),
                 "sessions": admitted.changed.len(),
+                "roots": roots,
                 "tailBytes": admitted.tail_bytes,
                 "renumberRows": admitted.renumber_rows,
                 "wallMs": millis(admitted.wall_ns),
                 "lockWaitMs": millis(admitted.lock_wait_ns),
+                "lockHeldMs": millis(admitted.lock_held_ns),
+                "elapsedS": since(admitted.committed_at),
+                "publishedS": published.as_secs_f64(),
             }));
         }
         Ok(admitted)

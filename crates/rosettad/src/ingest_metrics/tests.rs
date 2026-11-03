@@ -462,6 +462,23 @@ fn this_platform_reports_the_process_memory() {
     }
 }
 
+/// The in-RAM canonical store's share of the footprint: SQLite's global
+/// allocator, read on every platform, reaches the `memory-sample` event.
+#[test]
+fn a_memory_sample_carries_sqlite_memory_use_and_its_high_water_mark() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE t(x); INSERT INTO t VALUES (zeroblob(65536));")
+        .unwrap();
+    let sample = Sample::probe();
+    let used = sample.sqlite_memory_used.expect("SQLite memory statistics");
+    let highwater = sample.sqlite_memory_highwater.expect("its high-water mark");
+    assert!(used > 0 && highwater >= used, "{used} {highwater}");
+    let event = sample.event(1.0);
+    assert_eq!(event["sqliteMemoryUsedBytes"], used);
+    assert_eq!(event["sqliteMemoryHighwaterBytes"], highwater);
+    drop(conn);
+}
+
 #[test]
 fn the_memory_sampler_runs_only_when_wanted_and_stops_at_once() {
     let started = Instant::now();

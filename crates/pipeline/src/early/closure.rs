@@ -46,13 +46,15 @@ pub struct ClosedTree {
 
 /// One source over the big-lane split, as structure only: its read length
 /// and the approx bytes of its immediate, relational (withheld or deferred)
-/// and asset ops.
+/// and asset ops, how many asset ops, and what its capture steps measured.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BigSourceSplit {
     pub read_len: u64,
     pub immediate: u64,
     pub relational: u64,
     pub asset: u64,
+    pub asset_ops: u64,
+    pub capture: crate::capture::CaptureClock,
 }
 
 #[derive(Debug)]
