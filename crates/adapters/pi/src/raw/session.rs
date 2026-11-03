@@ -1,13 +1,14 @@
 //! Raw types for the `session` stream
 //! (`agent/sessions/<cwd-slug>/<timestamp>_<uuid>.jsonl`).
 //!
-//! Evidence: THE CANONICAL `groundtruth.json` — fixtures at 0.84.3 merged with
-//! writer-source `sources/0.84.3.writer.json` (session-manager.ts / messages.ts /
-//! pi-ai types.ts at tag v0.84.3).
+//! Evidence: THE CANONICAL `groundtruth.json` — fixtures at 0.84.3 and 1.5.0
+//! merged with writer-source `sources/0.84.3.writer.json` and
+//! `sources/1.5.0.writer.json` (session-manager.ts / messages.ts / pi-ai
+//! types.ts at tags v0.84.3 and v1.5.0).
 //!
 //! Fixture-backed types: session (incl. parentSession on forks), session_info,
 //! model_change, thinking_level_change, message (user / assistant / toolResult,
-//! including stopReason=error). Writer-only types (compaction, branch_summary,
+//! including stopReason=error; 1.5.0 adds role=system messages). Writer-only types (compaction, branch_summary,
 //! custom, custom_message, label) are typed from source so they parse when they
 //! appear; they remain research-evidence in the canonical file until a scenario
 //! writes them. Compaction.retainedTail is documented but NOT in the 0.84.3
@@ -170,6 +171,8 @@ impl Drift for AgentMessage {
 #[serde(tag = "role")]
 #[allow(clippy::large_enum_variant)]
 pub enum KnownMessage {
+    #[serde(rename = "system")]
+    System(SystemMessage),
     #[serde(rename = "user")]
     User(UserMessage),
     #[serde(rename = "assistant")]
@@ -189,6 +192,7 @@ pub enum KnownMessage {
 impl Drift for KnownMessage {
     fn drift(&self, prefix: &str, out: &mut Vec<String>) {
         match self {
+            KnownMessage::System(message) => note_unknown(&message.unknown, prefix, out),
             KnownMessage::User(message) => message.drift(prefix, out),
             KnownMessage::Assistant(message) => message.drift(prefix, out),
             KnownMessage::ToolResult(message) => message.drift(prefix, out),
@@ -216,6 +220,25 @@ impl Drift for UserContent {
             }
         }
     }
+}
+
+/// 1.5.0 `SystemMessage` (`packages/ai/src/types.ts` at v1.5.0): the base
+/// prompt as the leading message, later instruction and tool-set updates.
+/// Prompt scaffolding, not conversation content; ledger-only.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemMessage {
+    pub content: UserContent,
+    pub timestamp: u64,
+    /// `Record<string, string | null>`: named sections, `null` removes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_added: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_removed: Option<Value>,
+    #[serde(flatten)]
+    pub unknown: Unknown,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -253,6 +276,15 @@ pub struct AssistantMessage {
     pub response_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_turn: Option<bool>,
+    /// 1.5.0: the Pi and provider-native thinking levels of this response, and
+    /// its monotonic duration. Numbers stay `Number` so a fractional value
+    /// cannot demote the untagged message to `Other`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_thinking_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<serde_json::Number>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -283,6 +315,11 @@ pub struct ToolResultMessage {
     pub usage: Option<Usage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub added_tool_names: Option<Value>,
+    /// 1.5.0: calls this tool made to other tools, and its monotonic duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nested_calls: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<serde_json::Number>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -338,7 +375,8 @@ impl Drift for CustomRoleMessage {
 #[serde(rename_all = "camelCase")]
 pub struct BranchSummaryMessage {
     pub summary: String,
-    pub from_id: String,
+    /// `string | null` from the 1.5.0 writer (`messages.ts`).
+    pub from_id: Option<String>,
     pub timestamp: u64,
     #[serde(flatten)]
     pub unknown: Unknown,
@@ -471,6 +509,9 @@ pub struct Cost {
     pub cache_write: Option<serde_json::Number>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<serde_json::Number>,
+    /// 1.5.0: `total` is the provider-billed cost rather than a catalog estimate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_from_provider: Option<bool>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -553,6 +594,9 @@ pub struct CompactionEntry {
     pub details: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_hook: Option<bool>,
+    /// 1.5.0: the complete prompt and tool state at this boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }

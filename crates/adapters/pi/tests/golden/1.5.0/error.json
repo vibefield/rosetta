@@ -1,0 +1,95 @@
+[
+  {
+    "op": "message",
+    "timeline_id": "42ecad6a38ab3be4ea0794cbca849636e625634dc53ac8384d0903b89b6c0e84",
+    "session_id": "d98632875df208ff41ea8541476d4ffd840f47de98e7c30dbd10648ac8ab5623",
+    "ordinal": 0,
+    "group": {
+      "id": "42ecad6a38ab3be4ea0794cbca849636e625634dc53ac8384d0903b89b6c0e84",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "90d65683",
+    "parent_native_id": "04e41d1b",
+    "at": 1793734536700,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "This request must fail. [error]"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 5,
+      "src_offset": 5881
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "e63808ba552100dbaf7f97df6775552b0e36a56293da301851763346a2a7f1bc",
+    "session_id": "d98632875df208ff41ea8541476d4ffd840f47de98e7c30dbd10648ac8ab5623",
+    "ordinal": 1,
+    "group": {
+      "id": "e63808ba552100dbaf7f97df6775552b0e36a56293da301851763346a2a7f1bc",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "f13a9923",
+    "parent_native_id": "90d65683",
+    "at": 1793734536754,
+    "model": "mock-model",
+    "effort": "off",
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Rosetta mockmodel refused this request."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": "mock",
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 6,
+      "src_offset": 6098
+    }
+  }
+]

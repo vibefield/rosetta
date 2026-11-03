@@ -1,0 +1,188 @@
+[
+  {
+    "op": "message",
+    "timeline_id": "ecb06afdb54c7f6751fef23371d5d2977619b14e43f6cd8bbf0674e1283fc7ce",
+    "session_id": "6e81cd53db4509e84e373a578a97dcc56d5cd77802bfc8489c59a82de69aa67b",
+    "ordinal": 0,
+    "group": {
+      "id": "ecb06afdb54c7f6751fef23371d5d2977619b14e43f6cd8bbf0674e1283fc7ce",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "f6e24805",
+    "parent_native_id": "79a806d2",
+    "at": 1793734534468,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Reply with a short greeting."
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 5,
+      "src_offset": 5881
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "94bd4ecfa2e851e83cb30e0733a157243e31d1050949f3f033e8fe8bfe368f03",
+    "session_id": "6e81cd53db4509e84e373a578a97dcc56d5cd77802bfc8489c59a82de69aa67b",
+    "ordinal": 1,
+    "group": {
+      "id": "94bd4ecfa2e851e83cb30e0733a157243e31d1050949f3f033e8fe8bfe368f03",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "4393e14e",
+    "parent_native_id": "f6e24805",
+    "at": 1793734534517,
+    "model": "mock-model",
+    "effort": "off",
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": "mock",
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 6,
+      "src_offset": 6095
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "3474c57cccfe1df9e793dc3684ccc7f1e63d942313e778541ac0b431d905b787",
+    "session_id": "6e81cd53db4509e84e373a578a97dcc56d5cd77802bfc8489c59a82de69aa67b",
+    "ordinal": 2,
+    "group": {
+      "id": "3474c57cccfe1df9e793dc3684ccc7f1e63d942313e778541ac0b431d905b787",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "be103640",
+    "parent_native_id": "4393e14e",
+    "at": 1793734534942,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Continue: say goodbye."
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 7,
+      "src_offset": 6729
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "dcfc94a4531967ecedb3a01c26f7303574097acf21ebbb1f5c155d9978c05998",
+    "session_id": "6e81cd53db4509e84e373a578a97dcc56d5cd77802bfc8489c59a82de69aa67b",
+    "ordinal": 3,
+    "group": {
+      "id": "dcfc94a4531967ecedb3a01c26f7303574097acf21ebbb1f5c155d9978c05998",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "bf1fdf2d",
+    "parent_native_id": "be103640",
+    "at": 1793734534993,
+    "model": "mock-model",
+    "effort": "off",
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": "mock",
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 8,
+      "src_offset": 6937
+    }
+  }
+]

@@ -665,6 +665,37 @@ def _merge_record_types(
         current["evidence"] = _stronger(current.get("evidence", evidence), evidence)
 
 
+def _release_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", version))
+
+
+def _pinned_document(docs: list[dict[str, Any]]) -> dict[str, Any]:
+    """The strongest-evidence document that names the canonical version.
+
+    Several releases may contribute evidence of the same strength (a writer
+    document per pinned release). The canonical version is the newest of those
+    that also has a fixture corpus, so pinning a newer farmed release does not
+    depend on source file names sorting after older ones. Writer evidence for a
+    release without fixtures never moves the pin. Without such a candidate the
+    first strongest document keeps naming it, as before.
+    """
+
+    strength = docs[0]["evidence"]
+    farmed = {
+        document["agent_version"]
+        for document in docs
+        if document["evidence"] == "fixture"
+    }
+    candidates = [
+        document
+        for document in docs
+        if document["evidence"] == strength and document["agent_version"] in farmed
+    ]
+    if not candidates:
+        return docs[0]
+    return max(candidates, key=lambda document: _release_key(document["agent_version"]))
+
+
 def merge_docs(documents: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     docs = [copy.deepcopy(dict(document)) for document in documents]
     if not docs:
@@ -742,7 +773,7 @@ def merge_docs(documents: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         if not stream.get("facets"):
             stream.pop("facets", None)
 
-    strongest = docs[0]
+    strongest = _pinned_document(docs)
     return {
         "format": FORMAT,
         "agent": agent,
