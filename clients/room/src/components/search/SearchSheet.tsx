@@ -158,7 +158,9 @@ function HeadLine({
   );
 }
 
-function OptionRow({
+/** A full-text hit. `data-hit-kind` (inert, for the DOM contract) tells it
+ * from a title row, which says `title`. */
+export function OptionRow({
   option,
   active,
   home,
@@ -188,6 +190,7 @@ function OptionRow({
       aria-selected={active}
       aria-label={`${who}: ${spoken} · ${when} · ${project.row.name} › ${crumb.text}`}
       className="ah-sheet__row"
+      data-hit-kind="fulltext"
       onPointerMove={onHover}
       onClick={onOpen}
     >
@@ -232,6 +235,7 @@ function TitleRow({
       aria-label={`${spoken} · ${project.row.name} · ${when}`}
       className="ah-sheet__row"
       data-title=""
+      data-hit-kind="title"
       style={{ "--tint": project.tint } as TintStyle}
       onPointerMove={onHover}
       onClick={onOpen}

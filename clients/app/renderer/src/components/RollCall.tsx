@@ -65,8 +65,12 @@ export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient,
     // backfilling and the room replaces the roll call on the next poll.
   };
 
+  // `data-roll-call`, `data-agent-kind` and `data-action` are inert: what a
+  // scripted reader walks instead of the copy (the DOM contract in
+  // test/dom-contract.test.mjs).
   return (
-    <div className="ah-empty" style={{ flex: 1 }}>
+    <div className="ah-empty" style={{ flex: 1 }}
+      data-roll-call={rows === null ? "looking" : submitting ? "starting" : "ready"}>
       <strong>Choose what rosetta reads</strong>
       <p>
         {rows === null ? "" : "These agent stores were found on this machine. "}
@@ -92,6 +96,7 @@ export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient,
                   type="checkbox"
                   checked={checked.has(row.kind)}
                   disabled={submitting}
+                  data-agent-kind={row.kind}
                   onChange={(event) => {
                     const next = new Set(checked);
                     if (event.target.checked) next.add(row.kind);
@@ -119,6 +124,7 @@ export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient,
             type="button"
             className="ah-rollcall__begin"
             disabled={checked.size === 0 || submitting}
+            data-action="begin-ingest"
             onClick={begin}
           >
             {submitting ? "Starting…" : "Begin ingest"}

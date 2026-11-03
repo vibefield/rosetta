@@ -521,7 +521,7 @@ function SessionTranscript({
           )}
         </span>
       </header>}
-      <div className="tr-stage" data-ready={!loading || undefined}>
+      <div className="tr-stage" data-ready={!loading || undefined} data-session-key={session?.id}>
       <div className="tr-surface" inert={loading} aria-hidden={loading || undefined}>
       {!reader && session !== null && feed.timelineMeta !== null && (
         <TimelineMeta

@@ -777,6 +777,7 @@ function RoomBody({
             style={{ flex: 1 }}
             title={metaStatus === "closed" ? unavailableTitle : connectingTitle}
             description={connectionError ?? unavailable}
+            data-face={metaStatus === "closed" ? "not-answering" : "connecting"}
           >
             {/* Reaching the index has no amount, and a closed feed is not
                 working on anything: a sweep while connecting, then nothing. */}
@@ -788,6 +789,7 @@ function RoomBody({
               style={{ flex: 1 }}
               title="Waiting for consent"
               description="The index has found agents on this machine and reads nothing until it is told which ones to read."
+              data-face="consent"
             />
           )
         ) : coldStarting ? (

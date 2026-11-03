@@ -52,14 +52,18 @@ export function ImportEmptyState({ standing, duringBackfill, course = "newest-fi
   readonly duringBackfill: boolean;
   readonly course?: ImportCourse | undefined;
 }) {
+  // `data-import-face` and `data-import-course` are inert: the face and the
+  // course its words come from, for the DOM contract.
   if (standing === "unavailable") return (
     <EmptyState
       title="Transcript not available"
       description="Its own transcript was not found, only the conversations it started."
+      data-import-face="unavailable"
     />
   );
   return (
-    <EmptyState title="Not imported yet" description={NOT_IMPORTED_WHY[course]}>
+    <EmptyState title="Not imported yet" description={NOT_IMPORTED_WHY[course]}
+      data-import-face="not-imported" data-import-course={course}>
       {/* No amount is known for one session: the meter sweeps, unless the
           import is stopped and nothing moves. */}
       {duringBackfill && course !== "stopped" && <Meter fraction={null} />}

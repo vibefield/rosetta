@@ -1,6 +1,7 @@
 import type { SessionRow } from "@vibefield/rosetta-protocol";
 import { AgentMark } from "../../lib/agents";
 import { duration, lastActive, tokenText } from "../../lib/format";
+import { importStanding } from "../../lib/import-state";
 import { isSessionCooking } from "../../lib/ingest";
 import { sessionLastActive } from "../../lib/session-activity";
 import { spendDescription, spendText } from "../../lib/spend";
@@ -41,6 +42,10 @@ export function SessionListItem({
   const cookingState = isSessionCooking(session) && !metadataOnly;
   const landedFacts = facts !== null && (facts.messages > 0 || !cookingState) ? facts : null;
   const isCooking = cookingState && landedFacts === null;
+  // Where the row stands with the import, as the list placed it: the list
+  // already settled "unavailable" (`metadataOnly`), so only the running
+  // import's "not-imported" is left to read. Inert, for the DOM contract.
+  const standing = metadataOnly ? "unavailable" : (importStanding(session, duringBackfill, false) ?? "ready");
   const title = getSessionTitle(session);
   const lastActiveLabel = lastActive(sessionLastActive(session), currentTimestamp);
   const roleLabel = session.role === "main" ? null : session.role;
@@ -164,6 +169,8 @@ export function SessionListItem({
         data-cooking={isCooking ? "" : undefined}
         aria-current={isSelected ? "true" : undefined}
         aria-label={accessibleName}
+        data-standing={standing}
+        data-stream-state={session.stream_state}
         onClick={() => onSessionSelect(session)}
       >
         {body}
@@ -177,6 +184,8 @@ export function SessionListItem({
       data-role={session.role}
       data-cooking={isCooking ? "" : undefined}
       data-host-act=""
+      data-standing={standing}
+      data-stream-state={session.stream_state}
     >
       <button
         type="button"

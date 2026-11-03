@@ -1,6 +1,6 @@
 import { useId } from "react";
 import { AgentMark, agentLabel } from "../lib/agents";
-import { phaseHeading, readySuffix, runtimeActivity } from "../lib/ingest-activity";
+import { phaseHeading, readySessions, readySuffix, runtimeActivity } from "../lib/ingest-activity";
 import type { IngestActivity } from "../lib/ingest-activity";
 import { IngestionControls } from "./IngestionControls";
 
@@ -23,8 +23,11 @@ export function IngestStatus({ activity }: { readonly activity: IngestActivity |
   const ready = phase.key === "ready";
   const paused = interrupted || !phase.active;
   return (
+    // `data-ready-count` is the count "· N ready" draws, carried (inert)
+    // even where the copy leaves it out: zero, resumed, or another step.
     <section className="ah-ingest-status" aria-labelledby={titleId}
-      data-state={interrupted ? "disconnected" : ready ? "complete" : phase.key}>
+      data-state={interrupted ? "disconnected" : ready ? "complete" : phase.key}
+      data-ready-count={readySessions(feed.ingest)}>
       <div className="ah-ingest-status__eyebrow">
         <span>{ready ? "ALL SET" : "IMPORTING HISTORY"}</span>
         <span>{ready ? "✓" : `Step ${phase.step} of 4`}</span>

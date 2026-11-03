@@ -861,6 +861,17 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > agents, and a room opened after a resume's `restoring` phase cannot tell and shows the fresh
 > copy.
 >
+> **DOM readiness contract (2026-11-03).** So that a probe or a scripted reader never reads copy,
+> the room and the app's roll call carry inert data attributes for what is on screen: the face
+> before the columns (`data-face`), each session row's import standing and stream state
+> (`data-standing`, `data-stream-state`), the open session and its loader (`data-session-key`,
+> `data-loading-label`), the not-imported face and its course (`data-import-face`,
+> `data-import-course`), the import card's ready count (`data-ready-count`), a search row's kind
+> (`data-hit-kind`), and the roll call's state, toggles and Begin button. Each is derived from
+> props and state the component already has. The full list, with every value, is the header of
+> `clients/app/test/dom-contract.test.mjs`, which asserts it; copy may change, these may not
+> without changing that list.
+>
 > **Progress validation.** Campaign `/private/tmp/rosetta-ingest-progress-20260907` retains three
 > before/after fresh-serve pairs on the same read-only 200-file, 316,975,655-byte Claude/Codex
 > corpus (source manifest SHA-256 `f7c85b319eeb1779a0e29f3dba39bc6be29a221cda09a082109c37b3a3b2fb93`)
