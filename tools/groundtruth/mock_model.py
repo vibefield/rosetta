@@ -1072,6 +1072,53 @@ def _gemini_tool_names(request: dict[str, Any]) -> list[str]:
     return names
 
 
+def _gemini_declared_arguments(request: dict[str, Any], name: str) -> dict[str, Any] | None:
+    """Arguments that satisfy the shell tool's own declared JSON schema.
+
+    Antigravity 1.4.x declares `run_command` with `parametersJsonSchema`
+    (`CommandLine`, `toolSummary`, `WaitMsBeforeAsync` required, no additional
+    properties) and rejects the legacy `{"commandLine": …}` call as INVALID.
+    Without a declared object schema the caller keeps its legacy arguments.
+    """
+
+    tools = request.get("tools") if isinstance(request.get("tools"), list) else []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        declarations = tool.get("functionDeclarations", tool.get("function_declarations", []))
+        if isinstance(declarations, dict):
+            declarations = [declarations]
+        for declaration in declarations if isinstance(declarations, list) else []:
+            if not isinstance(declaration, dict) or declaration.get("name") != name:
+                continue
+            schema = declaration.get("parametersJsonSchema", declaration.get("parameters"))
+            properties = schema.get("properties") if isinstance(schema, dict) else None
+            if not isinstance(properties, dict) or not properties:
+                return None
+            required = schema.get("required") if isinstance(schema.get("required"), list) else []
+            command = next(
+                (key for key in properties if key.lower() in {"commandline", "command", "cmd"}),
+                None,
+            )
+            if command is None:
+                return None
+            arguments: dict[str, Any] = {command: "echo rosetta-mock"}
+            for key in required:
+                if key in arguments or not isinstance(properties.get(key), dict):
+                    continue
+                kind = str(properties[key].get("type", "")).lower()
+                if kind in {"integer", "number"}:
+                    # A wait budget long enough for `echo` to finish in the
+                    # foreground (Antigravity documents 500-10000 ms).
+                    arguments[key] = 5000 if "ms" in key.lower() else 1
+                elif kind == "boolean":
+                    arguments[key] = False
+                else:
+                    arguments[key] = "Echo command check"
+            return arguments
+    return None
+
+
 def _gemini_script(request: dict[str, Any]) -> tuple[str, Any, Any]:
     if _gemini_has_function_response(request):
         return ("text", TOOL_DONE, None)
@@ -1088,8 +1135,11 @@ def _gemini_script(request: dict[str, Any]) -> tuple[str, Any, Any]:
             names[0] if names else "run_command",
         )
         lowered = name.lower()
-        if lowered == "run_command":
-            arguments: dict[str, Any] = {"commandLine": "echo rosetta-mock"}
+        declared = _gemini_declared_arguments(request, name)
+        if declared is not None:
+            arguments: dict[str, Any] = declared
+        elif lowered == "run_command":
+            arguments = {"commandLine": "echo rosetta-mock"}
         elif lowered in {"bash", "shell", "execute", "run_terminal_cmd"}:
             arguments = {"command": "echo rosetta-mock"}
         elif lowered == "list_dir":

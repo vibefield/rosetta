@@ -1,0 +1,49 @@
+{
+  "agent": "copilot",
+  "agent_version": "1.0.105",
+  "scenario": "usage",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "copilot-home/config.json",
+      "bytes": 131
+    },
+    {
+      "path": "copilot-home/session-state/770d261e-92f8-4554-ba73-48a6d2807bae/checkpoints/index.md",
+      "bytes": 172
+    },
+    {
+      "path": "copilot-home/session-state/770d261e-92f8-4554-ba73-48a6d2807bae/events.jsonl",
+      "bytes": 32032
+    },
+    {
+      "path": "copilot-home/session-state/770d261e-92f8-4554-ba73-48a6d2807bae/rewind-file-snapshots/tracking.json",
+      "bytes": 29
+    },
+    {
+      "path": "copilot-home/session-state/770d261e-92f8-4554-ba73-48a6d2807bae/workspace.yaml",
+      "bytes": 254
+    },
+    {
+      "path": "copilot-home/session-store.db",
+      "bytes": 167936
+    },
+    {
+      "path": "copilot-home/settings.json",
+      "bytes": 89
+    },
+    {
+      "path": "share.md",
+      "bytes": 613
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 45
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 14213
+    }
+  ]
+}

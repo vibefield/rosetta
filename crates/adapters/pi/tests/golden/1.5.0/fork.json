@@ -1,0 +1,281 @@
+[
+  {
+    "op": "message",
+    "timeline_id": "6dd92c38455aa4e077219335d5b30de383455ecdef6ed224f70aab3503f81fd8",
+    "session_id": "71f52a95d836a867de190e78cd18b287d4bc4e9411df01c6ec86726322c29913",
+    "ordinal": 0,
+    "group": {
+      "id": "6dd92c38455aa4e077219335d5b30de383455ecdef6ed224f70aab3503f81fd8",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "dd8dc745",
+    "parent_native_id": "95695aa4",
+    "at": 1793734535723,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Reply with a short greeting."
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 5,
+      "src_offset": 5881
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "3ef87e372be0b138d9fd4e044de06be5097b663e461f1dc64e788f15996bd6fb",
+    "session_id": "71f52a95d836a867de190e78cd18b287d4bc4e9411df01c6ec86726322c29913",
+    "ordinal": 1,
+    "group": {
+      "id": "3ef87e372be0b138d9fd4e044de06be5097b663e461f1dc64e788f15996bd6fb",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "866b3d18",
+    "parent_native_id": "dd8dc745",
+    "at": 1793734535789,
+    "model": "mock-model",
+    "effort": "off",
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": "mock",
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 6,
+      "src_offset": 6095
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "826b6e81266809c802ed2bb663515645fb8cf378726e7ea1fc0599dcd7c17722",
+    "session_id": "5b802b84a0e270fd18f5a2e1693148a227e1af9490d65cfb0d0fca0f38694448",
+    "ordinal": 0,
+    "group": {
+      "id": "826b6e81266809c802ed2bb663515645fb8cf378726e7ea1fc0599dcd7c17722",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "dd8dc745",
+    "parent_native_id": "95695aa4",
+    "at": 1793734535723,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Reply with a short greeting."
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 5,
+      "src_offset": 6039
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "8c758cc28fdfe45d35b11ab611cb59baaed128d80dccdc78672b31f7c82002f1",
+    "session_id": "5b802b84a0e270fd18f5a2e1693148a227e1af9490d65cfb0d0fca0f38694448",
+    "ordinal": 1,
+    "group": {
+      "id": "8c758cc28fdfe45d35b11ab611cb59baaed128d80dccdc78672b31f7c82002f1",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "866b3d18",
+    "parent_native_id": "dd8dc745",
+    "at": 1793734535789,
+    "model": "mock-model",
+    "effort": "off",
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 6,
+      "src_offset": 6253
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "9b9f41f8532e77e7b81a3424b480849d611324c0d6628b47759649fb6717344a",
+    "session_id": "5b802b84a0e270fd18f5a2e1693148a227e1af9490d65cfb0d0fca0f38694448",
+    "ordinal": 2,
+    "group": {
+      "id": "9b9f41f8532e77e7b81a3424b480849d611324c0d6628b47759649fb6717344a",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "c3feb0d1",
+    "parent_native_id": "866b3d18",
+    "at": 1793734536204,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Continue from the fork."
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 7,
+      "src_offset": 6887
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "2147e301addd8d8288dfc27990bb3f87bf806c17ad82b3524bba7f62c998d4ed",
+    "session_id": "5b802b84a0e270fd18f5a2e1693148a227e1af9490d65cfb0d0fca0f38694448",
+    "ordinal": 3,
+    "group": {
+      "id": "2147e301addd8d8288dfc27990bb3f87bf806c17ad82b3524bba7f62c998d4ed",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "0ca67fce",
+    "parent_native_id": "c3feb0d1",
+    "at": 1793734536256,
+    "model": "mock-model",
+    "effort": "off",
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": "mock",
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 8,
+      "src_offset": 7096
+    }
+  }
+]

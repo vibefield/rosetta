@@ -157,13 +157,31 @@ def session_events_writer_doc(
     }
 
 
-def write_copilot_writer_schema(install: Path, agent_dir: Path, version: str) -> Path:
-    matches = sorted(
+def copilot_schema_candidates(install: Path, version: str) -> list[Path]:
+    """Locate the exact release's writer schema inside an installed package.
+
+    Through 1.0.84 the platform npm package shipped ``schemas/`` beside the
+    binary. From 1.0.85 the platform package is the single-file executable,
+    which self-extracts its payload (``schemas/`` included) into
+    ``<COPILOT_CACHE_HOME>/pkg/<platform>/<version>/`` on first run; the farm
+    performs that extraction under ``install`` before calling this.
+    """
+
+    shipped = sorted(
         install.glob("node_modules/@github/copilot-*/schemas/session-events.schema.json")
     )
+    extracted = sorted(
+        install.glob(f"**/pkg/*/{version}/schemas/session-events.schema.json")
+    )
+    return shipped + [path for path in extracted if path not in shipped]
+
+
+def write_copilot_writer_schema(install: Path, agent_dir: Path, version: str) -> Path:
+    matches = copilot_schema_candidates(install, version)
     if not matches:
         raise GroundTruthError(
-            "copilot session-events.schema.json not found under the installed npm package"
+            "copilot session-events.schema.json not found under the installed npm "
+            "package or its self-extracted payload"
         )
     schema_path = matches[0]
     try:

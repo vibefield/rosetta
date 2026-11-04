@@ -344,20 +344,59 @@ fn a_sibling_lost_before_its_heal_keeps_its_generation_streaming() {
     assert_eq!(serial.canonical["workflow_journal"].len(), 1);
 }
 
-/// The Copilot basic-chat session's workspace document, a document-driver
-/// group of one member.
-const COPILOT_WORKSPACE: &str = "session-state/8f0e1895-c442-4ac2-828d-6b2ea7b5421d/workspace.yaml";
-
-/// A home holding `adapter`'s recorded basic-chat scenario, and its data root.
-fn basic_chat_home(adapter: &dyn AgentAdapter) -> (TempDir, PathBuf) {
-    let (_, data) = fixture_roots(adapter.kind())
+/// A disposable home for every recorded basic-chat version. Fixture session
+/// ids belong to their capture, so neither version nor physical path is fixed.
+fn basic_chat_homes(adapter: &dyn AgentAdapter) -> Vec<(String, TempDir, PathBuf)> {
+    let homes: Vec<_> = fixture_roots(adapter.kind())
         .into_iter()
-        .find(|(scenario, _)| scenario == "basic-chat")
-        .expect("a basic-chat fixture");
-    let home = TempDir::new().unwrap();
-    let root = expand_data_root(&adapter.layout().data_root, home.path());
-    copy_tree(&data, &root);
-    (home, root)
+        .filter(|(scenario, _)| scenario == "basic-chat")
+        .map(|(_, data)| {
+            let version = data
+                .ancestors()
+                .nth(2)
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let home = TempDir::new().unwrap();
+            let root = expand_data_root(&adapter.layout().data_root, home.path());
+            copy_tree(&data, &root);
+            (version, home, root)
+        })
+        .collect();
+    assert!(
+        !homes.is_empty(),
+        "{} has no basic-chat fixture",
+        adapter.kind()
+    );
+    homes
+}
+
+/// Find the single physical source the scenario exercises, without baking
+/// the capture's session id into the test.
+fn fixture_file(root: &Path, name: &str) -> String {
+    let files: Vec<_> = walkdir::WalkDir::new(root)
+        .into_iter()
+        .map(Result::unwrap)
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == name)
+        .map(|entry| {
+            entry
+                .path()
+                .strip_prefix(root)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .replace('\\', "/")
+        })
+        .collect();
+    assert_eq!(
+        files.len(),
+        1,
+        "one {name} under {}: {files:?}",
+        root.display()
+    );
+    files.into_iter().next().unwrap()
 }
 
 /// Every emitted member of the group read from `physical` — a source named
@@ -427,34 +466,36 @@ fn assert_group_unledgered(label: &str, ledger: &Path, physical: &str) {
 /// held Streaming, and the build publishes.
 #[test]
 fn snapshot_and_document_groups_lost_before_capture_close_skipped() {
-    for (adapter, physical) in [
+    for (adapter, filename) in [
         (&CodexAdapter as &'static dyn AgentAdapter, "state_5.sqlite"),
-        (&CopilotAdapter, COPILOT_WORKSPACE),
+        (&CopilotAdapter, "workspace.yaml"),
     ] {
-        let label = format!("{} {physical} lost", adapter.kind());
-        let (home, root) = basic_chat_home(adapter);
-        let (path, stash) = (root.join(physical), home.path().join("stash"));
-        let run = |config: Config, ledger: &Path| {
+        for (version, home, root) in basic_chat_homes(adapter) {
+            let physical = fixture_file(&root, filename);
+            let label = format!("{} {version} {physical} lost", adapter.kind());
+            let (path, stash) = (root.join(&physical), home.path().join("stash"));
+            let run = |config: Config, ledger: &Path| {
+                restore(&path, &stash);
+                capture_into_after(
+                    adapter,
+                    home.path(),
+                    &IngestOptions::default(),
+                    config,
+                    ledger,
+                    &|| std::fs::rename(&path, &stash).unwrap(),
+                )
+            };
+            let serial =
+                assert_every_config(&label, |config| run(config, TempDir::new().unwrap().path()));
+            assert_published(&label, &serial);
+            let members = assert_group_skipped(&label, &serial, &physical);
+            // Files missing: the whole group.
+            assert_eq!(serial.report[1], members, "{label}: {:?}", serial.report);
+            let ledger = TempDir::new().unwrap();
+            assert_eq!(run(SERIAL, ledger.path()).emitted, serial.emitted);
+            assert_group_unledgered(&label, ledger.path(), &physical);
             restore(&path, &stash);
-            capture_into_after(
-                adapter,
-                home.path(),
-                &IngestOptions::default(),
-                config,
-                ledger,
-                &|| std::fs::rename(&path, &stash).unwrap(),
-            )
-        };
-        let serial =
-            assert_every_config(&label, |config| run(config, TempDir::new().unwrap().path()));
-        assert_published(&label, &serial);
-        let members = assert_group_skipped(&label, &serial, physical);
-        // Files missing: the whole group.
-        assert_eq!(serial.report[1], members, "{label}: {:?}", serial.report);
-        let ledger = TempDir::new().unwrap();
-        assert_eq!(run(SERIAL, ledger.path()).emitted, serial.emitted);
-        assert_group_unledgered(&label, ledger.path(), physical);
-        restore(&path, &stash);
+        }
     }
 }
 
@@ -573,38 +614,42 @@ fn unstable_document_cleanup_does_not_wait_for_other_writers() {
 /// session held Streaming.
 #[test]
 fn a_document_unstable_under_every_retry_closes_its_group_skipped() {
-    let label = "copilot workspace unstable";
-    let (home, root) = basic_chat_home(&CopilotAdapter);
-    let (path, stash) = (root.join(COPILOT_WORKSPACE), home.path().join("stash"));
-    let run = |config: Config, ledger: &Path| {
-        restore(&path, &stash);
-        let unstable = std::cell::RefCell::new(None);
-        let captured = capture_into_after(
-            &CopilotAdapter,
-            home.path(),
-            &IngestOptions::default(),
-            config,
-            ledger,
-            &|| {
-                std::fs::rename(&path, &stash).unwrap();
-                *unstable.borrow_mut() = Some(UnstableDocument::at(&path));
-            },
+    for (version, home, root) in basic_chat_homes(&CopilotAdapter) {
+        let physical = fixture_file(&root, "workspace.yaml");
+        let label = format!("copilot {version} {physical} unstable");
+        let label = label.as_str();
+        let (path, stash) = (root.join(&physical), home.path().join("stash"));
+        let run = |config: Config, ledger: &Path| {
+            restore(&path, &stash);
+            let unstable = std::cell::RefCell::new(None);
+            let captured = capture_into_after(
+                &CopilotAdapter,
+                home.path(),
+                &IngestOptions::default(),
+                config,
+                ledger,
+                &|| {
+                    std::fs::rename(&path, &stash).unwrap();
+                    *unstable.borrow_mut() = Some(UnstableDocument::at(&path));
+                },
+            );
+            drop(unstable.into_inner());
+            captured
+        };
+        let serial =
+            assert_every_config(label, |config| run(config, TempDir::new().unwrap().path()));
+        assert_published(label, &serial);
+        let members = assert_group_skipped(label, &serial, &physical);
+        // Files missing, retries exhausted: the whole group, never missing.
+        assert_eq!(
+            (serial.report[1], serial.report[12]),
+            (0, members),
+            "{:?}",
+            serial.report
         );
-        drop(unstable.into_inner());
-        captured
-    };
-    let serial = assert_every_config(label, |config| run(config, TempDir::new().unwrap().path()));
-    assert_published(label, &serial);
-    let members = assert_group_skipped(label, &serial, COPILOT_WORKSPACE);
-    // Files missing, retries exhausted: the whole group, never missing.
-    assert_eq!(
-        (serial.report[1], serial.report[12]),
-        (0, members),
-        "{:?}",
-        serial.report
-    );
-    let ledger = TempDir::new().unwrap();
-    assert_eq!(run(SERIAL, ledger.path()).emitted, serial.emitted);
-    assert_group_unledgered(label, ledger.path(), COPILOT_WORKSPACE);
-    restore(&path, &stash);
+        let ledger = TempDir::new().unwrap();
+        assert_eq!(run(SERIAL, ledger.path()).emitted, serial.emitted);
+        assert_group_unledgered(label, ledger.path(), &physical);
+        restore(&path, &stash);
+    }
 }

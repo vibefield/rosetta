@@ -176,7 +176,9 @@ fn message_entry(
             | KnownMessage::BranchSummary(_)
             | KnownMessage::CompactionSummary(_),
         ) => EntryKind::TurnStart,
-        AgentMessage::Known(KnownMessage::Assistant(_) | KnownMessage::ToolResult(_))
+        AgentMessage::Known(
+            KnownMessage::System(_) | KnownMessage::Assistant(_) | KnownMessage::ToolResult(_),
+        )
         | AgentMessage::Other(_) => EntryKind::TurnBody,
     };
     match &entry.message {
@@ -260,6 +262,9 @@ fn message_entry(
         AgentMessage::Known(KnownMessage::CompactionSummary(message)) => {
             compaction_summary_message(ctx, entry, message, &inherited, ts, ops);
         }
+        // Prompt scaffolding (1.5.0) stays in the ledger, as it did while it
+        // parsed as an undeclared role.
+        AgentMessage::Known(KnownMessage::System(_)) => {}
         // An undeclared nested role is reported by `drift_paths`; the declared
         // top-level `message` record remains successfully parsed.
         AgentMessage::Other(_) => {}
@@ -791,6 +796,7 @@ fn record_kind(record: &KnownRecord) -> String {
     match record {
         KnownRecord::Session(_) => "session".to_owned(),
         KnownRecord::Message(entry) => match &entry.message {
+            AgentMessage::Known(KnownMessage::System(_)) => "message/system".to_owned(),
             AgentMessage::Known(KnownMessage::User(_)) => "message/user".to_owned(),
             AgentMessage::Known(KnownMessage::Assistant(_)) => "message/assistant".to_owned(),
             AgentMessage::Known(KnownMessage::ToolResult(_)) => "message/toolResult".to_owned(),

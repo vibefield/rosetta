@@ -1,0 +1,12 @@
+{
+  "enableInstallTelemetry": false,
+  "defaultProjectTrust": "never",
+  "retry": {
+    "enabled": false
+  },
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 128,
+    "keepRecentTokens": 32
+  }
+}
