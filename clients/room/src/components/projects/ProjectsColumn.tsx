@@ -118,6 +118,7 @@ export function ProjectsColumn({
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}
+          importing={activityOrder.bootstrapping}
           runtimes={ingest?.runtimes}
           projectBackfills={backfills}
           pending={censusRunning}

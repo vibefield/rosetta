@@ -87,10 +87,12 @@ test("while importing, the sessions it has not reached are drawn last, newest so
     "Today", "today", "Yesterday", "yesterday",
     // A row made only for its children is never reached, so it is not waiting.
     "Activity unknown", "orphan",
-    "Not imported yet", "p2", "p3", "p1",
+    "Not imported yet · 3", "p2", "p3", "p1",
   ]);
-  assert.match(markup, /<div class="ah-day" data-not-imported="">Not imported yet<\/div>/);
-  assert.match(markup, /aria-label="Title p1 · not imported yet · /);
+  assert.match(markup, /<div class="ah-day" data-not-imported="">Not imported yet · 3<\/div>/);
+  // Its time slot says why there is no time; the name says it once.
+  assert.match(markup, /aria-label="Title p1 · not imported yet"/);
+  assert.match(markup, /data-motion-key="p1"[^>]*>(?:(?!<\/button>).)*<span class="ah-last">not imported yet<\/span>/);
   // Its title is its native id, and nothing about it cooks.
   assert.match(markup, /data-motion-key="orphan" data-role="main" aria-label="orphan · transcript not available · /);
 
@@ -126,7 +128,9 @@ test("a row is not imported yet only while the import runs; one with no transcri
 
 test("the row's label: not imported yet while importing, transcript not available for a metadata-only row", () => {
   const waiting = session("w", pending(1));
-  assert.deepEqual(getSessionStatus(waiting, true), { tone: "orange", isLive: false, label: "not imported yet" });
+  // Waiting on a running import is no trouble: no hue (the row draws a hollow dot).
+  assert.deepEqual(getSessionStatus(waiting, true), { tone: null, isLive: false, label: "not imported yet" });
+  assert.equal(getSessionStatus(waiting, false).tone, "orange");
   assert.equal(getSessionStatus(waiting, false).label, "not yet indexed");
   assert.deepEqual(getSessionStatus(waiting, true, true), { tone: null, isLive: false, label: "transcript not available" });
   assert.equal(getSessionStatus(session("s", { stream_state: "streaming" }), true).label, "indexing");
@@ -165,6 +169,11 @@ test("the pill says what arrived, and says older only when every arrival lands b
   assert.equal(/role="status">([^<]*)</.exec(one)[1], /role="status">([^<]*)</.exec(older)[1]);
   assert.match(notice({ pending: true, arrivals: null }), />Show recent activity<\/button>/);
   assert.match(notice({ pending: true }), /role="status">New activity is available in sessions\.<\/span>/);
+  // A reorder the import caused names the import, never activity.
+  const reordered = renderToStaticMarkup(createElement(ListActivityNotice, { onShow: () => {}, noun: "projects", pending: true, importReorder: true }));
+  assert.match(reordered, />Projects reordered by the import · show<\/button>/);
+  assert.match(reordered, /role="status">Projects were reordered by the import\.<\/span>/);
+  assert.match(renderToStaticMarkup(createElement(ListActivityNotice, { onShow: () => {}, noun: "projects", pending: true })), />Show recent activity<\/button>/);
   const idle = notice({ pending: false, arrivals: { count: 3, older: true } });
   assert.match(idle, /role="status"><\/span>/);
   assert.match(idle, /hidden="">Show recent activity<\/button>/);

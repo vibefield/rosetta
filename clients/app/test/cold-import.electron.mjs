@@ -328,12 +328,12 @@ async function freshImport() {
   const expectedFoot = await check((key) => window.coldImport.c.meta().sessions
     .filter((s) => s.parent_session_id === null && (s.project_id ?? '__rosetta_unassigned__') === key && window.coldImport.c.kindOf(s.id) !== 'placeholder')
     .sort((a, b) => b.updated_at - a.updated_at || a.id.localeCompare(b.id)).map((s) => s.id), newest.project);
-  today('ux:X2', 'at metadata every row sits in one "Not imported yet" foot group: no date head, no count',
-    groupsAtMetadata.map((group) => ({ head: group.head, notImported: group.notImported })), [{ head: 'Not imported yet', notImported: true }]);
+  today('ux:X2', 'at metadata every row sits in one "Not imported yet" foot group: no date head, its head counts its rows',
+    groupsAtMetadata.map((group) => ({ head: group.head, notImported: group.notImported })), [{ head: `Not imported yet · ${expectedFoot.length.toLocaleString()}`, notImported: true }]);
   today('ux:X2', 'the foot group orders by updated_at descending, then id',
     groupsAtMetadata[0].rows.map((row) => row.id), expectedFoot);
-  const pendingLook = { standing: 'not-imported', stream: 'pending', tone: 'orange', last: 'unknown', span: '—', cooking: true };
-  today('ux:X2', 'a not-imported row: orange dot, shimmering figures, "unknown" last active, "—" span',
+  const pendingLook = { standing: 'not-imported', stream: 'pending', tone: null, last: 'not imported yet', span: '—', cooking: false };
+  today('ux:X2', 'a not-imported row: a hollow neutral dot (no tone), no shimmer, "not imported yet" in the time slot, "—" span',
     [...new Set(groupsAtMetadata[0].rows.map(({ id: _id, ...look }) => JSON.stringify(look)))].map((look) => JSON.parse(look)), [pendingLook]);
   today('ux:X6', 'the project panel veils its figures with "Preparing activity summaries…" during the import',
     await inColumn((column) => column('sessions')?.querySelector('.ah-meta__body .ah-veil')?.getAttribute('aria-label') ?? null), 'Preparing activity summaries…');
@@ -384,13 +384,18 @@ async function freshImport() {
   today('ux:X2', 'the newest conversation still sits in the foot group, below older readable rows (the inversion)',
     { lastHead: foot.head, newestInFoot: foot.rows.some((row) => row.id === newest.id),
       readableAbove: inverted.slice(0, -1).some((group) => group.rows.some((row) => row.standing === 'ready')) },
-    { lastHead: 'Not imported yet', newestInFoot: true, readableAbove: true });
+    { lastHead: `Not imported yet · ${foot.rows.length.toLocaleString()}`, newestInFoot: true, readableAbove: true });
   today('forever', 'unheld, no readable row is drawn under the "Not imported yet" head',
     inverted.filter((group) => group.notImported).flatMap((group) => group.rows).filter((row) => row.standing === 'ready').length, 0);
   const streamingRow = inverted.flatMap((group) => group.rows).find((row) => row.id === dirty.id);
-  today('ux:X2', 'a Streaming root (its source was unclean) reads ready, with the not-imported row\'s orange dot and shimmer',
-    { standing: streamingRow?.standing, stream: streamingRow?.stream, tone: streamingRow?.tone, cooking: streamingRow?.cooking },
-    { standing: 'ready', stream: 'streaming', tone: pendingLook.tone, cooking: pendingLook.cooking });
+  // Pending and Streaming no longer look alike: a Streaming root is
+  // readable, so it keeps its orange "indexing" dot and figure shimmer and
+  // shows its recorded time and span, where a not-imported row shows none.
+  const dirtyActivity = await check((id) => window.coldImport.c.meta().sessions.find((s) => s.id === id).activity, dirty.id);
+  today('ux:X2', 'a Streaming root (its source was unclean) reads ready: orange dot and shimmer, its recorded time and span, unlike a not-imported row',
+    { standing: streamingRow?.standing, stream: streamingRow?.stream, tone: streamingRow?.tone, cooking: streamingRow?.cooking,
+      timed: streamingRow?.last !== pendingLook.last && streamingRow?.last !== 'unknown', span: streamingRow?.span !== '—', activity: dirtyActivity !== null },
+    { standing: 'ready', stream: 'streaming', tone: 'orange', cooking: true, timed: true, span: true, activity: true });
   const mixed = await agreed(projectsByToday);
   today('ux:X1', 'while ranked and unranked mix: activity-ranked projects first, the unranked after them by id',
     mixed.actual, mixed.expected);
@@ -424,10 +429,10 @@ async function freshImport() {
   const arrivals = await check((ids) => ids.filter((id) => window.coldImport.c.streamState(id) !== 'pending').length, heldIds);
   await frames(3);
   const held = await groups();
-  today('ux:X4', 'held by the pointer: the foot head reads "Activity updated" and the pill counts the arrivals',
+  today('ux:X4', 'held by the pointer: the foot head counts the conversations imported (never "Activity updated") and the pill counts the arrivals',
     { foot: held.at(-1).head, newestStillInFoot: held.at(-1).rows.some((row) => row.id === newest.id),
       pill: await check(() => { const pill = document.querySelector('.ah-list-view:has(> .ah-session-list) > .ah-list-updates'); return pill.hidden ? null : pill.textContent; }) },
-    { foot: 'Activity updated', newestStillInFoot: true, pill: `${arrivals} ${arrivals === 1 ? 'conversation' : 'conversations'} imported — show` });
+    { foot: `${arrivals} ${arrivals === 1 ? 'conversation' : 'conversations'} imported`, newestStillInFoot: true, pill: `${arrivals} ${arrivals === 1 ? 'conversation' : 'conversations'} imported — show` });
   today('forever', 'the catalog flipped the open session first: the face holds "Not imported yet" until rows arrive',
     await check(() => document.querySelector('.ah-col--measure .ah-empty[data-import-face]')?.dataset.importFace ?? null), 'not-imported');
   await check(() => window.coldImport.c.deliverResyncs());
@@ -438,7 +443,7 @@ async function freshImport() {
   await hover('sessions', false);
   await until((id) => document.querySelector('.ah-session-list-item')?.dataset.motionKey === id, 'the applied order to put the newest first', newest.id);
 
-  // The projects pill is activity copy, even for an import reorder (ux:X4).
+  // The projects pill names the import when the import reorders them (ux:X4).
   // Step to the first flip that changes the rank rule's project order; the
   // schedule is deterministic, so that flip always comes.
   await agreed(projectsByToday);
@@ -458,10 +463,10 @@ async function freshImport() {
   today('ux:X4', 'an import flip reorders the held projects (by the rank rule) before reading ends', reorderedAt !== null, true);
   await shows('ux:X4', 'the reorder raises the projects pill while they are held',
     () => document.querySelector('.ah-list-view:has(.ah-project-list-item) > .ah-list-updates')?.hidden === false);
-  today('ux:X4', 'held projects say "Show recent activity" when the import reorders them, and hold their rows',
+  today('ux:X4', 'held projects say "Projects reordered by the import · show" when the import reorders them, and hold their rows',
     { pill: await check(() => document.querySelector('.ah-list-view:has(.ah-project-list-item) > .ah-list-updates').textContent),
       held: JSON.stringify(await check(projectOrder)) === JSON.stringify(projectsHeld) },
-    { pill: 'Show recent activity', held: true });
+    { pill: 'Projects reordered by the import · show', held: true });
   await hover('projects', false);
 
   // ── More flips under an open transcript, by how the resync lands ──────

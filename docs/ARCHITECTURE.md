@@ -41,18 +41,24 @@ Calendar-day grouping still follows recorded activity, including midnight, with
 stable ranks inside each day. Pointer interaction, keyboard focus, and browsing
 below the top hold list positions, new insertions, and day membership together;
 row values continue updating. A deferred group whose dates changed says “Activity
-updated” until reconciliation. “Show recent activity” applies pending geometry
-and returns to the top without changing selection. Authoritative removals retain
-a surviving visible scroll anchor. During a cold import (2026-11-02), sessions the
-import has not reached (`Pending`) are drawn last in a “Not imported yet” group
-with no date head, ordered by `updated_at` descending, then id, since no recorded
-activity can rank them yet; a metadata-only placeholder (Pending, no cwd, title,
-summary or delegation, and with children) is left out of it and reads “Transcript
-not available” (`clients/room/src/lib/import-state.ts`). A held list's pill counts
+updated” until reconciliation; import-only changes never do. “Show recent
+activity” applies pending geometry and returns to the top without changing
+selection. Authoritative removals retain a surviving visible scroll anchor.
+During a cold import (2026-11-02), sessions the import has not reached (`Pending`)
+are drawn last in a “Not imported yet · N” group with no date head, ordered by
+`updated_at` descending, then id, since no recorded activity can rank them yet;
+a metadata-only placeholder (Pending, no cwd, title, summary or delegation, and
+with children) is left out of it and reads “Transcript not available”
+(`clients/room/src/lib/import-state.ts`). A Pending row is no §2.5 state while the
+import runs (2026-11-03): a hollow neutral dot, no shimmer, “not imported yet” in
+its time slot and “—” for its span; orange stays for real trouble, and a Streaming
+row keeps its orange dot, shimmer and recorded time. A held list's pill counts
 the imported arrivals (“N conversations imported — show”) and says “older” only
 when every one lands below the reader's anchor; its live region announces a
 count-free sentence (“Newly imported conversations are available in sessions.”),
-so only the button carries the count. The activity-order and subscription recovery
+so only the button carries the count. A held not-imported group whose rows were
+imported heads itself “N conversations imported”, and held projects the import
+reordered say “Projects reordered by the import · show”. The activity-order and subscription recovery
 unit tests run in CI; `pnpm test:list-order` exercises production hooks, lists,
 focus, scroll, themes, and reduced motion against synthetic data in Electron.
 `test:cold-import` (2026-11-03, CI at scale 0.25) steps the app, its RosettaClient

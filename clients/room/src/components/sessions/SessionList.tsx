@@ -3,7 +3,7 @@ import { dayLabel } from "../../lib/format";
 import { sessionLastActive } from "../../lib/session-activity";
 import { useListMotion } from "../../lib/use-list-motion";
 import { activityDay, compareNotImported } from "../../lib/activity-order";
-import { importStanding, NOT_IMPORTED_LABEL, notImportedLast } from "../../lib/import-state";
+import { arrivalsLabel, importStanding, NOT_IMPORTED_LABEL, notImportedLast } from "../../lib/import-state";
 import { useDeferredListOrder } from "../../lib/use-deferred-list-order";
 import type { ListPosition } from "../../lib/use-deferred-list-order";
 import { ListActivityNotice } from "../ListActivityNotice";
@@ -67,7 +67,9 @@ function groupSessionsByDay(
     }
   }
 
-  return groups;
+  // A not-imported head counts its rows: "Not imported yet · 12".
+  return groups.map(group => group.pending
+    ? { ...group, label: `${group.label} · ${group.sessions.length.toLocaleString()}` } : group);
 }
 
 export function SessionList(props: SessionListProps) {
@@ -106,17 +108,23 @@ export function SessionList(props: SessionListProps) {
       onSessionSelect={props.onSessionSelect}
     />
   );
-  // A held group whose rows moved on (a new date, or imported) says so
-  // until the reader applies the new order.
-  const moved = (group: SessionDayGroup, session: SessionRow) => group.pending
-    ? !notImported(session)
-    : notImported(session) || activityDay(sessionLastActive(session)) !== group.day;
+  // A held group whose rows moved on says why until the reader applies the
+  // new order: a not-imported group counts the rows the import opened, and
+  // only a new date is "Activity updated".
+  const head = (group: SessionDayGroup) => {
+    if (group.pending) {
+      const imported = group.sessions.filter(session => !notImported(session)).length;
+      return imported > 0 ? arrivalsLabel({ count: imported, older: false }) : group.label;
+    }
+    return group.sessions.some(session => notImported(session) || activityDay(sessionLastActive(session)) !== group.day)
+      ? "Activity updated" : group.label;
+  };
   // Headers and rows share one key space. Moving from Yesterday to Today
   // preserves the actual button, its keyboard focus and its animation.
   const drawDays = (groups: readonly SessionDayGroup[], keyPrefix: string) => groups.flatMap((group) => [
     <div key={`day:${keyPrefix}${group.pending ? "not-imported" : group.day}`} className="ah-day"
       data-not-imported={group.pending ? "" : undefined}>
-      {group.sessions.some(session => moved(group, session)) ? "Activity updated" : group.label}
+      {head(group)}
     </div>,
     ...group.sessions.map(drawRow),
   ]);

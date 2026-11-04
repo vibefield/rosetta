@@ -52,7 +52,8 @@
 //     ready         neither: it reads as it always did
 //   .ah-session-list-item[data-stream-state]  pending | streaming | indexed
 //   .ah-session-list-item[data-cooking]  present while its figure slots
-//                    shimmer (not indexed, no figures landed)
+//                    shimmer (not indexed, no figures landed); never on a
+//                    not-imported row, which has nothing read to cook
 //   .ah-session-list-item[data-role]     main, or the session's role
 //   .ah-day[data-not-imported]           the "Not imported yet" group's head;
 //                    its rows follow it. A held list keeps its rows there
@@ -295,7 +296,7 @@ test("a session row says where it stands with the import, from the stream state 
   };
   assert.deepEqual(facts("open"), ["ready", "indexed", false]);
   assert.deepEqual(facts("half"), ["ready", "streaming", true]);
-  assert.deepEqual(facts("waiting"), ["not-imported", "pending", true]);
+  assert.deepEqual(facts("waiting"), ["not-imported", "pending", false]);
   assert.deepEqual(facts("orphan"), ["unavailable", "pending", false]);
   assert.equal(drawn.get("open")["aria-current"], "true");
   assert.equal([...drawn.values()].filter((row) => "aria-current" in row).length, 1);
@@ -339,7 +340,7 @@ test("a session row with a host act keeps its facts on the row and its selection
   const facts = (attrs) => [attrs["data-standing"], attrs["data-stream-state"], "data-cooking" in attrs, attrs["data-role"]];
   const expected = {
     true: { open: ["ready", "indexed", false, "main"], half: ["ready", "streaming", true, "main"],
-      waiting: ["not-imported", "pending", true, "main"], orphan: ["unavailable", "pending", false, "main"] },
+      waiting: ["not-imported", "pending", false, "main"], orphan: ["unavailable", "pending", false, "main"] },
     false: { waiting: ["ready", "pending"], orphan: ["unavailable", "pending"] },
   };
   for (const duringBackfill of [true, false]) {

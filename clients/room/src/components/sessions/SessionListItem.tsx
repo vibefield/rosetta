@@ -34,20 +34,23 @@ export function SessionListItem({
   onSessionSelect,
 }: SessionListItemProps) {
   const status = getSessionStatus(session, duringBackfill, metadataOnly);
-  // The cooking card: identity is real from the skim; the figure slots are
-  // what is still unknown, and they alone carry the processing state. A
-  // facts row whose figures have not landed — a cooking session still
-  // counting from zero — is not a claim: the shimmer keeps the slot.
-  // A metadata-only row has nothing to cook: no import will reach it.
-  const cookingState = isSessionCooking(session) && !metadataOnly;
-  const landedFacts = facts !== null && (facts.messages > 0 || !cookingState) ? facts : null;
-  const isCooking = cookingState && landedFacts === null;
   // Where the row stands with the import, as the list placed it: the list
   // already settled "unavailable" (`metadataOnly`), so only the running
   // import's "not-imported" is left to read. Inert, for the DOM contract.
   const standing = metadataOnly ? "unavailable" : (importStanding(session, duringBackfill, false) ?? "ready");
+  const notImported = standing === "not-imported";
+  // The cooking card: identity is real from the skim; the figure slots are
+  // what is still unknown, and they alone carry the processing state. A
+  // facts row whose figures have not landed — a cooking session still
+  // counting from zero — is not a claim: the shimmer keeps the slot.
+  // Nothing is read yet for a row the import has not reached, so it does
+  // not shimmer as if it were; a metadata-only row has nothing to cook.
+  const cookingState = isSessionCooking(session) && !metadataOnly && !notImported;
+  const landedFacts = facts !== null && (facts.messages > 0 || !cookingState) ? facts : null;
+  const isCooking = cookingState && landedFacts === null;
   const title = getSessionTitle(session);
-  const lastActiveLabel = lastActive(sessionLastActive(session), currentTimestamp);
+  // Its time is not "unknown": it is not imported yet, and says so.
+  const lastActiveLabel = notImported ? "not imported yet" : lastActive(sessionLastActive(session), currentTimestamp);
   const roleLabel = session.role === "main" ? null : session.role;
   const accessibleMetadata = [
     roleLabel === null ? null : `${roleLabel} session`,
@@ -72,7 +75,8 @@ export function SessionListItem({
     title,
     status.label,
     ...accessibleMetadata,
-    `last active ${lastActiveLabel}`,
+    // The status already said "not imported yet".
+    ...(notImported ? [] : [`last active ${lastActiveLabel}`]),
   ].join(" · ");
   // With an act the row holds two buttons, and a button cannot hold another:
   // the row becomes a box, one button covers it (the selection, named as the

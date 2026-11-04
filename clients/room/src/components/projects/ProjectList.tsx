@@ -19,6 +19,9 @@ export interface ProjectListProps {
   readonly currentTimestamp: number;
   /** A backfill is running: unfinished projects cook rather than lie. */
   readonly ingestActive: boolean;
+  /** The order is still the import's (`ActivityOrder.bootstrapping`): a
+   * held reorder comes from conversations it opened, and the pill says so. */
+  readonly importing?: boolean;
   readonly runtimes?: readonly RuntimeBackfill[] | undefined;
   /** The daemon's per-project backfill fold, keyed by project id. */
   readonly projectBackfills: ReadonlyMap<string, ProjectBackfill>;
@@ -40,6 +43,7 @@ export function ProjectList({
   homeDirectory,
   currentTimestamp,
   ingestActive,
+  importing = false,
   runtimes,
   projectBackfills,
   pending,
@@ -102,7 +106,7 @@ export function ProjectList({
           />
         )}
       </div>
-      <ListActivityNotice pending={layout.pending} onShow={layout.apply} noun="projects" />
+      <ListActivityNotice pending={layout.pending} onShow={layout.apply} noun="projects" importReorder={importing} />
     </div>
   );
 }

@@ -23,9 +23,13 @@ export function getSessionStatus(
         label: duringBackfill ? "indexing" : "history incomplete",
       };
     case "pending":
-      // Newest trees import first: while the import runs, an older one
-      // is simply not reached yet.
-      return { tone: "orange", isLive: false, label: duringBackfill ? "not imported yet" : "not yet indexed" };
+      // Newest trees import first: while the import runs, an older one is
+      // simply not reached yet. That is no trouble, so it takes no hue: the
+      // row draws a hollow dot (`data-standing`). Orange stays for a row
+      // the finished import never reached.
+      return duringBackfill
+        ? { tone: null, isLive: false, label: "not imported yet" }
+        : { tone: "orange", isLive: false, label: "not yet indexed" };
     default:
       return { tone: null, isLive: false, label: "history indexed" };
   }
