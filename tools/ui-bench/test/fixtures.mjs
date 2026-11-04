@@ -89,7 +89,7 @@ export function probeLog(over = {}) {
     cost: { mainMs: 30, postMs: 2, postBytes: 1_000_000, posts: 40, passes: 50, passMs: 25, apiMs: 3, observerCalls: 60, errors: 0 },
     end: { rootsSeen: 6, readyAll: 12, sessionsSeen: 12, pendingSessions: 0, pendingRoots: 0, metaOnlyRoots: 0, neverRostered: 0, lastRootReady: at(2500.3), daemonRoots: 6,
       daemonPending: 0, daemonTruncated: false, projectMismatches: 0, newestProjectRoots: 3, newestProjectDaemonRoots: 3, membershipStable: true,
-      inversionMs: 30, workerParseMs: 3, frames: 30, snapshots: 1, mutations: 29, resyncs: 0, metaBytes: 40000, statusBodies: 9, retractions: 0 },
+      inversionMs: 30, inversionFootMs: 45, workerParseMs: 3, frames: 30, snapshots: 1, mutations: 29, resyncs: 0, metaBytes: 40000, statusBodies: 9, retractions: 0 },
     finishedAt: at(9000),
   };
   return deepMerge(base, over);

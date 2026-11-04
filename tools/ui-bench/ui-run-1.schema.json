@@ -422,7 +422,7 @@
             "obj": {
               "role": {"enum": ["report-only"]},
               "newestProjectRank": {"arr": {"tuple": ["num", "num?", "num?", "num?"]}, "max": 8},
-              "inversionSelectedMs": "num?", "inversionCorpusMs": "num?",
+              "inversionSelectedMs": "num?", "inversionCorpusMs": "num?", "inversionCorpusFootMs": "num?",
               "newestGiant": {
                 "obj": {"known": "bool", "receiptMs": "num?", "paintMs": "num?", "daemonMs": "num?", "lagVsDaemonMs": "num?"}
               },
@@ -760,9 +760,9 @@
               "pendingRoots": "num?", "metaOnlyRoots": "num?", "neverRostered": "num?", "lastRootReady": "num?",
               "daemonRoots": "num?", "daemonPending": "num?", "projectMismatches": "num?",
               "newestProjectRoots": "num?", "newestProjectDaemonRoots": "num?", "inversionMs": "num?",
-              "workerParseMs": "num?", "frames": "num?", "snapshots": "num?", "mutations": "num?", "resyncs": "num?",
-              "metaBytes": "num?", "statusBodies": "num?", "retractions": "num?", "daemonTruncated": "bool?",
-              "membershipStable": "bool?"
+              "inversionFootMs": "num?", "workerParseMs": "num?", "frames": "num?", "snapshots": "num?",
+              "mutations": "num?", "resyncs": "num?", "metaBytes": "num?", "statusBodies": "num?",
+              "retractions": "num?", "daemonTruncated": "bool?", "membershipStable": "bool?"
             },
             "null": true
           },

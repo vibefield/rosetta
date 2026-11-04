@@ -81,8 +81,8 @@
                 "H6.finalizing.longestMs", "H6.post.longestMs", "H6.input.p98Ms", "H6.input.maxMs", "H6.heapPeakMb",
                 "H6.appWorkingSetPeakMb", "H6.probeMainPctOfWall", "H7.projectsMoves", "H7.sessionsMoves",
                 "H7.aimMisses", "H7.selectionJumps", "H8.chartsSelectedMs", "H8.chartsAllMs", "H8.portfolioMs",
-                "H8.searchLagMs", "D1.consentToProgressMs", "D2.newestGiant.receiptMs", "D3.wire.p95Ms",
-                "daemon.metadata-ready", "daemon.first-readable", "daemon.newest-giant-ready",
+                "H8.searchLagMs", "D1.consentToProgressMs", "D2.newestGiant.receiptMs", "D2.inversionCorpusFootMs",
+                "D3.wire.p95Ms", "daemon.metadata-ready", "daemon.first-readable", "daemon.newest-giant-ready",
                 "daemon.recent-ready:24h@newest", "daemon.recent-ready:7d@newest", "daemon.canonical-ready",
                 "daemon.search-ready", "daemon.footprintMb", "run.wallS"
               ]
@@ -146,8 +146,8 @@
                 "H6.finalizing.longestMs", "H6.post.longestMs", "H6.input.p98Ms", "H6.input.maxMs", "H6.heapPeakMb",
                 "H6.appWorkingSetPeakMb", "H6.probeMainPctOfWall", "H7.projectsMoves", "H7.sessionsMoves",
                 "H7.aimMisses", "H7.selectionJumps", "H8.chartsSelectedMs", "H8.chartsAllMs", "H8.portfolioMs",
-                "H8.searchLagMs", "D1.consentToProgressMs", "D2.newestGiant.receiptMs", "D3.wire.p95Ms",
-                "daemon.metadata-ready", "daemon.first-readable", "daemon.newest-giant-ready",
+                "H8.searchLagMs", "D1.consentToProgressMs", "D2.newestGiant.receiptMs", "D2.inversionCorpusFootMs",
+                "D3.wire.p95Ms", "daemon.metadata-ready", "daemon.first-readable", "daemon.newest-giant-ready",
                 "daemon.recent-ready:24h@newest", "daemon.recent-ready:7d@newest", "daemon.canonical-ready",
                 "daemon.search-ready", "daemon.footprintMb", "run.wallS"
               ]

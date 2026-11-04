@@ -178,6 +178,50 @@ test('an empty frozen set has no receipt time', () => {
   assert.equal(h.n, 0);
 });
 
+// D2(b) corpus-wide. P1: A (NEWEST) and B recent, O three days old; P2: C recent, D
+// newer than C, E five days old. O, D and E are readable from t=2; B flips at 10, C at
+// 15, A at 20; the run ends at 30.
+//   foot (every not-imported row at the foot): A, B, C below an older readable root
+//     from 2, then A and C from 10, then A from 15: 3·8 + 2·5 + 1·5 = 39.
+//   drawn (D1): A and B are newer than every readable root of P1, so they head its
+//     list ("Still importing"); C is older than D, so it sits at P2's foot below E:
+//     1·(15 − 2) = 13.
+// The integral runs from the first frame: the freeze's moment (the page's first
+// post-consent status) moves nothing.
+test('corpus inversion: the D1 placement and the foot, over the whole import', () => {
+  const rows = [
+    row('A', { updated_at: T }), row('B', { updated_at: T - HOUR }), row('O', { updated_at: T - 3 * 24 * HOUR }),
+    row('C', { project_id: 'P2', updated_at: T - 2 * HOUR }), row('D', { project_id: 'P2', updated_at: T - HOUR / 2 }),
+    row('E', { project_id: 'P2', updated_at: T - 5 * 24 * HOUR }),
+  ];
+  const ready = (id) => ({ ...rows.find((r) => r.id === id), stream_state: 'indexed' });
+  const run = (freezeAt) => {
+    const w = load();
+    w.send(meta(1, { frame: 'meta_snapshot', runtimes: [], projects: [], sessions: rows }));
+    const at = [[2, 'O'], [2, 'D'], [2, 'E'], [10, 'B'], [15, 'C'], [20, 'A']];
+    let frozenYet = false;
+    for (const [t, id] of at) {
+      if (!frozenYet && t > freezeAt) { w.send(status(freezeAt)); frozenYet = true; }
+      w.send(mut(t, ready(id)));
+    }
+    if (!frozenYet) w.send(status(freezeAt));
+    w.send({ k: 'end', id: 1, t: 30, daemon: { roots: [], truncated: false } });
+    return w.last('end');
+  };
+  for (const freezeAt of [1.5, 5, 12, 25]) {
+    const end = run(freezeAt);
+    assert.equal(end.inversionFootMs, 39, `foot, frozen at ${freezeAt}`);
+    assert.equal(end.inversionMs, 13, `drawn, frozen at ${freezeAt}`);
+  }
+  // Never frozen (no post-consent status): no membership, no inversion.
+  const w = load();
+  w.send(meta(1, { frame: 'meta_snapshot', runtimes: [], projects: [], sessions: rows }));
+  w.send(mut(2, ready('O')));
+  w.send({ k: 'end', id: 1, t: 30, daemon: { roots: [], truncated: false } });
+  assert.equal(w.last('end').inversionMs, 0);
+  assert.equal(w.last('end').inversionFootMs, 0);
+});
+
 test('the worker keeps no title, cwd or native id', () => {
   assert.doesNotMatch(SRC, /title:\s*row\.title|cwd:\s*row\.cwd|nat:\s*row\.native_session_id/);
 });

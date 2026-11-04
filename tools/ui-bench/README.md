@@ -200,7 +200,7 @@ one), reported per run.
 | horizon 7d @newest (H3) | `metrics.H3.h7d.receiptMs`, `metrics.H3.h7d.paintedSelMs` |
 | all readable (H-all) | `metrics.Hall.receiptMs`, `metrics.Hall.paintedSelMs` |
 | flip→paint p95 | `metrics.H5.p95Ms` |
-| inversion | `metrics.D2.inversionCorpusMs`, `metrics.D2.inversionSelectedMs` (count × ms) |
+| inversion | `metrics.D2.inversionCorpusMs`, `metrics.D2.inversionSelectedMs` (count × ms). The corpus value comes from the frames over the whole import (from the first frame, not from the freeze, whose moment is the page's first post-consent status) and places rows as the room does since D1: a not-imported root newer than every readable root of its list heads it ("Still importing") and is not inverted. `D2.inversionCorpusFootMs` (report) is the same integral with every not-imported row at the foot: the pre-D1 placement, and the daemon's own within-project order |
 | open-ready p95 (reader) | H4's p95: ready opens' `contentAt − clickAt` from `probe.opens` (metrics.mjs records only p50 and max, so the evaluator re-derives it with the same `pct`) |
 | long-task ms | `metrics.H6.byWindow.{streaming,finalizing,post}.blockingMs` |
 

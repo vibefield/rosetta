@@ -755,7 +755,7 @@
         metaOnlyRoots: end.metaOnlyRoots, neverRostered: end.neverRostered, lastRootReady: end.lastRootReady, daemonRoots: end.daemonRoots,
         daemonPending: end.daemonPending, daemonTruncated: end.daemonTruncated, projectMismatches: end.projectMismatches,
         newestProjectRoots: end.newestProjectRoots, newestProjectDaemonRoots: end.newestProjectDaemonRoots, membershipStable: end.membershipStable,
-        inversionMs: end.inversionMs, workerParseMs: end.parseMs, frames: end.counts.frames, snapshots: end.counts.snapshots, mutations: end.counts.mutations,
+        inversionMs: end.inversionMs, inversionFootMs: end.inversionFootMs, workerParseMs: end.parseMs, frames: end.counts.frames, snapshots: end.counts.snapshots, mutations: end.counts.mutations,
         resyncs: end.counts.resyncs, metaBytes: end.counts.bytes, statusBodies: end.counts.statusBodies, retractions: end.counts.retractions } : null,
       finishedAt: now() });
     emit('result', { data: out, nonce: arg && typeof arg.nonce === 'string' ? arg.nonce : null });

@@ -375,7 +375,12 @@ export function derive({ probe, main, daemon, mainPings, notApplicable = [] }) {
   const h1at = probe.h1?.paintAt ?? null;
   m.D2 = { role: 'report-only', newestProjectRank: (probe.d2?.rank || []).map(([off, at, rank, unranked]) => [off, r1(sub(at, h1at)), rank, unranked]),
     inversionSelectedMs: probe.d2?.selShown === true ? r1(probe.d2?.inversionSelMs ?? null) : null,
+    // Corpus-wide, from the frames, over the whole import: RECENT24 roots the room's
+    // lists draw below an older readable root (the D1 placement); Foot: as a list with
+    // every not-imported row at the foot would (the pre-D1 placement, and the daemon's
+    // own within-project order). Both count × ms (probe-worker.js inversionReplay).
     inversionCorpusMs: probe.frozen != null ? r1(probe.end?.inversionMs ?? null) : null,
+    inversionCorpusFootMs: probe.frozen != null ? r1(probe.end?.inversionFootMs ?? null) : null,
     newestGiant: { known: probe.d2?.giantKnown === true, receiptMs: r1(R(probe.d2?.giantReceiptAt ?? null)), paintMs: r1(R(probe.d2?.giantPaintAt ?? null)),
       daemonMs: r1(D('newest-giant-ready')), lagVsDaemonMs: r1(lag(R(probe.d2?.giantReceiptAt ?? null), 'newest-giant-ready')) },
     notImportedSelected: (probe.notImported || []).map(([at, n]) => [r1(R(at)), n]) };

@@ -108,7 +108,7 @@ metrics = O({
            'countUnitRatio': O({'at25': N, 'at50': N, 'at100': N}), 'phases': A(T(N, E(*STATES)), 200),
            'phaseSeenLagMs': O({'finalizing': N, 'canonical': N, 'search': N}), 'titleRowsAfterSearchMs': N,
            'appLaunch': O({'windowMs': N, 'loadedMs': N, 'firstFrameMs': N, 'rollCallMs': N, 'rollCallReadyMs': N})}),
-  'D2': O({'role': ROLES['report'], 'newestProjectRank': A(T(NN, N, N, N), 8), 'inversionSelectedMs': N, 'inversionCorpusMs': N,
+  'D2': O({'role': ROLES['report'], 'newestProjectRank': A(T(NN, N, N, N), 8), 'inversionSelectedMs': N, 'inversionCorpusMs': N, 'inversionCorpusFootMs': N,
            'newestGiant': O({'known': B, 'receiptMs': N, 'paintMs': N, 'daemonMs': N, 'lagVsDaemonMs': N}), 'notImportedSelected': A(R('pair'))}),
   'D3': O({'role': ROLES['report'], 'opens': A(O({'standing': E('ready', 'not-imported', 'unavailable'), 'phase': E('reading', 'finalizing', 'postCanonical'),
            'clickToSocketMs': N, 'socketToOpenMs': N, 'openToHelloMs': N, 'helloToSnapshotMs': N, 'snapshotBytes': N, 'parseMs': N, 'snapshotToRevealMs': N,
@@ -120,7 +120,7 @@ metrics = O({
 }, null=True)
 
 probe_end = O({k: N for k in ['rootsSeen', 'readyAll', 'sessionsSeen', 'pendingSessions', 'pendingRoots', 'metaOnlyRoots', 'neverRostered', 'lastRootReady', 'daemonRoots',
-  'daemonPending', 'projectMismatches', 'newestProjectRoots', 'newestProjectDaemonRoots', 'inversionMs', 'workerParseMs', 'frames', 'snapshots',
+  'daemonPending', 'projectMismatches', 'newestProjectRoots', 'newestProjectDaemonRoots', 'inversionMs', 'inversionFootMs', 'workerParseMs', 'frames', 'snapshots',
   'mutations', 'resyncs', 'metaBytes', 'statusBodies', 'retractions']} | {'daemonTruncated': BN, 'membershipStable': BN}, null=True)
 probe = O({
   'format': E('ui-probe/1'),
@@ -248,7 +248,7 @@ METRIC_IDS = ['H2.ms', 'H2.receiptMs', 'H3.h24.receiptMs', 'H3.h24.paintedSelMs'
   'H6.post.blockingMs', 'H1.ms', 'H1.metaPushMs', 'H1.statusPollMs', 'H2.lag.ms', 'H2.heldReadyMs', 'H4.p50Ms', 'H4.maxMs', 'H4.pendingFace.p50Ms',
   'H5.p50Ms', 'H5.maxMs', 'H6.streaming.longestMs', 'H6.finalizing.longestMs', 'H6.post.longestMs', 'H6.input.p98Ms', 'H6.input.maxMs', 'H6.heapPeakMb',
   'H6.appWorkingSetPeakMb', 'H6.probeMainPctOfWall', 'H7.projectsMoves', 'H7.sessionsMoves', 'H7.aimMisses', 'H7.selectionJumps', 'H8.chartsSelectedMs',
-  'H8.chartsAllMs', 'H8.portfolioMs', 'H8.searchLagMs', 'D1.consentToProgressMs', 'D2.newestGiant.receiptMs', 'D3.wire.p95Ms'] + \
+  'H8.chartsAllMs', 'H8.portfolioMs', 'H8.searchLagMs', 'D1.consentToProgressMs', 'D2.newestGiant.receiptMs', 'D2.inversionCorpusFootMs', 'D3.wire.p95Ms'] + \
   ['daemon.' + k for k in MILESTONE_METRICS] + ['daemon.footprintMb', 'run.wallS']
 VOID_REASONS = ['run-missing', 'wrong-document', 'run-not-complete', 'self-test-failed', 'i1-failed', 'privacy-failed', 'rosettad-differs-from-declared',
   'dist-differs-from-declared', 'identity-differs', 'source-differs-from-declared', 'script-differs', 'digest-missing', 'digest-differs']

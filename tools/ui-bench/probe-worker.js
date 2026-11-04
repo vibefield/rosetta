@@ -33,11 +33,11 @@ let giantId = null;
 let lastPhase = null;
 let parseMs = 0;
 let counts = { frames: 0, snapshots: 0, mutations: 0, resyncs: 0, hellos: 0, other: 0, bytes: 0, retractions: 0, statusBodies: 0, statusBad: 0 };
-// D2(b), corpus-wide: integral of RECENT24 roots pending while an older root of their
-// project is ready, over receipt time.
-let inversionMs = 0;
-let inversionNow = 0;
-let inversionAt = null;
+// D2(b), corpus-wide: every root's state as received, in receipt order, so the
+// inversion integral (inversionReplay) runs over the whole import, not from the freeze:
+// the freeze waits for the page's first post-consent status, whose timing is the UI's.
+// [t, id, false] (gone, or not a root) or [t, id, true, pending, updated_at, project].
+const rootLog = [];
 
 const projectKey = (r) => (r.p === null ? UNASSIGNED : r.p);
 const pending = (r) => r.s === 'pending';
@@ -84,29 +84,76 @@ function rootCounts() {
   return [ready, total];
 }
 
-function inversionCount() {
-  if (frozen === null) return 0;
-  let n = 0;
-  const oldestReady = new Map(); // project -> smallest updated_at among ready roots
-  for (const r of rows.values()) {
-    if (!isRoot(r) || pending(r)) continue;
-    const key = projectKey(r);
-    const cur = oldestReady.get(key);
-    if (cur === undefined || r.u < cur) oldestReady.set(key, r.u);
-  }
-  for (const id of frozen.r24) {
-    const r = rows.get(id);
-    if (r === undefined || !pending(r)) continue;
-    const older = oldestReady.get(projectKey(r));
-    if (older !== undefined && older < r.u) n += 1;
-  }
-  return n;
+function logRoot(t, id) {
+  const r = rows.get(id);
+  rootLog.push(r === undefined || !isRoot(r) ? [t, id, false] : [t, id, true, pending(r), r.u, projectKey(r)]);
 }
 
-function advanceInversion(t) {
-  if (inversionAt !== null) inversionMs += inversionNow * Math.max(0, t - inversionAt);
-  inversionAt = t;
-  inversionNow = inversionCount();
+// D2(b), corpus-wide, from the frames: the integral over receipt time, from the first
+// frame to `endT`, of the RECENT24 roots (the frozen membership) a project's list draws
+// below an older readable root of its own. Two placements:
+//   drawn: the room's since D1 (docs/ARCHITECTURE.md): a not-imported root newer than
+//          every readable root of its list heads the list ("Still importing"), above
+//          them all; one at or below the list's newest readable root sits at the foot
+//          ("Not imported yet"), below every readable root, so it is inverted when one
+//          of them is older;
+//   foot:  every not-imported root at the foot (the placement before D1); this is also
+//          the daemon's own order, a recent root admitted after an older one.
+// A root counts while Pending; metadata-only placeholders are never members.
+function inversionReplay(endT) {
+  const out = { drawn: 0, foot: 0 };
+  if (frozen === null || rootLog.length === 0) return out;
+  const r24 = frozen.r24Set;
+  const state = new Map(); // id -> {pending, u, p}
+  const members = new Map(); // project -> Set(id)
+  const contrib = new Map(); // project -> [drawn, foot]
+  const now = { drawn: 0, foot: 0 };
+  const recount = (p) => {
+    const ids = members.get(p) ?? new Set();
+    let min = Infinity;
+    let max = -Infinity;
+    for (const id of ids) {
+      const x = state.get(id);
+      if (!x.pending) { if (x.u < min) min = x.u; if (x.u > max) max = x.u; }
+    }
+    let drawn = 0;
+    let foot = 0;
+    for (const id of ids) {
+      if (!r24.has(id)) continue;
+      const x = state.get(id);
+      if (!x.pending || !(min < x.u)) continue;
+      foot += 1;
+      if (x.u <= max) drawn += 1;
+    }
+    const [d0, f0] = contrib.get(p) ?? [0, 0];
+    now.drawn += drawn - d0;
+    now.foot += foot - f0;
+    contrib.set(p, [drawn, foot]);
+  };
+  let at = rootLog[0][0];
+  const advance = (t) => {
+    if (t <= at) return;
+    out.drawn += now.drawn * (t - at);
+    out.foot += now.foot * (t - at);
+    at = t;
+  };
+  for (const [t, id, present, isPending, u, p] of rootLog) {
+    advance(t);
+    const before = state.get(id);
+    if (before !== undefined) {
+      state.delete(id);
+      members.get(before.p).delete(id);
+      recount(before.p);
+    }
+    if (present) {
+      state.set(id, { pending: isPending, u, p });
+      if (!members.has(p)) members.set(p, new Set());
+      members.get(p).add(id);
+      recount(p);
+    }
+  }
+  advance(endT);
+  return out;
 }
 
 function onMeta(m) {
@@ -120,6 +167,7 @@ function onMeta(m) {
     const before = rows.get(id);
     const next = compact(row);
     rows.set(id, next);
+    if (before === undefined || pending(before) !== pending(next) || before.u !== next.u || before.par !== next.par || projectKey(before) !== projectKey(next)) logRoot(m.t, id);
     if (next.par !== null) parents.add(next.par);
     if (next.s !== 'pending') {
       if (!firstReady.has(id)) {
@@ -137,7 +185,7 @@ function onMeta(m) {
     const seen = new Set();
     for (const rt of f.runtimes || []) kinds.set(rt.id, rt.kind);
     for (const row of f.sessions || []) { seen.add(row.id); touch(row.id, row); }
-    for (const id of [...rows.keys()]) if (!seen.has(id)) rows.delete(id);
+    for (const id of [...rows.keys()]) if (!seen.has(id)) { rows.delete(id); logRoot(m.t, id); }
     rebuildParents();
   } else if (f.frame === 'mutation') {
     kind = 'mutation';
@@ -161,7 +209,6 @@ function onMeta(m) {
     if (r !== undefined && isRoot(r)) projFlips.push(projectKey(r));
   }
   const changed = flips.length > 0 || kind === 'snapshot';
-  if (changed) advanceInversion(m.t);
   const [readyRoots, totalRoots] = changed ? rootCounts() : [null, null];
   const out = { k: 'meta', t: m.t, kind, bytes: m.d.length, flips, projFlips, retract,
     unranked: changed ? unrankedProjects() : null, readyRoots, totalRoots,
@@ -202,7 +249,6 @@ function freeze(t) {
     r24Set: new Set(r24), r7Set: new Set(r7) };
   postMessage({ k: 'frozen', t, newest: frozen.newest, newestProject, r24, r7, roots, metaOnly,
     projectRoots, newestReadyAt: newest === null ? null : (firstReady.get(newest.id) ?? null) });
-  advanceInversion(t);
   horizons(t, lastPhase === 'finalizing' || lastPhase === 'publishing' || lastPhase === 'live');
 }
 
@@ -351,9 +397,9 @@ onmessage = (event) => {
       postMessage({ k: 'parsed', ref: m.ref, ms: performance.now() - b });
     }
     else if (m.k === 'end') {
-      advanceInversion(m.t);
-      postMessage({ k: 'end', id: m.id, ...endState(m.daemon), inversionMs, counts, parseMs });
-    } else if (m.k === 'flush') postMessage({ k: 'flushed', id: m.id, counts, parseMs, inversionMs });
+      const inversion = inversionReplay(m.t);
+      postMessage({ k: 'end', id: m.id, ...endState(m.daemon), inversionMs: inversion.drawn, inversionFootMs: inversion.foot, counts, parseMs });
+    } else if (m.k === 'flush') postMessage({ k: 'flushed', id: m.id, counts, parseMs });
   } catch {
     postMessage({ k: 'error' });
   }

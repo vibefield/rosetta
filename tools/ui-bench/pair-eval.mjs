@@ -91,6 +91,7 @@ export const METRICS = [
   rep('H8.searchLagMs', 'charts and search', (d) => g(d, 'metrics', 'H8', 'searchLagMs'), R('H8', 'searchLagMs')),
   rep('D1.consentToProgressMs', 'wait reasons', (d) => g(d, 'metrics', 'D1', 'consentToProgressMs')),
   rep('D2.newestGiant.receiptMs', 'order', (d) => g(d, 'metrics', 'D2', 'newestGiant', 'receiptMs')),
+  rep('D2.inversionCorpusFootMs', 'order', (d) => g(d, 'metrics', 'D2', 'inversionCorpusFootMs')),
   rep('D3.wire.p95Ms', 'transcript path', (d) => g(d, 'metrics', 'D3', 'wire', 'p95Ms')),
   ...['metadata-ready', 'first-readable', 'newest-giant-ready', 'recent-ready:24h@newest', 'recent-ready:7d@newest', 'canonical-ready', 'search-ready']
     .map((k) => rep(`daemon.${k}`, 'daemon milestones', (d) => g(d, 'daemon', 'milestonesMs', k))),

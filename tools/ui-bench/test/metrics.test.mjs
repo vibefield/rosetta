@@ -330,7 +330,11 @@ test('a diagnostic whose precondition never happened is null, not 0', () => {
   assert.equal(m.D1.titleRowsAfterSearchMs, null);
   assert.equal(m.D2.inversionSelectedMs, null);
   assert.equal(m.D2.inversionCorpusMs, null);
+  assert.equal(m.D2.inversionCorpusFootMs, null);
   assert.equal(run().metrics.D1.titleRowsAfterSearchMs, 0);
+  // Both corpus placements come from the worker's end state.
+  assert.equal(run().metrics.D2.inversionCorpusMs, 30);
+  assert.equal(run().metrics.D2.inversionCorpusFootMs, 45);
 });
 
 test('D1–D3 diagnostics are report-only and derived from the same logs', () => {
