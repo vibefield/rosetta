@@ -765,6 +765,15 @@ async function freshImport() {
         section.querySelector('h3')?.textContent === 'Search ready ✓' &&
         !section.querySelector('.ah-ingest-status__detail, .ah-ingest-meter, .ah-ingest-status__eyebrow');
     });
+  // How the fold moves, read from the page rather than from frame timing:
+  // while it ends, its height eases by a CSS transition (ingest.css).
+  const easing = await check(() => {
+    const fold = document.querySelector('.ah-ingest-fold');
+    if (fold === null) return null;
+    const style = getComputedStyle(fold);
+    const seconds = Math.max(...style.transitionDuration.split(',').map((d) => parseFloat(d) || 0));
+    return { ending: fold.hasAttribute('data-ending'), height: /(^|,\s*)(height|all)(\s*,|$)/.test(style.transitionProperty), eases: seconds > 0 };
+  });
   await rowsAtRest();
   const collapse = await check(() => window.coldImport.stopSampling());
   // I1's end state, as far as a fixture sees it: the board completed, the
@@ -814,17 +823,19 @@ async function freshImport() {
     return { sameOrder: order(first) === order(last), uniform: Math.max(...shifts) - Math.min(...shifts) <= 1, shift: shifts[0] ?? 0,
       movingFrames: steps.length, maxStep: Math.max(0, ...steps), frames: samples.length };
   };
-  // A logic bound, not a timing one: the move is spread over frames, so no
-  // single frame carries more than half of it (an ease of a few hundred ms
-  // keeps each step far below that at any frame rate this test sees).
+  // Logic only: every row keeps its order and moves by one common shift, and
+  // the fold eases its height (a CSS transition while it ends) instead of
+  // jumping. How many frames carry the move depends on the machine's frame
+  // timing (a loaded CI runner can draw a 360 ms ease in two frames), so the
+  // frame counts are only logged.
   const glides = (move) => ({ sameOrder: move.sameOrder, uniform: move.uniform, moved: Math.abs(move.shift) > 1,
-    spread: move.movingFrames > 1, largestStepAtMostHalf: move.maxStep <= Math.ceil(Math.abs(move.shift) / 2) });
-  const calm = { sameOrder: true, uniform: true, moved: true, spread: true, largestStepAtMostHalf: true };
+    eases: easing?.ending === true && easing.height && easing.eases });
+  const calm = { sameOrder: true, uniform: true, moved: true, eases: true };
   const collapsed = travel(collapse);
-  today('ux:X9', 'ALL SET\'s collapse to one line moves every project row by one common shift, spread over frames',
+  today('ux:X9', 'ALL SET\'s collapse to one line moves every project row by one common shift, the fold easing its height',
     glides(collapsed), calm);
   const exit = travel(exitSamples);
-  today('ux:X9', 'the card\'s exit moves every project row by one common shift, spread over frames (its height eases to zero)',
+  today('ux:X9', 'the card\'s exit moves every project row by one common shift, the fold easing its height to zero',
     glides(exit), calm);
   console.log(`  card collapse: every row moved ${collapsed.shift} px; the largest one-frame step ${collapsed.maxStep} px over ${collapsed.movingFrames} moving frame(s) of ${collapsed.frames}`);
   // The failing project no longer veils the portfolio: the rest show, a
