@@ -342,10 +342,11 @@ async function freshImport() {
   today('ux:X6', 'while the card is up the projects head is the bare count, never the portfolio panel',
     await inColumn((column) => ({ portfolio: column('projects')?.querySelector('.ah-meta__body') !== null,
       head: column('projects')?.querySelector('.ah-meta__head .ah-eyebrow')?.textContent ?? null })), { portfolio: false, head: 'Projects' });
-  today('ux:X6', 'the launcher counts every top-level row, the not-imported ones and placeholders included',
+  today('ux:X6', 'the launcher counts the conversation titles the sheet searches: named roots, placeholders excluded',
     await check(() => document.querySelector('.ah-launcher__text')?.textContent), await check(() => {
-      const meta = window.coldImport.c.meta();
-      return `Search ${meta.sessions.filter((s) => s.parent_session_id === null).length.toLocaleString('en-US')} sessions across ${meta.runtimes.length} agents`;
+      const c = window.coldImport.c;
+      const titled = c.meta().sessions.filter((s) => s.parent_session_id === null && c.kindOf(s.id) !== 'placeholder' && (s.title ?? s.summary) !== null);
+      return `Search ${titled.length.toLocaleString('en-US')} conversation titles`;
     }));
 
   const tokenSort = () => {
@@ -369,8 +370,8 @@ async function freshImport() {
   const pendingLook = { standing: 'not-imported', stream: 'pending', tone: null, last: 'not imported yet', span: '—', cooking: false };
   today('ux:X2', 'a not-imported row: a hollow neutral dot (no tone), no shimmer, "not imported yet" in the time slot, "—" span',
     [...new Set(groupsAtMetadata[0].rows.map(({ id: _id, ...look }) => JSON.stringify(look)))].map((look) => JSON.parse(look)), [pendingLook]);
-  today('ux:X6', 'the project panel veils its figures with "Preparing activity summaries…" during the import',
-    await inColumn((column) => column('sessions')?.querySelector('.ah-meta__body .ah-veil')?.getAttribute('aria-label') ?? null), 'Preparing activity summaries…');
+  today('ux:X6', 'the project panel\'s veil names the global gate during the import: "Charts appear when the whole import finishes"',
+    await inColumn((column) => column('sessions')?.querySelector('.ah-meta__body .ah-veil')?.getAttribute('aria-label') ?? null), 'Charts appear when the whole import finishes');
 
   // Opening the newest (a giant tree, so it waits in the big lane) (ux:X5).
   await click(`.ah-session-list-item[data-motion-key="${newest.id}"]`);
@@ -391,13 +392,14 @@ async function freshImport() {
   await type(newestTitle);
   await until(() => document.querySelector('.ah-sheet__row[data-hit-kind="title"]') && window.coldImport.c.log.search.length > 0 &&
     document.querySelector('.ah-sheet__count')?.textContent !== 'searching…', 'title matches and the answered search');
-  today('ux:X6', 'before publication a not-imported title row says "Activity unknown"; the foot names the import',
+  today('ux:X6', 'before publication a not-imported title row says "Not imported yet"; the foot says titles only until the import finishes',
     await check((id) => ({
       when: document.getElementById(`ah-sheet-title-${id}`)?.querySelector('.ah-sheet__when')?.textContent ?? null,
+      standing: document.getElementById(`ah-sheet-title-${id}`)?.dataset.standing ?? null,
       pending: document.querySelector('.ah-sheet__pending')?.textContent ?? null,
       foot: document.querySelector('.ah-sheet__count')?.textContent ?? null,
       fulltext: document.querySelectorAll('.ah-sheet__row[data-hit-kind="fulltext"]').length,
-    }), newest.id), { when: 'Activity unknown', pending: 'Full-text search arrives when the import finishes.', foot: 'history is being imported', fulltext: 0 });
+    }), newest.id), { when: 'Not imported yet', standing: 'not-imported', pending: 'Full-text search arrives when the import finishes.', foot: 'Titles only until the import finishes', fulltext: 0 });
   await sheet(false);
   await until(() => !document.querySelector('.ah-sheet__field'), 'the sheet to close');
 
@@ -596,8 +598,8 @@ async function freshImport() {
   await until(() => window.coldImport.c.log.projectStats.length > 0, 'the first figures ask');
   today('ux:X9', 'canonical readiness during "publishing": figures load while the card still says "Saving your archive"',
     await check(card).then((c) => ({ state: c.state, title: c.title })), { state: 'publishing', title: 'Saving your archive' });
-  today('ux:X6', 'published but still "publishing": the panel veil keeps "Preparing activity summaries…"',
-    await inColumn((column) => column('sessions')?.querySelector('.ah-meta__body .ah-veil')?.getAttribute('aria-label') ?? null), 'Preparing activity summaries…');
+  today('ux:X6', 'published but still "publishing": the panel veil keeps "Charts appear when the whole import finishes"',
+    await inColumn((column) => column('sessions')?.querySelector('.ah-meta__body .ah-veil')?.getAttribute('aria-label') ?? null), 'Charts appear when the whole import finishes');
   await until(() => new Set(window.coldImport.c.log.projectStats.map((s) => s.projectId)).size >= document.querySelectorAll('.ah-project-list-item').length, 'every project\'s figures');
   // reveal_pending: the still-Pending rows' rollups, the end's one metadata change.
   await advanceToPhase('reveal');
@@ -631,18 +633,24 @@ async function freshImport() {
 
   // Search right after publication, the index still building (ux:X6).
   await advanceToPhase('search-indexing');
+  // Part-way through, so the foot's % is the status's own non-zero number.
+  await check(() => { const c = window.coldImport.c; window.coldImport.advanceTo((c.phaseAt('search-indexing') + c.phaseAt('search-optimizing')) / 2); return true; });
   await settle();
   await sheet(true);
   await until(() => document.querySelector('.ah-sheet__field input'), 'the search sheet after publication');
   await type(`${topic} `);
-  await until(() => document.querySelector('.ah-sheet__row[data-hit-kind="title"]') && /indexing/.test(document.querySelector('.ah-sheet__count')?.textContent ?? ''), 'title rows with the indexing foot');
+  await until(() => document.querySelector('.ah-sheet__row[data-hit-kind="title"]') && /being built · \d+%/.test(document.querySelector('.ah-sheet__count')?.textContent ?? ''), 'title rows with the building foot');
   const sheetAfter = await check(() => ({
     pending: document.querySelector('.ah-sheet__pending')?.textContent ?? null,
     foot: document.querySelector('.ah-sheet__count')?.textContent ?? '',
   }));
-  today('ux:X6', 'after publication, building: titles stand in, "arrives when the import finishes", "results are partial"',
-    { pending: sheetAfter.pending, foot: /^indexing · \d+% · [\d,]+ of [\d,]+ messages · results are partial$/.test(sheetAfter.foot) },
-    { pending: 'Full-text search arrives when the import finishes.', foot: true });
+  const statusPct = await check(() => {
+    const progress = window.coldImport.c.status().searchProgress;
+    return Math.floor((100 * progress.documents_done) / progress.documents_total);
+  });
+  today('ux:X6', 'after publication, building: titles stand in, the note waits on the index, the foot gives the status\'s % and never "partial"',
+    { pending: sheetAfter.pending, foot: sheetAfter.foot },
+    { pending: 'Full-text search arrives when its index is built.', foot: `Full-text search is being built · ${statusPct}% · showing title matches` });
   await sheet(false);
   await until(() => !document.querySelector('.ah-sheet__field'), 'the sheet to close');
   today('ux:X6', 'the portfolio panel stays hidden while search builds (the card is up)',

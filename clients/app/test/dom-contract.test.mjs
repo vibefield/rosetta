@@ -98,6 +98,9 @@
 //   .ah-sheet__row[data-hit-kind]  title (a title match, also [data-title])
 //                    | fulltext (a full-text hit); [aria-selected] is the
 //                    cursor. Recent queries are .ah-sheet__recent rows.
+//   .ah-sheet__row[data-standing]  on a title match: not-imported (the
+//                    import runs and has not reached it, stream_state
+//                    pending) | ready
 //
 // The not-answering and consent faces, .ah-cols[data-rail], and data-ready
 // on a stage with a session, need live ports or layout: room-host.electron.mjs
@@ -511,6 +514,13 @@ test("a search row says whether it is a title match or a full-text hit", () => {
     onHover: nothing, onOpen: nothing,
   })), "ah-sheet__row"), "title row");
   assert.deepEqual([titleRow["data-hit-kind"], titleRow["data-title"], titleRow["aria-selected"]], ["title", "", "true"]);
+  const standing = (row, duringBackfill) => only(classed(renderToStaticMarkup(createElement(SheetTitles, {
+    titles: matchSessionTitles("import", [row], new Map([["p", project]]), { project: null, agent: null, runtimeKind: () => "claude-code" }),
+    query: "import", active: 0, nowMs: NOW, getRuntimeKind: () => "claude-code", onHover: nothing, onOpen: nothing, duringBackfill,
+  })), "ah-sheet__row"), "title row")["data-standing"];
+  assert.equal(standing({ ...titled, stream_state: "pending" }, true), "not-imported");
+  assert.equal(standing({ ...titled, stream_state: "pending" }, false), "ready");
+  assert.equal(standing({ ...titled, stream_state: "indexed" }, true), "ready");
 
   const hit = { timeline_id: "t1", session_id: "s1", kind: "user", at: NOW - HOUR, snippet: "the [import] meter", score: -1 };
   const hitRow = only(classed(renderToStaticMarkup(createElement(OptionRow, {

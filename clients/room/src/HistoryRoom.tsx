@@ -73,7 +73,7 @@ import {
   sessionResultOf,
 } from "./lib/search-sheet";
 import type { SearchFilters } from "./lib/search-sheet";
-import { fullTextUnavailable, matchSessionTitles, titlesStandIn } from "./lib/title-search";
+import { fullTextUnavailable, matchSessionTitles, searchableTitleCount, titlesStandIn } from "./lib/title-search";
 import { spendOf } from "./lib/spend";
 
 function useNow(refreshKey: unknown): number {
@@ -738,12 +738,20 @@ function RoomBody({
     () => (meta?.sessions ?? []).filter((s) => s.parent_session_id === null).length,
     [meta],
   );
+  // While full text cannot answer, the sheet searches titles: the launcher
+  // counts those, in conversations (placeholders have none).
+  const titleCount = useMemo(
+    () => (fullTextUnavailable(readiness, canonicalReady) ? searchableTitleCount(meta?.sessions ?? []) : null),
+    [meta, readiness, canonicalReady],
+  );
   // The launcher states the scope in a breath; the sheet's foot states it in
   // full — the strip is always honest and never furniture (Q5, answered).
   const launcherPlaceholder =
-    meta === null || threadCount === 0
+    meta === null || threadCount === 0 || titleCount === 0
       ? "Search your whole agentic past"
-      : `Search ${threadCount.toLocaleString("en-US")} sessions across ${kinds.length} ${kinds.length === 1 ? "agent" : "agents"}`;
+      : titleCount !== null
+        ? `Search ${titleCount.toLocaleString("en-US")} conversation ${titleCount === 1 ? "title" : "titles"}`
+        : `Search ${threadCount.toLocaleString("en-US")} sessions across ${kinds.length} ${kinds.length === 1 ? "agent" : "agents"}`;
   const stepperState: MatchStepperState | null =
     stepper === null || stepper.sessionId !== sessionId
       ? null
@@ -889,6 +897,7 @@ function RoomBody({
         progress={searchProgress}
         canonicalReady={canonicalReady}
         ingestPaused={ingest?.phase === "metadata_ready" || ingest?.run?.state === "paused" || ingest?.run?.state === "failed"}
+        duringBackfill={ingestActive}
         agentKinds={kinds}
         currentProject={
           projectId !== null && projectId !== UNASSIGNED_PROJECT_ID

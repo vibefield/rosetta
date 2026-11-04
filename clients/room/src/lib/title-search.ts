@@ -1,8 +1,9 @@
 // Title search over the metadata the room already holds — what the sheet can
-// honestly offer while full-text search cannot answer yet. During a first
-// import the projects and session titles are public within seconds, but the
-// full-text index arrives only when the import finishes; until then every
-// query would come back empty, and an empty list reads as "nothing matched".
+// honestly offer while full-text search cannot answer. During a first import
+// the projects and session titles are public within seconds, but the
+// full-text index answers nothing until the import has finished and its first
+// generation is built; until then every query would come back empty, and an
+// empty list reads as "nothing matched".
 //
 // This is not a second search engine. It never ranks beyond the session
 // list's own order (newest known activity first), it reads only titles the
@@ -13,25 +14,47 @@ import type { ProjectViewModel, SnippetPart } from "./model";
 import { projectKey } from "./model";
 import { compareSessionActivity } from "./session-activity";
 
-/** The line the sheet prints under title matches. */
+/** The line the sheet prints under title matches during the import. */
 export const FULL_TEXT_PENDING = "Full-text search arrives when the import finishes.";
+/** …after publication, while the index builds its first generation. */
+export const FULL_TEXT_BUILDING = "Full-text search arrives when its index is built.";
+/** …and when the index failed. */
+export const FULL_TEXT_FAILED = "Full-text search is unavailable.";
+
+/** The line under title matches: what full text is waiting for, never a
+ * time. Before publication the import is the gate; after it, the index. */
+export function titlesNote(readiness: SearchReadiness | null, canonicalReady: boolean | null): string {
+  if (canonicalReady === false) return FULL_TEXT_PENDING;
+  return readiness === "failed" ? FULL_TEXT_FAILED : FULL_TEXT_BUILDING;
+}
+
+/** How many titles the sheet can search: top-level conversations that have a
+ * name to match. Metadata-only placeholders carry none, so they never count
+ * — the same unit the import card counts in (conversations). */
+export function searchableTitleCount(sessions: readonly SessionRow[]): number {
+  let count = 0;
+  for (const session of sessions) {
+    if (session.parent_session_id === null && sessionTitleText(session) !== null) count += 1;
+  }
+  return count;
+}
 
 /** How many title matches the sheet lists; the count says when there are more. */
 export const TITLE_MATCH_LIMIT = 50;
 
 /**
- * Full text cannot answer yet: the canonical projection is unpublished (the
- * daemon answers every query with zero hits and `building`), or the detached
- * index has no generation yet (`building`). A catching-up or stale index does
- * answer — partially — and keeps the ordinary sheet; so does a failed one
- * over a published projection, whose import has finished. Unknown (null) is
+ * Full text cannot answer: the canonical projection is unpublished (the
+ * daemon answers every query with zero hits and `building`), the detached
+ * index has no generation yet (`building`), or the index failed (it serves
+ * no hits; crates/search/src/sidecar.rs `serves_hits`). A catching-up index
+ * does answer — partially — and keeps the ordinary sheet. Unknown (null) is
  * no claim either way.
  */
 export function fullTextUnavailable(
   readiness: SearchReadiness | null,
   canonicalReady: boolean | null,
 ): boolean {
-  return canonicalReady === false || readiness === "building";
+  return canonicalReady === false || readiness === "building" || readiness === "failed";
 }
 
 /**

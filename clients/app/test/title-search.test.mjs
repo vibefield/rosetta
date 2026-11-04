@@ -7,6 +7,8 @@ import {
   TITLE_MATCH_LIMIT,
   foldText,
   fullTextUnavailable,
+  searchableTitleCount,
+  titlesNote,
   markTitle,
   matchSessionTitles,
   sessionTitleText,
@@ -54,25 +56,39 @@ const ids = (result) => result.matches.map((m) => m.session.id);
 const text = (parts) => parts.map((p) => (p.mark ? `[${p.text}]` : p.text)).join("");
 
 describe("fullTextUnavailable", () => {
-  it("holds while the projection is unpublished or the index has no generation", () => {
+  it("holds while the projection is unpublished, the index has no generation, or it failed", () => {
     assert.equal(fullTextUnavailable("building", false), true);
     assert.equal(fullTextUnavailable("building", true), true);
     assert.equal(fullTextUnavailable("failed", false), true);
     assert.equal(fullTextUnavailable(null, false), true);
+    // A failed index serves no hits (sidecar.rs serves_hits): titles stand in.
+    assert.equal(fullTextUnavailable("failed", true), true);
   });
 
   it("does not hold once full text can answer, even partially, or when nothing is known", () => {
     assert.equal(fullTextUnavailable("ready", true), false);
     assert.equal(fullTextUnavailable("catching-up", true), false);
     assert.equal(fullTextUnavailable("stale", true), false);
-    // A failed index over a finished import keeps the ordinary sheet: the
-    // pending line would not be true there.
-    assert.equal(fullTextUnavailable("failed", true), false);
     assert.equal(fullTextUnavailable(null, null), false);
   });
 
-  it("prints the promised line", () => {
+  it("prints the line for what full text waits on: the import, then the index", () => {
     assert.equal(FULL_TEXT_PENDING, "Full-text search arrives when the import finishes.");
+    assert.equal(titlesNote("building", false), FULL_TEXT_PENDING);
+    assert.equal(titlesNote("failed", false), FULL_TEXT_PENDING);
+    assert.equal(titlesNote("building", true), "Full-text search arrives when its index is built.");
+    assert.equal(titlesNote("building", null), "Full-text search arrives when its index is built.");
+    assert.equal(titlesNote("failed", true), "Full-text search is unavailable.");
+  });
+});
+
+describe("searchableTitleCount", () => {
+  it("counts top-level conversations with a name, never children or nameless placeholders", () => {
+    const row = (id, extra) => ({ id, parent_session_id: null, title: "t", summary: null, ...extra });
+    assert.equal(searchableTitleCount([
+      row("a"), row("b", { title: null, summary: "s" }), row("c", { parent_session_id: "a" }),
+      row("placeholder", { title: null, summary: null }),
+    ]), 2);
   });
 });
 

@@ -26,7 +26,8 @@ import { SearchGlyph } from "../../lib/icons";
 import { parseSnippet } from "../../lib/model";
 import type { ProjectViewModel } from "../../lib/model";
 import type { SearchResultsViewModel } from "../../lib/search-results";
-import { FULL_TEXT_PENDING, titleCountLabel } from "../../lib/title-search";
+import { NOT_IMPORTED_LABEL } from "../../lib/import-state";
+import { FULL_TEXT_PENDING, titleCountLabel, titlesNote } from "../../lib/title-search";
 import type { TitleMatch, TitleMatches } from "../../lib/title-search";
 import {
   KIND_FILTER_OPTIONS,
@@ -73,6 +74,9 @@ export interface SearchSheetProps {
   readonly progress: SearchBuildProgress | null;
   readonly canonicalReady: boolean | null;
   readonly ingestPaused: boolean;
+  /** An import is running: a Pending title row says it is not imported yet,
+   * as its session row does (the session list's `duringBackfill`). */
+  readonly duringBackfill?: boolean;
   /** Runtime families the daemon reads, for the agent chip and the scope line. */
   readonly agentKinds: readonly string[];
   /** The selected project, so the sheet can offer to stay inside it. */
@@ -208,11 +212,14 @@ export function OptionRow({
 }
 
 /** A title match: the thread's name with the query marked, its project, and
- * when it was last active — what a session row says, in a search row's shape. */
+ * when it was last active — what a session row says, in a search row's shape.
+ * A thread the running import has not reached says so, as its session row
+ * does, rather than "Activity unknown". */
 function TitleRow({
   match,
   active,
   nowMs,
+  duringBackfill,
   runtimeKind,
   onHover,
   onOpen,
@@ -220,12 +227,14 @@ function TitleRow({
   readonly match: TitleMatch;
   readonly active: boolean;
   readonly nowMs: number;
+  readonly duringBackfill: boolean;
   readonly runtimeKind: string;
   readonly onHover: () => void;
   readonly onOpen: () => void;
 }) {
   const { project, session, parts } = match;
-  const when = dayLabel(sessionLastActive(session), nowMs);
+  const notImported = duringBackfill && session.stream_state === "pending";
+  const when = notImported ? NOT_IMPORTED_LABEL : dayLabel(sessionLastActive(session), nowMs);
   const spoken = parts.map((part) => part.text).join("");
   return (
     <div
@@ -236,6 +245,7 @@ function TitleRow({
       className="ah-sheet__row"
       data-title=""
       data-hit-kind="title"
+      data-standing={notImported ? "not-imported" : "ready"}
       style={{ "--tint": project.tint } as TintStyle}
       onPointerMove={onHover}
       onClick={onOpen}
@@ -268,8 +278,9 @@ function Quiet({ title, children }: { readonly title: string; readonly children:
 
 /**
  * The list while full text cannot answer: the titles that match, then the
- * line that says what is still to come — or, with none, a quiet that says
- * both. Opening one opens its thread, which shows its own import state.
+ * line that says what full text waits for (`note`, from `titlesNote`) — or,
+ * with none, a quiet that says both. Opening one opens its thread, which
+ * shows its own import state.
  */
 export function SheetTitles({
   titles,
@@ -279,6 +290,8 @@ export function SheetTitles({
   getRuntimeKind,
   onHover,
   onOpen,
+  note = FULL_TEXT_PENDING,
+  duringBackfill = false,
 }: {
   readonly titles: TitleMatches;
   readonly query: string;
@@ -287,11 +300,13 @@ export function SheetTitles({
   readonly getRuntimeKind: (runtimeId: string) => string;
   readonly onHover: (index: number) => void;
   readonly onOpen: (session: SessionRow) => void;
+  readonly note?: string;
+  readonly duringBackfill?: boolean;
 }) {
   if (titles.matches.length === 0) {
     return (
       <Quiet title="No titles match">
-        No session title contains every word of <code>{query.trim()}</code>. {FULL_TEXT_PENDING}
+        No session title contains every word of <code>{query.trim()}</code>. {note}
       </Quiet>
     );
   }
@@ -307,13 +322,14 @@ export function SheetTitles({
           match={match}
           active={match.index === active}
           nowMs={nowMs}
+          duringBackfill={duringBackfill}
           runtimeKind={getRuntimeKind(match.session.runtime_id)}
           onHover={() => onHover(match.index)}
           onOpen={() => onOpen(match.session)}
         />
       ))}
       <p className="ah-sheet__pending" role="presentation">
-        {FULL_TEXT_PENDING}
+        {note}
       </p>
     </>
   );
@@ -340,6 +356,7 @@ export function SearchSheet({
   progress,
   canonicalReady,
   ingestPaused,
+  duringBackfill = false,
   agentKinds,
   currentProject,
   homeDirectory,
@@ -566,6 +583,8 @@ export function SearchSheet({
         getRuntimeKind={getRuntimeKind}
         onHover={hover}
         onOpen={onOpenSession}
+        note={titlesNote(readiness, canonicalReady)}
+        duringBackfill={duringBackfill}
       />
     );
   } else if (lines.length === 0) {

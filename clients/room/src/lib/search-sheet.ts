@@ -306,20 +306,28 @@ export interface SheetStateInput {
  * The one sentence in the sheet's foot. Degraded is Tuesday here (design
  * record §09): a building index says so with a number, an error says what
  * happened, and a full page says it is the first page.
+ *
+ * Until publication full text answers nothing, so the foot says what the
+ * sheet searches instead. After it, a building or failed index serves no
+ * hits either (crates/search/src/sidecar.rs `serves_hits`): the foot says
+ * so and that titles stand in, never "partial" over zero hits, and a
+ * percentage only from the index's own document count.
  */
 export function stateSentence(input: SheetStateInput): string {
   if (input.error !== null) return `search failed · ${input.error}`;
+  if (input.canonicalReady === false) return "Titles only until the import finishes";
   if (input.ingestPaused) return "transcript import paused · search covers what was read";
   if (input.readiness !== null && input.readiness !== "ready") {
-    if (input.readiness === "failed") {
-      return input.canonicalReady ? "search unavailable" : "history is being imported";
-    }
-    if (input.progress !== null && input.progress.documents_total > 0) {
-      const pct = Math.floor((100 * input.progress.documents_done) / input.progress.documents_total);
-      return `indexing · ${pct}% · ${input.progress.documents_done.toLocaleString("en-US")} of ${input.progress.documents_total.toLocaleString("en-US")} messages · results are partial`;
-    }
+    const titles = input.query.trim() === "" ? "" : " · showing title matches";
+    if (input.readiness === "failed") return `Full-text search unavailable${titles}`;
+    const pct = input.progress !== null && input.progress.documents_total > 0
+      ? Math.floor((100 * input.progress.documents_done) / input.progress.documents_total)
+      : null;
     if (input.readiness === "building") {
-      return input.canonicalReady ? "search is being prepared" : "history is being imported";
+      return `Full-text search is being built${pct === null ? "" : ` · ${pct}%`}${titles}`;
+    }
+    if (pct !== null) {
+      return `indexing · ${pct}% · ${input.progress!.documents_done.toLocaleString("en-US")} of ${input.progress!.documents_total.toLocaleString("en-US")} messages · results are partial`;
     }
     return `search is ${input.readiness.replace("-", " ")} · results may be partial`;
   }

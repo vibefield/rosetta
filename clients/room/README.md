@@ -131,15 +131,22 @@ match stepper the sheet leaves in the transcript's head names those keys.
 
 **While full text cannot answer, the sheet searches titles.** Until the
 catalog's status says search can answer (`canonicalReady` false, or search
-readiness `building`, as through a first import), the sheet matches the query
-against the session titles the room already holds, under "Titles that match",
-and says "Full-text search arrives when the import finishes." Opening one
-opens its thread as a hit does, with no message to land on. When full text
-starts answering, the room asks the query again, and the titles stay until
-that answer arrives. A catching-up, stale or ready index keeps the ordinary
-sheet. The foot's meter fills only from the index's document count, sweeps
-for work with no count, and is absent while the import is paused or the index
-has failed.
+readiness `building` or `failed`, as through a first import and the index
+build after it), the sheet matches the query against the session titles the
+room already holds, under "Titles that match", and the launcher counts those
+titles ("Search 1,174 conversation titles"). The line under the matches says
+what full text waits on: "Full-text search arrives when the import finishes."
+before publication, "…when its index is built." after it, or "Full-text
+search is unavailable." The foot reads "Titles only until the import
+finishes", then "Full-text search is being built · 37% · showing title
+matches" (the % only from the index's own document count), or "Full-text
+search unavailable · showing title matches". A title row the running import
+has not reached reads "Not imported yet". Opening one opens its thread as a
+hit does, with no message to land on. When full text starts answering, the
+room asks the query again, and the titles stay until that answer arrives. A
+catching-up, stale or ready index keeps the ordinary sheet. The foot's meter
+fills only from the index's document count, sweeps for work with no count,
+and is absent while the import is paused or the index has failed.
 
 **The disconnected face can be all the host's words.** While the catalog has
 delivered no rows, the room draws one face: a title, a sentence under it, and,

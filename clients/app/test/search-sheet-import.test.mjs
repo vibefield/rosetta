@@ -173,6 +173,29 @@ describe("SheetTitles", () => {
     assert.ok(markup.endsWith(`<p class="ah-sheet__pending" role="presentation">${FULL_TEXT_PENDING}</p>`));
   });
 
+  it("marks a thread the import has not reached, and dates a readable one", () => {
+    const when = (rows, duringBackfill = true) => renderToStaticMarkup(createElement(SheetTitles, {
+      titles: matchSessionTitles("import", rows, projects, scope), query: "import", active: 0, nowMs: now,
+      getRuntimeKind: () => "claude-code", onHover() {}, onOpen() {}, duringBackfill,
+    })).match(/class="ah-sheet__when">([^<]*)</)[1];
+    assert.equal(when([sessions[0]]), "Not imported yet");
+    const readable = when([{ ...sessions[0], stream_state: "indexed" }]);
+    assert.notEqual(readable, "Not imported yet");
+    assert.notEqual(readable, "Activity unknown");
+    // Once no import runs, a row still Pending is one no import will reach.
+    assert.notEqual(when([sessions[0]], false), "Not imported yet");
+  });
+
+  it("prints the note it is given in place of the pending line", () => {
+    const note = "Full-text search arrives when its index is built.";
+    const markup = renderToStaticMarkup(createElement(SheetTitles, {
+      titles: matchSessionTitles("import", sessions, projects, scope), query: "import", active: 0, nowMs: now,
+      getRuntimeKind: () => "claude-code", onHover() {}, onOpen() {}, note,
+    }));
+    assert.ok(markup.endsWith(`<p class="ah-sheet__pending" role="presentation">${note}</p>`));
+    assert.ok(!markup.includes(FULL_TEXT_PENDING));
+  });
+
   it("says no title matches, and what is still to come, when none does", () => {
     const markup = render({ matches: [], total: 0 });
     assert.match(markup, /<strong>No titles match<\/strong>/);

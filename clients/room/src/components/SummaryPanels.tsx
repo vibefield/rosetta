@@ -66,6 +66,12 @@ export interface ProjectSummaryPanelProps {
   readonly hostActs?: readonly RoomAct[] | null | undefined;
 }
 
+/** The veil's words while an import runs. Every figure waits on one global
+ * gate — the daemon publishes aggregates only once the whole import has
+ * finished (http.rs `is_published`) — so it names that gate, never work on
+ * this project. */
+export const CHARTS_AFTER_IMPORT = "Charts appear when the whole import finishes";
+
 export function ProjectSummaryPanel({
   project,
   visibleSessionCount,
@@ -195,7 +201,7 @@ export function ProjectSummaryPanel({
           {isVeiled && (
             <Veil
               label={ingestActive
-                ? censusRunning ? "Discovering conversations…" : "Preparing activity summaries…"
+                ? censusRunning ? "Discovering conversations…" : CHARTS_AFTER_IMPORT
                 : "Loading activity summaries…"}
               progress={null}
             />
@@ -390,7 +396,7 @@ export function PortfolioSummaryPanel({
           {summariesPending && (
             <Veil
               label={ingestActive
-                ? censusRunning ? "Discovering conversations…" : "Preparing activity summaries…"
+                ? censusRunning ? "Discovering conversations…" : CHARTS_AFTER_IMPORT
                 : "Loading activity summaries…"}
               progress={null}
             />
