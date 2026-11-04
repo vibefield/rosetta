@@ -1,0 +1,23 @@
+[
+  {
+    "op": "session_usage",
+    "session_id": "21692a88838f06397c77db91e5903d13446a183524fea2952831b245d9061277",
+    "key": "30ab8783258205cee8ac42f4a87724179424400edeb384c89630c6385f23d931",
+    "ts": 1793818671124,
+    "model": "gemini-3.1-pro-preview",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    }
+  }
+]

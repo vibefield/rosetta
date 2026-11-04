@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::raw::transcript::{
-    ErrorMessageLine, KnownRecord, ListDirectoryLine, PlannerResponseLine, RunCommandLine,
-    ViewFileLine,
+    ErrorMessageLine, GenericLine, KnownRecord, ListDirectoryLine, PlannerResponseLine,
+    RunCommandLine, ViewFileLine,
 };
 use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
@@ -62,9 +62,15 @@ impl AntigravityState {
     }
 
     /// Typed result records select the oldest pending call with the matching
-    /// name. `ERROR_MESSAGE` has no tool-name field, so it selects the oldest
-    /// pending call regardless of name. Both rules use only native stream order.
+    /// name. `ERROR_MESSAGE` and `GENERIC` have no tool-name field, so they
+    /// select the oldest pending call regardless of name. Both rules use only
+    /// native stream order.
     fn take(&mut self, expected_name: Option<&str>) -> Option<String> {
+        self.take_pending(expected_name)
+            .map(|pending| pending.tool_id)
+    }
+
+    fn take_pending(&mut self, expected_name: Option<&str>) -> Option<PendingTool> {
         let index = match expected_name {
             Some(name) => self
                 .pending_tools
@@ -72,7 +78,7 @@ impl AntigravityState {
                 .position(|pending| pending.name == name)?,
             None => (!self.pending_tools.is_empty()).then_some(0)?,
         };
-        Some(self.pending_tools.remove(index).tool_id)
+        Some(self.pending_tools.remove(index))
     }
 }
 
@@ -159,18 +165,7 @@ fn normalize(
             emit.message(row);
             LineStatus::Parsed
         }
-        KnownRecord::Generic(line) => {
-            let message_kind = match line.source.as_str() {
-                "MODEL" => MessageKind::Agent,
-                "USER" => MessageKind::User,
-                _ => MessageKind::System,
-            };
-            let mut row = emit.row(line.step_index, "generic", message_kind, at);
-            row.subtype = Some("GENERIC".to_owned());
-            row.content = Some(line.content.clone());
-            emit.message(row);
-            LineStatus::Parsed
-        }
+        KnownRecord::Generic(line) => generic(&mut emit, state, line, at),
         // Declared and intentionally unprojected: this record carries only the
         // common envelope and no content in the canonical ground truth.
         KnownRecord::ConversationHistory(_) => LineStatus::Parsed,
@@ -309,6 +304,56 @@ fn error_message(
     )
 }
 
+/// A `GENERIC` step while a planner call is still pending is that call's
+/// result. Evidence (fixtures/1.4.12 tool-use and usage): the writer replaced
+/// the typed `RUN_COMMAND` record with `GENERIC`, at the step index the
+/// headless stream reports as `step_type=tool, tool_name=run_command`, right
+/// after the planner step that requested it. The record names no tool, so it
+/// takes the oldest pending call, as `ERROR_MESSAGE` does. With nothing
+/// pending it stays model prose (the census shape).
+///
+/// The record carries no `exit_code`. Its only outcome fact is the writer's
+/// own `Command exited with code N.` line, read for `run_command` alone; any
+/// other tool, or a command without that line, keeps the terminal-record
+/// policy (a completed result is a success). The farm has only captured
+/// code 0; a non-zero code reads as a failure by the same line.
+fn generic(
+    emit: &mut Emit<'_>,
+    state: &mut AntigravityState,
+    line: &GenericLine,
+    at: Option<Ms>,
+) -> LineStatus {
+    let Some(pending) = state.take_pending(None) else {
+        let message_kind = match line.source.as_str() {
+            "MODEL" => MessageKind::Agent,
+            "USER" => MessageKind::User,
+            _ => MessageKind::System,
+        };
+        let mut row = emit.row(line.step_index, "generic", message_kind, at);
+        row.subtype = Some("GENERIC".to_owned());
+        row.content = Some(line.content.clone());
+        emit.message(row);
+        return LineStatus::Parsed;
+    };
+    let is_error = (pending.name == "run_command")
+        .then(|| command_exit_code(&line.content))
+        .flatten()
+        .map(|code| code != 0);
+    emit_tool_update(emit, pending.tool_id, Some(&line.content), is_error, at);
+    LineStatus::Parsed
+}
+
+/// `Command exited with code N.` as a whole line of a 1.4.12 command result.
+fn command_exit_code(content: &str) -> Option<i64> {
+    content.lines().find_map(|line| {
+        line.trim_end()
+            .strip_prefix("Command exited with code ")?
+            .strip_suffix('.')?
+            .parse()
+            .ok()
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn tool_result(
     emit: &mut Emit<'_>,
@@ -326,6 +371,17 @@ fn tool_result(
             code: ORPHAN_TOOL_RESULT.to_owned(),
         };
     };
+    emit_tool_update(emit, tool_id, result.as_deref(), is_error, at);
+    LineStatus::Parsed
+}
+
+fn emit_tool_update(
+    emit: &mut Emit<'_>,
+    tool_id: String,
+    result: Option<&str>,
+    is_error: Option<bool>,
+    at: Option<Ms>,
+) {
     emit.ops.push(IngestOp::ToolUpdate {
         session_id: emit.session_id.clone(),
         correlation_key: tool_id,
@@ -335,11 +391,10 @@ fn tool_result(
             true,
             rosetta_core::StatusBasis::NativeTerminalRecord,
             at,
-            result.as_deref(),
+            result,
         )),
         at,
     });
-    LineStatus::Parsed
 }
 
 fn tool_discriminator(step_index: u64, call_index: usize) -> String {
@@ -390,7 +445,9 @@ impl<'a> Emit<'a> {
             uuid: None,
             parent_uuid: None,
             ts,
-            // No model, effort, or usage fields exist in this stream.
+            // No model or effort fields exist in this stream. 1.4.12 planner
+            // steps carry token counts, but usage is owned by the
+            // conversation store (`crate::usage`) and is never duplicated here.
             model: None,
             effort: None,
             content: None,
@@ -582,6 +639,71 @@ mod tests {
             }
             other => panic!("expected one tool result, got {other:?}"),
         }
+    }
+
+    fn generic_result_status(content: &str, tool: &str, args: Value) -> rosetta_core::ToolStatus {
+        let mut ctx = context();
+        let _ = ingest(
+            &mut ctx,
+            json!({
+                "step_index": 1,
+                "source": "MODEL",
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-04T18:57:51Z",
+                "input_tokens": 128,
+                "cache_read_tokens": 0,
+                "output_tokens": 32,
+                "tool_calls": [{"name": tool, "args": args}]
+            }),
+        );
+        let result = ingest(
+            &mut ctx,
+            json!({
+                "step_index": 2,
+                "source": "MODEL",
+                "type": "GENERIC",
+                "status": "DONE",
+                "created_at": "2026-11-04T18:57:51Z",
+                "content": content
+            }),
+        );
+        assert_eq!(result.status, LineStatus::Parsed);
+        match result.ops.as_slice() {
+            [
+                IngestOp::ToolUpdate {
+                    correlation_key,
+                    patch,
+                    ..
+                },
+            ] => {
+                assert_eq!(correlation_key, "step#1:tool#0");
+                patch.status.expect("terminal status").value
+            }
+            other => panic!("expected one tool result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn writer_1_4_12_generic_step_is_the_pending_command_result() {
+        // fixtures/1.4.12/tool-use step 2, verbatim.
+        let content = "Created At: 2026-11-04T10:57:51-08:00\nCompleted At: 2026-11-04T10:57:51-08:00\nCommand exited with code 0.\n\nCommand output:\nrosetta-mock\r\n";
+        let args = json!({"CommandLine": "\"echo rosetta-mock\"", "WaitMsBeforeAsync": "5000"});
+        assert_eq!(
+            generic_result_status(content, "run_command", args.clone()),
+            rosetta_core::ToolStatus::Succeeded
+        );
+        let failed = content.replace("code 0.", "code 2.");
+        assert_eq!(
+            generic_result_status(&failed, "run_command", args),
+            rosetta_core::ToolStatus::Failed
+        );
+        // The exit line is a command fact only; another tool's result keeps
+        // the terminal-record policy.
+        assert_eq!(
+            generic_result_status(&failed, "view_file", json!({"AbsolutePath": "/fixture"})),
+            rosetta_core::ToolStatus::Succeeded
+        );
     }
 
     #[test]

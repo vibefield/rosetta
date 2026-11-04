@@ -21,7 +21,8 @@ fn golden_dir() -> PathBuf {
 }
 
 /// One file per native conversation. The full and chunk paths are proven
-/// byte-identical inventory and are intentionally absent from this list.
+/// inventory (byte copies, or for 1.4.12 tool calls the same records with
+/// typed rather than JSON-encoded args) and are intentionally absent here.
 fn scenarios() -> Vec<(String, String, PathBuf)> {
     let root = fixtures_root();
     let mut found: Vec<_> = walkdir::WalkDir::new(&root)

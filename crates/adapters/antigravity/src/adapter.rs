@@ -44,7 +44,9 @@ impl AgentAdapter for AntigravityAdapter {
     fn normalizer_version(&self) -> u32 {
         // 8: the conversation store's per-step usage becomes session usage
         // samples (§4.1.3); the checkpoint gains the generation index.
-        8
+        // 9: a GENERIC step with a call pending is that call's result
+        // (1.4.12), and 1.4.12's JSON-encoded `CommandLine` is decoded.
+        9
     }
 
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {

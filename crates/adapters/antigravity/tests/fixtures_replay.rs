@@ -124,24 +124,23 @@ fn transcripts_round_trip_losslessly() {
 #[test]
 fn overlapping_transcript_representations_are_exact_copies() {
     // This is the committed ownership evidence. There is one chunk generation
-    // (`00000000`) in each family and it reproduces the monolithic primary byte
-    // for byte; transcript_full does too. The corpus therefore establishes
-    // duplication, but no later rotation boundary or truncation behavior.
+    // (`00000000`) in each family and it reproduces its monolithic file byte
+    // for byte. The corpus therefore establishes duplication, but no later
+    // rotation boundary or truncation behavior.
     for primary in primary_transcript_files() {
         let logs = primary.parent().expect("logs directory");
-        let paths = [
-            logs.join("transcript_full.jsonl"),
-            logs.join("chunks/transcript/00000000.jsonl"),
-            logs.join("chunks/transcript_full/00000000.jsonl"),
-        ];
-        let expected = std::fs::read(&primary).unwrap();
-        for copy in paths {
+        for (monolith, chunk) in [
+            ("transcript.jsonl", "chunks/transcript/00000000.jsonl"),
+            (
+                "transcript_full.jsonl",
+                "chunks/transcript_full/00000000.jsonl",
+            ),
+        ] {
             assert_eq!(
-                std::fs::read(&copy).unwrap(),
-                expected,
-                "{} differs from primary {}",
-                copy.display(),
-                primary.display()
+                std::fs::read(logs.join(chunk)).unwrap(),
+                std::fs::read(logs.join(monolith)).unwrap(),
+                "{chunk} differs from {monolith} in {}",
+                logs.display()
             );
         }
 
@@ -160,6 +159,67 @@ fn overlapping_transcript_representations_are_exact_copies() {
             );
         }
     }
+}
+
+/// `transcript_full.jsonl` carries the primary's records with one difference:
+/// the primary stores every `tool_calls[].args` value as its JSON encoding
+/// (1.4.12: `"CommandLine":"\"echo x\""`, `"WaitMsBeforeAsync":"5000"`), the
+/// full file stores the value itself. Without tool calls, and in every 1.1.20
+/// fixture (whose primary does not encode its args), the two are byte-identical.
+#[test]
+fn transcript_full_is_the_primary_with_typed_tool_args() {
+    let mut decoded_args = 0usize;
+    for primary in primary_transcript_files() {
+        let full = primary.with_file_name("transcript_full.jsonl");
+        let primary_text = std::fs::read_to_string(&primary).unwrap();
+        let full_text = std::fs::read_to_string(&full).unwrap();
+        let primary_lines: Vec<_> = primary_text.lines().collect();
+        let full_lines: Vec<_> = full_text.lines().collect();
+        assert_eq!(
+            primary_lines.len(),
+            full_lines.len(),
+            "{}",
+            primary.display()
+        );
+        for (no, (encoded, typed)) in primary_lines.iter().zip(&full_lines).enumerate() {
+            if encoded == typed {
+                continue;
+            }
+            let mut encoded: serde_json::Value = serde_json::from_str(encoded).unwrap();
+            let typed: serde_json::Value = serde_json::from_str(typed).unwrap();
+            let calls = encoded["tool_calls"].as_array_mut().unwrap_or_else(|| {
+                panic!(
+                    "{}:{}: differs without tool calls",
+                    primary.display(),
+                    no + 1
+                )
+            });
+            for call in calls {
+                for value in call["args"]
+                    .as_object_mut()
+                    .expect("args object")
+                    .values_mut()
+                {
+                    let text = value
+                        .as_str()
+                        .expect("primary arg is a JSON-encoded string");
+                    *value = serde_json::from_str(text).expect("arg decodes as JSON");
+                    decoded_args += 1;
+                }
+            }
+            assert_eq!(
+                encoded,
+                typed,
+                "{}:{}: differs beyond tool-call arg encoding",
+                primary.display(),
+                no + 1
+            );
+        }
+    }
+    assert!(
+        decoded_args > 0,
+        "the corpus no longer exercises encoded args"
+    );
 }
 
 #[test]

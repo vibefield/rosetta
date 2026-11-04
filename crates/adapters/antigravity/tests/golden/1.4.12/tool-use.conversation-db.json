@@ -1,0 +1,44 @@
+[
+  {
+    "op": "session_usage",
+    "session_id": "bdc1c89d63d9c931b2241a94df58033615b04720d2644e30188143edb770f9d6",
+    "key": "ae6f7320d31087e6b9de206649648f5f842751c8b1ac9e771b06af15ea14e1a6",
+    "ts": 1793818671755,
+    "model": "gemini-3.1-pro-preview",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "bdc1c89d63d9c931b2241a94df58033615b04720d2644e30188143edb770f9d6",
+    "key": "8adca699a02c8bb1bbdb7683770091120f25d9ee59eba9829864876064da355d",
+    "ts": 1793818671785,
+    "model": "gemini-3.1-pro-preview",
+    "tokens": {
+      "input": 128,
+      "output": 32,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": 0,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    }
+  }
+]
