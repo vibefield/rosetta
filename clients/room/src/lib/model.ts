@@ -117,86 +117,23 @@ export function getCalendarDayKey(timestamp: number): string {
   ).padStart(2, "0")}`;
 }
 
-/** The grid's day keys and today's place in it. They follow the viewer's
- * day and offset alone, so every project and every delivery of that day
- * shares one copy. */
-interface ActivityGrid {
-  readonly identity: string;
-  readonly keys: readonly string[];
-  readonly currentDayIndex: number;
-}
-
-let lastGrid: ActivityGrid | null = null;
-
-function activityGrid(currentTimestamp: number): ActivityGrid {
-  const startTimestamp = getActivityGridStartTimestamp(currentTimestamp);
-  const currentDayKey = getCalendarDayKey(currentTimestamp);
-  // Every key below is a function of these three, and nothing else.
-  const identity = `${startTimestamp}|${currentDayKey}|${getViewerUtcOffsetMinutes()}`;
-  if (lastGrid?.identity === identity) return lastGrid;
-  const keys: string[] = [];
-  let currentDayIndex = ACTIVITY_HEATMAP_DAY_COUNT - 1;
-  for (let index = 0; index < ACTIVITY_HEATMAP_DAY_COUNT; index += 1) {
-    const key = getCalendarDayKey(startTimestamp + index * DAY_IN_MS + DAY_IN_MS / 2);
-    // Noon-anchored keys are distinct, so today matches at most once.
-    if (key === currentDayKey) currentDayIndex = index;
-    keys.push(key);
-  }
-  lastGrid = { identity, keys, currentDayIndex };
-  return lastGrid;
-}
-
-/** A project's series and what the ledger reads off it: its 30-day tail,
- * the sparkline's buckets and the window totals. */
-interface ActivitySeries {
-  readonly dailyTokens: readonly number[];
-  readonly currentDayIndex: number;
-  readonly recentTokenBuckets: readonly number[];
-  readonly tokensLast30Days: number;
-  readonly tokensLast53Weeks: number;
-}
-
-/** Stats are immutable once landed, so a series is a function of the heat
- * days' identity and the grid: kept per heat array (and once for a project
- * with none), it is rebuilt only when either changes. A metadata delivery
- * rebuilds every project's view model, and before this every one of them
- * rebuilt 371 day keys and handed the heatmap a new array to redraw. */
-const NO_HEAT: readonly HeatmapDay[] = [];
-const seriesByHeat = new WeakMap<readonly HeatmapDay[], { grid: ActivityGrid; series: ActivitySeries }>();
-
 /** The full 53×7 grid, zero-filled from sparse heatmap days; cells after
  * today hold -1 (not yet, which is not the same as empty). */
 function createActivitySeries(
   heatmapDays: readonly HeatmapDay[],
   currentTimestamp: number,
-): ActivitySeries {
-  const grid = activityGrid(currentTimestamp);
-  const kept = seriesByHeat.get(heatmapDays);
-  if (kept !== undefined && kept.grid === grid) return kept.series;
+): { dailyTokens: number[]; currentDayIndex: number } {
   const tokensByDay = new Map(heatmapDays.map((day) => [day.day, day.tokens]));
-  const { currentDayIndex } = grid;
-  const dailyTokens = grid.keys.map((key, index) =>
-    index > currentDayIndex ? -1 : (tokensByDay.get(key) ?? 0));
-  // The ledger's 30-day figures are the same series' tail, so the heatmap,
-  // the sparkline, and the figure can never disagree.
-  const dailyTokensLast30Days = Array.from({ length: 30 }, (_, dayIndex) =>
-    Math.max(0, dailyTokens[currentDayIndex - (29 - dayIndex)] ?? 0),
-  );
-  const recentTokenBuckets = Array.from({ length: 15 }, (_, bucketIndex) =>
-    [dailyTokensLast30Days[bucketIndex * 2], dailyTokensLast30Days[bucketIndex * 2 + 1]].reduce<number>(
-      (total, value) => total + (value ?? 0),
-      0,
-    ),
-  );
-  const series: ActivitySeries = {
-    dailyTokens,
-    currentDayIndex,
-    recentTokenBuckets,
-    tokensLast30Days: dailyTokensLast30Days.reduce((total, value) => total + value, 0),
-    tokensLast53Weeks: dailyTokens.reduce((total, value) => total + Math.max(0, value), 0),
-  };
-  seriesByHeat.set(heatmapDays, { grid, series });
-  return series;
+  const startTimestamp = getActivityGridStartTimestamp(currentTimestamp);
+  const currentDayKey = getCalendarDayKey(currentTimestamp);
+  const dailyTokens: number[] = [];
+  let currentDayIndex = ACTIVITY_HEATMAP_DAY_COUNT - 1;
+  for (let index = 0; index < ACTIVITY_HEATMAP_DAY_COUNT; index += 1) {
+    const key = getCalendarDayKey(startTimestamp + index * DAY_IN_MS + DAY_IN_MS / 2);
+    if (key === currentDayKey) currentDayIndex = index;
+    dailyTokens.push(index > currentDayIndex ? -1 : (tokensByDay.get(key) ?? 0));
+  }
+  return { dailyTokens, currentDayIndex };
 }
 
 /* ── sessions by project: one pass per metadata change ─────────────────── */
@@ -272,26 +209,43 @@ export function buildProjectViewModelFromSessions(
       : indexedSessionCount === 0
         ? "pending"
         : "partial";
-  const { dailyTokens, currentDayIndex, recentTokenBuckets, tokensLast30Days, tokensLast53Weeks } =
-    createActivitySeries(projectStats?.heat ?? NO_HEAT, currentTimestamp);
+  const { dailyTokens, currentDayIndex } = createActivitySeries(
+    projectStats?.heat ?? [],
+    currentTimestamp,
+  );
+  // The ledger's 30-day figures are the same series' tail, so the heatmap,
+  // the sparkline, and the figure can never disagree.
+  const dailyTokensLast30Days = Array.from({ length: 30 }, (_, dayIndex) =>
+    Math.max(0, dailyTokens[currentDayIndex - (29 - dayIndex)] ?? 0),
+  );
+  const recentTokenBuckets = Array.from({ length: 15 }, (_, bucketIndex) =>
+    [dailyTokensLast30Days[bucketIndex * 2], dailyTokensLast30Days[bucketIndex * 2 + 1]].reduce<number>(
+      (total, value) => total + (value ?? 0),
+      0,
+    ),
+  );
+  const tokensLast30Days = dailyTokensLast30Days.reduce((total, value) => total + value, 0);
+  const tokensLast53Weeks = dailyTokens.reduce(
+    (total, value) => total + Math.max(0, value),
+    0,
+  );
   const lifetimeTokens = (projectStats?.contribution ?? []).reduce(
     (total, contribution) => total + contribution.tokens,
     0,
   );
   const lifetimeSpend = sumSpend(projectStats?.contribution ?? []);
   // Spend windows come from the same heatmap days as the token windows.
-  const heat = projectStats?.heat ?? NO_HEAT;
-  const thirtyDayKeys = heat.length === 0 ? null : new Set(
+  const thirtyDayKeys = new Set(
     Array.from({ length: 30 }, (_, dayIndex) =>
       getCalendarDayKey(currentTimestamp - (29 - dayIndex) * DAY_IN_MS),
     ),
   );
   let spendLast30Days = NO_SPEND;
   let spendLast53Weeks = NO_SPEND;
-  for (const day of heat) {
+  for (const day of projectStats?.heat ?? []) {
     const spend = spendOf(day);
     spendLast53Weeks = addSpend(spendLast53Weeks, spend);
-    if (thirtyDayKeys?.has(day.day)) spendLast30Days = addSpend(spendLast30Days, spend);
+    if (thirtyDayKeys.has(day.day)) spendLast30Days = addSpend(spendLast30Days, spend);
   }
   const lifetimeMessages = (projectStats?.contribution ?? []).reduce(
     (total, contribution) => total + contribution.messages,
