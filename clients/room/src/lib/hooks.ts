@@ -105,9 +105,16 @@ export interface DaemonStatusFeed {
 /** The daemon's status surface. It answers from the daemon's first breath —
  * before the projection is even readable — so it is the room's connectivity
  * truth during a cold start. Polls fast through canonical publication and
- * search preparation, then quietly once both are ready. */
-export function useDaemonStatus(catalog: CatalogPort): DaemonStatusFeed {
+ * search preparation, then quietly once both are ready. A connection change,
+ * or a new `asked` (the host knows the daemon's state moved: it granted
+ * consent), drops the wait and the ask in flight and asks again at once.
+ * After a new `asked`, an answer still awaiting consent is the grant not
+ * yet visible, not the user choosing: the room asks again every 100 ms, not
+ * at the consent pause's 2.5 s, until the phase moves on. */
+export function useDaemonStatus(catalog: CatalogPort, asked = 0): DaemonStatusFeed {
   const [connectionRevision, setConnectionRevision] = useState(0);
+  // The last `asked` whose move the daemon has shown.
+  const shown = useRef(0);
   useEffect(
     () => catalog.onConnectionChange?.(() => setConnectionRevision((value) => value + 1)),
     [catalog],
@@ -146,12 +153,16 @@ export function useDaemonStatus(catalog: CatalogPort): DaemonStatusFeed {
           receivedAt: Date.now(),
         });
         const phase = status.ingest?.phase;
+        if (phase !== "awaiting_consent") shown.current = asked;
+        // rosettad answers a grant a moment before its phase leaves
+        // awaiting_consent: re-ask briskly until it does.
+        const unshown = phase === "awaiting_consent" && shown.current !== asked;
         // Keep search visible after canonical publication. Audit/consent are
         // intentional pauses; an unanswered first request retries promptly.
         const paused = status.ingest?.run?.state === "paused" || status.ingest?.run?.state === "failed" ||
           phase === "metadata_ready" || phase === "awaiting_consent";
         const complete = status.canonicalReady && status.searchReadiness === "ready";
-        delay = complete ? 30_000 : paused ? 2_500 : 500;
+        delay = complete ? 30_000 : unshown ? 100 : paused ? 2_500 : 500;
       } catch (error: unknown) {
         if (!cancelled) setFeed((previous) => ({
           ...previous,
@@ -171,7 +182,7 @@ export function useDaemonStatus(catalog: CatalogPort): DaemonStatusFeed {
       window.clearTimeout(deadline);
       window.clearTimeout(timer);
     };
-  }, [catalog, connectionRevision]);
+  }, [catalog, connectionRevision, asked]);
   return feed;
 }
 

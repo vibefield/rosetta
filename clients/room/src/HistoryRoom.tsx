@@ -207,6 +207,11 @@ export interface HistoryRoomHandle {
    * messages when given. A session the index has not delivered yet is opened
    * when it arrives; one it does not have is said so in a receipt. */
   openAt(target: RoomTarget): void;
+  /** Ask the index's status now, not at the next poll: for a host that just
+   * moved the index's state itself (its consent screen granted consent).
+   * While the index still answers that it awaits consent, the room asks
+   * again every 100 ms, not at the consent pause's 2.5 s. */
+  refreshStatus(): void;
 }
 
 function insetStyle(inset: RoomInset | undefined): CSSProperties {
@@ -316,7 +321,8 @@ function RoomBody({
   const overlayOpen = useRoomOverlayOpen();
   // The room's root, where a host's menus are drawn over every column.
   const [frameElement, setFrameElement] = useState<HTMLDivElement | null>(null);
-  const daemonStatus = useDaemonStatus(catalog);
+  const [statusAsked, setStatusAsked] = useState(0);
+  const daemonStatus = useDaemonStatus(catalog, statusAsked);
   const {
     connectionError,
     canonicalReady,
@@ -705,6 +711,9 @@ function RoomBody({
     },
     openAt(target) {
       setPendingOpen({ sessionId: target.sessionId, timelineId: target.timelineId ?? null });
+    },
+    refreshStatus() {
+      setStatusAsked((value) => value + 1);
     },
   }), [stepMatch]);
 

@@ -14,8 +14,13 @@ function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
 }
 
-/** Consent is the app's to ask: it speaks to its own daemon directly. */
-export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient, "discoveries" | "enableRuntimes"> }) {
+/** Consent is the app's to ask: it speaks to its own daemon directly.
+ * `onGranted` runs once the daemon took the grant, so the room can ask its
+ * status at once rather than at its next poll. */
+export function RollCallPanel({ client, onGranted }: {
+  readonly client: Pick<RosettaClient, "discoveries" | "enableRuntimes">;
+  readonly onGranted?: () => void;
+}) {
   const [rows, setRows] = useState<DiscoveryRow[] | null>(null);
   const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
@@ -57,12 +62,13 @@ export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient,
   const begin = () => {
     setSubmitting(true);
     setError(null);
-    client.enableRuntimes([...checked]).catch((err: unknown) => {
+    client.enableRuntimes([...checked]).then(() => onGranted?.(), (err: unknown) => {
       setSubmitting(false);
       setError(err instanceof Error ? err.message : String(err));
     });
-    // On success this panel simply waits: the daemon's phase flips to
-    // backfilling and the room replaces the roll call on the next poll.
+    // On success this panel waits for the room's status answer, which it
+    // asks for at once (`onGranted`): the daemon's phase has left
+    // awaiting_consent and the room replaces the roll call.
   };
 
   // `data-roll-call`, `data-agent-kind` and `data-action` are inert: what a
@@ -127,7 +133,7 @@ export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient,
             data-action="begin-ingest"
             onClick={begin}
           >
-            {submitting ? "Starting…" : "Begin ingest"}
+            {submitting ? "Starting your import…" : "Begin ingest"}
           </button>
           {error !== null && <p className="ah-rollcall__error">{error}</p>}
         </>

@@ -106,7 +106,9 @@ folder and the host's key when it gave one, on mount and on every change) · `st
 `emptyPrompt` (the empty transcript's sentence in the host's words; absent,
 the room's own, below) · `search` (the room's own strip and
 sheet, with the host owning the open state; absent, neither is drawn). The ref
-handle offers `openAt({ sessionId, timelineId? })` and `stepMatch(delta)`.
+handle offers `openAt({ sessionId, timelineId? })`, `stepMatch(delta)` and
+`refreshStatus()` (ask the index's status now, for a host that just moved its
+state itself — rosetta's roll call calls it once consent is granted).
 
 **The search keys are the host's (RO-14).** The room binds no key of its own.
 The host's window opens the sheet and walks the matches: rosetta's app binds

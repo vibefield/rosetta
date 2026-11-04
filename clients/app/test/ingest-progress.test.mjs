@@ -129,6 +129,39 @@ test("status polls twice per second through search, preserves progress on failur
   assert.equal(requests.length, 5);
 });
 
+test("a host's status refresh asks at once, and re-asks briskly until the grant shows", async (t) => {
+  const clock = fakeClock(t);
+  const oldWindow = globalThis.window;
+  globalThis.window = globalThis;
+  const requests = [];
+  const client = { onConnectionChange: () => () => {}, status(signal) {
+    const request = { signal, ...deferred() }; requests.push(request); return request.promise;
+  } };
+  const hook = dataHooks(client)("useDaemonStatus", 0);
+  t.after(async () => {
+    hook.close(); await microtasks();
+    if (oldWindow === undefined) delete globalThis.window; else globalThis.window = oldWindow;
+  });
+  const at = (phase) => ({ canonical_ready: false, search: { readiness: "building", progress: null },
+    daemon: { started_at: 1, uptime_ms: 1_000, ingest: { ...feed().ingest, phase } } });
+  hook.render(0);
+  requests[0].resolve(at("awaiting_consent")); await microtasks(); hook.render(0);
+  clock.tick(2_499); assert.equal(requests.length, 1, "the user is choosing: the consent pause");
+  clock.tick(1); assert.equal(requests.length, 2);
+  hook.render(1);
+  assert.equal(requests.length, 3, "a refresh asks at once");
+  assert.equal(requests[1].signal.aborted, true, "and drops the ask in flight");
+  requests[2].resolve(at("awaiting_consent")); await microtasks(); hook.render(1);
+  clock.tick(99); assert.equal(requests.length, 3);
+  clock.tick(1); assert.equal(requests.length, 4, "the grant not yet shown: re-asked after 100 ms");
+  requests[3].resolve(at("backfilling")); await microtasks(); hook.render(1);
+  assert.equal(hook.render(1).ingest.phase, "backfilling");
+  clock.tick(500); assert.equal(requests.length, 5);
+  requests[4].resolve(at("awaiting_consent")); await microtasks(); hook.render(1);
+  clock.tick(500); assert.equal(requests.length, 5, "once shown, awaiting consent is the pause again");
+  clock.tick(2_000); assert.equal(requests.length, 6);
+});
+
 test("a stalled status request is aborted and retries instead of freezing indefinitely", async (t) => {
   const clock = fakeClock(t);
   const oldWindow = globalThis.window;

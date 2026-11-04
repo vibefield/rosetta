@@ -1013,7 +1013,10 @@ timing.
 > nothing and never change either canonical or search readiness.
 >
 > The renderer polls status every 500 ms until canonical **and** search readiness are satisfied,
-> then returns to 30-second polling (intentional consent/audit pauses use 2.5 seconds). Requests
+> then returns to 30-second polling (intentional consent/audit pauses use 2.5 seconds; once the
+> app's roll call has its grant it asks the room, through `HistoryRoomHandle.refreshStatus`, to
+> ask again at once, and an answer that still awaits consent, the grant not yet visible, is
+> re-asked every 100 ms, so the import's first face does not wait out that pause). Requests
 > are serial, abort after five seconds, retain the last observed progress on failure, and retry
 > after one second. A compact panel above the project list describes four user-facing steps:
 > discovery, reading, preparation/saving, and search. Step-local meters use real denominators;

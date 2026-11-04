@@ -275,7 +275,8 @@ async function freshImport() {
   // ── The roll call → the import (ux:X7) ─────────────────────────────────
   // The roll call, the SDK and catalogOver run their real code (the fixture
   // mounts App on a RosettaClient), so a re-ask after the grant, wherever it
-  // is wired, reaches the trail as a status ask.
+  // is wired, reaches the trail as a status ask. App wires it through the
+  // room's handle (refreshStatus), so it reads as a refresh.
   await until(() => document.querySelector('[data-roll-call="ready"]'), 'the roll call');
   await check(() => { window.coldImport.c.holdStatus(); return true; });
   await until(() => window.coldImport.c.heldStatus() > 0, 'the room to park a status ask while consent waits');
@@ -285,21 +286,24 @@ async function freshImport() {
   const grant = await check((since) => window.coldImport.c.log.trail.find((e) => e.seq > since && e.what === 'grant').seq, beforeBegin);
   // Its chance to react: a re-ask "at once" lands within these frames.
   await frames(3);
-  today('ux:X7', 'once the grant resolves the room hears no connection change and asks no status: its poll stays parked',
+  today('ux:X7', 'once the grant resolves the room drops its parked ask and asks status once more, at once, with no connection change',
     await check((since) => {
       const after = window.coldImport.c.log.trail.filter((e) => e.seq > since).map((e) => e.what);
-      return { asks: after.filter((what) => what === 'status-ask').length, changes: after.filter((what) => what === 'connection-change').length };
-    }, grant), { asks: 0, changes: 0 });
-  today('ux:X7', 'the roll call waits, "starting", until a status answer moves the phase on',
-    await check(() => document.querySelector('[data-roll-call]')?.dataset.rollCall ?? null), 'starting');
+      return { asks: after.filter((what) => what === 'status-ask').length, aborts: after.filter((what) => what === 'status-abort').length,
+        changes: after.filter((what) => what === 'connection-change').length };
+    }, grant), { asks: 1, aborts: 1, changes: 0 });
+  today('ux:X7', 'the roll call waits, "starting" and reading "Starting your import…", until a status answer moves the phase on',
+    await check(() => ({ state: document.querySelector('[data-roll-call]')?.dataset.rollCall ?? null,
+      button: document.querySelector('button[data-action="begin-ingest"]')?.textContent ?? null })),
+    { state: 'starting', button: 'Starting your import…' });
   await check(() => { window.coldImport.advanceTo(window.coldImport.c.phaseAt('consent') + 200); window.coldImport.c.releaseStatus(); return true; });
-  await shows('ux:X7', 'the face that follows consent arrives with the parked ask\'s answer, none earlier',
+  await shows('ux:X7', 'the face that follows consent arrives with the re-ask\'s answer, none earlier',
     () => document.querySelector('.ah-empty[data-face="cold-start"]'));
   await until((since) => window.coldImport.c.log.trail.some((e) => e.seq > since && e.what === 'status-ask'), 'the next status ask', grant);
-  today('ux:X7', 'the first status ask after the grant is the poll\'s cadence, after the parked answer, not a connection change',
-    await firstAskAfter(grant), 'cadence');
-  // The instrument sees what X7 would change: a host route change reaching
-  // the room re-asks at once, and reads as a connection change.
+  today('ux:X7', 'the first status ask after the grant is a refresh, while the parked ask still waited, not the poll\'s cadence or a connection change',
+    await firstAskAfter(grant), 'refresh');
+  // The instrument tells the seams apart: a host route change reaching the
+  // room also re-asks at once, and reads as a connection change.
   await check(() => { window.coldImport.c.holdStatus(); return true; });
   await until(() => window.coldImport.c.heldStatus() > 0, 'a parked ask');
   const beforeRoute = await lastSeq();
