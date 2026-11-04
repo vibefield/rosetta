@@ -4,13 +4,15 @@
 // invariants and digests only, never a timing threshold.
 //
 // What it covers, honestly: since ux:X7 the app's columns are up about 0.15 s after
-// consent, well before the import ends, but no session row is drawn Pending (reader-v1
-// first draws NEWEST, already ready, when it re-selects NEWEST's project; see
-// fixture-checks.mjs). It tests flip DELIVERY (every root's flip reaches the UI, in the
-// daemon's order, after the daemon made it), the end state, selection and list
-// invariants, privacy and the digests; it does NOT test Pending paint (I1 c1's breach
-// class, c4, c7, H5, the opened-while-Pending face). Each run's regime is recorded and
-// printed (fixture-checks.mjs regimeOf), and a run in another regime is flagged.
+// consent, well before the import ends, and reader-v1 selects NEWEST's project while
+// NEWEST is still Pending, so NEWEST is drawn not imported and flips in place (once its
+// first aim's miss is aimed again; see fixture-checks.mjs). It tests flip DELIVERY
+// (every root's flip reaches the UI, in the daemon's order, after the daemon made it),
+// the end state, selection and list invariants, privacy and the digests; Pending paint
+// it reaches, but timing decides whether, so it asserts nothing from it (I1 c1's breach
+// class, H5), and c4, c7 and the opened-while-Pending face stay unreached. Each run's
+// regime is recorded and printed (fixture-checks.mjs regimeOf), and a run in another
+// regime is flagged.
 //
 // LOCAL-ONLY: it needs a release rosettad, the built renderer (clients/app/dist),
 // Electron with a display and macOS (the bench's guards read `top`/`sysctl`/`sw_vers`,
@@ -323,9 +325,9 @@ async function main() {
         const g = recorded.regime;
         say(`  regime ${g.name}: canonical-ready ${g.canonicalReadyMs} ms, H1 ${g.h1Ms} ms, NEWEST first drawn ${g.newestFirstDrawStanding}, `
           + `not-imported rows drawn ${g.notImportedDrawnMax}, ready opens before canonical ${g.readyOpensBeforeCanonical}, pending-face opens ${g.pendingFaceOpens}, H5 n ${g.h5n}`);
-        if (g.name !== DOCUMENTED_REGIME) {
-          say(`  NOTE: not the documented regime (${DOCUMENTED_REGIME}, README "Fixture test"): Pending rows may have been painted, so I1 c1/c7, `
-            + 'H5 and the pending face may be reachable now; if this holds across runs, assert them (fixture-checks.mjs EXERCISED/MUST_REACH)');
+        if (g.name !== DOCUMENTED_REGIME[script]) {
+          say(`  NOTE: not the documented regime (${DOCUMENTED_REGIME[script]}, README "Fixture test"): timing moved NEWEST's flip against the `
+            + 'reader\'s selection (or the import against the first paint); nothing is asserted from the regime, so this fails nothing');
         }
         say(`  recorded: H7 invariant ${inv?.pass ? 'pass' : 'FAIL'} (aims ${inv?.aims}, misses ${inv?.aimMisses}, selection jumps ${inv?.selectionJumps}); `
           + `I1 exercised ${JSON.stringify(recorded.i1Exercised)}; H4 n ${recorded.h4.n}, pending face ${recorded.h4.pendingFace}`);

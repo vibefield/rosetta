@@ -295,23 +295,30 @@ the roll call's grant is taken) the columns are up 130–262 ms after consent, w
 the import: the first roots read ready at 40–150 ms, the giant (NEWEST) at 1.5–5.7 s,
 canonical readiness at 1.9–6.5 s (12 fixture documents, 2026-11-03, on a machine shared
 with other builds). Before it, the columns waited for the roll call's 2.5 s status poll
-and the whole import was over by H1 (1.7–2.5 s). Still, no session row is drawn Pending:
-reader-v1 selects NEWEST's project 0.5–0.7 s after Begin, while NEWEST is Pending, yet no
-not-imported row is drawn there, and NEWEST is first drawn, already ready, when the reader
-re-selects that project after aiming at another card (7.2–11.4 s; its step 3 then marks
-`newest-never-ready`, although NEWEST was rostered). The test covers flip *delivery*
-(every root's flip reaches the UI, after the daemon made it and in its order), the end
-state, the selection and list invariants, privacy and the digests. It does **not** test
-Pending → paint: I1 c1's breach class (a Pending row painted ready), c4, c7, H5 and the
-opened-while-Pending face are not reached here, and a planted Pending-painted-ready
-renderer breach passes (a reviewer showed it). Each run records its **regime**
-(`fixture-checks.mjs` `regimeOf`: `flips-done-before-first-paint` in all 12 documents,
-that is no row drawn Pending and canonical readiness after H1; the name predates X7) and
-prints it. A run in another regime (a row painted Pending, or the import over by H1) is
-flagged with a NOTE, not failed: it is the order of timings no one guarantees (a build
-that re-asked every 500 ms instead of 100 ms drew NEWEST not-imported once:
-`pending-painted`), so nothing new is asserted from it. Pausing the cold build
-(`POST /api/ingestions/{id}/pause`) is no way to reach Pending paint either: a resumed
+and the whole import was over by H1 (1.7–2.5 s). reader-v1 selects NEWEST's project
+0.5–1.0 s after Begin, while NEWEST is Pending: NEWEST is drawn not imported, on top in
+"Still importing", and flips in place there (H5's one sample, about 25 ms receipt → paint).
+Its first aim at that card often misses: the card is read first at metadata (ux:X1) and
+moves about 94 px when the first flips rank another project above it, 100–250 ms later,
+before the pointer reaches the list, so no hold keeps it (H7 records the miss). The reader
+sees from the probe that its press met another card and aims again once the card is at
+rest. Until it did (2026-11-03), the miss left it in another project, whose rows were all
+readable, until its horizon step re-selected NEWEST's 7.2–11.4 s later, NEWEST then ready:
+no session row was ever drawn Pending (`flips-done-before-first-paint`, and step 3 marked
+`newest-never-ready`), which read as if the selected project hid its Pending rows. The test
+covers flip *delivery* (every root's flip reaches the UI, after the daemon made it and in
+its order), a Pending row's paint and flip, the end state, the selection and list
+invariants, privacy and the digests. Whether the reader's selection comes before NEWEST's
+flip is timing, so nothing is asserted from the Pending paint: I1 c1's breach class (a
+Pending row painted ready) and H5 are recorded, not asserted, and c4, c7 and the
+opened-while-Pending face are not reached. Each run records its **regime**
+(`fixture-checks.mjs` `regimeOf`; reader-v1's documented one is `pending-painted`, a row
+drawn not imported; passive-v1, which selects no project, `flips-done-before-first-paint`,
+no row drawn Pending and canonical readiness after H1) and prints it. A run in another
+regime (NEWEST flipped before the reader's selection, or the import over by H1) is flagged
+with a NOTE, not failed: it is the order of timings no one guarantees, so nothing is
+asserted from it. Pausing the cold build (`POST /api/ingestions/{id}/pause`) is no way to
+make Pending paint certain either: a resumed
 build runs the cross-launch resume path, which withholds every readiness
 decision until publication (no per-tree flips, no `newest-giant-ready`), and the pause
 would still have to win a race against the giant's flip.
@@ -392,11 +399,10 @@ What it does not assert, and why:
 - H-all against `runtime-readable`: that milestone is stamped at the runtime's close, after
   its last tree flip, and has no unrounded JSON twin (two decimals), so the UI can and does
   receive the last flip a few ms before it (−2.3 ms in one run). Its lag is recorded.
-- H7's invariant: recorded. In the first 13 reader-v1 fixture runs (2026-11-03) one aim
-  missed: the first aim at NEWEST's project, −92 px, as the end-of-import reorder landed
-  between its rect read and its press. That is the R1 snapshot's product finding (ux:X9).
-  The script then marked `newest-never-ready`, and H2's painted leg timed its later
-  reselect.
+- H7's invariant: recorded. Since ux:X1 the first aim at NEWEST's project misses in most
+  runs (above): the card moves before the pointer reaches the unheld list. On the R1
+  snapshot reader-v1 also misses at the end-of-import reorder (ux:X9). Both are product
+  findings; the reader marks `select-newest-project-missed` and aims again.
 
 **Digests.** Pinned:
 - logical TOTAL;

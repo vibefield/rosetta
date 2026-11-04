@@ -5,7 +5,11 @@
 // it, as for a real reader, so the lists hold their geometry the way they do for one.
 //
 //   1. consent: exactly claude-code and codex, then Begin;
-//   2. the columns are up and NEWEST is frozen: select NEWEST's project;
+//   2. the columns are up and NEWEST is frozen: select NEWEST's project, and see that
+//      it is selected: a press the list's reorder sent to another card (the card moved
+//      before the pointer reached the list, so nothing held it; H7 records the miss) is
+//      marked and aimed again once the card is at rest, at most 3 aims in all, as a
+//      reader would click again;
 //   3. NEWEST reads ready: 300 ms later, open it (H4); if the import's capture ends
 //      first (all readable) and NEWEST is still not drawn ready within 5 s, it was
 //      never rostered and the step is skipped (marked, not a timeout);
@@ -61,13 +65,40 @@ async function untilState(ctx, test, timeoutMs) {
   return null;
 }
 
+/** Step 2: aim at NEWEST's project card until the page says it is selected. The
+ * probe judges each press (it met the aimed card, or another); after a miss the
+ * reader looks again once the card is at rest (two reads 50 ms apart agree), so a
+ * card still sliding from the reorder is not aimed at where it was. */
+async function selectNewestProject(ctx) {
+  for (let tries = 0; tries < 3; tries += 1) {
+    if (tries > 0) {
+      let last = null;
+      for (let i = 0; i < 20; i += 1) {
+        const r = await ctx.q('rect', 'newest-project');
+        if (r && last && Math.abs(r.y - last.y) < 1) break;
+        last = r;
+        await ctx.sleep(50);
+      }
+    }
+    const aimed = await ctx.aim('newest-project');
+    if (!aimed.ok) return;
+    let hit = null;
+    for (let i = 0; i < 10 && hit === null; i += 1) {
+      hit = await ctx.q('aimHit', aimed.aimId);
+      if (hit === null) await ctx.sleep(50);
+    }
+    if (hit === true && (await untilState(ctx, (s) => s.newestSelected, 1_000))) { ctx.mark('select-newest-project'); return; }
+    ctx.mark('select-newest-project-missed');
+  }
+}
+
 export default {
   name: 'reader-v1',
   async run(ctx) {
     await consent(ctx);
     if (!(await ctx.until('cols-up', { timeoutMs: 120_000 }))) { ctx.mark('timeout-cols'); return; }
     if (!(await ctx.until('frozen', { timeoutMs: 60_000 }))) { ctx.mark('timeout-frozen'); return; }
-    if ((await ctx.aim('newest-project')).ok) ctx.mark('select-newest-project');
+    await selectNewestProject(ctx);
 
     let ready = await ctx.untilAny([['newest-ready', 1], ['all-readable', 1]], 300_000);
     if (ready === 'all-readable') ready = (await ctx.until('newest-ready', { timeoutMs: 5_000 })) ? 'newest-ready' : 'never';

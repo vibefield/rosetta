@@ -28,7 +28,7 @@ function goodDoc() {
     daemon: { newestGiantTreeBytes: GIANT, milestonesMs: { 'canonical-ready': 1539.4 } },
     metrics: {
       H1: { ms: 152.6, metaPushMs: 29.3, reached: { ms: 'yes' } },
-      H2: { ms: 8162.7, receiptMs: 1204.2, firstDrawStanding: 'ready', flippedBeforeDrawn: true, reached: { ms: 'yes', receiptMs: 'yes' } },
+      H2: { ms: 1230.1, receiptMs: 1204.2, firstDrawStanding: 'not-imported', flippedBeforeDrawn: false, reached: { ms: 'yes', receiptMs: 'yes' } },
       H3: { h24: horizon(5), h7d: horizon(12), reached: { 'h24.receiptMs': 'yes', 'h24.paintedSelMs': 'yes', 'h7d.receiptMs': 'yes', 'h7d.paintedSelMs': 'yes' } },
       // The last runtime-readable (a 10 ms-rounded close stamp) after the UI's receipt:
       // the documented case, not a failure.
@@ -37,7 +37,7 @@ function goodDoc() {
         pendingFace: { n: 0, p50Ms: null }, reached: { samples: 'yes', pendingFace: 'not-reached' } },
       H5: { n: 0, p50Ms: null, p95Ms: null, maxMs: null, reached: { samples: 'not-reached' } },
       H7: { invariant: { pass: false, aims: 7, aimMisses: 1, selectionJumps: 0 } },
-      D2: { newestGiant: { known: true, receiptMs: 1204.2 }, notImportedSelected: [[8162.7, 0]] },
+      D2: { newestGiant: { known: true, receiptMs: 1204.2 }, notImportedSelected: [[480.3, 0], [504.2, 1], [1230.1, 0]] },
       I1: { pass: true, checks: { c1ReadyBeforeReceipt: check(), c2NeverReverts: check(), c3SelectionOnlyByInput: check(), c4NoFlashOfEmpty: check(0, 0),
         c5EndState: check(), c6Privacy: check(), c7PendingFaceCourse: check(0, 0) } },
     },
@@ -55,7 +55,7 @@ test('a consistent fixture run passes every check; the regime and H7 are recorde
   assert.equal(r.checks.filter((c) => c.ok === null).length, 0, 'nothing is n/a for reader-v1');
   assert.equal(r.recorded.h7Invariant.aimMisses, 1);
   assert.equal(r.recorded.hallLagVsRuntimeReadableMs, -2.3);
-  assert.equal(r.recorded.regime.name, DOCUMENTED_REGIME);
+  assert.equal(r.recorded.regime.name, DOCUMENTED_REGIME['reader-v1']);
 });
 
 test('each planted fault fails its own check', () => {
@@ -110,7 +110,7 @@ test('passive-v1: no hit digest, only c3 must examine something, and only its de
   const r = verdict(d, { script: 'passive-v1' });
   assert.deepEqual(failing(r), []);
   assert.deepEqual(r.checks.filter((c) => c.ok === null).map((c) => c.id), ['order:H2-painted>=H2-receipt']);
-  assert.equal(r.recorded.regime.name, DOCUMENTED_REGIME);
+  assert.equal(r.recorded.regime.name, DOCUMENTED_REGIME['passive-v1']);
   // The same missing end is a failure when the metric does not say not-applicable.
   d.metrics.H2.reached.ms = 'not-reached';
   assert.deepEqual(failing(verdict(d, { script: 'passive-v1' })), ['order:H2-painted>=H2-receipt']);
@@ -126,7 +126,14 @@ test('constant and redundant I1 counts are not asserted; every check is either a
 
 test('the regime is read from the document, never asserted', () => {
   const d = goodDoc();
+  assert.equal(regimeOf(d).name, 'pending-painted');
+  assert.equal(regimeOf(d).notImportedDrawnMax, 1);
+  // NEWEST first drawn already ready, no row drawn not imported: the regime before
+  // reader-v1 confirmed its selection.
+  Object.assign(d.metrics.H2, { firstDrawStanding: 'ready', flippedBeforeDrawn: true });
+  d.metrics.D2.notImportedSelected = [[8162.7, 0]];
   assert.equal(regimeOf(d).name, 'flips-done-before-first-paint');
+  assert.deepEqual(failing(verdict(d)), []);
   d.daemon.milestonesMs['canonical-ready'] = 140;
   assert.equal(regimeOf(d).name, 'import-done-before-first-paint');
   // Another regime alone fails nothing.

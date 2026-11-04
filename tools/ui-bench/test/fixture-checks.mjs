@@ -6,15 +6,21 @@
 //
 // The regime this fixture runs in (REGIME, recorded per run, never asserted: it is the
 // order of timings nothing guarantees): since ux:X7 the columns are up well before the
-// import ends (H1 about 0.13-0.26 s after consent, canonical readiness 1.9-6.5 s), yet
-// no session row is drawn Pending: reader-v1 selects NEWEST's project while NEWEST is
-// still Pending, but no not-imported row is drawn there, and NEWEST is first drawn,
-// already ready, when the reader re-selects that project after aiming at another card.
-// So the test covers flip delivery through the real daemon, SDK, hooks and renderer,
-// the end state, the orderings, privacy and the digests — still not Pending paint. What
-// that leaves unreachable (c1's breach class, c4, c7, H5, the opened-while-Pending face)
-// is listed in NOT_ASSERTED; fixture-run.mjs prints the regime and flags a run whose
-// regime differs.
+// import ends (H1 about 0.13-0.26 s after consent, NEWEST's flip 1.4-1.8 s, canonical
+// readiness 1.8-6.5 s), and reader-v1 selects NEWEST's project while NEWEST is still
+// Pending, so NEWEST is drawn not imported, on top in "Still importing", and flips in
+// place (`pending-painted`). The reader's first aim at that card often misses: the
+// card moves when the first flips rank another project above it, before the pointer
+// reaches the list, so nothing holds it (H7 records the miss); the reader sees the
+// press met another card and aims again, still well before NEWEST's flip. Before it
+// confirmed its selection (2026-11-03) the miss left it in another project until its
+// horizon step re-selected NEWEST's, by then ready (`flips-done-before-first-paint`).
+// So the test reaches a Pending row's paint and flip through the real daemon, SDK,
+// hooks and renderer, besides flip delivery, the end state, the orderings, privacy and
+// the digests. Whether the selection comes before NEWEST's flip is timing, so what
+// only a Pending paint reaches (c1's breach class, H5) is recorded, not asserted; c4,
+// c7 and the opened-while-Pending face stay unreachable. NOT_ASSERTED says why per
+// check; fixture-run.mjs prints the regime and flags a run whose regime differs.
 //
 // Asserted:
 //   - the run: outcome complete, probe self-test, privacy gate (from the run db's list,
@@ -50,8 +56,8 @@ export const EXERCISED = {
 /** Why the other I1 checks are not asserted to examine something (they must still pass). */
 export const NOT_ASSERTED = {
   c1ReadyBeforeReceipt: 'its breach class (a Pending row painted ready, or a row painted ready before its receipt) needs a row '
-    + 'drawn while still Pending; in this regime no session row is drawn Pending, so its count is of rows first drawn already '
-    + 'ready (a planted Pending-painted-ready breach passes here); passive-v1 draws no session row at all',
+    + 'drawn while still Pending: in this regime NEWEST is, but only when the reader\'s selection beats NEWEST\'s flip, which is '
+    + 'timing; its count also takes rows first drawn already ready, so a count above 0 says nothing; passive-v1 draws no session row at all',
   c2NeverReverts: 'passive-v1 selects no project, so no session row is drawn (reader-v1: asserted; its rows are drawn during '
     + 'the import and after it)',
   c4NoFlashOfEmpty: 'counts opens before the status says live; the import is live before the reader\'s first open (that open '
@@ -68,8 +74,9 @@ export const ORDER_NOT_APPLICABLE = {
 };
 /** Values the fixture makes happen whatever the timing (metric.reached keys), per script:
  * NEWEST, both horizons and every root become ready, and reader-v1 selects NEWEST's
- * project and opens ready rows. H5 and the opened-while-Pending face need a flip while
- * the row is drawn, which no run in this regime has shown (no row is drawn Pending). */
+ * project and opens ready rows. H5 needs NEWEST's flip while it is drawn, which this
+ * regime shows but timing decides; the opened-while-Pending face needs a row still
+ * Pending once NEWEST reads ready, which no run has shown. */
 export const MUST_REACH = {
   'reader-v1': ['H1.ms', 'H2.ms', 'H2.receiptMs', 'H3.h24.receiptMs', 'H3.h24.paintedSelMs', 'H3.h7d.receiptMs', 'H3.h7d.paintedSelMs',
     'Hall.receiptMs', 'Hall.paintedSelMs', 'H4.samples'],
@@ -81,8 +88,9 @@ export const MUST_REACH = {
  * (capture FileIdentity::Unix), so it changes whenever the home is regenerated, at any
  * location. Every other strict_noid component, cursor paths included, is pinned. */
 export const PINNED = ['logicalTotal', 'strictNoidRTotal', 'sourceSetDigest', 'rankedIdsSha256', 'hitDigest', 'finalRoots', 'finalReadySessions'];
-/** The regime the docs describe (README, "Fixture test"); fixture-run.mjs flags any other. */
-export const DOCUMENTED_REGIME = 'flips-done-before-first-paint';
+/** The regime the docs describe, per script (README, "Fixture test"); fixture-run.mjs
+ * flags any other. passive-v1 selects no project, so it never draws a session row. */
+export const DOCUMENTED_REGIME = { 'reader-v1': 'pending-painted', 'passive-v1': 'flips-done-before-first-paint' };
 
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const get = (o, dotted) => dotted.split('.').reduce((v, k) => (v == null ? undefined : v[k]), o);

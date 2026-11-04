@@ -27,7 +27,7 @@ LABELS = ['error', 'team', 'seeking', 'preparing', 'loading', 'other']
 AIMS = ['begin', 'kind', 'newest-project', 'other-project', 'newest-row', 'recent-next', 'ready-next', 'pending-row']
 EVENTS = ['pointerdown', 'pointerup', 'click', 'keydown', 'keyup', 'keypress', 'input', 'mousedown', 'mouseup']
 INPUTS = ['pointerdown', 'pointerup', 'wheel', 'keydown']
-MARKS = ['enrolled-ok', 'enrolled-mismatch', 'consent-begin', 'select-newest-project', 'open-newest', 'open-pending', 'open-recent', 'aim-horizon', 'reselect',
+MARKS = ['enrolled-ok', 'enrolled-mismatch', 'consent-begin', 'select-newest-project', 'select-newest-project-missed', 'open-newest', 'open-pending', 'open-recent', 'aim-horizon', 'reselect',
          'open-finalizing', 'open-post-canonical', 'search-open', 'search-query', 'search-close', 'park', 'done',
          'newest-never-ready', 'horizon-via-all-readable',
          'timeout-cols', 'timeout-frozen', 'timeout-newest-ready', 'timeout-open', 'timeout-horizon', 'timeout-all-readable', 'timeout-canonical',
