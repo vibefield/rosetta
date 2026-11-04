@@ -22,7 +22,10 @@
 //   crates/pipeline/src/streamed/trees.rs:199-213). A tree flips Indexed,
 //   except a session whose source was unclean, which flips Streaming
 //   (trees.rs:226-232, 274). Bound trees flip at their producer's close; a
-//   placeholder root never flips.
+//   placeholder root never flips. A runtime admitted whole (a runtime-
+//   admission adapter, or the `--experiment-cold-admission runtime` kill
+//   switch) flips every tree at its producer's close instead
+//   (closed/setup.rs; status `admission_course: at_runtime_close`).
 // - Status: `preparing` when reading ends (crates/rosettad/src/cold_progress.rs:
 //   73-76), `applying` and `done` at the producer's close, `finalizing` and
 //   `publishing` (serve.rs:1575, 1924-1935), canonical readiness once the read
@@ -154,6 +157,8 @@ export interface FlipBatch {
 
 export interface Schedule {
   readonly course: "fresh" | "resumed";
+  /** Runtimes (by id) a fresh build admits whole, at their close. */
+  readonly whole: ReadonlySet<string>;
   readonly consentAt: number;
   readonly runtimes: readonly RuntimeTimes[];
   readonly batches: readonly FlipBatch[];
@@ -211,7 +216,7 @@ function batchFlips(runtimeId: string, ready: readonly { tree: ColdTree; at: num
 const filesOf = (trees: readonly ColdTree[]) => Math.round(trees.reduce((sum, tree) => sum + tree.members.length, 0) * 1.72);
 const bytesOf = (trees: readonly ColdTree[]) => trees.reduce((sum, tree) => sum + tree.bytes, 0);
 
-function planFresh(corpus: ColdCorpus, enrolled: readonly RuntimeRow[], consentAt: number) {
+function planFresh(corpus: ColdCorpus, enrolled: readonly RuntimeRow[], consentAt: number, whole: ReadonlySet<string>) {
   const runtimes: RuntimeTimes[] = [];
   const batches: FlipBatch[] = [];
   for (const runtime of enrolled) {
@@ -229,11 +234,12 @@ function planFresh(corpus: ColdCorpus, enrolled: readonly RuntimeRow[], consentA
       sessions: corpus.sessions.filter((row) => row.runtime_id === runtime.id).length,
     };
     runtimes.push(times);
-    const ready = lanes.flatMap((lane) => lane.spans.filter((span) => !span.tree.bound).map((span) => ({
+    const perTree = !whole.has(runtime.id);
+    const ready = !perTree ? [] : lanes.flatMap((lane) => lane.spans.filter((span) => !span.tree.bound).map((span) => ({
       tree: span.tree, at: Math.round(lane.start + ((lane.end - lane.start) * span.to) / Math.max(1, lane.bytes)),
     })));
     batches.push(...batchFlips(runtime.id, ready));
-    const bound = trees.filter((tree) => tree.bound);
+    const bound = trees.filter((tree) => tree.bound || !perTree);
     if (bound.length > 0) {
       batches.push({ at: times.close, runtimeId: runtime.id, trees: bound, sessions: bound.flatMap((t) => t.members), kind: "close" });
     }
@@ -270,6 +276,7 @@ function planResumed(corpus: ColdCorpus, enrolled: readonly RuntimeRow[], consen
 
 export function planSchedule(
   corpus: ColdCorpus, enrolled: readonly RuntimeRow[], consentAt: number, course: "fresh" | "resumed",
+  whole: ReadonlySet<string> = new Set(),
 ): Schedule {
   const phases = new Map<ColdPhase, number>([["consent", consentAt]]);
   let runtimes: RuntimeTimes[];
@@ -278,7 +285,7 @@ export function planSchedule(
     readonly search: { readonly indexing: number; readonly optimizing: number; readonly validating: number; readonly publishing: number; readonly ready: number } };
   let commitAt: number | null = null;
   if (course === "fresh") {
-    ({ runtimes, batches } = planFresh(corpus, enrolled, consentAt));
+    ({ runtimes, batches } = planFresh(corpus, enrolled, consentAt, whole));
     const lastClose = Math.max(...runtimes.map((r) => r.close));
     const from = (offset: number) => consentAt + offset;
     end = {
@@ -322,5 +329,5 @@ export function planSchedule(
   phases.set("search-validating", end.search.validating);
   phases.set("search-publishing", end.search.publishing);
   phases.set("search-ready", end.search.ready);
-  return { course, consentAt, runtimes, batches, flipAt, phases, commitAt };
+  return { course, whole: course === "fresh" ? whole : new Set(), consentAt, runtimes, batches, flipAt, phases, commitAt };
 }

@@ -265,6 +265,12 @@ const transcript = () => {
     range: column?.querySelector('header .ah-caption')?.textContent ?? null,
   };
 };
+/** The transcript's polite live region. */
+const announcement = () => {
+  const region = document.querySelector('.ah-col--measure [data-import-announce]');
+  return region === null ? null : { role: region.getAttribute('role'), live: region.getAttribute('aria-live'),
+    state: region.dataset.importAnnounce, text: region.textContent };
+};
 /** Root ids of a project, newest source first, with what the import does with them. */
 const rootsOf = (projectKey) => window.coldImport.c.meta().sessions
   .filter((s) => s.parent_session_id === null && (s.project_id ?? '__rosetta_unassigned__') === projectKey)
@@ -412,12 +418,14 @@ async function freshImport() {
   // Opening the newest (a giant tree, so it waits in the big lane) (ux:X5).
   await click(`.ah-session-list-item[data-motion-key="${newest.id}"]`);
   await until(() => document.querySelector('.ah-col--measure .ah-empty[data-import-face]') && document.querySelector('.tr-stage[data-ready]'), 'the not-imported face, revealed');
-  today('ux:X5', 'a not-imported session opens on one promise, whatever its tree or course',
+  today('ux:X5', 'a not-imported session of a per-tree runtime: newer ones import first, no time, order or count promised; the head reads "Not imported yet", no "0"',
     await check(transcript), {
       session: newest.id, face: 'not-imported', course: 'newest-first', title: 'Not imported yet',
-      why: 'Your newest conversations import first. This one opens as soon as the import reaches it.',
-      meter: true, sittings: 0, banner: null, bubble: '0', range: 'Activity time unknown',
+      why: 'Newer conversations import first. This one opens here once it is imported.',
+      meter: true, sittings: 0, banner: null, bubble: null, range: 'Not imported yet',
     });
+  today('ux:X5', 'the transcript\'s polite live region waits, empty, while the session is not imported',
+    await check(announcement), { role: 'status', live: 'polite', state: '', text: '' });
   console.log(`  opening it asked boost ${await check((id) => window.coldImport.c.log.boosts.filter((b) => b.sessionId === id).length, newest.id)} time(s); the fresh RAM build attaches no boost queue`);
 
   // Titles stand in for full text before publication (ux:X6).
@@ -590,6 +598,8 @@ async function freshImport() {
   await advanceTo(second.flip);
   await shows('forever', 'a flip while open reveals the transcript when its socket resyncs first',
     () => document.querySelector('.ah-col--measure .tr-sitting') && !document.querySelector('.ah-col--measure .ah-empty[data-import-face]'));
+  today('ux:X5', 'a flip while open is announced once, politely: "Conversation imported"',
+    await check(announcement), { role: 'status', live: 'polite', state: 'imported', text: 'Conversation imported' });
   // The resync never arrives: the face holds, then asks again (3 s grace).
   const third = await nextPending([newest.id, second.id]);
   await openPending(third);
@@ -612,9 +622,9 @@ async function freshImport() {
     return row === undefined ? null : { id: row.id, project: row.project_id ?? '__rosetta_unassigned__', flip: c.flipAt(row.id) };
   });
   await openPending(bound, { refused: true });
-  today('ux:X5', 'a bound tree (opens only at its runtime\'s close) gets the same newest-first promise',
+  today('ux:X5', 'a bound tree (opens only at its runtime\'s close) gets the per-tree copy, which promises it no time',
     await check(transcript).then((t) => ({ course: t.course, why: t.why })),
-    { course: 'newest-first', why: 'Your newest conversations import first. This one opens as soon as the import reaches it.' });
+    { course: 'newest-first', why: 'Newer conversations import first. This one opens here once it is imported.' });
 
   // ── Reading ends ──────────────────────────────────────────────────────
   await advanceToPhase('reading-done');
@@ -882,7 +892,7 @@ async function resumedImport() {
   await until((id) => document.querySelector(`.ah-session-list-item[data-motion-key="${id}"]`), 'the resumed newest row', target.id);
   await click(`.ah-session-list-item[data-motion-key="${target.id}"]`);
   await until(() => document.querySelector('.ah-col--measure .ah-empty[data-import-face]') && document.querySelector('.tr-stage[data-ready]'), 'the resumed face');
-  today('ux:X5', 'resumed (caught restoring): the face promises the end of the import',
+  today('ux:X5', 'resumed (the daemon\'s course: at_publication): the face promises the end of the import',
     await check(transcript).then((t) => ({ course: t.course, why: t.why, meter: t.meter })),
     { course: 'resumed', why: 'The import picked up where it stopped. This one opens when the import finishes.', meter: true });
   await check(() => { window.coldImport.c.setRunState('paused'); return true; });
@@ -915,6 +925,35 @@ async function resumedImport() {
   today('forever', 'I1 in the resumed build', report.violations, []);
 }
 
+async function runtimeAdmission() {
+  console.log('Runtime admission (Codex admitted whole) at scale 0.05');
+  await check(() => { window.coldImport.mount({ scale: 0.05, consent: 'granted', wholeRuntimes: ['codex'] }); return true; });
+  const codex = await check(() => window.coldImport.c.runtimeAt(window.coldImport.c.corpus.runtimes.find((r) => r.kind === 'codex').id));
+  await advanceTo(codex.metaPublic + 1_000);
+  await until(() => document.querySelector('.ah-project-list-item'), 'projects of a build that admits Codex whole');
+  await settle();
+  const target = await check((runtimeId) => {
+    const c = window.coldImport.c;
+    const row = c.meta().sessions.filter((s) => s.parent_session_id === null && s.runtime_id === runtimeId && c.kindOf(s.id) === 'root' && s.stream_state === 'pending')
+      .sort((a, b) => b.updated_at - a.updated_at || a.id.localeCompare(b.id))[0];
+    return row === undefined ? null : { id: row.id, project: row.project_id ?? '__rosetta_unassigned__' };
+  }, codex.runtime.id);
+  assert.ok(target !== null, 'fixture precondition: a Codex root is still Pending before Codex closes');
+  await click(`.ah-project-list-item[data-motion-key="${target.project}"]`);
+  await until((id) => document.querySelector(`.ah-session-list-item[data-motion-key="${id}"]`), 'the Codex row', target.id);
+  await click(`.ah-session-list-item[data-motion-key="${target.id}"]`);
+  await until((id) => document.querySelector(`.tr-stage[data-session-key="${id}"][data-ready]`) && document.querySelector('.ah-col--measure .ah-empty[data-import-face="not-imported"]'), 'its not-imported face', target.id);
+  today('ux:X5', 'a runtime admitted whole (its course at_runtime_close): the face names the agent whose close opens it',
+    await check(transcript).then((t) => ({ course: t.course, why: t.why, meter: t.meter, bubble: t.bubble, range: t.range })),
+    { course: 'runtime-close', why: 'This one opens when Codex finishes importing.', meter: true, bubble: null, range: 'Not imported yet' });
+  await advanceTo(codex.close);
+  await shows('forever', 'it opens at its runtime\'s close, rows and all',
+    () => document.querySelector('.ah-col--measure .tr-sitting') && !document.querySelector('.ah-col--measure .ah-empty[data-import-face]'));
+  today('ux:X5', 'opening at the runtime\'s close is announced once, politely: "Conversation imported"',
+    await check(announcement), { role: 'status', live: 'polite', state: 'imported', text: 'Conversation imported' });
+  today('forever', 'I1 when a runtime is admitted whole', (await check(() => window.coldImport.report())).violations, []);
+}
+
 async function run() {
   try {
     await app.whenReady(); clearInterval(pulse);
@@ -931,6 +970,7 @@ async function run() {
     await until(() => window.coldImport, 'the fixture');
     await freshImport();
     await resumedImport();
+    await runtimeAdmission();
     assert.deepEqual(errors, []);
     console.log('\nCharacterized today (each flips with the item named, holds forever, or changes only on purpose):');
     // Ids are synthetic but long: a list of them prints as its length.

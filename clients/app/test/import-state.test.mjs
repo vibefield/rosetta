@@ -3,7 +3,7 @@
 // transcript says why a session is still empty and never reads "Nothing
 // readable yet" between a tree's flip and its resync, the import card counts
 // what is ready, and a held list's pill counts what arrived. Every fact comes
-// from fields the daemon already sends; nothing here changes the protocol.
+// from fields the daemon sends, the runtime's admission course among them.
 //
 // Run with TZ=UTC (as `npm test` is): the list's day heads are local days.
 import assert from "node:assert/strict";
@@ -219,11 +219,11 @@ function feedOf(rows, snapshotReady = true) {
   };
 }
 
-function renderTranscript(row, { rows = [], duringBackfill = true, sessions = [row], importCourse } = {}) {
+function renderTranscript(row, { rows = [], duringBackfill = true, sessions = [row], importCourse, importAgent } = {}) {
   const nothing = () => undefined;
   return renderToStaticMarkup(createElement(RoomProvider, { ports: createDemoPorts(), options: { storage: null } },
     createElement(TranscriptDocument, {
-      session: row, model: transcriptModel(rows, row, null, NOW), feed: feedOf(rows), duringBackfill, importCourse,
+      session: row, model: transcriptModel(rows, row, null, NOW), feed: feedOf(rows), duringBackfill, importCourse, importAgent,
       index: buildThreadIndex(sessions), focus: null, highlightedTimelineId: null,
       onFocusConsumed: nothing, onReceipt: nothing, onOpenAttachment: nothing, onOpenPath: nothing,
       getRuntimeKind: () => "claude-code", homeDirectory: null, onPillPress: null,
@@ -231,8 +231,10 @@ function renderTranscript(row, { rows = [], duringBackfill = true, sessions = [r
 }
 
 test("a session the import has not reached says so, and promises nothing it cannot keep", () => {
+  // Per tree, a tree may still wait for its runtime's close (bound): no time
+  // is promised, and no order or position is claimed.
   const markup = renderTranscript(session("w", pending(NOW)));
-  assert.match(markup, /<strong>Not imported yet<\/strong><p>Your newest conversations import first\. This one opens as soon as the import reaches it\.<\/p>/);
+  assert.match(markup, /<strong>Not imported yet<\/strong><p>Newer conversations import first\. This one opens here once it is imported\.<\/p>/);
   assert.doesNotMatch(markup, /Nothing readable yet|Indexing history|Live updates resume/);
   assert.match(markup, /class="ah-meter" data-indeterminate=""/);
 });
@@ -248,10 +250,28 @@ test("the not-imported face promises only what the import's course keeps", () =>
   assert.match(stopped, /<p>The import stopped before it reached this one\. It opens once the import continues\.<\/p>/);
   assert.doesNotMatch(stopped, /as soon as the import reaches it|ah-meter/);
 
-  assert.equal(importCourse({ state: "running" }, false), "newest-first");
-  assert.equal(importCourse(null, false), "newest-first");
-  assert.equal(importCourse({ state: "running" }, true), "resumed");
-  for (const state of ["paused", "pausing", "failed"]) assert.equal(importCourse({ state }, true), "stopped");
+  // A runtime admitted whole opens each of its sessions at its close.
+  const whole = renderTranscript(session("w", pending(NOW)), { importCourse: "runtime-close", importAgent: "Codex" });
+  assert.match(whole, /<p>This one opens when Codex finishes importing\.<\/p>/);
+  assert.match(whole, /data-import-course="runtime-close"/);
+
+  // The course is the daemon's, per runtime; an older daemon's (none) falls
+  // back to the room's inference of a resume.
+  const ingest = (runtimes, state = "running") => ({ phase: "backfilling", run: { state }, projects: [], runtimes });
+  const row = (runtime_id, admission_course) => ({ ...runtime({ runtime_id }), admission_course });
+  const both = ingest([row("rt-claude", "per_tree"), row("rt-gemini", "at_runtime_close")]);
+  assert.equal(importCourse(both, "rt-claude", false), "newest-first");
+  assert.equal(importCourse(both, "rt-gemini", false), "runtime-close");
+  assert.equal(importCourse(both, "rt-claude", true), "newest-first", "the daemon's course outranks the inference");
+  assert.equal(importCourse(ingest([row("rt", "at_publication")]), "rt", false), "resumed",
+    "a resume says so itself, seen restoring or not");
+  assert.equal(importCourse(ingest([row("rt", undefined)]), "rt", false), "newest-first");
+  assert.equal(importCourse(ingest([row("rt", null)]), "rt", true), "resumed");
+  assert.equal(importCourse(null, null, false), "newest-first");
+  assert.equal(importCourse(both, "elsewhere", true), "resumed");
+  for (const state of ["paused", "pausing", "failed"]) {
+    assert.equal(importCourse(ingest([row("rt", "at_publication")], state), "rt", true), "stopped");
+  }
 });
 
 test("an opened session reads during the import, under the line that says live updates wait", () => {
@@ -465,6 +485,14 @@ test("a resumed build counts what the catalog says is readable, never its board,
   assert.equal(resumedRun(key, feed({ phase: "live" })), null);
   assert.equal(resumedRun(key, feed({}, { startedAt: 2 })), null);
   assert.equal(resumedRun(null, catchingUp), null);
+
+  // A daemon that names its course says so itself: a room that opened after
+  // the restoring phase still knows, and a fresh build is never resumed.
+  const courseOf = (admission_course, phase = "backfilling") => feed({ phase, runtimes: [runtime({ admission_course })] });
+  assert.equal(resumedRun(null, courseOf("at_publication")), "1:run");
+  assert.equal(resumedRun(key, courseOf("per_tree")), null);
+  assert.equal(resumedRun(null, courseOf("per_tree", "restoring")), null);
+  assert.equal(resumedRun(null, courseOf("at_publication", "live")), null);
 });
 
 function renderProject(backfill, counts, ingestActive = true) {

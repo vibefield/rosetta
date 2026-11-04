@@ -103,8 +103,12 @@
 //     not-imported  "Not imported yet"; also kept between a tree's flip and
 //                   its resync, while the row already reads otherwise
 //     unavailable   "Transcript not available" (a metadata-only parent)
-//   .ah-empty[data-import-course]  newest-first | resumed | stopped: the
-//                    course the not-imported face's promise is chosen from
+//   .ah-empty[data-import-course]  newest-first | runtime-close | resumed |
+//                    stopped: the course the not-imported face's promise is
+//                    chosen from (the runtime's admission_course, or stopped)
+//   [data-import-announce]  the transcript's polite live region (role=status):
+//                    "" until the session opens under the reader, then
+//                    "imported" (it says "Conversation imported")
 //   .tr-mark[data-import-banner]   an open transcript during the import
 //   .tr-mark[data-transcript-unavailable]  a metadata-only parent, above the
 //                    conversations it started
@@ -140,7 +144,7 @@ import { OptionRow, SheetTitles } from "../../room/src/components/search/SearchS
 import { SessionList } from "../../room/src/components/sessions/SessionList.tsx";
 import { SessionListItem } from "../../room/src/components/sessions/SessionListItem.tsx";
 import { TranscriptDocument } from "../../room/src/components/transcript/Document.tsx";
-import { ImportEmptyState } from "../../room/src/components/transcript/ImportState.tsx";
+import { ImportAnnouncement, ImportEmptyState } from "../../room/src/components/transcript/ImportState.tsx";
 import { Veil } from "../../room/src/components/ui/Veil.tsx";
 import { PortfolioSummaryPanel } from "../../room/src/components/SummaryPanels.tsx";
 import { TranscriptLoading } from "../../room/src/components/transcript/TranscriptLoading.tsx";
@@ -548,7 +552,7 @@ const importFace = (markup) =>
 test("the not-imported face names itself and the course its promise comes from", () => {
   const waiting = session("w", pending());
   for (const [course, expected] of [[undefined, "newest-first"], ["newest-first", "newest-first"],
-    ["resumed", "resumed"], ["stopped", "stopped"]]) {
+    ["runtime-close", "runtime-close"], ["resumed", "resumed"], ["stopped", "stopped"]]) {
     const face = only(importFace(renderDocument(waiting, { importCourse: course })), "import face");
     assert.deepEqual([face.class, face["data-import-face"], face["data-import-course"]],
       ["ah-empty", "not-imported", expected]);
@@ -566,6 +570,17 @@ test("the not-imported face names itself and the course its promise comes from",
   const sittings = classed(open, "tr-sitting");
   assert.ok(sittings.length >= 1);
   assert.equal(sittings[0].attrs["data-sitting-key"], rows[0].timeline_id);
+  // The transcript keeps one polite live region, empty until its session
+  // opens under the reader (the flip itself needs a live room:
+  // cold-import.electron.mjs).
+  const announce = (markup) => elements(markup).filter((element) => "data-import-announce" in element.attrs);
+  for (const markup of [open, renderDocument(waiting)]) {
+    const region = only(announce(markup), "import announcement");
+    assert.deepEqual([region.role, region["aria-live"], region["data-import-announce"]], ["status", "polite", ""]);
+  }
+  const opened = only(announce(renderToStaticMarkup(createElement(ImportAnnouncement, { opened: true }))), "import announcement");
+  assert.equal(opened["data-import-announce"], "imported");
+  assert.match(renderToStaticMarkup(createElement(ImportAnnouncement, { opened: true })), />Conversation imported</);
 });
 
 /* ── the search sheet ─────────────────────────────────────────────────── */

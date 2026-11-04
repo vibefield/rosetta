@@ -11,8 +11,9 @@ export const LEAVING_MS = 360;
 /** `conversations` is the room's fold of the catalog it draws the rows from,
  * so the card's counts change in the same render as the rows. */
 export function useIngestActivity(given: ActivityFeed, conversations: ConversationReadiness | null = null): IngestActivity | null {
-  // A resumed build is known by the restoring phase it passed through; the
-  // mark outlives that phase until the import goes live.
+  // A resumed build is known by its runtimes' course, or, from a daemon that
+  // names none, by the restoring phase it passed through; the mark outlives
+  // that phase until the import goes live.
   const [resumedKey, setResumedKey] = useState<string | null>(null);
   const nextResumedKey = resumedRun(resumedKey, given);
   if (nextResumedKey !== resumedKey) setResumedKey(nextResumedKey);

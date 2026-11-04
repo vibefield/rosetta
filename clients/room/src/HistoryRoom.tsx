@@ -64,6 +64,7 @@ import {
 import type { ProjectViewModel } from "./lib/model";
 
 import { compareOrderedSessions } from "./lib/activity-order";
+import { agentLabel } from "./lib/agents";
 import { importCourse, parentIds } from "./lib/import-state";
 import { useActivityOrder } from "./lib/use-activity-order";
 import { createSearchResultsViewModel } from "./lib/search-results";
@@ -882,7 +883,8 @@ function RoomBody({
             <TranscriptColumn
               session={session}
               duringBackfill={ingestActive}
-              importCourse={importCourse(ingest?.run, activity?.feed.resumed === true)}
+              importCourse={importCourse(ingest, session?.runtime_id ?? null, activity?.feed.resumed === true)}
+              importAgent={session === null ? undefined : agentLabel(kindOf(session.runtime_id))}
               sessions={meta?.sessions ?? []}
               project={session ? (projectById.get(projectKey(session)) ?? null) : null}
               feed={feed}

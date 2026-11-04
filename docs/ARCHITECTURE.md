@@ -74,7 +74,8 @@ subscription recovery unit tests run in CI; `pnpm test:list-order` exercises pro
 focus, scroll, themes, and reduced motion against synthetic data in Electron.
 `test:cold-import` (2026-11-03, CI at scale 0.25) steps the app, its RosettaClient
 and the whole room through a seeded, step-driven cold import of the MacBook trace's
-shape, fresh and resumed (`clients/room/src/fixtures/cold-import.ts`), and pins what
+shape, fresh, resumed, and with one runtime admitted whole
+(`clients/room/src/fixtures/cold-import.ts`), and pins what
 the room does today — project order, the foot group, holds and pills, faces by
 course, counts, search and chart copy, the end transition — each assertion naming
 the UX item that flips it, an I1 honesty rule that holds forever, or `unplanned`; a
@@ -1054,8 +1055,9 @@ timing.
 > reader's clock (so a frozen corpus older than a week shows none, and benches cannot see it). Past
 > reading the card counts on (“Opening conversations as each agent finishes”, then “Finishing your
 > archive”, or “All N conversations readable”); a root no source rosters stays Pending past every
-> close, so the copy never promises that every one left opens there. A resumed build (the room saw
-> its `restoring` phase) reads “Finishing the import” with the catalog's count, which is 0 across
+> close, so the copy never promises that every one left opens there. A resumed build (a runtime's
+> `admission_course` is `at_publication`; from a daemon that names no course, the room saw its
+> `restoring` phase) reads “Finishing the import” with the catalog's count, which is 0 across
 > a launch and what stayed open after a pause in-process, since it opens nothing new before it
 > publishes (`clients/room/src/lib/ingest-activity.ts`). Canonical readiness can arrive while the
 > phase still says publishing; the archive is installed by then, so the card moves on to search
@@ -1064,11 +1066,17 @@ timing.
 > is doing, with the card under its head; at the end the card collapses in place to one line,
 > “Search ready ✓”, for five seconds, then its height eases to zero (it jumps under reduced
 > motion), so no head swaps and the rows glide rather than jump. A Pending session's transcript says
-> “Not imported yet” with the promise its import's course can keep: fresh, “Your newest
-> conversations import first. This one opens as soon as the import reaches it.”; resumed, “The
-> import picked up where it stopped. This one opens when the import finishes.”; a paused or failed
-> run, “The import stopped before it reached this one. It opens once the import continues.”, with
-> no sweeping meter. A metadata-only placeholder reads “Transcript not available” (above its
+> “Not imported yet” with the promise its runtime's `admission_course` can keep (2026-11-03),
+> never a count, order, position or time: `per_tree`, “Newer conversations import first. This one
+> opens here once it is imported.” (a bound tree of that runtime waits for its close, so no time
+> is promised); `at_runtime_close`, “This one opens when <agent> finishes importing.”;
+> `at_publication`, “The import picked up where it stopped. This one opens when the import
+> finishes.”; a paused or failed run, “The import stopped before it reached this one. It opens
+> once the import continues.”, with no sweeping meter. A daemon that names no course gets the
+> per-tree copy, or the publication one once the room saw `restoring`. Its head band drops the
+> message count and reads “Not imported yet” for the activity range. A flip under the reader
+> keeps the hold and reveal below, and the transcript's polite live region then says
+> “Conversation imported” once. A metadata-only placeholder reads “Transcript not available” (above its
 > children: “only the conversations it started”); a real session with children whose skim
 > yielded nothing looks the same and reads so until its tree flips. An open transcript during the
 > import carries
@@ -1079,18 +1087,16 @@ timing.
 > no resync came. A full command's disclosure maps `not_ready` by the server's message — one naming
 > the import gives “available when imported · retry”, one saying saving or naming publication
 > gives “still saving · retry”, any other “couldn’t load · retry” — so the daemon's two messages
-> (“this conversation is still importing”, “still saving · retry”) are a contract. The room has
-> no wire signal of the admission mode, so the newest-first copy also shows for runtime-admission
-> agents, and a room opened after a resume's `restoring` phase cannot tell and shows the fresh
-> copy.
+> (“this conversation is still importing”, “still saving · retry”) are a contract.
 >
 > **DOM readiness contract (2026-11-03).** So that a probe or a scripted reader never reads copy,
 > the room and the app's roll call carry inert data attributes for what is on screen: the face
 > before the columns (`data-face`), each session row's import standing and stream state
 > (`data-standing`, `data-stream-state`), the open session and its loader (`data-session-key`,
 > `data-loading-label`), the not-imported face and its course (`data-import-face`,
-> `data-import-course`), the import card's readable conversations and their total
-> (`data-ready-count`, `data-ready-total`), a search row's kind
+> `data-import-course`), the transcript's import announcement (`data-import-announce`), the
+> import card's readable conversations and their total (`data-ready-count`, `data-ready-total`),
+> a search row's kind
 > (`data-hit-kind`), and the roll call's state, toggles and Begin button. Each is derived from
 > props and state the component already has. The full list, with every value, is the header of
 > `clients/app/test/dom-contract.test.mjs`, which asserts it; copy may change, these may not

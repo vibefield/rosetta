@@ -68,7 +68,9 @@ import { messageDomId, sessionContains } from "./thread-index";
 import { ThoughtLine } from "./Thinking";
 import type { TeamReportWorkPresentation } from "./Team";
 import { KnownTeamRoster, TeamEvent, TeamWorkthread } from "./Team";
-import { ImportBanner, ImportEmptyState, TranscriptUnavailableMark, useImportHold } from "./ImportState";
+import {
+  ImportAnnouncement, ImportBanner, ImportEmptyState, TranscriptUnavailableMark, useImportHold, useImportedAnnouncement,
+} from "./ImportState";
 import { importStanding } from "../../lib/import-state";
 import type { ImportCourse } from "../../lib/import-state";
 
@@ -111,6 +113,8 @@ export interface TranscriptDocumentProps {
   readonly duringBackfill: boolean;
   /** When the running import opens a session it has not reached. */
   readonly importCourse?: ImportCourse | undefined;
+  /** The session's agent, as a `runtime-close` promise names it. */
+  readonly importAgent?: string | undefined;
   readonly index: ThreadIndex;
   readonly focus: ThreadFocus | null;
   readonly highlightedTimelineId: string | null;
@@ -242,6 +246,7 @@ export function TranscriptDocument({
   feed,
   duringBackfill,
   importCourse,
+  importAgent,
   index,
   focus,
   highlightedTimelineId: parentHighlightedTimelineId,
@@ -898,10 +903,12 @@ export function TranscriptDocument({
     knownTeamSessions.length > 0 &&
     (teamMembers.size === 0 || (partialParentHistory && !hasSafeRosterLine));
   const empty = importFace || (model.plan.length === 0 && floating.length === 0 && !showKnownTeam);
+  const imported = useImportedAnnouncement(importFace, !importFace && model.plan.length > 0);
   return (
     <ThreadNavigationContext.Provider value={childNavigation}>
     <DisclosureState key={session.id}>
       {head}
+      {!nested && <ImportAnnouncement opened={imported} />}
       {!nested && duringBackfill && standing === null && !importHold && <ImportBanner />}
       {standing === "unavailable" && !empty && <TranscriptUnavailableMark />}
       {showKnownTeam && (
@@ -936,7 +943,7 @@ export function TranscriptDocument({
           </p>
         ) : importFace || standing === "unavailable" ? (
           <ImportEmptyState standing={importFace ? "not-imported" : "unavailable"} duringBackfill={duringBackfill}
-            course={importCourse} />
+            course={importCourse} agent={importAgent} />
         ) : session.stream_state !== "indexed" ? (
           <EmptyState
             title={

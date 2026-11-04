@@ -28,7 +28,9 @@
 //   the shared-cache lock refuses ends the socket with a `not_ready` error
 //   frame (ws.rs `snapshot_failure`; crates/server/src/http/shared_reads.rs),
 //   and the SDK reconnects with backoff (client.ts `retry`).
-// - /api/status: phases, runtime meters and the progress board
+// - /api/status: phases, runtime meters, each runtime's admission course
+//   (fresh `per_tree`, or `at_runtime_close` for one admitted whole; resumed
+//   `at_publication`) and the progress board
 //   (crates/server/src/health.rs:208-366; crates/server/src/board.rs:63-140),
 //   canonical readiness only once the read router is published (http.rs:821).
 // - Before publication every cross-session aggregate answers `not_ready`
@@ -123,6 +125,10 @@ export interface ColdImportOptions extends ColdCorpusOptions {
   /** `awaiting` (default for fresh): the app's roll call grants consent.
    * `granted`: consent was given before (a resume always has it). */
   readonly consent?: "awaiting" | "granted";
+  /** Agent kinds a fresh build admits whole, as a runtime-admission adapter
+   * or the kill switch has it: each of their sessions opens at its runtime's
+   * close. Default none: claude-code and codex admit per tree. */
+  readonly wholeRuntimes?: readonly string[];
 }
 
 /** One entry of the trail: every status ask and its fate, the grant, every
@@ -274,7 +280,8 @@ export function createColdImport(options: ColdImportOptions): ColdImport {
   // A resume always has consent; a fresh build waits for the roll call
   // unless told consent was given before.
   const rollCall = course === "fresh" && (options.consent ?? "awaiting") === "awaiting";
-  let schedule: Schedule | null = rollCall ? null : planSchedule(corpus, corpus.runtimes, DISCOVERY_MS, course);
+  const whole = new Set(corpus.runtimes.filter((r) => options.wholeRuntimes?.includes(r.kind)).map((r) => r.id));
+  let schedule: Schedule | null = rollCall ? null : planSchedule(corpus, corpus.runtimes, DISCOVERY_MS, course, whole);
   let runOverride: IngestionState | null = null;
   let resyncMode: ResyncMode = "immediate";
   let revealed = false;
@@ -583,6 +590,7 @@ export function createColdImport(options: ColdImportOptions): ColdImport {
       files_total: times.files, bytes_total: times.bytes, files_skimmed: Math.round(times.files * Math.min(1, skimmed)),
       bytes_streamed: Math.round(stage === "done" ? times.bytes : streamed),
       sessions_total: Math.round(times.sessions * Math.min(1, skimmed)), records: records(streamed),
+      admission_course: schedule?.whole.has(times.runtime.id) ? "at_runtime_close" : "per_tree",
     };
   };
   /** A resumed runtime: queued, its replay streaming, its skim, then its
@@ -591,7 +599,10 @@ export function createColdImport(options: ColdImportOptions): ColdImport {
   const resumedRow = (times: RuntimeTimes, t: number): RuntimeBackfill => {
     const replay = times.replay!;
     const caughtUp = times.lanes.reduce((sum, lane) => sum + laneBytesAt(lane, t), 0);
-    const base = { kind: times.runtime.kind, runtime_id: times.runtime.id, label: null, files_total: times.files };
+    // A resumed attempt opens nothing new before it publishes (serve.rs
+    // `run_resumed_fresh_serve`).
+    const base = { kind: times.runtime.kind, runtime_id: times.runtime.id, label: null, files_total: times.files,
+      admission_course: "at_publication" as const };
     if (t >= times.metaPublic) {
       const stage: BackfillState = t >= times.close ? "done" : t >= times.readEnd ? "preparing" : "streaming";
       return { ...base, state: stage, bytes_total: 0, files_skimmed: times.files, sessions_total: times.sessions,
@@ -741,7 +752,7 @@ export function createColdImport(options: ColdImportOptions): ColdImport {
       if (schedule !== null) throw new ColdWireError(409, "invalid_transition", "consent was already granted");
       const enrolled = corpus.runtimes.filter((runtime) => kinds.includes(runtime.kind));
       if (enrolled.length === 0) throw new ColdWireError(400, "bad_request", "no installed agent was named");
-      schedule = planSchedule(corpus, enrolled, Math.max(clock, DISCOVERY_MS), course);
+      schedule = planSchedule(corpus, enrolled, Math.max(clock, DISCOVERY_MS), course, whole);
       replan();
       mark("grant", enrolled.map((runtime) => runtime.kind).join(","));
       return { enabled: enrolled.map((runtime) => runtime.kind) };

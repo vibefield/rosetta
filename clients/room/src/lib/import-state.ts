@@ -1,14 +1,14 @@
 // How the room speaks about sessions the import has not reached.
 //
-// A cold import reads the newest conversation trees first, and each tree
-// opens as soon as it closes. While it runs, the session list draws the
+// A fresh cold import reads the newest conversation trees first; when each
+// session opens is its runtime's course (`ImportCourse`). While it runs, the session list draws the
 // sessions it has not reached in two date-free groups, "Still importing"
 // above the readable rows and "Not imported yet" at the foot; the transcript
 // says why a session is
 // still empty, and a held list counts the conversations that arrived. Every
 // fact here comes from fields the daemon already sends: `stream_state`, the
 // session's own metadata, and the parent links between sessions.
-import type { Ingestion, SessionRow, StreamState } from "@vibefield/rosetta-protocol";
+import type { IngestProgress, SessionRow, StreamState } from "@vibefield/rosetta-protocol";
 import type { ListPosition } from "./use-deferred-list-order";
 
 /** Where a session stands with the import, for the words the room uses.
@@ -41,15 +41,32 @@ export function importStanding(
   return duringBackfill && session.stream_state === "pending" ? "not-imported" : null;
 }
 
-/** When the import opens a session it has not reached yet.
- * - `newest-first`: a fresh build opens each conversation tree as it closes.
- * - `resumed`: a resumed build (`resumedRun`) withholds every session it has
- *   not opened before until it publishes, so they open when it finishes.
+/** When the import opens a session it has not reached yet, as far as the
+ * daemon's course for the session's runtime promises
+ * (`RuntimeBackfill.admission_course`). None names an order or a position.
+ * - `newest-first` (`per_tree`): a fresh build admits the runtime per
+ *   conversation tree, newer trees first; most open as they close, but a
+ *   bound one waits for the runtime's close, so this promises no time.
+ * - `runtime-close` (`at_runtime_close`): the runtime is admitted whole, so
+ *   the session opens when its agent finishes importing.
+ * - `resumed` (`at_publication`): a resumed build, across a launch or after
+ *   a pause, withholds every session it has not opened before until it
+ *   publishes, so they open when it finishes.
  * - `stopped`: a paused or failed run reaches nothing until it continues. */
-export type ImportCourse = "newest-first" | "resumed" | "stopped";
+export type ImportCourse = "newest-first" | "runtime-close" | "resumed" | "stopped";
 
-export function importCourse(run: Ingestion | null | undefined, resumed: boolean): ImportCourse {
+/** `resumed` is the room's own inference for a daemon that names no course
+ * (`resumedRun`: a restoring phase seen). */
+export function importCourse(
+  ingest: IngestProgress | null | undefined, runtimeId: string | null, resumed: boolean,
+): ImportCourse {
+  const run = ingest?.run;
   if (run?.state === "paused" || run?.state === "pausing" || run?.state === "failed") return "stopped";
+  const own = runtimeId === null ? undefined
+    : ingest?.runtimes.find((row) => row.runtime_id === runtimeId)?.admission_course;
+  if (own === "at_publication") return "resumed";
+  if (own === "at_runtime_close") return "runtime-close";
+  if (own === "per_tree") return "newest-first";
   return resumed ? "resumed" : "newest-first";
 }
 

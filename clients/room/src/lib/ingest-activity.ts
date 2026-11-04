@@ -10,7 +10,7 @@ export interface ActivityFeed {
   readonly startedAt: number | null;
   readonly uptimeMs: number;
   readonly receivedAt: number | null;
-  /** This daemon start's run was seen restoring saved progress (`resumedRun`).
+  /** This daemon start's attempt is a resumed build (`resumedRun`).
    * A resumed build's board counts nothing done until it publishes, while the
    * conversations a reader could open before stay open, so its card counts
    * nothing. Absent means a fresh build. */
@@ -108,14 +108,18 @@ export function phaseHeading(phase: ActivityPhase): string {
   return `${phase.title}${phase.count ?? ""}`;
 }
 
-/** The run key once this daemon start's run is seen restoring, kept until the
- * import goes live: a resumed build reads, reconciles and publishes as one,
- * so its card says so. A room that opens after the restoring
- * phase cannot tell, and reads the fresh copy without a count. */
+/** The run key while this daemon start's attempt is a resumed build, until
+ * the import goes live: a resumed build reads, reconciles and publishes as
+ * one, so its card says so. The daemon says so itself: a runtime whose
+ * course is `at_publication` (across a launch or after a pause). A daemon
+ * that names no course is known resumed once its run is seen restoring; a
+ * room that opens after that phase cannot tell, and reads the fresh copy. */
 export function resumedRun(previous: string | null, feed: ActivityFeed): string | null {
   const ingest = feed.ingest;
   if (ingest === null || ingest.phase === "live") return null;
   const key = `${feed.startedAt ?? ""}:${ingest.run?.id ?? ""}`;
+  const courses = ingest.runtimes.flatMap((row) => (row.admission_course == null ? [] : [row.admission_course]));
+  if (courses.length > 0) return courses.includes("at_publication") ? key : null;
   if (ingest.phase === "restoring") return key;
   return previous === key ? key : null;
 }
