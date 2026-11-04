@@ -31,10 +31,15 @@
 //     organizing, finalizing, publishing, paused, pausing, failed,
 //     search_failed, search_waiting, search_indexing, search_optimizing,
 //     search_validating, search_publishing
-//   .ah-ingest-status[data-ready-count]  integer: the conversations ready
-//                    (Σ ProjectBackfill.sessions_done), the N of "· N ready".
-//                    Always present; the words show it only when data-state
-//                    is "reading", N > 0 and the run is not resumed
+//   .ah-ingest-status[data-ready-count]  integer: the readable conversations,
+//                    root sessions from the pushed catalog that are not
+//                    Pending (never a metadata-only placeholder), the k of
+//                    "· k of N conversations readable"; folded from the same
+//                    delivery as the rows
+//   .ah-ingest-status[data-ready-total]  integer: N, every root session in the
+//                    catalog but metadata-only placeholders. Both always
+//                    present (0 before the catalog names a conversation); the
+//                    words show them while reading, organizing or finalizing
 //
 // Projects                               ProjectListItem
 //   .ah-project-list-item[data-motion-key]  the project id (the unassigned
@@ -138,6 +143,7 @@ import { createDemoPorts } from "../../room/src/fixtures/index.ts";
 import { HostInputsProvider } from "../../room/src/host-inputs.ts";
 import { AgentMark, lastActive } from "../../room/src/index.ts";
 import { activityPhase } from "../../room/src/lib/ingest-activity.ts";
+import { ConversationFold } from "../../room/src/lib/conversation-readiness.ts";
 import { buildProjectViewModelFromSessions, UNASSIGNED_PROJECT_ID } from "../../room/src/lib/model.ts";
 import { matchSessionTitles } from "../../room/src/lib/title-search.ts";
 import { RoomProvider } from "../../room/src/room-context.tsx";
@@ -208,40 +214,48 @@ function activityOf(ingest = {}, overrides = {}) {
 const inRoom = (element) => renderToStaticMarkup(
   createElement(RoomProvider, { ports: createDemoPorts(), options: { storage: null } }, element));
 
+/** The room's fold over these rows, as HistoryRoom hands it to the card. */
+const counted = (rows) => new ConversationFold().read(rows, NOW);
+
 test("the cold start is a face of its own, holding the import card", () => {
   const markup = inRoom(createElement(ColdStartPanel, { activity: activityOf({ projects: [board(3)] }) }));
   const face = only(classed(markup, "ah-cold-start"), "cold start");
   assert.equal(face["data-face"], "cold-start");
   const card = only(classed(markup, "ah-ingest-status"), "import card");
   assert.equal(card["data-state"], "reading");
-  assert.equal(card["data-ready-count"], "3");
+  // Before the first metadata batch the catalog names no conversation.
+  assert.deepEqual([card["data-ready-count"], card["data-ready-total"]], ["0", "0"]);
 });
 
 /* ── the import card ──────────────────────────────────────────────────── */
 
-test("the import card carries the ready count, also where its words leave it out", () => {
-  const card = (ingest, overrides) =>
-    only(classed(inRoom(createElement(IngestStatus, { activity: activityOf(ingest, overrides) })), "ah-ingest-status"), "card");
-  // Drawn: "· 12 ready", over two projects and the unassigned bucket.
-  const twelve = card({ projects: [board(5), board(7, null)] });
-  assert.deepEqual([twelve["data-state"], twelve["data-ready-count"]], ["reading", "12"]);
-  assert.deepEqual([card({ projects: [board(0)] })["data-state"], card({ projects: [board(0)] })["data-ready-count"]],
-    ["reading", "0"]);
-  // Left out of the words, still carried: an interrupted feed, a resumed
-  // build, and the steps that draw no count.
-  const cut = card({ projects: [board(12)] }, { connectionError: "gone" });
-  assert.deepEqual([cut["data-state"], cut["data-ready-count"]], ["disconnected", "12"]);
-  const resumed = card({ projects: [board(9)] }, { resumed: true });
-  assert.deepEqual([resumed["data-state"], resumed["data-ready-count"]], ["reading", "9"]);
-  const saving = card({ phase: "publishing", projects: [board(40)], runtimes: [runtime({ state: "done" })] });
-  assert.deepEqual([saving["data-state"], saving["data-ready-count"]], ["publishing", "40"]);
-  const paused = card({ projects: [board(4)], run: { ...run, state: "paused" } });
-  assert.deepEqual([paused["data-state"], paused["data-ready-count"]], ["paused", "4"]);
-  const done = card({ phase: "live", projects: [board(40)], runtimes: [runtime({ state: "done" })] },
-    { canonicalReady: true, searchReadiness: "ready" });
-  assert.deepEqual([done["data-state"], done["data-ready-count"]], ["complete", "40"]);
-  // A daemon too old to carry the board counts nothing.
-  assert.equal(card({ projects: undefined })["data-ready-count"], "0");
+test("the import card carries the readable conversations and their total, also where its words leave them out", () => {
+  const card = (ingest, overrides) => {
+    const attrs = only(classed(inRoom(createElement(IngestStatus, { activity: activityOf(ingest, overrides) })), "ah-ingest-status"), "card");
+    return [attrs["data-state"], attrs["data-ready-count"], attrs["data-ready-total"]];
+  };
+  // Roots only: two readable (one Streaming), one Pending; a child and a
+  // metadata-only placeholder with its child are never counted.
+  const rows = counted([
+    session("a"), session("b", { stream_state: "streaming", project_id: null }), session("c", pending()),
+    session("k", { parent_session_id: "a", root_session_id: "a" }),
+    session("ph", metadataOnly()), session("o", { parent_session_id: "ph", root_session_id: "ph", ...pending() }),
+  ]);
+  const conversations = { conversations: rows };
+  assert.deepEqual(card({ projects: [board(5)] }, conversations), ["reading", "2", "3"]);
+  // The board's sessions_done is not the unit.
+  assert.deepEqual(card({ projects: [board(40)] }, { conversations: counted([session("c", pending())]) }), ["reading", "0", "1"]);
+  // Left out of the words, still carried: an interrupted feed, and the steps
+  // that draw no count.
+  assert.deepEqual(card({ projects: [board(12)] }, { ...conversations, connectionError: "gone" }), ["disconnected", "2", "3"]);
+  assert.deepEqual(card({ projects: [board(9)] }, { ...conversations, resumed: true }), ["reading", "2", "3"]);
+  assert.deepEqual(card({ phase: "publishing", projects: [board(40)], runtimes: [runtime({ state: "done" })] }, conversations),
+    ["publishing", "2", "3"]);
+  assert.deepEqual(card({ projects: [board(4)], run: { ...run, state: "paused" } }, conversations), ["paused", "2", "3"]);
+  assert.deepEqual(card({ phase: "live", projects: [board(40)], runtimes: [runtime({ state: "done" })] },
+    { ...conversations, canonicalReady: true, searchReadiness: "ready" }), ["complete", "2", "3"]);
+  // No catalog yet counts nothing.
+  assert.deepEqual(card({ projects: [board(3)] }), ["reading", "0", "0"]);
 });
 
 /* ── the project list ─────────────────────────────────────────────────── */
@@ -252,7 +266,7 @@ function projectRow({ id = "p", ingestActive = true, isSelected = false, act = n
     () => "claude-code", NOW, () => "#888");
   const item = createElement(ProjectListItem, {
     project: view, maximumLifetimeCost: 0, isSelected, homeDirectory: null, currentTimestamp: NOW,
-    ingestActive, runtimeStates: ["streaming"], backfill: board(3, id), onProjectSelect: nothing,
+    ingestActive, backfill: board(3, id), conversations: { readable: 1, total: 2 }, onProjectSelect: nothing,
   });
   return renderToStaticMarkup(act === null ? item
     : createElement(HostInputsProvider, { value: { projectRow: () => ({ act }) } }, item));

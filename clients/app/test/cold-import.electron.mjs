@@ -222,10 +222,34 @@ const groups = () => win.webContents.executeJavaScript(`(${sessionGroups.toStrin
 const card = () => {
   const section = document.querySelector('.ah-ingest-status');
   return section === null ? null : {
-    state: section.dataset.state, ready: Number(section.dataset.readyCount),
+    state: section.dataset.state, ready: Number(section.dataset.readyCount), total: Number(section.dataset.readyTotal),
     title: section.querySelector('h3')?.textContent ?? null,
     detail: section.querySelector('.ah-ingest-status__detail')?.textContent ?? null,
+    horizon: section.querySelector('.ah-ingest-status__horizon')?.textContent ?? null,
   };
+};
+/** The conversations the card counts, read from the catalog the room draws:
+ * root sessions but metadata-only placeholders, and the readable among them
+ * (not Pending); for one project when `projectKey` is given. */
+const conversationsIn = (projectKey) => {
+  const c = window.coldImport.c;
+  const roots = c.meta().sessions.filter((s) => s.parent_session_id === null && c.kindOf(s.id) !== 'placeholder' &&
+    (projectKey === undefined || (s.project_id ?? '__rosetta_unassigned__') === projectKey));
+  const readable = roots.filter((s) => s.stream_state !== 'pending').length;
+  const n = (v) => v.toLocaleString('en-US');
+  // The recency spans run back from the reader's clock (the fixture's
+  // Date.now is the simulated one), over each root's updated_at.
+  const span = (days) => {
+    const inside = roots.filter((s) => Date.now() - s.updated_at <= days * 86_400_000);
+    return { readable: inside.filter((s) => s.stream_state !== 'pending').length, total: inside.length };
+  };
+  const day = span(1), week = span(7);
+  const dayDone = day.total > 0 && day.readable >= day.total, weekDone = week.total > 0 && week.readable >= week.total;
+  const horizon = day.total > 0 && !dayDone ? `Last 24 hours: ${n(day.readable)} of ${n(day.total)} readable`
+    : week.total > 0 && !weekDone ? `${dayDone ? 'Last 24 hours ready ✓ · ' : ''}Last 7 days: ${n(week.readable)} of ${n(week.total)}`
+    : weekDone ? 'Last 7 days ready ✓' : null;
+  return { readable, total: roots.length,
+    text: `${n(readable)} of ${n(roots.length)} ${roots.length === 1 ? 'conversation' : 'conversations'} readable`, horizon };
 };
 const transcript = () => {
   const column = document.querySelector('.ah-col--measure');
@@ -332,13 +356,25 @@ async function freshImport() {
 
   // The import card at metadata (ux:X3).
   const cardAtMetadata = await check(card);
-  today('ux:X3', 'the card while nothing is readable: the import step, no "· N ready", the count 0',
-    { state: cardAtMetadata.state, ready: cardAtMetadata.ready, title: cardAtMetadata.title },
-    { state: 'reading', ready: 0, title: 'Importing your newest conversations first' });
+  const atMetadataCount = await check(conversationsIn);
+  today('ux:X3', 'the card while nothing is readable counts conversations from the catalog: "· 0 of N conversations readable"',
+    { state: cardAtMetadata.state, ready: cardAtMetadata.ready, total: cardAtMetadata.total, title: cardAtMetadata.title },
+    { state: 'reading', ready: 0, total: atMetadataCount.total, title: `Importing your newest conversations first · ${atMetadataCount.text}` });
+  // The spans are anchored on the reader's clock (now): this fixture moves
+  // that clock with the import, while a frozen corpus older than a week
+  // shows no line at all (the room's unit tests pin that case).
+  today('ux:X3', 'a recency line under the meter counts the last 24 hours by the reader\'s clock',
+    { line: cardAtMetadata.horizon, starts: /^Last 24 hours: 0 of \d+ readable$/.test(cardAtMetadata.horizon ?? '') },
+    { line: atMetadataCount.horizon, starts: true });
   today('unplanned', 'the reading card\'s detail sentence', cardAtMetadata.detail,
     'Older history fills in while you browse. Conversations you start now appear when the import finishes.');
-  today('ux:X3', 'an unreached project card reads "Reading conversations · N%" (bytes, not readiness)',
-    await check((key) => /^Reading conversations · \d+%$/.test(document.querySelector(`.ah-project-list-item[data-motion-key="${key}"] .ah-project-list-item__progress`)?.textContent ?? ''), newest.project), true);
+  const unreached = await check((key) => {
+    const streamed = window.coldImport.c.status().ingest.projects.find((row) => (row.project_id ?? '__rosetta_unassigned__') === key)?.bytes_streamed ?? 0;
+    return { streamed, label: document.querySelector(`.ah-project-list-item[data-motion-key="${key}"] .ah-project-list-item__progress`)?.textContent ?? null };
+  }, newest.project);
+  const newestCount = await check(conversationsIn, newest.project);
+  today('ux:X3', 'a project card with nothing readable says so in conversations: "Not reached yet" before its bytes, else "0 of n"',
+    unreached.label, unreached.streamed === 0 ? 'Not reached yet' : newestCount.text);
   today('ux:X6', 'while the card is up the projects head is the bare count, never the portfolio panel',
     await inColumn((column) => ({ portfolio: column('projects')?.querySelector('.ah-meta__body') !== null,
       head: column('projects')?.querySelector('.ah-meta__head .ah-eyebrow')?.textContent ?? null })), { portfolio: false, head: 'Projects' });
@@ -452,15 +488,16 @@ async function freshImport() {
     const title = document.querySelector('.ah-ingest-status h3')?.textContent;
     return { shown, sessionsDone, readableRoots, title };
   });
-  const countUnit = unit.shown === unit.sessionsDone ? 'sessions' : unit.shown === unit.readableRoots ? 'roots' : 'other';
-  today('ux:X3', '"· N ready" counts sessions, children included, not the readable roots the lists show',
-    { unit: countUnit, title: unit.title, moreThanRoots: unit.shown > unit.readableRoots },
-    { unit: 'sessions', title: `Importing your newest conversations first · ${unit.sessionsDone.toLocaleString()} ready`, moreThanRoots: true });
-  console.log(`  "· ${unit.shown} ready" with ${unit.readableRoots} readable roots in the catalog`);
-  const board = await check((key) => window.coldImport.c.status().ingest.projects.find((row) => (row.project_id ?? '__rosetta_unassigned__') === key), newest.project);
-  today('ux:X3', 'a started project card counts its sessions, children included: "k of T ready"',
+  assert.ok(unit.sessionsDone > unit.readableRoots, 'fixture precondition: flipped children make the sessions count differ from the roots');
+  const countUnit = unit.shown === unit.readableRoots ? 'roots' : unit.shown === unit.sessionsDone ? 'sessions' : 'other';
+  const midCount = await check(conversationsIn);
+  today('ux:X3', 'the count is readable conversations (roots, as the lists draw them), in the frame of the rows: "· k of N conversations readable"',
+    { unit: countUnit, title: unit.title, horizon: (await check(card)).horizon },
+    { unit: 'roots', title: `Importing your newest conversations first · ${midCount.text}`, horizon: midCount.horizon });
+  console.log(`  "${midCount.text}" while the board counts ${unit.sessionsDone} sessions done`);
+  today('ux:X3', 'a started project card counts its conversations: "k of n conversations readable"',
     await check((key) => document.querySelector(`.ah-project-list-item[data-motion-key="${key}"] .ah-project-list-item__progress`)?.textContent, newest.project),
-    `Reading conversations · ${board.sessions_done.toLocaleString()} of ${board.sessions_total.toLocaleString()} ready`);
+    (await check(conversationsIn, newest.project)).text);
 
   // ── A held list while the giant flips under an open transcript ────────
   await hover('sessions', true);
@@ -572,16 +609,23 @@ async function freshImport() {
   // ── Reading ends ──────────────────────────────────────────────────────
   await advanceToPhase('reading-done');
   await settle();
-  today('ux:X3', 'when reading ends with trees already readable, the card says they are not available yet',
+  today('ux:X3', 'when reading ends the card counts what is readable and says the rest open as their agent finishes',
     await check(card).then((c) => ({ state: c.state, title: c.title, detail: c.detail })),
-    { state: 'organizing', title: 'Organizing conversations', detail: 'Putting messages and tool activity in order before they become available.' });
+    { state: 'organizing', title: `Opening conversations as each agent finishes · ${(await check(conversationsIn)).text}`,
+      detail: 'Conversations still importing open as their agent finishes. Conversations you start now appear when the import finishes.' });
   await advanceToPhase('runtime-close');
   await shows('forever', 'the bound tree opens at its runtime\'s close, rows and all',
     () => document.querySelector('.ah-col--measure .tr-sitting') && !document.querySelector('.ah-col--measure .ah-empty[data-import-face]'));
   await advanceToPhase('finalizing');
   await settle();
-  today('ux:X3', 'finalizing: step 3, "Finishing your archive"', await check(card).then((c) => ({ state: c.state, title: c.title })),
-    { state: 'finalizing', title: 'Finishing your archive' });
+  // A root no source rosters stays Pending past every close, so the count
+  // stops short of its total and the card says so rather than "All N".
+  const atFinalizing = await check(conversationsIn);
+  assert.ok(atFinalizing.readable < atFinalizing.total, 'fixture precondition: never-rostered roots stay Pending');
+  today('ux:X3', 'finalizing: step 3, "Finishing your archive" with the count, which stops short at never-rostered roots',
+    await check(card).then((c) => ({ state: c.state, title: c.title, detail: c.detail })),
+    { state: 'finalizing', title: `Finishing your archive · ${atFinalizing.text}`,
+      detail: 'Finishing the archive so search and charts can start. Conversations may pause for a few seconds while the archive is saved.' });
   await advanceToPhase('publishing');
   await settle();
   today('unplanned', 'publishing, before canonical readiness: "Saving your archive"', await check(card).then((c) => c.title), 'Saving your archive');
@@ -695,6 +739,8 @@ async function freshImport() {
       done: status.ingest.projects.reduce((n, row) => n + row.sessions_done, 0),
       total: status.ingest.projects.reduce((n, row) => n + row.sessions_total, 0),
       shown: Number(document.querySelector('.ah-ingest-status')?.dataset.readyCount),
+      shownTotal: Number(document.querySelector('.ah-ingest-status')?.dataset.readyTotal),
+      countedRoots: c.meta().sessions.filter((s) => s.parent_session_id === null && c.kindOf(s.id) !== 'placeholder').length,
       readableRoots: c.meta().sessions.filter((s) => s.parent_session_id === null && s.stream_state !== 'pending').length,
       drawn: document.querySelectorAll('.ah-session-list-item').length,
       roots: c.meta().sessions.filter((s) => s.parent_session_id === null && (s.project_id ?? '__rosetta_unassigned__') === selected).length,
@@ -703,7 +749,8 @@ async function freshImport() {
   today('forever', 'I1 end state: the board counts every planned session done, the card\'s count reached all that is readable in its own unit, the open project draws all its roots',
     { boardComplete: end.done === end.total, countComplete: end.shown === (countUnit === 'roots' ? end.readableRoots : end.done), rows: end.drawn === end.roots },
     { boardComplete: true, countComplete: true, rows: true });
-  today('ux:X3', 'the end count is in sessions: data-ready-count equals Σ sessions_done', end.shown === end.done, true);
+  today('ux:X3', 'the end count is in conversations: data-ready-count the readable roots, data-ready-total every root but placeholders',
+    { count: end.shown === end.readableRoots, total: end.shownTotal === end.countedRoots }, { count: true, total: true });
   // The card's exit, frame by frame: the head swap and the card's unmount.
   await frames(4);
   await check(() => { window.coldImport.startSampling(); return true; });
@@ -779,8 +826,11 @@ async function resumedImport() {
   await advanceTo(claude.metaPublic + 1_000);
   await until(() => document.querySelector('.ah-project-list-item'), 'projects of a resumed build');
   await settle();
-  today('ux:X3', 'a resumed build, seen restoring: "Finishing the import" and no count',
-    await check(card).then((c) => ({ state: c.state, title: c.title, ready: c.ready })), { state: 'reading', title: 'Finishing the import', ready: 0 });
+  // The count is the catalog's, so it claims only what a reader can open:
+  // nothing yet across launches, and what stayed open after a pause.
+  today('ux:X3', 'a resumed build, seen restoring: "Finishing the import · k of N conversations readable", k from the catalog',
+    await check(card).then((c) => ({ state: c.state, title: c.title, ready: c.ready })),
+    await check(conversationsIn).then((n) => ({ state: 'reading', title: `Finishing the import · ${n.text}`, ready: n.readable })));
   const target = await check(() => {
     const c = window.coldImport.c;
     const row = c.meta().sessions.filter((s) => s.parent_session_id === null && c.kindOf(s.id) === 'root').sort((a, b) => b.updated_at - a.updated_at)[0];

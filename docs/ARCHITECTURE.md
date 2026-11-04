@@ -657,8 +657,8 @@ timing.
 >   Checks (1) and the course check are self-consistency guards: `data-standing` derives from
 >   the same row data.
 > - D1 wait reasons, D2 order honesty, D3 transcript path and cost (report-only): consent →
->   progress, status RTT and gaps, ready-count lag after flips, the sessions-per-root ratio of
->   "· N ready", phase-seen lags and app launch; NEWEST's project rank and the unranked count at
+>   progress, status RTT and gaps, ready-count lag after flips, the card's ready count over the
+>   readable roots (1 once it counts conversations), phase-seen lags and app launch; NEWEST's project rank and the unranked count at
 >   H1 + 0/5/30 s, recency inversion time, the newest big tree's root (named only in harness
 >   memory) received and drawn; each open's socket, hello, snapshot bytes, Worker parse, reveal
 >   and cover, re-covers, error covers, second sockets and meta cost.
@@ -1031,10 +1031,21 @@ timing.
 > keep frequent updates readable without repeatedly announcing changing counts.
 >
 > During a fresh import the reading step is titled “Importing your newest conversations first”,
-> with “· N ready” after it (Σ `ProjectBackfill.sessions_done`, so N moves per flipped tree; drawn,
-> but outside the live region); a resumed build (the room saw its `restoring` phase) reads
-> “Finishing the import” and counts nothing, since it opens nothing new before it publishes
-> (`clients/room/src/lib/ingest-activity.ts`, 2026-11-02). A Pending session's transcript says
+> with “· k of N conversations readable” after it (2026-11-03): conversations are root sessions
+> from the pushed catalog, N every one but metadata-only placeholders and k those no longer
+> `Pending`, folded once per metadata delivery from the rows the lists draw
+> (`clients/room/src/lib/conversation-readiness.ts`), so the count moves in the rows' frame, never
+> with the status poll; each project card says “k of n conversations readable” (“Not reached yet”
+> before any of its bytes are read). The count is drawn, never announced: the card's live regions
+> say the step and each recency span reached. Under the meter a fresh build adds “Last 24 hours:
+> r of t readable”, then “Last 7 days …”, over roots whose `updated_at` lies within the span of the
+> reader's clock (so a frozen corpus older than a week shows none, and benches cannot see it). Past
+> reading the card counts on (“Opening conversations as each agent finishes”, then “Finishing your
+> archive”, or “All N conversations readable”); a root no source rosters stays Pending past every
+> close, so the copy never promises that every one left opens there. A resumed build (the room saw
+> its `restoring` phase) reads “Finishing the import” with the catalog's count, which is 0 across
+> a launch and what stayed open after a pause in-process, since it opens nothing new before it
+> publishes (`clients/room/src/lib/ingest-activity.ts`). A Pending session's transcript says
 > “Not imported yet” with the promise its import's course can keep: fresh, “Your newest
 > conversations import first. This one opens as soon as the import reaches it.”; resumed, “The
 > import picked up where it stopped. This one opens when the import finishes.”; a paused or failed
@@ -1060,7 +1071,8 @@ timing.
 > before the columns (`data-face`), each session row's import standing and stream state
 > (`data-standing`, `data-stream-state`), the open session and its loader (`data-session-key`,
 > `data-loading-label`), the not-imported face and its course (`data-import-face`,
-> `data-import-course`), the import card's ready count (`data-ready-count`), a search row's kind
+> `data-import-course`), the import card's readable conversations and their total
+> (`data-ready-count`, `data-ready-total`), a search row's kind
 > (`data-hit-kind`), and the roll call's state, toggles and Begin button. Each is derived from
 > props and state the component already has. The full list, with every value, is the header of
 > `clients/app/test/dom-contract.test.mjs`, which asserts it; copy may change, these may not

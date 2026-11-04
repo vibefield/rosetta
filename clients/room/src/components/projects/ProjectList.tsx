@@ -1,4 +1,5 @@
-import type { ProjectBackfill, RuntimeBackfill } from "@vibefield/rosetta-protocol";
+import type { ProjectBackfill } from "@vibefield/rosetta-protocol";
+import type { ConversationCount } from "../../lib/conversation-readiness";
 import type { ProjectViewModel } from "../../lib/model";
 import { useListMotion } from "../../lib/use-list-motion";
 import { useDeferredListOrder } from "../../lib/use-deferred-list-order";
@@ -22,9 +23,11 @@ export interface ProjectListProps {
   /** The order is still the import's (`ActivityOrder.bootstrapping`): a
    * held reorder comes from conversations it opened, and the pill says so. */
   readonly importing?: boolean;
-  readonly runtimes?: readonly RuntimeBackfill[] | undefined;
   /** The daemon's per-project backfill fold, keyed by project id. */
   readonly projectBackfills: ReadonlyMap<string, ProjectBackfill>;
+  /** Each project's conversations and how many are readable, from the
+   * catalog (`ConversationFold`), keyed by project id. */
+  readonly projectConversations?: ReadonlyMap<string, ConversationCount> | undefined;
   /** The list itself is still being censused — only the ready may claim
    * emptiness, so the empty state yields to the section's veil. */
   readonly pending: boolean;
@@ -44,8 +47,8 @@ export function ProjectList({
   currentTimestamp,
   ingestActive,
   importing = false,
-  runtimes,
   projectBackfills,
+  projectConversations,
   pending,
   onProjectSelect,
   sections = null,
@@ -70,8 +73,8 @@ export function ProjectList({
       homeDirectory={homeDirectory}
       currentTimestamp={currentTimestamp}
       ingestActive={ingestActive}
-      runtimeStates={runtimes?.filter((runtime) => project.agents.some((agent) => agent.kind === runtime.kind)).map((runtime) => runtime.state)}
       backfill={projectBackfills.get(project.row.id) ?? null}
+      conversations={projectConversations?.get(project.row.id) ?? null}
       onProjectSelect={onProjectSelect}
     />
   );

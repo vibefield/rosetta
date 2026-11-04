@@ -1,6 +1,6 @@
 import { useId } from "react";
 import { AgentMark, agentLabel } from "../lib/agents";
-import { phaseHeading, readySessions, readySuffix, runtimeActivity } from "../lib/ingest-activity";
+import { phaseHeading, readyConversations, runtimeActivity } from "../lib/ingest-activity";
 import type { IngestActivity } from "../lib/ingest-activity";
 import { IngestionControls } from "./IngestionControls";
 
@@ -22,21 +22,30 @@ export function IngestStatus({ activity }: { readonly activity: IngestActivity |
   const interrupted = feed.connectionError !== null;
   const ready = phase.key === "ready";
   const paused = interrupted || !phase.active;
+  const count = readyConversations(feed);
+  const horizon = interrupted ? null : phase.horizon ?? null;
   return (
-    // `data-ready-count` is the count "· N ready" draws, carried (inert)
-    // even where the copy leaves it out: zero, resumed, or another step.
+    // `data-ready-count` / `data-ready-total` are the readable conversations
+    // and their total, carried (inert) even where the copy leaves them out.
     <section className="ah-ingest-status" aria-labelledby={titleId}
       data-state={interrupted ? "disconnected" : ready ? "complete" : phase.key}
-      data-ready-count={readySessions(feed.ingest)}>
+      data-ready-count={count.readable} data-ready-total={count.total}>
       <div className="ah-ingest-status__eyebrow">
         <span>{ready ? "ALL SET" : "IMPORTING HISTORY"}</span>
         <span>{ready ? "✓" : `Step ${phase.step} of 4`}</span>
       </div>
-      <h3 id={titleId} aria-live="polite" aria-atomic="true">
+      {/* The counts move with every tree the import opens: drawn, never
+          announced. The live regions say the step and each recency span
+          reached, nothing else. */}
+      <span className="ah-visually-hidden" aria-live="polite" aria-atomic="true">
+        {interrupted ? "Progress updates paused" : phase.spoken ?? phase.title}
+      </span>
+      <span className="ah-visually-hidden" aria-live="polite" aria-atomic="true">
+        {phase.horizon?.reached ?? ""}
+      </span>
+      <h3 id={titleId}>
         {interrupted ? "Progress updates paused" : phase.title}
-        {/* The count moves with every tree the import opens: drawn, but kept
-            out of what the live region announces (the meter names it). */}
-        {!interrupted && phase.ready ? <span aria-hidden="true">{readySuffix(phase)}</span> : null}
+        {!interrupted && phase.count ? <span className="ah-ingest-status__count">{phase.count}</span> : null}
       </h3>
       <p className="ah-ingest-status__detail">
         {interrupted ? "Waiting for the background service. Reconnecting automatically…" : phase.detail}
@@ -46,6 +55,7 @@ export function IngestStatus({ activity }: { readonly activity: IngestActivity |
         {phase.fraction !== null && !ready && <b>{Math.floor(phase.fraction * 100)}%</b>}
       </div>
       <ProgressMeter key={phase.key} value={phase.fraction} label={phaseHeading(phase)} paused={paused} />
+      {horizon && <p className="ah-ingest-status__horizon" aria-hidden="true">{horizon.line}</p>}
       <div className="ah-ingest-status__footer">
         <span title={feed.connectionError ?? (footer.includes("No new") ? "The service is connected; its work counters have not changed." : undefined)}>{footer}</span>
         <span>{elapsed}</span>

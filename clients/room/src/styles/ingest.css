@@ -1,12 +1,14 @@
 /* Progress describes its named step and never covers available content. */
 .ah-ingest-status {
-  flex: 0 0 auto; margin: 10px 10px 2px; padding: 13px 14px 8px; min-width: 0;
+  position: relative; flex: 0 0 auto; margin: 10px 10px 2px; padding: 13px 14px 8px; min-width: 0;
   border: 1px solid var(--vf-hairline-strong); border-radius: 11px;
   background: var(--vf-chrome-surface); color: var(--vf-text-primary);
   font-size: 11px; text-align: left; font-variant-numeric: tabular-nums;
 }
 .ah-ingest-status__eyebrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--vf-text-secondary); font-size: 9px; font-weight: 600; letter-spacing: .045em; }
 .ah-ingest-status h3 { margin: 7px 0 5px; font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: -.015em; }
+.ah-ingest-status__count { color: var(--vf-text-secondary); font-weight: 500; }
+.ah-ingest-status__horizon { margin: 7px 0 0; color: var(--vf-text-secondary); font-size: 10px; line-height: 1.5; }
 .ah-ingest-status .ah-ingest-status__detail { margin: 0 0 13px; color: var(--vf-text-secondary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .ah-ingest-status__amount { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 7px; line-height: 1.4; }
 .ah-ingest-status__amount b { font-size: 11px; font-weight: 500; }

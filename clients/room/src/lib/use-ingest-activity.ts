@@ -1,15 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { activityIdentity, activityPhase, progressBytes, progressDuration, resumedRun, sampleActivity } from "./ingest-activity";
 import type { ActivityFeed, ActivitySamples, IngestActivity } from "./ingest-activity";
+import type { ConversationReadiness } from "./conversation-readiness";
 
-export function useIngestActivity(given: ActivityFeed): IngestActivity | null {
+/** `conversations` is the room's fold of the catalog it draws the rows from,
+ * so the card's counts change in the same render as the rows. */
+export function useIngestActivity(given: ActivityFeed, conversations: ConversationReadiness | null = null): IngestActivity | null {
   // A resumed build is known by the restoring phase it passed through; the
   // mark outlives that phase until the import goes live.
   const [resumedKey, setResumedKey] = useState<string | null>(null);
   const nextResumedKey = resumedRun(resumedKey, given);
   if (nextResumedKey !== resumedKey) setResumedKey(nextResumedKey);
   const resumed = nextResumedKey !== null;
-  const feed = useMemo(() => (resumed ? { ...given, resumed } : given), [given, resumed]);
+  const polled = useMemo(() => (resumed ? { ...given, resumed } : given), [given, resumed]);
+  // The counts move with every metadata delivery; the samples and the clock
+  // follow the status poll alone, so a delivery costs the room no second render.
+  const feed = useMemo(() => (conversations === null ? polled : { ...polled, conversations }), [polled, conversations]);
   const phase = activityPhase(feed);
   const [samples, setSamples] = useState<ActivitySamples | null>(null);
   const [now, setNow] = useState(Date.now);
@@ -17,10 +23,10 @@ export function useIngestActivity(given: ActivityFeed): IngestActivity | null {
   const [showCompletion, setShowCompletion] = useState(false);
   const key = phase?.key;
   useEffect(() => {
-    const current = activityPhase(feed);
-    if (current) setSamples((previous) => sampleActivity(previous, feed, current));
+    const current = activityPhase(polled);
+    if (current) setSamples((previous) => sampleActivity(previous, polled, current));
     setNow(Date.now());
-  }, [feed]);
+  }, [polled]);
   useEffect(() => {
     if (key && key !== "ready" && key !== "paused") sawWork.current = true;
     if (key !== "ready") return;

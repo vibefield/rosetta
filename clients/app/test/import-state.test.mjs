@@ -22,8 +22,9 @@ import { buildThreadIndex } from "../../room/src/components/transcript/thread-in
 import { createDemoPorts } from "../../room/src/fixtures/index.ts";
 import { compareNotImported } from "../../room/src/lib/activity-order.ts";
 import {
-  activityPhase, phaseHeading, readySessions, readySuffix, resumedRun,
+  activityPhase, horizonLine, phaseHeading, readyConversations, resumedRun,
 } from "../../room/src/lib/ingest-activity.ts";
+import { ConversationFold } from "../../room/src/lib/conversation-readiness.ts";
 import {
   arrivalsLabel, commandFailureLabel, holdsImport, importArrivals, importCourse, importStanding,
   isMetadataOnly, newestReadableSource, notImportedAround, notImportedLast, parentIds, watchImport,
@@ -323,47 +324,121 @@ const feed = (ingest = {}, overrides = {}) => ({
   startedAt: 1, uptimeMs: 5_000, receivedAt: 1_000, ...overrides,
 });
 
-test("the import card counts the conversations ready to read, and drops the count at zero", () => {
-  const twelve = activityPhase(feed({ projects: [project(5), { ...project(7), project_id: null }] }));
+/** The room's fold over `rows` at NOW, as HistoryRoom hands it to the card. */
+const counted = (rows, now = NOW) => new ConversationFold().read(rows, now);
+/** `readable` of `total` conversations, all an hour old. */
+const conversations = (readable, total) => counted(Array.from({ length: total }, (_, i) =>
+  session(`c${i}`, i < readable ? {} : pending(NOW - HOUR))));
+
+test("the import card counts readable conversations from the catalog, zero included", () => {
+  const twelve = activityPhase(feed({ projects: [project(5), { ...project(7), project_id: null }] }, { conversations: conversations(12, 40) }));
   assert.equal(twelve.title, "Importing your newest conversations first");
-  assert.equal(phaseHeading(twelve), "Importing your newest conversations first · 12 ready");
-  assert.equal(readySuffix(twelve), " · 12 ready");
+  assert.equal(phaseHeading(twelve), "Importing your newest conversations first · 12 of 40 conversations readable");
+  assert.equal(twelve.count, " · 12 of 40 conversations readable");
   assert.equal(twelve.detail, "Older history fills in while you browse. Conversations you start now appear when the import finishes.");
   assert.equal(twelve.fraction, .4, "the meter is still the bytes read");
-  const none = activityPhase(feed());
-  assert.equal(phaseHeading(none), "Importing your newest conversations first");
-  assert.equal(none.ready, null);
-  assert.equal(phaseHeading(activityPhase(feed({ projects: [project(1_234, 2_000)] }))),
-    "Importing your newest conversations first · 1,234 ready");
-  assert.equal(readySessions(null), 0);
+  // Zero is a count the catalog states, not a guess.
+  assert.equal(phaseHeading(activityPhase(feed({}, { conversations: conversations(0, 1_139) }))),
+    "Importing your newest conversations first · 0 of 1,139 conversations readable");
+  // Before the catalog names any conversation there is nothing to count.
+  assert.equal(phaseHeading(activityPhase(feed())), "Importing your newest conversations first");
+  assert.deepEqual(readyConversations(feed()), { readable: 0, total: 0 });
+  assert.deepEqual(readyConversations(feed({}, { conversations: conversations(3, 7) })), { readable: 3, total: 7 });
 });
 
-test("the import card draws the count after its title, outside what its live region reads", () => {
+test("the fold counts roots, never children or metadata-only placeholders, and follows every delivery", () => {
+  const fold = new ConversationFold();
+  const root = session("r");
+  const child = session("k", { parent_session_id: "r", root_session_id: "r" });
+  const placeholder = session("ph", metadataOnly());
+  const orphan = session("o", { parent_session_id: "ph", root_session_id: "ph" });
+  const waiting = session("w", pending(NOW - 2 * HOUR, { project_id: "q" }));
+  const first = [root, child, placeholder, orphan, waiting];
+  const at = fold.read(first, NOW);
+  assert.deepEqual([at.readable, at.total], [1, 2]);
+  assert.deepEqual(at.byProject.get("p"), { readable: 1, total: 1 });
+  assert.deepEqual(at.byProject.get("q"), { readable: 0, total: 1 });
+  assert.equal(fold.read(first, NOW), at, "the same delivery is the same answer");
+  // A flip, a removal and a placeholder's last child leaving: each lands.
+  const flipped = { ...waiting, stream_state: "streaming" };
+  const second = fold.read([root, child, placeholder, flipped], NOW);
+  assert.deepEqual([second.readable, second.total], [2, 3], "without children the placeholder row is an ordinary Pending root");
+  // And back again, as a render of an older delivery would ask.
+  const back = fold.read(first, NOW);
+  assert.deepEqual([back.readable, back.total, back.byProject.get("q")], [1, 2, { readable: 0, total: 1 }]);
+  // The fold agrees with a fresh count of the same rows.
+  const fresh = counted([root, child, placeholder, flipped]);
+  assert.deepEqual([fresh.readable, fresh.total], [second.readable, second.total]);
+});
+
+test("the recency line runs back from the reader's clock: the last 24 hours, then the last 7 days", () => {
+  const DAY = 24 * HOUR;
+  const rows = (readableDay, day, readableWeek, week) => [
+    ...Array.from({ length: day }, (_, i) => session(`d${i}`, i < readableDay ? { updated_at: NOW - HOUR } : pending(NOW - HOUR))),
+    ...Array.from({ length: week }, (_, i) => session(`w${i}`, i < readableWeek ? { updated_at: NOW - 3 * DAY } : pending(NOW - 3 * DAY))),
+    session("old", pending(NOW - 30 * DAY)),
+  ];
+  const line = (...shape) => horizonLine(counted(rows(...shape)).horizons);
+  assert.deepEqual(line(18, 24, 0, 1_031), { line: "Last 24 hours: 18 of 24 readable", reached: null });
+  assert.deepEqual(line(24, 24, 788, 1_031), { line: "Last 24 hours ready ✓ · Last 7 days: 812 of 1,055", reached: "Last 24 hours ready" });
+  assert.deepEqual(line(24, 24, 1_031, 1_031), { line: "Last 7 days ready ✓", reached: "Last 7 days ready" });
+  assert.deepEqual(line(0, 0, 2, 5), { line: "Last 7 days: 2 of 5", reached: null }, "an empty day skips to the week");
+  // A frozen archive older than a week, by the reader's clock: no line.
+  assert.equal(line(0, 0, 0, 0), null);
+  assert.equal(horizonLine(counted(rows(1, 2, 0, 0), NOW + 60 * DAY).horizons), null);
+  // A fresh build draws it under the meter; a resumed one, which opens nothing
+  // new before it publishes, does not.
+  const fresh = activityPhase(feed({}, { conversations: counted(rows(18, 24, 0, 1_031)) }));
+  assert.equal(fresh.horizon?.line, "Last 24 hours: 18 of 24 readable");
+  assert.equal(activityPhase(feed({}, { conversations: counted(rows(18, 24, 0, 1_031)), resumed: true })).horizon, null);
+});
+
+test("the import card draws its count after the title, and its live regions say only the step and each span reached", () => {
   const run = { id: "run", index_id: "ix", revision: 1, state: "running", phase: "capturing", created_at: 0,
     updated_at: 0, progress_epoch: "run:1", runtime_ids: ["rt"], allowed_actions: [], error: null };
-  const draw = (projects, overrides = {}) => {
-    const given = feed({ projects, run }, overrides);
+  const draw = (counts, overrides = {}) => {
+    const given = feed({ projects: [project(12)], run }, { conversations: counts, ...overrides });
     const activity = { phase: activityPhase(given), feed: given, footer: "Connected", elapsed: "5s elapsed" };
     return renderToStaticMarkup(createElement(RoomProvider, { ports: createDemoPorts(), options: { storage: null } },
       createElement(IngestStatus, { activity })));
   };
-  const markup = draw([project(12)]);
-  assert.match(markup, /aria-live="polite" aria-atomic="true">Importing your newest conversations first<span aria-hidden="true"> · 12 ready<\/span><\/h3>/);
-  assert.match(markup, /role="progressbar" aria-label="Importing your newest conversations first · 12 ready"/);
-  assert.match(draw([project(0)]), /aria-atomic="true">Importing your newest conversations first<\/h3>/);
+  const markup = draw(conversations(12, 40));
+  assert.match(markup, /<h3 id="[^"]+">Importing your newest conversations first<span class="ah-ingest-status__count"> · 12 of 40 conversations readable<\/span><\/h3>/);
+  const live = [...markup.matchAll(/aria-live="polite" aria-atomic="true">([^<]*)</g)].map((m) => m[1]);
+  assert.deepEqual(live, ["Importing your newest conversations first", ""]);
+  assert.match(markup, /role="progressbar" aria-label="Importing your newest conversations first · 12 of 40 conversations readable"/);
+  assert.match(markup, /data-ready-count="12" data-ready-total="40"/);
   // An interrupted feed says so, and claims no count it cannot refresh.
-  assert.match(draw([project(12)], { connectionError: "gone" }), /aria-atomic="true">Progress updates paused<\/h3>/);
+  assert.match(draw(conversations(12, 40), { connectionError: "gone" }), /<h3 id="[^"]+">Progress updates paused<\/h3>/);
+});
+
+test("past reading the card never says conversations are unavailable, and promises only what each close opens", () => {
+  const closing = (counts, overrides = {}) => activityPhase(feed({ runtimes: [runtime({ state: "applying" })] }, { conversations: counts, ...overrides }));
+  const opening = closing(conversations(700, 1_139));
+  assert.equal(opening.key, "organizing");
+  assert.equal(phaseHeading(opening), "Opening conversations as each agent finishes · 700 of 1,139 conversations readable");
+  assert.doesNotMatch(opening.detail, /before they become available/);
+  const all = closing(conversations(1_139, 1_139));
+  assert.equal(phaseHeading(all), "All 1,139 conversations readable");
+  assert.equal(all.spoken, "All conversations readable");
+  assert.equal(all.detail, "Finishing the archive so search and charts can start.");
+  const finalizing = (counts) => activityPhase(feed({ phase: "finalizing", runtimes: [runtime({ state: "done" })] }, { conversations: counts }));
+  assert.equal(phaseHeading(finalizing(conversations(1_139, 1_139))), "All 1,139 conversations readable");
+  assert.equal(phaseHeading(finalizing(conversations(1_100, 1_139))), "Finishing your archive · 1,100 of 1,139 conversations readable");
+  // Publishing names the save and no count.
+  assert.equal(phaseHeading(activityPhase(feed({ phase: "publishing", runtimes: [runtime({ state: "done" })] }, { conversations: conversations(9, 9) }))),
+    "Saving your archive");
 });
 
 test("finishing says conversations may pause while the archive is saved", () => {
   for (const phase of ["finalizing", "publishing"]) {
     const view = activityPhase(feed({ phase, runtimes: [runtime({ state: "done" })] }));
     assert.match(view.detail, /Conversations may pause for a few seconds while the archive is saved\.$/);
-    assert.equal(view.ready, undefined);
+    assert.equal(view.count ?? null, null, "no catalog, no count");
   }
 });
 
-test("a resumed build counts nothing it cannot see: its board starts at zero while open conversations stay open", () => {
+test("a resumed build counts what the catalog says is readable, never its board, which starts at zero", () => {
   const restoring = feed({ phase: "restoring", runtimes: [runtime({ records: 800 })] });
   const key = resumedRun(null, restoring);
   assert.equal(key, "1:run");
@@ -378,9 +453,13 @@ test("a resumed build counts nothing it cannot see: its board starts at zero whi
   const resumed = activityPhase({ ...catchingUp, resumed: true });
   assert.equal(phaseHeading(resumed), "Finishing the import");
   assert.equal(resumed.detail, "Conversations you can open now stay open. The rest, and any you start now, appear when the import finishes.");
-  assert.equal(resumed.ready, null);
-  // A count the board does reach still stays out of a resumed card.
-  assert.equal(phaseHeading(activityPhase({ ...feed({ projects: [project(9)] }), resumed: true })), "Finishing the import");
+  assert.equal(resumed.count ?? null, null);
+  // The count is the catalog's, never the board's: nothing across a launch,
+  // and what stayed readable after a pause in the same process.
+  assert.equal(phaseHeading(activityPhase(feed({ projects: [project(9)] }, { resumed: true, conversations: conversations(0, 40) }))),
+    "Finishing the import · 0 of 40 conversations readable");
+  assert.equal(phaseHeading(activityPhase(feed({ projects: [project(0)] }, { resumed: true, conversations: conversations(12, 40) }))),
+    "Finishing the import · 12 of 40 conversations readable");
 
   // It ends with the import, and a new daemon start that never restored is fresh.
   assert.equal(resumedRun(key, feed({ phase: "live" })), null);
@@ -388,20 +467,28 @@ test("a resumed build counts nothing it cannot see: its board starts at zero whi
   assert.equal(resumedRun(null, catchingUp), null);
 });
 
-function renderProject(backfill, runtimeStates = ["streaming"]) {
+function renderProject(backfill, counts, ingestActive = true) {
   const row = { id: "p", name: "Project", root_paths: ["/work"], git_repo: null };
   const view = buildProjectViewModelFromSessions(row, [session("a", pending(1))], undefined, () => "claude-code", NOW, () => "#888");
   return renderToStaticMarkup(createElement(ProjectListItem, {
     project: view, maximumLifetimeCost: 0, isSelected: false, homeDirectory: null, currentTimestamp: NOW,
-    ingestActive: true, runtimeStates, backfill, onProjectSelect: () => {},
+    ingestActive, backfill, conversations: counts, onProjectSelect: () => {},
   }));
 }
 
-test("the project card says how many of its conversations are ready, and keeps the byte meter's words before the first", () => {
-  assert.match(renderProject(project(3, 10)), /Reading conversations · 3 of 10 ready/);
-  assert.match(renderProject(project(1_234, 2_000)), /Reading conversations · 1,234 of 2,000 ready/);
-  const before = renderProject(project(0, 10));
-  assert.match(before, /Reading conversations · 40%/);
-  assert.doesNotMatch(before, /0 of 10/);
-  assert.match(renderProject(project(10, 10)), /Preparing activity summaries/);
+test("the project card counts its readable conversations, the unit the lists draw", () => {
+  const card = (backfill, readable, total, active) =>
+    renderProject(backfill, { readable, total }, active).match(/ah-project-list-item__progress"[^>]*>([^<]*)</)?.[1] ?? null;
+  assert.equal(card(project(3, 10), 3, 7), "3 of 7 conversations readable");
+  assert.equal(card(project(1_234, 2_000), 1_234, 1_500), "1,234 of 1,500 conversations readable");
+  // Nothing readable: not reached while none of its bytes are read, else the count.
+  assert.equal(card({ ...project(0, 10), bytes_streamed: 0 }, 0, 7), "Not reached yet");
+  assert.equal(card(null, 0, 7), "Not reached yet");
+  assert.equal(card(project(0, 10), 0, 1), "0 of 1 conversation readable");
+  assert.equal(card(project(10, 10), 7, 7), "All 7 readable · figures after the import");
+  assert.equal(card(project(1, 1), 1, 1), "Readable · figures after the import");
+  // No conversation counted yet, and the figures after the import.
+  assert.equal(renderProject(project(0, 10), null).match(/ah-project-list-item__progress"[^>]*>([^<]*)</)?.[1], "Waiting for conversations");
+  assert.equal(card(project(10, 10), 7, 7, false), "Preparing activity summaries");
+  assert.doesNotMatch(renderProject(project(0, 10), { readable: 0, total: 7 }), /Reading conversations/);
 });

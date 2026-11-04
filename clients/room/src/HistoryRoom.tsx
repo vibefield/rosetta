@@ -49,6 +49,7 @@ import {
   useTimeline,
 } from "./lib/hooks";
 import { useIngestActivity } from "./lib/use-ingest-activity";
+import { ConversationFold } from "./lib/conversation-readiness";
 import { isAwaitingConsent, isIngestActive } from "./lib/ingest";
 import {
   UNASSIGNED_PROJECT_ID,
@@ -76,6 +77,8 @@ import type { SearchFilters } from "./lib/search-sheet";
 import { fullTextUnavailable, matchSessionTitles, searchableTitleCount, titlesStandIn } from "./lib/title-search";
 import { drawnProjectCards, figureOrder } from "./lib/figure-order";
 import { spendOf } from "./lib/spend";
+
+const NO_SESSION_ROWS: readonly SessionRow[] = [];
 
 function useNow(refreshKey: unknown): number {
   const [tick, setTick] = useState(() => Date.now());
@@ -336,7 +339,14 @@ function RoomBody({
   // the project models: those renders yield to the reader's keys and clicks.
   const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog, { transition: ingestActive });
   const nowMs = useNow(meta);
-  const activity = useIngestActivity(daemonStatus);
+  // One fold of the readable conversations per metadata delivery, from the
+  // rows the lists draw, so the card and the project cards count in step.
+  const [conversationFold] = useState(() => new ConversationFold());
+  const conversations = useMemo(
+    () => conversationFold.read(meta?.sessions ?? NO_SESSION_ROWS, nowMs),
+    [conversationFold, meta, nowMs],
+  );
+  const activity = useIngestActivity(daemonStatus, conversations);
   const activityOrder = useActivityOrder(
     meta, snapshotVersion, metaStatus === "live" && canonicalReady === true && !ingestActive,
     canonicalReady !== true || ingestActive, nowMs,
@@ -830,6 +840,7 @@ function RoomBody({
               currentTimestamp={nowMs}
               ingest={ingest}
               activity={activity}
+              conversations={conversations}
               onProjectSelect={(id) => {
                 setProjectId(id);
                 setSessionId(null);

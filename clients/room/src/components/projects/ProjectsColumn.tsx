@@ -10,6 +10,7 @@ import { ListSummaryHeader, ListToolbar, SegmentedControl } from "../ui";
 import type { SegmentedControlOption } from "../ui/SegmentedControl";
 import { IngestStatus } from "../IngestStatus";
 import type { IngestActivity } from "../../lib/ingest-activity";
+import type { ConversationReadiness } from "../../lib/conversation-readiness";
 import { ProjectList } from "./ProjectList";
 import { useHostInputs } from "../../host-inputs";
 import { arrangeSections } from "../../lib/sections";
@@ -38,6 +39,8 @@ export interface ProjectsColumnProps {
   /** The daemon's cold-start block; null on a daemon too old to carry it. */
   readonly ingest: IngestProgress | null;
   readonly activity: IngestActivity | null;
+  /** The room's fold of readable conversations, from the rows it draws. */
+  readonly conversations?: ConversationReadiness | undefined;
   readonly onProjectSelect: (projectId: string) => void;
 }
 
@@ -51,6 +54,7 @@ export function ProjectsColumn({
   currentTimestamp,
   ingest,
   activity,
+  conversations,
   onProjectSelect,
 }: ProjectsColumnProps) {
   const ingestActive = isIngestActive(ingest);
@@ -130,8 +134,8 @@ export function ProjectsColumn({
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}
           importing={importing}
-          runtimes={ingest?.runtimes}
           projectBackfills={backfills}
+          projectConversations={conversations?.byProject}
           pending={censusRunning}
           onProjectSelect={onProjectSelect}
           sections={sections}

@@ -1,4 +1,5 @@
 import type { IngestProgress, RuntimeBackfill, SearchBuildProgress, SearchReadiness } from "@vibefield/rosetta-protocol";
+import type { ConversationCount, ConversationHorizons, ConversationReadiness } from "./conversation-readiness";
 
 export interface ActivityFeed {
   readonly ingest: IngestProgress | null;
@@ -14,6 +15,9 @@ export interface ActivityFeed {
    * conversations a reader could open before stay open, so its card counts
    * nothing. Absent means a fresh build. */
   readonly resumed?: boolean;
+  /** The readable conversations, folded from the pushed catalog in the same
+   * render as the rows (`ConversationFold`); absent counts nothing. */
+  readonly conversations?: ConversationReadiness | null;
 }
 
 export interface ActivityPhase {
@@ -27,11 +31,23 @@ export interface ActivityPhase {
   readonly unit: "bytes" | "files" | "documents" | "records" | null;
   readonly fraction: number | null;
   readonly active: boolean;
-  /** Conversations the import has made readable, drawn after the title as
-   * "· N ready" (`phaseHeading`); absent, or null, when there are none to
-   * count. Apart from the title, so its live region announces the step and
-   * not every count. */
-  readonly ready?: number | null;
+  /** Drawn after the title (`phaseHeading`), " · 412 of 1,139 conversations
+   * readable"; absent, or null, when there is nothing to count. */
+  readonly count?: string | null;
+  /** What the card's live region says for this step when the title carries
+   * a number, so it announces the step and never each count; absent: the
+   * title. */
+  readonly spoken?: string;
+  /** The recency line under the meter (`horizonLine`); absent: none. */
+  readonly horizon?: Horizon | null;
+}
+
+export interface Horizon {
+  /** "Last 24 hours: 18 of 24 readable", "Last 7 days ready ✓". */
+  readonly line: string;
+  /** The last horizon reached, the only words its live region announces;
+   * null before the first. */
+  readonly reached: string | null;
 }
 
 const number = (value: number) => value.toLocaleString();
@@ -52,20 +68,44 @@ export function progressDuration(ms: number): string {
   return `${Math.floor(seconds / 3_600)}h ${Math.floor((seconds % 3_600) / 60)}m`;
 }
 
-/** The sessions whose import finished: the board advances them as each
- * conversation tree opens, or as each runtime closes. */
-export function readySessions(ingest: IngestProgress | null): number {
-  return (ingest?.projects ?? []).reduce((sum, row) => sum + row.sessions_done, 0);
+const plural = (n: number, noun: string) => `${noun}${n === 1 ? "" : "s"}`;
+
+/** "412 of 1,139 conversations readable". */
+export function readableText({ readable, total }: ConversationCount): string {
+  return `${number(readable)} of ${number(total)} ${plural(total, "conversation")} readable`;
 }
 
-/** " · 12 ready" after the title, or nothing when there is no count. */
-export function readySuffix(phase: ActivityPhase): string {
-  return phase.ready ? ` · ${number(phase.ready)} ready` : "";
+/** The readable conversations the card counts (`data-ready-count`) and their
+ * total (`data-ready-total`): root sessions from the pushed catalog, never a
+ * metadata-only placeholder. */
+export function readyConversations(feed: ActivityFeed): ConversationCount {
+  return { readable: feed.conversations?.readable ?? 0, total: feed.conversations?.total ?? 0 };
 }
 
-/** The title as drawn: "Importing your newest conversations first · 12 ready". */
+/**
+ * The recency line: the last 24 hours until every conversation in it is
+ * readable, then the last 7 days. Spans run back from the reader's clock
+ * over each root's `updated_at` (its source's freshness, not its activity),
+ * so the words are about the conversations themselves. A conversation no
+ * import reaches keeps its span open, and the line says so by its count.
+ */
+export function horizonLine({ day, week }: ConversationHorizons): Horizon | null {
+  const dayDone = day.total > 0 && day.readable >= day.total;
+  const weekDone = week.total > 0 && week.readable >= week.total;
+  const reached = weekDone ? "Last 7 days ready" : dayDone ? "Last 24 hours ready" : null;
+  if (day.total > 0 && !dayDone) {
+    return { line: `Last 24 hours: ${number(day.readable)} of ${number(day.total)} readable`, reached };
+  }
+  if (week.total > 0 && !weekDone) {
+    return { line: `${dayDone ? "Last 24 hours ready ✓ · " : ""}Last 7 days: ${number(week.readable)} of ${number(week.total)}`, reached };
+  }
+  return weekDone ? { line: "Last 7 days ready ✓", reached } : null;
+}
+
+/** The title as drawn: "Importing your newest conversations first · 412 of
+ * 1,139 conversations readable". */
 export function phaseHeading(phase: ActivityPhase): string {
-  return `${phase.title}${readySuffix(phase)}`;
+  return `${phase.title}${phase.count ?? ""}`;
 }
 
 /** The run key once this daemon start's run is seen restoring, kept until the
@@ -122,12 +162,24 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
     detail: "Transcript import is paused after scanning your history.",
     amount: `${number(sessions)} sessions found`,
   };
+  const conversations = feed.conversations ?? null;
+  const counted = conversations !== null && conversations.total > 0 ? conversations : null;
+  const allReadable = counted !== null && counted.readable >= counted.total;
+  const count = counted === null ? null : ` · ${readableText(counted)}`;
+  if (ingest?.phase === "finalizing" && allReadable) return {
+    ...base, key: ingest.phase, step: 3,
+    title: `All ${number(counted.total)} ${plural(counted.total, "conversation")} readable`,
+    spoken: "All conversations readable",
+    detail: `Finishing the archive so search and charts can start. ${ARCHIVE_PAUSE}`,
+    amount: `${number(sessions)} sessions imported`,
+  };
   if (ingest?.phase === "finalizing" || ingest?.phase === "publishing") return {
     ...base, key: ingest.phase, step: 3,
     title: ingest.phase === "publishing" ? "Saving your archive" : "Finishing your archive",
+    count: ingest.phase === "finalizing" ? count : null,
     detail: ingest.phase === "publishing"
       ? `Saving your history to this device. ${ARCHIVE_PAUSE}`
-      : `Checking conversations and preparing your activity summaries. ${ARCHIVE_PAUSE}`,
+      : `Finishing the archive so search and charts can start. ${ARCHIVE_PAUSE}`,
     amount: `${number(sessions)} sessions imported`,
   };
   if (ingest && ingest.phase !== "live") {
@@ -143,17 +195,20 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
         fraction: fraction(current, total),
       };
     }
+    // Recency spans follow a fresh build only: a resumed one opens nothing
+    // new before it publishes.
+    const horizon = counted === null || feed.resumed ? null : horizonLine(counted.horizons);
     if (runtimes.some((row) => row.state === "streaming")) {
       const current = runtimes.reduce((sum, row) => sum + row.bytes_streamed, 0);
       const total = runtimes.some((row) => row.bytes_total === 0 && row.sessions_total > 0) ? 0
         : runtimes.reduce((sum, row) => sum + row.bytes_total, 0);
-      const ready = readySessions(ingest);
       return {
         ...base, key: "reading", step: 2,
         // Newest trees import first and each opens as it closes. A
-        // resumed build opens nothing new before it publishes.
+        // resumed build opens nothing new before it publishes; what a
+        // reader could open before stays open, and the count says so.
         title: feed.resumed ? "Finishing the import" : "Importing your newest conversations first",
-        ready: feed.resumed || ready === 0 ? null : ready,
+        count, horizon,
         detail: feed.resumed
           ? "Conversations you can open now stay open. The rest, and any you start now, appear when the import finishes."
           : `Older history fills in while you browse. ${BORN_DURING_IMPORT}`,
@@ -161,9 +216,23 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
         fraction: fraction(current, total),
       };
     }
+    // Reading is over and the agents are closing. A conversation no source
+    // rosters stays Pending past them, so the copy never promises that
+    // every one left opens here.
+    if (allReadable) return {
+      ...base, key: "organizing", step: 3,
+      title: `All ${number(counted.total)} ${plural(counted.total, "conversation")} readable`,
+      spoken: "All conversations readable",
+      detail: "Finishing the archive so search and charts can start.",
+      amount: `${number(sessions)} sessions found`,
+    };
     return {
-      ...base, key: "organizing", title: "Organizing conversations", step: 3,
-      detail: "Putting messages and tool activity in order before they become available.",
+      ...base, key: "organizing", step: 3,
+      title: feed.resumed ? "Finishing the import" : "Opening conversations as each agent finishes",
+      count, horizon,
+      detail: feed.resumed
+        ? "Conversations you can open now stay open. The rest, and any you start now, appear when the import finishes."
+        : `Conversations still importing open as their agent finishes. ${BORN_DURING_IMPORT}`,
       amount: `${number(sessions)} sessions found`,
     };
   }
@@ -172,8 +241,9 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
     detail: "Your conversations are available. Search will retry automatically.",
     amount: "Ready to browse",
   };
+  // The end, one line: the card then folds away (`useIngestActivity`).
   if (feed.canonicalReady && feed.searchReadiness === "ready") return {
-    ...base, key: "ready", title: "Your archive is ready", step: 4, active: false,
+    ...base, key: "ready", title: "Search ready", step: 4, active: false,
     detail: "Browse and search all your conversations.",
     amount: `${number(sessions)} sessions imported`, fraction: 1,
   };
@@ -245,4 +315,6 @@ export interface IngestActivity {
   readonly feed: ActivityFeed;
   readonly footer: string;
   readonly elapsed: string;
+  /** The finished card is folding its height to zero, then goes. */
+  readonly leaving?: boolean;
 }
