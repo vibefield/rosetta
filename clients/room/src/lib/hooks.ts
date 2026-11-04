@@ -112,6 +112,9 @@ export interface DaemonStatusFeed {
  * After a new `asked`, an answer still awaiting consent is the grant not
  * yet visible, not the user choosing: the room asks again every 100 ms, not
  * at the consent pause's 2.5 s, until the phase moves on. */
+/** How many 100 ms re-asks a status refresh may make while the grant is unshown. */
+const BRISK_REASKS = 50;
+
 export function useDaemonStatus(catalog: CatalogPort, asked = 0): DaemonStatusFeed {
   const [connectionRevision, setConnectionRevision] = useState(0);
   // The last `asked` whose move the daemon has shown.
@@ -135,6 +138,10 @@ export function useDaemonStatus(catalog: CatalogPort, asked = 0): DaemonStatusFe
     let controller: AbortController | undefined;
     let timer: number | undefined;
     let deadline: number | undefined;
+    // Brisk re-asks after a refresh are bounded: 50 (about 5 s), then the
+    // ordinary consent pause, so a grant that never moves the phase costs
+    // nothing more than a cadence.
+    let briskLeft = BRISK_REASKS;
     const poll = async () => {
       const request = new AbortController();
       controller = request;
@@ -157,13 +164,16 @@ export function useDaemonStatus(catalog: CatalogPort, asked = 0): DaemonStatusFe
         if (phase !== "awaiting_consent") shown.current = asked;
         // rosettad answers a grant a moment before its phase leaves
         // awaiting_consent: re-ask briskly until it does.
-        const unshown = phase === "awaiting_consent" && shown.current !== asked;
+        const unshown = phase === "awaiting_consent" && shown.current !== asked && briskLeft > 0;
+        if (unshown) briskLeft -= 1;
         // Keep search visible after canonical publication. Audit/consent are
         // intentional pauses; an unanswered first request retries promptly.
         const paused = status.ingest?.run?.state === "paused" || status.ingest?.run?.state === "failed" ||
           phase === "metadata_ready" || phase === "awaiting_consent";
         const complete = status.canonicalReady && status.searchReadiness === "ready";
-        delay = complete ? 30_000 : unshown ? 100 : paused ? 2_500 : 500;
+        // An unshown grant comes first: a daemon awaiting consent may still
+        // report a complete archive from before, and must not wait 30 s.
+        delay = unshown ? 100 : complete ? 30_000 : paused ? 2_500 : 500;
       } catch (error: unknown) {
         if (!cancelled) setFeed((previous) => ({
           ...previous,

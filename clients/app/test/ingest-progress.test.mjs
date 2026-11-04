@@ -162,6 +162,37 @@ test("a host's status refresh asks at once, and re-asks briskly until the grant 
   clock.tick(2_000); assert.equal(requests.length, 6);
 });
 
+test("a refresh's brisk re-asks beat a complete archive and stop after 50", async (t) => {
+  const clock = fakeClock(t);
+  const oldWindow = globalThis.window;
+  globalThis.window = globalThis;
+  const requests = [];
+  const client = { onConnectionChange: () => () => {}, status(signal) {
+    const request = { signal, ...deferred() }; requests.push(request); return request.promise;
+  } };
+  const hook = dataHooks(client)("useDaemonStatus", 0);
+  t.after(async () => {
+    hook.close(); await microtasks();
+    if (oldWindow === undefined) delete globalThis.window; else globalThis.window = oldWindow;
+  });
+  // Awaiting consent over an archive that is already complete.
+  const waiting = { canonical_ready: true, search: { readiness: "ready", progress: null },
+    daemon: { started_at: 1, uptime_ms: 1_000, ingest: { ...feed().ingest, phase: "awaiting_consent" } } };
+  hook.render(0);
+  requests[0].resolve(waiting); await microtasks(); hook.render(0);
+  hook.render(1);
+  assert.equal(requests.length, 2, "a refresh asks at once");
+  for (let i = 1; i <= 50; i += 1) {
+    requests.at(-1).resolve(waiting); await microtasks(); hook.render(1);
+    clock.tick(100);
+    assert.equal(requests.length, 2 + i, `brisk re-ask ${i} after 100 ms, not the complete archive's 30 s`);
+  }
+  requests.at(-1).resolve(waiting); await microtasks(); hook.render(1);
+  clock.tick(100); assert.equal(requests.length, 52, "after 50 brisk re-asks the room stops asking every 100 ms");
+  clock.tick(29_899); assert.equal(requests.length, 52);
+  clock.tick(1); assert.equal(requests.length, 53, "and falls back to its ordinary cadence");
+});
+
 test("a stalled status request is aborted and retries instead of freezing indefinitely", async (t) => {
   const clock = fakeClock(t);
   const oldWindow = globalThis.window;
