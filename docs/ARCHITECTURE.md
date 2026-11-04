@@ -926,6 +926,18 @@ timing.
 > JSONL byte totals remain source-size estimates, with UI clamping for delimiters and growing files.
 > Recovery explicitly reports `restoring`; runtimes distinguish `preparing` and `applying` after
 > input reading, and the final canonical phases distinguish `finalizing` from `publishing`.
+> Each runtime row also says what its `Pending` sessions wait for on the current cold attempt,
+> `RuntimeBackfill.admission_course` (2026-11-03; additive with a serde default, so
+> `PROTOCOL_VERSION` stays 29): `per_tree` for a fresh build's runtime admitted per root tree
+> and walked by recency (most trees open as they close, a bound or tainted one at the runtime's
+> close), `at_runtime_close` for one admitted whole (a runtime-admission adapter, a truncated
+> walk's fallback, the path walk, the `--experiment-cold-admission runtime` kill switch), and
+> `at_publication` for every runtime of a resumed attempt, across a launch or in process after a
+> pause, since it opens nothing new before it publishes. A fresh build states the requested
+> course as it starts and the granted one as each runtime's setup opens (`cold_stream.rs`); a
+> resumed attempt states its course before it replays. The row keeps it after the import goes
+> live. It names no order, position or time; null means an older daemon or a serve path without
+> a cold attempt (warm, disk-progressive).
 >
 > **First metadata pass** (2026-10-29): `daemon.ingest.metadata_ready_at` is the Unix-millisecond
 > stamp when this process has published every active runtime's bounded metadata, including its

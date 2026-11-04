@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use rosetta_core::rows::Ms;
 use rosetta_protocol::{
-    BackfillState, DaemonStatus, IngestPhase, IngestProgress, ProjectBackfill, RuntimeBackfill,
-    RuntimeIngestStatus,
+    AdmissionCourse, BackfillState, DaemonStatus, IngestPhase, IngestProgress, ProjectBackfill,
+    RuntimeBackfill, RuntimeIngestStatus,
 };
 
 use crate::hub::Hub;
@@ -64,6 +64,9 @@ struct BackfillEntry {
     bytes_streamed: u64,
     sessions_total: u64,
     records: u64,
+    /// What its Pending sessions wait for on the current cold attempt; the
+    /// serve loop says, per attempt (`ingest_admission_course`).
+    admission_course: Option<AdmissionCourse>,
     live: Option<IngestCounterSource>,
 }
 
@@ -171,8 +174,19 @@ impl DaemonHealth {
             bytes_streamed: 0,
             sessions_total: 0,
             records: 0,
+            admission_course: None,
             live: None,
         });
+    }
+
+    /// When this runtime's Pending sessions open on the current cold attempt:
+    /// a fresh build says what the runtime asked for, then what its setup
+    /// granted; a resumed attempt says publication for every runtime.
+    pub fn ingest_admission_course(&self, runtime_id: &str, course: AdmissionCourse) {
+        let mut ingest = self.ingest.lock().expect("ingest state poisoned");
+        if let Some(entry) = entry_mut(&mut ingest, runtime_id) {
+            entry.admission_course = Some(course);
+        }
     }
 
     /// The skim begins: install the live counter source for its meter.
@@ -331,6 +345,7 @@ impl DaemonHealth {
                         bytes_streamed: entry.bytes_streamed,
                         sessions_total: entry.sessions_total,
                         records: entry.records,
+                        admission_course: entry.admission_course,
                     };
                     if let Some(live) = live {
                         match entry.state {
@@ -450,6 +465,45 @@ mod tests {
         let status = health.snapshot(&hub, 5_000);
         assert_eq!(status.runtimes[0].last_activity_ms, Some(4_000));
         assert_eq!(status.runtimes[0].live_rows, 1);
+    }
+
+    /// A runtime's course is what the serve loop last said for this attempt:
+    /// unknown until it speaks, kept through live, and forgotten with the
+    /// rest of the observations when an in-process resume re-registers.
+    #[test]
+    fn the_admission_course_is_the_current_attempts() {
+        let hub = Hub::new(HubConfig::default(), 1);
+        let health = DaemonHealth::new(1_000);
+        health.ingest_register(&identity("rt1"), 1, 1);
+        health.ingest_register(&identity("rt2"), 1, 1);
+        let course = |health: &DaemonHealth| {
+            health
+                .snapshot(&hub, 2_000)
+                .ingest
+                .runtimes
+                .iter()
+                .map(|row| row.admission_course)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(course(&health), [None, None]);
+        health.ingest_admission_course("rt1", AdmissionCourse::PerTree);
+        health.ingest_admission_course("rt2", AdmissionCourse::PerTree);
+        // Its setup admits rt2 whole after all.
+        health.ingest_admission_course("rt2", AdmissionCourse::AtRuntimeClose);
+        health.ingest_admission_course("unknown", AdmissionCourse::AtPublication);
+        assert_eq!(
+            course(&health),
+            [
+                Some(AdmissionCourse::PerTree),
+                Some(AdmissionCourse::AtRuntimeClose)
+            ]
+        );
+        health.ingest_reset_progress();
+        health.ingest_register(&identity("rt1"), 1, 1);
+        assert_eq!(course(&health), [None]);
+        health.ingest_admission_course("rt1", AdmissionCourse::AtPublication);
+        health.ingest_live();
+        assert_eq!(course(&health), [Some(AdmissionCourse::AtPublication)]);
     }
 
     #[test]

@@ -281,7 +281,10 @@ impl Writer<'_> {
                     adapter,
                     runtime,
                     setup,
+                    per_tree,
                 } = *opened;
+                cx.health
+                    .ingest_admission_course(&runtime.id, super::granted_course(per_tree));
                 self.milestones
                     .trees_known(&runtime.id, setup.trees().cloned());
                 let mut streamed =

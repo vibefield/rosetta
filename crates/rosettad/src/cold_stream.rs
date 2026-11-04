@@ -42,14 +42,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::{Scope, ScopedJoinHandle};
 use std::time::{Duration, Instant};
 
-use rosetta_adapter_support::AgentAdapter;
+use rosetta_adapter_support::{AgentAdapter, ColdAdmission};
 use rosetta_capture::Ledger;
 use rosetta_pipeline::{
     CapturePool, ClosedSource, ColdWalkOptions, Instrument, InstrumentSnapshot, LaneId, MetaReport,
     Metric, PoolBudgets, PreparedAdmission, StreamReport, StreamedPreparer, StreamedSetup,
     stream_closed_sources_into, stream_closed_sources_pooled, streamed_setup_for, walk_summary,
 };
-use rosetta_server::{DaemonHealth, Hub, ProgressBoard, RuntimeIdentity};
+use rosetta_server::{AdmissionCourse, DaemonHealth, Hub, ProgressBoard, RuntimeIdentity};
 use rosetta_store::Store;
 use serde_json::json;
 
@@ -101,6 +101,26 @@ struct OpenedColdRuntime {
     adapter: &'static dyn AgentAdapter,
     runtime: rosetta_core::rows::RuntimeRow,
     setup: StreamedSetup,
+    /// Its trees flip one by one: it got root-tree admission and walks by
+    /// recency. Otherwise every session waits for the runtime's close.
+    per_tree: bool,
+}
+
+/// The course a fresh build's runtime asks for before its setup decides.
+pub(crate) fn requested_course(admission: ColdAdmission) -> AdmissionCourse {
+    match admission {
+        ColdAdmission::RootTree => AdmissionCourse::PerTree,
+        ColdAdmission::Runtime => AdmissionCourse::AtRuntimeClose,
+    }
+}
+
+/// The course its setup granted: per tree only when trees close one by one.
+pub(crate) fn granted_course(per_tree: bool) -> AdmissionCourse {
+    if per_tree {
+        AdmissionCourse::PerTree
+    } else {
+        AdmissionCourse::AtRuntimeClose
+    }
 }
 
 /// Everything admission and the live handoff need once a producer's capture
@@ -175,11 +195,14 @@ fn produce(
         setup.fell_back(),
         stage_profiles,
     );
+    // The preparer below closes trees exactly when this holds.
+    let per_tree = trees.is_some() && !plan.is_path();
     sender
         .send(StreamMessage::Opened(Box::new(OpenedColdRuntime {
             adapter,
             runtime: runtime.clone(),
             setup,
+            per_tree,
         })))
         .map_err(gone)?;
 
@@ -394,6 +417,11 @@ pub(crate) fn build_streamed(
             .enumerate()
             .collect::<VecDeque<_>>(),
     );
+    // What each runtime's sessions wait for, until its setup says (Opened).
+    for (_, request) in queue.lock().expect("cold planning queue poisoned").iter() {
+        cx.health
+            .ingest_admission_course(&request.identity.id, requested_course(request.admission));
+    }
     let abandoned = AtomicBool::new(false);
     // One capture pool for the whole build: every producer registers its
     // runtime as it starts, and the pool's workers serve them all.

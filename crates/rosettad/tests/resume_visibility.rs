@@ -469,6 +469,10 @@ fn a_finished_runtime_catch_up_stays_pending_until_the_resume_publishes() {
             && row("codex")["bytes_streamed"].as_u64().unwrap_or(0) > 0
     });
     assert_eq!(run(&reading)["state"], "running", "{reading}");
+    // A cross-launch resume opens nothing before it publishes, and says so.
+    for row in reading["daemon"]["ingest"]["runtimes"].as_array().unwrap() {
+        assert_eq!(row["admission_course"], "at_publication", "{row}");
+    }
     assert_eq!(daemon.post(&reading, "pause", 1), 202);
     let paused = daemon.wait("pause", |status| run(status)["state"] == "paused");
     assert_eq!(paused["canonical_ready"], false, "{paused}");

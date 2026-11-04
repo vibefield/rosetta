@@ -1166,6 +1166,11 @@ fn run_resumed_fresh_serve(
     let board = Arc::new(rosetta_server::ProgressBoard::new());
     let status_board = board.clone();
     health.ingest_project_source(Arc::new(move || status_board.snapshot()));
+    // Every session this attempt has not opened before waits for its
+    // publication, across a launch or in process after a pause alike.
+    for target in consented_targets(targets, consented) {
+        health.ingest_admission_course(target.id(), rosetta_server::AdmissionCourse::AtPublication);
+    }
 
     let mut remaining = consented_targets(targets, consented).peekable();
     while let Some(target) = remaining.next() {

@@ -164,6 +164,18 @@ fn cold_pause_stops_capture_keeps_reads_and_resumes_the_same_run() {
             "running",
             "fixture finished before pause: {before}"
         );
+        let courses = |status: &Value| {
+            status["daemon"]["ingest"]["runtimes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["admission_course"].clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            courses(&before).iter().all(|course| course == "per_tree"),
+            "a fresh Claude Code build opens tree by tree: {before}"
+        );
         let (code, accepted) = post(&origin, run(&before), "pause", 1);
         assert_eq!(code, 202, "{accepted}");
         assert_eq!(accepted["state"], "pausing");
@@ -220,6 +232,15 @@ fn cold_pause_stops_capture_keeps_reads_and_resumes_the_same_run() {
         let done = wait(&origin, |s| {
             s["canonical_ready"] == true && run(s)["state"] == "succeeded"
         });
+        // The resumed attempt — in process (no workers) or after the restart
+        // — withheld every session it opened until publication, and says so.
+        assert!(
+            !courses(&done).is_empty()
+                && courses(&done)
+                    .iter()
+                    .all(|course| course == "at_publication"),
+            "{done}"
+        );
         if workers == "0" {
             assert_eq!(
                 done["daemon"]["ingest"]["metadata_ready_at"],
