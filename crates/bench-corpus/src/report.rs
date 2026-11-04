@@ -112,6 +112,10 @@ impl<W: Write> LineSink<W> {
         self.lines
     }
 
+    pub fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
     /// Flush and surrender the counts.
     pub fn finish(mut self) -> io::Result<(u64, u64)> {
         self.inner.flush()?;
