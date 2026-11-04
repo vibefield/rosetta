@@ -3,7 +3,9 @@ import { dayLabel } from "../../lib/format";
 import { sessionLastActive } from "../../lib/session-activity";
 import { useListMotion } from "../../lib/use-list-motion";
 import { activityDay, compareNotImported } from "../../lib/activity-order";
-import { arrivalsLabel, importStanding, NOT_IMPORTED_LABEL, notImportedLast } from "../../lib/import-state";
+import {
+  arrivalsLabel, importStanding, newestReadableSource, NOT_IMPORTED_LABEL, notImportedAround, STILL_IMPORTING_LABEL,
+} from "../../lib/import-state";
 import { useDeferredListOrder } from "../../lib/use-deferred-list-order";
 import type { ListPosition } from "../../lib/use-deferred-list-order";
 import { ListActivityNotice } from "../ListActivityNotice";
@@ -21,7 +23,8 @@ export interface SessionListProps {
   readonly selectedSessionId: string | null;
   readonly currentTimestamp: number;
   /** A backfill is running — unindexed sessions cook rather than lie, and
-   * the ones it has not reached are drawn last, as "Not imported yet". */
+   * the ones it has not reached are drawn in date-free groups, "Still
+   * importing" on top and "Not imported yet" at the foot. */
   readonly duringBackfill: boolean;
   /** Ids some session names as its parent (`parentIds`): a Pending row with
    * children and no metadata of its own has no transcript to import. */
@@ -43,8 +46,10 @@ const NO_PARENTS: ReadonlySet<string> = new Set();
 
 interface SessionDayGroup {
   readonly day: number | null;
-  /** The import's "Not imported yet" group, drawn last with no date. */
+  /** One of the import's date-free not-imported groups. */
   readonly pending: boolean;
+  /** That group is the top one, "Still importing"; else the foot's. */
+  readonly importing: boolean;
   readonly label: string;
   readonly sessions: SessionRow[];
 }
@@ -56,18 +61,19 @@ function groupSessionsByDay(
 ): SessionDayGroup[] {
   const groups: SessionDayGroup[] = [];
 
-  for (const { id, day, pending = false } of positions) {
+  for (const { id, day, pending = false, importing = false } of positions) {
     const session = sessions.get(id);
     if (!session) continue;
     const currentGroup = groups.at(-1);
-    if (currentGroup?.day === day && currentGroup.pending === pending) {
+    if (currentGroup?.day === day && currentGroup.pending === pending && currentGroup.importing === importing) {
       currentGroup.sessions.push(session);
     } else {
-      groups.push({ day, pending, label: pending ? NOT_IMPORTED_LABEL : dayLabel(day, currentTimestamp), sessions: [session] });
+      const label = !pending ? dayLabel(day, currentTimestamp) : importing ? STILL_IMPORTING_LABEL : NOT_IMPORTED_LABEL;
+      groups.push({ day, pending, importing, label, sessions: [session] });
     }
   }
 
-  // A not-imported head counts its rows: "Not imported yet · 12".
+  // A not-imported head counts its rows: "Still importing · 2".
   return groups.map(group => group.pending
     ? { ...group, label: `${group.label} · ${group.sessions.length.toLocaleString()}` } : group);
 }
@@ -79,12 +85,18 @@ export function SessionList(props: SessionListProps) {
   const parents = props.parentIds ?? NO_PARENTS;
   const standing = (session: SessionRow) => importStanding(session, props.duringBackfill, parents.has(session.id));
   const notImported = (session: SessionRow) => standing(session) === "not-imported";
-  const position = (session: SessionRow): ListPosition => notImported(session)
-    ? { id: session.id, day: null, pending: true }
-    : { id: session.id, day: activityDay(sessionLastActive(session)) };
-  // In the room's order, the sessions the import has not reached go last,
-  // newest source first, where no recorded activity can rank them yet.
-  const roomOrder = (rows: readonly SessionRow[]) => notImportedLast(rows, notImported, compareNotImported);
+  // The sessions the import has not reached have no recorded activity to
+  // rank or date them, so they sit in two date-free groups, newest source
+  // first: the ones newer than every readable row above those rows ("Still
+  // importing"), the rest at the foot ("Not imported yet"). A flip then
+  // moves a top row a short way down into its day.
+  const newestReadable = newestReadableSource(props.sessions, session => standing(session) === null);
+  const stillImporting = (session: SessionRow) => newestReadable === null || session.updated_at > newestReadable;
+  const position = (session: SessionRow): ListPosition => !notImported(session)
+    ? { id: session.id, day: activityDay(sessionLastActive(session)) }
+    : stillImporting(session) ? { id: session.id, day: null, pending: true, importing: true }
+    : { id: session.id, day: null, pending: true };
+  const roomOrder = (rows: readonly SessionRow[]) => notImportedAround(rows, notImported, stillImporting, compareNotImported);
   // A folded section's rows are the reader's to open, so they never wait on
   // the held geometry: only the open runs go through it.
   const layout = useDeferredListOrder(sections === null
@@ -122,8 +134,8 @@ export function SessionList(props: SessionListProps) {
   // Headers and rows share one key space. Moving from Yesterday to Today
   // preserves the actual button, its keyboard focus and its animation.
   const drawDays = (groups: readonly SessionDayGroup[], keyPrefix: string) => groups.flatMap((group) => [
-    <div key={`day:${keyPrefix}${group.pending ? "not-imported" : group.day}`} className="ah-day"
-      data-not-imported={group.pending ? "" : undefined}>
+    <div key={`day:${keyPrefix}${!group.pending ? group.day : group.importing ? "still-importing" : "not-imported"}`} className="ah-day"
+      data-not-imported={!group.pending ? undefined : group.importing ? "top" : "foot"}>
       {head(group)}
     </div>,
     ...group.sessions.map(drawRow),

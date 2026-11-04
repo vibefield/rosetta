@@ -1,8 +1,10 @@
 // How the room speaks about sessions the import has not reached.
 //
 // A cold import reads the newest conversation trees first, and each tree
-// opens as soon as it closes. While it runs, the session list keeps a
-// "Not imported yet" group at its foot, the transcript says why a session is
+// opens as soon as it closes. While it runs, the session list draws the
+// sessions it has not reached in two date-free groups, "Still importing"
+// above the readable rows and "Not imported yet" at the foot; the transcript
+// says why a session is
 // still empty, and a held list counts the conversations that arrived. Every
 // fact here comes from fields the daemon already sends: `stream_state`, the
 // session's own metadata, and the parent links between sessions.
@@ -16,8 +18,10 @@ import type { ListPosition } from "./use-deferred-list-order";
  * - `null`: nothing to say; the session reads as it always did. */
 export type ImportStanding = "not-imported" | "unavailable" | null;
 
-/** The list group's header, in place of a date. */
+/** The foot group's header, in place of a date. */
 export const NOT_IMPORTED_LABEL = "Not imported yet";
+/** The top group's header: not-imported sessions newer than every readable one. */
+export const STILL_IMPORTING_LABEL = "Still importing";
 
 /** A row the metadata pass made only because a descendant names it as its
  * parent or root. Its own transcript was not found, so the row is Pending
@@ -58,14 +62,37 @@ export function parentIds(sessions: readonly SessionRow[]): ReadonlySet<string> 
   return ids;
 }
 
-/** The list's draw order during an import: every other row where the room's
- * order put it, then the not-imported rows, ordered by `compare`. */
-export function notImportedLast<T>(
-  rows: readonly T[], notImported: (row: T) => boolean, compare: (left: T, right: T) => number,
+/** The list's draw order during an import: the not-imported rows `above`
+ * picks first, then every other row where the room's order put it, then the
+ * rest of the not-imported rows; both groups ordered by `compare`. */
+export function notImportedAround<T>(
+  rows: readonly T[], notImported: (row: T) => boolean, above: (row: T) => boolean,
+  compare: (left: T, right: T) => number,
 ): T[] {
   const waiting = rows.filter(notImported);
   if (waiting.length === 0) return [...rows];
-  return [...rows.filter((row) => !notImported(row)), ...waiting.sort(compare)];
+  const top = waiting.filter(above);
+  const foot = waiting.filter((row) => !above(row));
+  return [...top.sort(compare), ...rows.filter((row) => !notImported(row)), ...foot.sort(compare)];
+}
+
+/** Every not-imported row at the foot (`notImportedAround` with no top group). */
+export function notImportedLast<T>(
+  rows: readonly T[], notImported: (row: T) => boolean, compare: (left: T, right: T) => number,
+): T[] {
+  return notImportedAround(rows, notImported, () => false, compare);
+}
+
+/** The newest source among the readable rows, the line the top group's rows
+ * are newer than; null while none is readable, when every not-imported row
+ * is newer. Both sides are `updated_at`, the source's freshness: it places a
+ * row in a date-free group and never claims a day or a time. */
+export function newestReadableSource(rows: readonly SessionRow[], readable: (row: SessionRow) => boolean): number | null {
+  let newest: number | null = null;
+  for (const row of rows) {
+    if (readable(row) && Number.isFinite(row.updated_at)) newest = newest === null ? row.updated_at : Math.max(newest, row.updated_at);
+  }
+  return newest;
 }
 
 /* ── a held list's arrivals ───────────────────────────────────────────── */

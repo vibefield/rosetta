@@ -210,7 +210,8 @@ const sessionGroups = (look) => {
   const groups = [];
   for (const element of document.querySelector('.ah-session-list')?.children ?? []) {
     if (element.classList.contains('ah-day')) {
-      groups.push({ head: element.textContent, notImported: element.hasAttribute('data-not-imported'), rows: [] });
+      groups.push({ head: element.textContent, notImported: element.hasAttribute('data-not-imported'),
+        group: element.getAttribute('data-not-imported'), rows: [] });
     } else if (element.matches('.ah-session-list-item')) {
       groups.at(-1)?.rows.push(look(element));
     }
@@ -245,6 +246,18 @@ const rootsOf = (projectKey) => window.coldImport.c.meta().sessions
   .filter((s) => s.parent_session_id === null && (s.project_id ?? '__rosetta_unassigned__') === projectKey)
   .map((s) => ({ id: s.id, updated: s.updated_at, kind: window.coldImport.c.kindOf(s.id), flip: window.coldImport.c.flipAt(s.id),
     bound: window.coldImport.c.treeOf(s.id)?.bound ?? false, dirty: window.coldImport.c.treeOf(s.id)?.dirty ?? false, stream: s.stream_state }));
+/** The D1 split of a project's not-imported roots (ux:X2): newest source
+ * first, those newer than every readable root's updated_at on top
+ * ("Still importing"), the rest at the foot. Metadata-only placeholders are
+ * in neither. */
+const splitOf = (projectKey) => {
+  const c = window.coldImport.c;
+  const roots = c.meta().sessions.filter((s) => s.parent_session_id === null && (s.project_id ?? '__rosetta_unassigned__') === projectKey && c.kindOf(s.id) !== 'placeholder');
+  const readable = roots.filter((s) => s.stream_state !== 'pending').map((s) => s.updated_at);
+  const line = readable.length === 0 ? null : Math.max(...readable);
+  const waiting = roots.filter((s) => s.stream_state === 'pending').sort((a, b) => b.updated_at - a.updated_at || a.id.localeCompare(b.id));
+  return { top: waiting.filter((s) => line === null || s.updated_at > line).map((s) => s.id), foot: waiting.filter((s) => line !== null && s.updated_at <= line).map((s) => s.id) };
+};
 /** A page function handed `column` as its first argument. */
 const inColumn = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})((${column.toString()}), ...${JSON.stringify(args)})`);
 
@@ -345,9 +358,9 @@ async function freshImport() {
   const expectedFoot = await check((key) => window.coldImport.c.meta().sessions
     .filter((s) => s.parent_session_id === null && (s.project_id ?? '__rosetta_unassigned__') === key && window.coldImport.c.kindOf(s.id) !== 'placeholder')
     .sort((a, b) => b.updated_at - a.updated_at || a.id.localeCompare(b.id)).map((s) => s.id), newest.project);
-  today('ux:X2', 'at metadata every row sits in one "Not imported yet" foot group: no date head, its head counts its rows',
-    groupsAtMetadata.map((group) => ({ head: group.head, notImported: group.notImported })), [{ head: `Not imported yet · ${expectedFoot.length.toLocaleString()}`, notImported: true }]);
-  today('ux:X2', 'the foot group orders by updated_at descending, then id',
+  today('ux:X2', 'at metadata nothing is readable, so every row sits in one date-free "Still importing" group whose head counts its rows',
+    groupsAtMetadata.map((group) => ({ head: group.head, group: group.group })), [{ head: `Still importing · ${expectedFoot.length.toLocaleString()}`, group: 'top' }]);
+  today('ux:X2', 'the group orders by updated_at descending, then id',
     groupsAtMetadata[0].rows.map((row) => row.id), expectedFoot);
   const pendingLook = { standing: 'not-imported', stream: 'pending', tone: null, last: 'not imported yet', span: '—', cooking: false };
   today('ux:X2', 'a not-imported row: a hollow neutral dot (no tone), no shimmer, "not imported yet" in the time slot, "—" span',
@@ -397,11 +410,17 @@ async function freshImport() {
     (window.coldImport.c.streamState(row.dataset.motionKey) !== 'pending') === (row.dataset.standing === 'ready')), 'rows to match the catalog');
   await settle();
   const inverted = await groups();
-  const foot = inverted.at(-1);
-  today('ux:X2', 'the newest conversation still sits in the foot group, below older readable rows (the inversion)',
-    { lastHead: foot.head, newestInFoot: foot.rows.some((row) => row.id === newest.id),
-      readableAbove: inverted.slice(0, -1).some((group) => group.rows.some((row) => row.standing === 'ready')) },
-    { lastHead: `Not imported yet · ${foot.rows.length.toLocaleString()}`, newestInFoot: true, readableAbove: true });
+  const split = await check(splitOf, newest.project);
+  assert.ok(split.foot.length > 0, 'fixture precondition: some not-imported root is older than the newest readable one');
+  const drawnGroup = (name) => inverted.filter((group) => group.group === name);
+  const countHead = (label, n) => (n === 0 ? [] : [`${label} · ${n.toLocaleString()}`]);
+  today('ux:X2', 'mid-import (no inversion) the newest conversation waits on top in "Still importing", above the readable rows; older not-imported ones wait at the foot',
+    { first: inverted[0]?.group, heads: inverted.filter((group) => group.notImported).map((group) => group.head),
+      top: drawnGroup('top').flatMap((group) => group.rows.map((row) => row.id)), foot: drawnGroup('foot').flatMap((group) => group.rows.map((row) => row.id)),
+      newestOnTop: drawnGroup('top').some((group) => group.rows.some((row) => row.id === newest.id)),
+      readableBelowTop: inverted.slice(1).some((group) => group.rows.some((row) => row.standing === 'ready')), last: inverted.at(-1)?.group },
+    { first: 'top', heads: [...countHead('Still importing', split.top.length), ...countHead('Not imported yet', split.foot.length)],
+      top: split.top, foot: split.foot, newestOnTop: true, readableBelowTop: true, last: 'foot' });
   today('forever', 'unheld, no readable row is drawn under the "Not imported yet" head',
     inverted.filter((group) => group.notImported).flatMap((group) => group.rows).filter((row) => row.standing === 'ready').length, 0);
   const streamingRow = inverted.flatMap((group) => group.rows).find((row) => row.id === dirty.id);
@@ -439,17 +458,23 @@ async function freshImport() {
 
   // ── A held list while the giant flips under an open transcript ────────
   await hover('sessions', true);
-  const heldIds = await check(() => [...document.querySelectorAll('.ah-day[data-not-imported] ~ .ah-session-list-item')].map((row) => row.dataset.motionKey));
+  const beforeHold = await groups();
+  const heldIds = beforeHold.filter((group) => group.notImported).flatMap((group) => group.rows.map((row) => row.id));
+  const flatIds = (all) => all.flatMap((group) => group.rows.map((row) => row.id));
+  const newestFrom = flatIds(beforeHold).indexOf(newest.id);
   await check(() => { window.coldImport.c.resyncMode = 'manual'; return true; });
   await advanceTo(giantFlip);
   await until((id) => document.querySelector(`.ah-session-list-item[data-motion-key="${id}"]`)?.dataset.standing === 'ready', 'the giant\'s row to read ready', newest.id);
   const arrivals = await check((ids) => ids.filter((id) => window.coldImport.c.streamState(id) !== 'pending').length, heldIds);
   await frames(3);
   const held = await groups();
-  today('ux:X4', 'held by the pointer: the foot head counts the conversations imported (never "Activity updated") and the pill counts the arrivals',
-    { foot: held.at(-1).head, newestStillInFoot: held.at(-1).rows.some((row) => row.id === newest.id),
+  const heldGroup = held.find((group) => group.rows.some((row) => row.id === newest.id));
+  const groupArrivals = await check((ids) => ids.filter((id) => window.coldImport.c.streamState(id) !== 'pending').length, heldGroup.rows.map((row) => row.id));
+  const conversations = (n) => `${n} ${n === 1 ? 'conversation' : 'conversations'} imported`;
+  today('ux:X4', 'held by the pointer: the held group counts the conversations imported (never "Activity updated") and the pill counts the arrivals',
+    { head: heldGroup.head, group: heldGroup.group, activityUpdated: held.some((group) => group.head === 'Activity updated'),
       pill: await check(() => { const pill = document.querySelector('.ah-list-view:has(> .ah-session-list) > .ah-list-updates'); return pill.hidden ? null : pill.textContent; }) },
-    { foot: `${arrivals} ${arrivals === 1 ? 'conversation' : 'conversations'} imported`, newestStillInFoot: true, pill: `${arrivals} ${arrivals === 1 ? 'conversation' : 'conversations'} imported — show` });
+    { head: conversations(groupArrivals), group: 'top', activityUpdated: false, pill: `${conversations(arrivals)} — show` });
   today('forever', 'the catalog flipped the open session first: the face holds "Not imported yet" until rows arrive',
     await check(() => document.querySelector('.ah-col--measure .ah-empty[data-import-face]')?.dataset.importFace ?? null), 'not-imported');
   await check(() => window.coldImport.c.deliverResyncs());
@@ -459,6 +484,10 @@ async function freshImport() {
     await check(() => document.querySelector('.ah-col--measure [data-import-banner]')?.textContent ?? null), 'Live updates resume when the import finishes');
   await hover('sessions', false);
   await until((id) => document.querySelector('.ah-session-list-item')?.dataset.motionKey === id, 'the applied order to put the newest first', newest.id);
+  const applied = await groups();
+  today('ux:X2', 'its flip moves the newest a short way: from its place on top in "Still importing" into the first day group, first',
+    { from: newestFrom, to: flatIds(applied).indexOf(newest.id), into: applied[0]?.group ?? 'day' },
+    { from: split.top.indexOf(newest.id), to: 0, into: 'day' });
 
   // The projects pill names the import when the import reorders them (ux:X4).
   // Step to the first flip that changes the rank rule's project order; the

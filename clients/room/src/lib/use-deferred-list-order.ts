@@ -7,8 +7,10 @@ export interface ListPosition {
   readonly day: number | null;
   /** Which of a host's sections the row is drawn in (R3); absent without them. */
   readonly section?: number;
-  /** Drawn in the import's "Not imported yet" group; absent otherwise. */
+  /** Drawn in one of the import's not-imported groups; absent otherwise. */
   readonly pending?: boolean;
+  /** That group is the top one, "Still importing"; absent otherwise. */
+  readonly importing?: boolean;
 }
 
 interface Interaction {

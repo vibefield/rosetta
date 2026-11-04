@@ -57,9 +57,12 @@
 //                    shimmer (not indexed, no figures landed); never on a
 //                    not-imported row, which has nothing read to cook
 //   .ah-session-list-item[data-role]     main, or the session's role
-//   .ah-day[data-not-imported]           the "Not imported yet" group's head;
-//                    its rows follow it. A held list keeps its rows there
-//                    after they flip: data-standing says where each one is now
+//   .ah-day[data-not-imported]           a not-imported group's head; its rows
+//                    follow it. A held list keeps its rows there after they
+//                    flip: data-standing says where each one is now
+//     top   "Still importing": newer sources than every readable row,
+//           drawn above them
+//     foot  "Not imported yet": the rest, drawn last
 //   .ah-list-updates[data-visible]       a held list has a new order waiting
 //                    (one per list; pressing it applies the order)
 //
@@ -323,7 +326,7 @@ test("a session row says where it stands with the import, from the stream state 
   // The not-imported group's head, and the waiting row after it.
   const heads = classed(during, "ah-day");
   assert.equal(heads.filter(({ attrs }) => "data-not-imported" in attrs).length, 1);
-  assert.match(during, /<div class="ah-day" data-not-imported="">[^<]*<\/div><button[^>]*data-motion-key="waiting"/);
+  assert.match(during, /<div class="ah-day" data-not-imported="(?:top|foot)">[^<]*<\/div><button[^>]*data-motion-key="waiting"/);
 
   // Once the import is over a Pending row reads as it always did; a
   // metadata-only parent is still unavailable.

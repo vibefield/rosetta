@@ -26,7 +26,7 @@ import {
 } from "../../room/src/lib/ingest-activity.ts";
 import {
   arrivalsLabel, commandFailureLabel, holdsImport, importArrivals, importCourse, importStanding,
-  isMetadataOnly, notImportedLast, parentIds, watchImport,
+  isMetadataOnly, newestReadableSource, notImportedAround, notImportedLast, parentIds, watchImport,
 } from "../../room/src/lib/import-state.ts";
 import { buildProjectViewModelFromSessions } from "../../room/src/lib/model.ts";
 import { RoomProvider } from "../../room/src/room-context.tsx";
@@ -71,7 +71,7 @@ function renderList(sessions, { duringBackfill = true, parents = new Set() } = {
 
 /* ── the session list ─────────────────────────────────────────────────── */
 
-test("while importing, the sessions it has not reached are drawn last, newest source first, under one undated head", () => {
+test("while importing, the sessions it has not reached are drawn in two undated groups, newest source first", () => {
   // In the room's order (HistoryRoom's sort): days newest first, then the
   // sessions with no recorded activity, by id.
   const rows = [
@@ -81,15 +81,19 @@ test("while importing, the sessions it has not reached are drawn last, newest so
     session("p1", pending(NOW - 5 * HOUR)),
     session("p2", pending(NOW - 2 * HOUR)),
     session("p3", pending(NOW - 2 * HOUR)),
+    // Newer than every readable row's source (NOW - HOUR): drawn on top.
+    session("p0", pending(NOW - 10 * 60_000)),
   ];
   const markup = renderList(rows, { parents: new Set(["orphan"]) });
   assert.deepEqual(drawn(markup), [
+    "Still importing · 1", "p0",
     "Today", "today", "Yesterday", "yesterday",
     // A row made only for its children is never reached, so it is not waiting.
     "Activity unknown", "orphan",
     "Not imported yet · 3", "p2", "p3", "p1",
   ]);
-  assert.match(markup, /<div class="ah-day" data-not-imported="">Not imported yet · 3<\/div>/);
+  assert.match(markup, /<div class="ah-day" data-not-imported="foot">Not imported yet · 3<\/div>/);
+  assert.match(markup, /<div class="ah-day" data-not-imported="top">Still importing · 1<\/div>/);
   // Its time slot says why there is no time; the name says it once.
   assert.match(markup, /aria-label="Title p1 · not imported yet"/);
   assert.match(markup, /data-motion-key="p1"[^>]*>(?:(?!<\/button>).)*<span class="ah-last">not imported yet<\/span>/);
@@ -98,8 +102,10 @@ test("while importing, the sessions it has not reached are drawn last, newest so
 
   // Once the import is over there is no group: the room's own order stands.
   assert.deepEqual(drawn(renderList(rows, { duringBackfill: false, parents: new Set(["orphan"]) })), [
-    "Today", "today", "Yesterday", "yesterday", "Activity unknown", "orphan", "p1", "p2", "p3",
+    "Today", "today", "Yesterday", "yesterday", "Activity unknown", "orphan", "p1", "p2", "p3", "p0",
   ]);
+  // Before anything is readable, everything is still importing.
+  assert.deepEqual(drawn(renderList([session("p1", pending(1)), session("p2", pending(2))])), ["Still importing · 2", "p2", "p1"]);
 });
 
 test("the group's order is the source's freshness, then identity; everything else keeps the room's order", () => {
@@ -107,6 +113,11 @@ test("the group's order is the source's freshness, then identity; everything els
   const waiting = (row) => row.stream_state === "pending";
   assert.deepEqual(notImportedLast(rows, waiting, compareNotImported).map((row) => row.id), ["b", "a", "x", "y", "z"]);
   assert.deepEqual(notImportedLast(rows.filter((row) => !waiting(row)), waiting, compareNotImported).map((row) => row.id), ["b", "a"]);
+  // The top group: the waiting rows `above` picks, before everything else.
+  assert.deepEqual(notImportedAround(rows, waiting, (row) => row.updated_at > 6, compareNotImported).map((row) => row.id), ["x", "y", "b", "a", "z"]);
+  // Its line is the newest readable source; none readable, none drawn.
+  assert.equal(newestReadableSource(rows, (row) => !waiting(row)), NOW - HOUR);
+  assert.equal(newestReadableSource(rows, () => false), null);
 });
 
 test("a row is not imported yet only while the import runs; one with no transcript of its own is unavailable", () => {

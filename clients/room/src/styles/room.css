@@ -387,8 +387,8 @@
    tells it apart from a date. */
 .ah-day[data-not-imported] {
   margin-top: 10px;
-  background: linear-gradient(var(--ah-plate) 72%, transparent),
-    linear-gradient(90deg, var(--vf-hairline) 50%, transparent 0) top left / 6px 1px repeat-x;
+  background: linear-gradient(90deg, var(--vf-hairline) 50%, transparent 0) top left / 6px 1px repeat-x,
+    linear-gradient(var(--ah-plate) 72%, transparent);
 }
 .ah-session-list > .ah-day[data-not-imported]:first-child { margin-top: 0; }
 /* The session row answers the same four questions the ledger row does, in the
