@@ -168,25 +168,35 @@ const column = (name) => [...document.querySelectorAll('.ah-col')].find((col) =>
 const projectOrder = () => [...document.querySelectorAll('.ah-project-list-item')].map((row) => row.dataset.motionKey);
 const tops = () => Object.fromEntries([...document.querySelectorAll('.ah-project-list-item')]
   .map((row) => [row.dataset.motionKey, Math.round(row.getBoundingClientRect().top)]));
-/** The room's project rule as it stands: activity-ranked projects first
- * (newest recorded root activity), then every unranked one by id. */
+/** The room's project rule as it stands (ux:X1, decision D1):
+ * activity-ranked projects first (newest recorded root activity); then the
+ * unranked ones, while the import runs (no canonical readiness yet, or the
+ * ingest not live) by their newest root's updated_at, else by id alone. */
 const projectsByToday = () => {
   const meta = window.coldImport.c.meta();
+  const status = window.coldImport.c.status();
+  const importing = status.canonicalReady !== true || (status.ingest !== null && status.ingest.phase !== 'live');
   const rank = new Map(meta.projects.map((project) => [project.id, null]));
+  const source = new Map();
   for (const session of meta.sessions) {
     const key = session.project_id ?? '__rosetta_unassigned__';
     if (!rank.has(key)) rank.set(key, null);
-    const at = session.parent_session_id === null ? session.activity?.last_at ?? null : null;
+    if (session.parent_session_id !== null) continue;
+    const at = session.activity?.last_at ?? null;
     if (at !== null) rank.set(key, Math.max(rank.get(key) ?? -Infinity, at));
+    source.set(key, Math.max(source.get(key) ?? -Infinity, session.updated_at));
   }
   const actual = [...document.querySelectorAll('.ah-project-list-item')].map((row) => row.dataset.motionKey);
-  const expected = [...rank.keys()].sort((a, b) => {
-    const x = rank.get(a), y = rank.get(b);
+  const known = (x, y, a, b) => {
     if (x === null && y !== null) return 1;
     if (y === null && x !== null) return -1;
     return (x !== null && y !== null ? y - x : 0) || a.localeCompare(b);
+  };
+  const expected = [...rank.keys()].sort((a, b) => {
+    const x = rank.get(a), y = rank.get(b);
+    return x === null && y === null && importing ? known(source.get(a) ?? null, source.get(b) ?? null, a, b) : known(x, y, a, b);
   });
-  return { actual, expected, ranked: [...rank.values()].filter((at) => at !== null).length };
+  return { actual, expected, ranked: [...rank.values()].filter((at) => at !== null).length, importing };
 };
 const rowLook = (element) => ({
   id: element.dataset.motionKey, standing: element.dataset.standing, stream: element.dataset.streamState,
@@ -293,15 +303,15 @@ async function freshImport() {
   const metaDelivery = await check(() => window.coldImport.c.log.meta.filter((m) => m.why === 'metadata').map((m) => m.source));
   console.log(`  metadata reached the room as: ${metaDelivery.join(', ')} (a burst over the hub's 1,024 queue is a resync + snapshot)`);
   const atMetadata = await agreed(projectsByToday);
-  today('ux:X1', 'project order at metadata: every project unranked, so ordered by id alone',
-    { order: atMetadata.actual, ranked: atMetadata.ranked }, { order: [...atMetadata.actual].sort((a, b) => a.localeCompare(b)), ranked: 0 });
+  today('ux:X1', 'project order at metadata: every project unranked, so ordered by its newest root\'s updated_at, then id',
+    { order: atMetadata.actual, ranked: atMetadata.ranked, importing: atMetadata.importing }, { order: atMetadata.expected, ranked: 0, importing: true });
   const newest = await check(() => {
     const roots = window.coldImport.c.meta().sessions.filter((s) => s.parent_session_id === null && window.coldImport.c.kindOf(s.id) === 'root');
     const giant = roots.sort((a, b) => b.updated_at - a.updated_at)[0];
     const key = giant.project_id ?? '__rosetta_unassigned__';
     return { id: giant.id, project: key, at: [...document.querySelectorAll('.ah-project-list-item')].findIndex((row) => row.dataset.motionKey === key) };
   });
-  console.log(`  the project holding the newest conversation is drawn at position ${newest.at + 1} of ${projectCount}`);
+  today('ux:X1', 'at metadata the project holding the newest conversation is drawn first', newest.at, 0);
 
   // The import card at metadata (ux:X3).
   const cardAtMetadata = await check(card);
@@ -320,6 +330,13 @@ async function freshImport() {
       const meta = window.coldImport.c.meta();
       return `Search ${meta.sessions.filter((s) => s.parent_session_id === null).length.toLocaleString('en-US')} sessions across ${meta.runtimes.length} agents`;
     }));
+
+  const tokenSort = () => {
+    const button = [...document.querySelectorAll('.ah-sortseg button')].find((b) => b.textContent === 'token');
+    return button === undefined ? null : { disabled: button.disabled, title: button.title || null, pressed: button.getAttribute('aria-pressed') };
+  };
+  today('ux:X6', 'during the import the token sort waits, disabled, and says why',
+    await check(tokenSort), { disabled: true, title: 'Spend ranks arrive after the import', pressed: 'false' });
 
   // The newest project's list at metadata (ux:X2).
   await click(`.ah-project-list-item[data-motion-key="${newest.project}"]`);
@@ -397,8 +414,8 @@ async function freshImport() {
       timed: streamingRow?.last !== pendingLook.last && streamingRow?.last !== 'unknown', span: streamingRow?.span !== '—', activity: dirtyActivity !== null },
     { standing: 'ready', stream: 'streaming', tone: 'orange', cooking: true, timed: true, span: true, activity: true });
   const mixed = await agreed(projectsByToday);
-  today('ux:X1', 'while ranked and unranked mix: activity-ranked projects first, the unranked after them by id',
-    mixed.actual, mixed.expected);
+  today('ux:X1', 'while ranked and unranked mix: activity-ranked projects first, the unranked after them by newest root updated_at',
+    { order: mixed.actual, importing: mixed.importing }, { order: mixed.expected, importing: true });
   console.log(`  mixed order: ${mixed.ranked} of ${projectCount} projects ranked at ${(inversionAt / 1000).toFixed(1)} s`);
 
   // The count's unit (ux:X3).
@@ -566,6 +583,8 @@ async function freshImport() {
   console.log(`  publication: ${reranked} of ${beforePublication.rule.actual.length} project rows changed position; the ${kept.length} that kept theirs moved ${[...new Set(keptShifts)].slice(0, 6).join(', ')} px`);
   today('unplanned', 'live, search not started: the card says "Preparing search" (the simulator counts documents after going live)',
     await check(card).then((c) => ({ state: c.state, title: c.title })), { state: 'search_waiting', title: 'Preparing search' });
+  today('ux:X6', 'once the import publishes the token sort is offered again',
+    await check(tokenSort), { disabled: false, title: null, pressed: 'false' });
   today('ux:X6', 'live, search not started: the portfolio panel stays hidden while the card is up',
     await inColumn((column) => column('projects')?.querySelector('.ah-meta__body') !== null), false);
   const hydration = await check(() => {

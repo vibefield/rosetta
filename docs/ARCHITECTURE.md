@@ -28,7 +28,13 @@ Archived task/workflow states are likewise last-recorded facts: missing completi
 evidence never starts a wall-clock duration or an indefinite activity animation.
 
 The History room's navigation order is separate client-side memory (2026-10-02).
-Initial discovery sorts by recorded activity. Subsequently, a fresh conversation
+Initial discovery sorts by recorded activity. One import-time exception (decision
+D1, 2026-11-03): while the room bootstraps (no canonical readiness yet, or the
+ingest not live), projects no recorded activity ranks yet follow the ranked ones
+by their newest root's `updated_at` descending, then id, instead of by id alone;
+ranked projects keep activity order, and activity-then-id order returns at
+publication. Spend ranks load only after publication, so the token sort is
+disabled meanwhile (“Spend ranks arrive after the import”). Subsequently, a fresh conversation
 event promotes a session only after at least five minutes of recorded quiet;
 continuing output updates its row in place, and quiet expiry itself moves nothing.
 A project promotes only after its whole root-session set has been quiet. Coalesced

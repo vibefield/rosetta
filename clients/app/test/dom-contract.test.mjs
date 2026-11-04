@@ -42,6 +42,8 @@
 //   .ah-project-list-item[data-cooking]  present while its figures wait
 //                    (import running, or its stats not ready)
 //   .ah-project-list-item[data-fill]     present while a byte meter fills it
+//   .ah-sortseg button[disabled]         the token sort, while the import's
+//                    order holds (until publication); its title says why
 //
 // Sessions                               SessionList, SessionListItem
 //   .ah-session-list-item[data-motion-key]  the session id
@@ -112,6 +114,7 @@ import { IngestStatus } from "../../room/src/components/IngestStatus.tsx";
 import { ListActivityNotice } from "../../room/src/components/ListActivityNotice.tsx";
 import { TranscriptColumn } from "../../room/src/components/Transcript.tsx";
 import { ProjectListItem } from "../../room/src/components/projects/ProjectListItem.tsx";
+import { ProjectsColumn } from "../../room/src/components/projects/ProjectsColumn.tsx";
 import { OptionRow, SheetTitles } from "../../room/src/components/search/SearchSheet.tsx";
 import { SessionList } from "../../room/src/components/sessions/SessionList.tsx";
 import { SessionListItem } from "../../room/src/components/sessions/SessionListItem.tsx";
@@ -263,6 +266,23 @@ test("a project row is keyed by its project id, and says while its figures wait"
   assert.equal(box["data-host-act"], "");
   assert.equal(box["aria-current"], undefined);
   assert.equal(only(classed(boxed, "ah-project-list-item__hit"), "hit")["aria-current"], "true");
+});
+
+test("the token sort waits while the import's order holds, and says why", () => {
+  const sortButtons = (bootstrapping) => elements(inRoom(createElement(ProjectsColumn, {
+    projects: [], activityOrder: { sessions: new Map(), projects: new Map(), bootstrapping },
+    selectedProjectId: null, sort: "token", onSortChange: nothing, homeDirectory: null, currentTimestamp: NOW,
+    ingest: activityOf().feed.ingest, activity: activityOf(), onProjectSelect: nothing,
+  }))).filter((element) => element.tag === "button" && "aria-pressed" in element.attrs);
+  const importing = sortButtons(true);
+  const token = importing.find((button) => button.attrs["aria-label"]?.startsWith("token"));
+  assert.equal("disabled" in token.attrs, true);
+  assert.equal(token.attrs.title, "Spend ranks arrive after the import");
+  // A token choice reads as recent until then.
+  assert.equal(importing.find((button) => button.attrs["aria-pressed"] === "true")?.attrs["aria-label"], undefined);
+  const live = sortButtons(false);
+  assert.equal(live.some((button) => "disabled" in button.attrs), false);
+  assert.equal(live.filter((button) => button.attrs["aria-pressed"] === "true").length, 1);
 });
 
 /* ── the session list ─────────────────────────────────────────────────── */

@@ -3,10 +3,11 @@ import type { IngestProgress } from "@vibefield/rosetta-protocol";
 import { isCensusRunning, isIngestActive, projectBackfills } from "../../lib/ingest";
 import type { ProjectViewModel } from "../../lib/model";
 import { UNASSIGNED_PROJECT_ID } from "../../lib/model";
-import { compareActivityRanks } from "../../lib/activity-order";
+import { compareProjectOrder } from "../../lib/activity-order";
 import type { ActivityOrder } from "../../lib/activity-order";
 import { PortfolioSummaryPanel } from "../SummaryPanels";
 import { ListSummaryHeader, ListToolbar, SegmentedControl } from "../ui";
+import type { SegmentedControlOption } from "../ui/SegmentedControl";
 import { IngestStatus } from "../IngestStatus";
 import type { IngestActivity } from "../../lib/ingest-activity";
 import { ProjectList } from "./ProjectList";
@@ -16,10 +17,15 @@ import { FilterChips } from "../FilterChips";
 
 export type ProjectSort = "recent" | "token";
 
-const PROJECT_SORT_OPTIONS = [
+/** Spend figures load only after publication, so until then a token sort
+ * would rank every project at zero, by id: it waits, and says why. */
+const TOKEN_SORT_WAITS = "Spend ranks arrive after the import";
+const projectSortOptions = (importing: boolean): readonly SegmentedControlOption<ProjectSort>[] => [
   { value: "recent", label: "recent" },
-  { value: "token", label: "token" },
-] as const;
+  importing
+    ? { value: "token", label: "token", disabled: true, title: TOKEN_SORT_WAITS, accessibleLabel: `token: ${TOKEN_SORT_WAITS}` }
+    : { value: "token", label: "token" },
+];
 
 export interface ProjectsColumnProps {
   readonly projects: readonly ProjectViewModel[];
@@ -63,19 +69,24 @@ export function ProjectsColumn({
     ),
     [projects],
   );
+  // The import's order holds until publication: the token sort waits, and
+  // a token choice reads as recent meanwhile.
+  const importing = activityOrder.bootstrapping;
+  const effectiveSort: ProjectSort = importing ? "recent" : sort;
   const visibleProjects = useMemo(
     () =>
       [...projects].sort((left, right) =>
-        sort === "recent"
-          ? compareActivityRanks(
-              activityOrder.projects.get(left.row.id === UNASSIGNED_PROJECT_ID ? null : left.row.id)?.rankAt ?? null,
-              activityOrder.projects.get(right.row.id === UNASSIGNED_PROJECT_ID ? null : right.row.id)?.rankAt ?? null,
+        effectiveSort === "recent"
+          ? compareProjectOrder(
+              activityOrder,
+              left.row.id === UNASSIGNED_PROJECT_ID ? null : left.row.id,
+              right.row.id === UNASSIGNED_PROJECT_ID ? null : right.row.id,
               left.row.id, right.row.id,
             )
           : (right.lifetimeSpend.costMicroUsd ?? 0) - (left.lifetimeSpend.costMicroUsd ?? 0)
             || right.lifetimeTokens - left.lifetimeTokens || left.row.id.localeCompare(right.row.id),
       ),
-    [projects, sort, activityOrder],
+    [projects, effectiveSort, activityOrder],
   );
 
   // R3: the host's sections over the room's own order.
@@ -102,8 +113,8 @@ export function ProjectsColumn({
       <ListToolbar>
         {projectFilters !== undefined && projectFilters.length > 0 && <FilterChips filters={projectFilters} />}
         <SegmentedControl
-          value={sort}
-          options={PROJECT_SORT_OPTIONS}
+          value={effectiveSort}
+          options={projectSortOptions(importing)}
           accessibleLabel="Rank projects by"
           className="ah-sortseg"
           onValueChange={onSortChange}
@@ -112,13 +123,13 @@ export function ProjectsColumn({
       <div className="ah-veilhost">
         <ProjectList
           projects={visibleProjects}
-          orderScope={`projects:${sort}`}
+          orderScope={`projects:${effectiveSort}`}
           selectedProjectId={selectedProjectId}
           maximumLifetimeCost={maximumLifetimeCost}
           homeDirectory={homeDirectory}
           currentTimestamp={currentTimestamp}
           ingestActive={ingestActive}
-          importing={activityOrder.bootstrapping}
+          importing={importing}
           runtimes={ingest?.runtimes}
           projectBackfills={backfills}
           pending={censusRunning}
