@@ -1045,7 +1045,13 @@ timing.
 > close, so the copy never promises that every one left opens there. A resumed build (the room saw
 > its `restoring` phase) reads “Finishing the import” with the catalog's count, which is 0 across
 > a launch and what stayed open after a pause in-process, since it opens nothing new before it
-> publishes (`clients/room/src/lib/ingest-activity.ts`). A Pending session's transcript says
+> publishes (`clients/room/src/lib/ingest-activity.ts`). Canonical readiness can arrive while the
+> phase still says publishing; the archive is installed by then, so the card moves on to search
+> rather than “Saving your archive”, and an open artifact library loads its list again. The
+> portfolio panel heads the projects column as soon as any project's figures land, whatever search
+> is doing, with the card under its head; at the end the card collapses in place to one line,
+> “Search ready ✓”, for five seconds, then its height eases to zero (it jumps under reduced
+> motion), so no head swaps and the rows glide rather than jump. A Pending session's transcript says
 > “Not imported yet” with the promise its import's course can keep: fresh, “Your newest
 > conversations import first. This one opens as soon as the import reaches it.”; resumed, “The
 > import picked up where it stopped. This one opens when the import finishes.”; a paused or failed

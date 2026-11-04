@@ -62,3 +62,19 @@
 .ah-ingest-controls button:disabled { opacity: .55; cursor: default; }
 .ah-ingest-controls button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
 .ah-ingest-controls [role="alert"] { color: var(--vf-text-secondary); line-height: 1.5; }
+
+/* The card's place in the projects column (IngestStatusFold): its height
+   follows the card, easing only at the end, so the rows glide. */
+.ah-ingest-fold { flex: 0 0 auto; overflow: hidden; }
+.ah-ingest-fold__content { display: flow-root; }
+.ah-ingest-fold[data-ending] { transition: height 360ms cubic-bezier(.4, 0, .2, 1); }
+.ah-ingest-status[data-compact] { padding: 8px 14px; }
+.ah-ingest-status[data-compact] h3 { margin: 0; font-size: 12px; font-weight: 500; }
+@media (prefers-reduced-motion: reduce) {
+  .ah-ingest-fold[data-ending] { transition: none; }
+}
+/* A short window shares column ① between the portfolio and a search card:
+   the card keeps its title, amount and meter. */
+@media (max-height: 820px) {
+  .ah-ingest-status[data-state^="search_"]:not([data-state="search_failed"]) .ah-ingest-status__detail { display: none; }
+}

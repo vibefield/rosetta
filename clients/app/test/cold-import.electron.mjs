@@ -375,7 +375,7 @@ async function freshImport() {
   const newestCount = await check(conversationsIn, newest.project);
   today('ux:X3', 'a project card with nothing readable says so in conversations: "Not reached yet" before its bytes, else "0 of n"',
     unreached.label, unreached.streamed === 0 ? 'Not reached yet' : newestCount.text);
-  today('ux:X6', 'while the card is up the projects head is the bare count, never the portfolio panel',
+  today('ux:X6', 'before any figure lands the projects head is the bare count, not the portfolio panel',
     await inColumn((column) => ({ portfolio: column('projects')?.querySelector('.ah-meta__body') !== null,
       head: column('projects')?.querySelector('.ah-meta__head .ah-eyebrow')?.textContent ?? null })), { portfolio: false, head: 'Projects' });
   today('ux:X6', 'the launcher counts the conversation titles the sheet searches: named roots, placeholders excluded',
@@ -657,8 +657,9 @@ async function freshImport() {
   await advanceToPhase('canonical');
   await settle();
   await until(() => window.coldImport.c.log.projectStats.length > 0, 'the first figures ask');
-  today('ux:X9', 'canonical readiness during "publishing": figures load while the card still says "Saving your archive"',
-    await check(card).then((c) => ({ state: c.state, title: c.title })), { state: 'publishing', title: 'Saving your archive' });
+  today('ux:X9', 'canonical readiness during "publishing": the archive is saved, so the card moves on to search',
+    { ...await check(card).then((c) => ({ state: c.state, title: c.title })), phase: await check(() => window.coldImport.c.status().ingest.phase) },
+    { state: 'search_waiting', title: 'Preparing search', phase: 'publishing' });
   today('ux:X6', 'published but still "publishing": the panel veil keeps "Charts appear when the whole import finishes"',
     await inColumn((column) => column('sessions')?.querySelector('.ah-meta__body .ah-veil')?.getAttribute('aria-label') ?? null), 'Charts appear when the whole import finishes');
   await until(() => new Set(window.coldImport.c.log.projectStats.map((s) => s.projectId)).size >= document.querySelectorAll('.ah-project-list-item').length, 'every project\'s figures');
@@ -679,10 +680,19 @@ async function freshImport() {
   console.log(`  publication: ${reranked} of ${beforePublication.rule.actual.length} project rows changed position; the ${kept.length} that kept theirs moved ${[...new Set(keptShifts)].slice(0, 6).join(', ')} px`);
   today('unplanned', 'live, search not started: the card says "Preparing search" (the simulator counts documents after going live)',
     await check(card).then((c) => ({ state: c.state, title: c.title })), { state: 'search_waiting', title: 'Preparing search' });
+  // The portfolio as the column draws it: its figures, and the card (if
+  // any) right under its head.
+  const portfolio = (column) => {
+    const col = column('projects');
+    return { panel: col?.querySelector(':scope > .ah-meta .ah-meta__body') !== null,
+      cardUnderHead: col?.querySelector(':scope > .ah-meta + .ah-ingest-fold > * > .ah-ingest-status') !== null };
+  };
+  // Figures land on their own answers; give the room its chance to draw them.
+  for (let i = 0; i < 200 && !(await inColumn(portfolio)).panel; i++) await frames(2);
+  today('ux:X6', 'live, search not started: the portfolio panel is up, the card right under its head',
+    await inColumn(portfolio), { panel: true, cardUnderHead: true });
   today('ux:X6', 'once the import publishes the token sort is offered again',
     await check(tokenSort), { disabled: false, title: null, pressed: 'false' });
-  today('ux:X6', 'live, search not started: the portfolio panel stays hidden while the card is up',
-    await inColumn((column) => column('projects')?.querySelector('.ah-meta__body') !== null), false);
   const askedFigures = await check((n) => window.coldImport.c.log.projectStats.map((s) => s.projectId).slice(0, n), drawnAtPublication.cards.length);
   const { cards: drawnCards, selected: selectedAtPublication } = drawnAtPublication;
   const onScreen = drawnCards.filter((card) => card.onScreen && card.id !== selectedAtPublication).map((card) => card.id);
@@ -716,18 +726,27 @@ async function freshImport() {
     { pending: 'Full-text search arrives when its index is built.', foot: `Full-text search is being built · ${statusPct}% · showing title matches` });
   await sheet(false);
   await until(() => !document.querySelector('.ah-sheet__field'), 'the sheet to close');
-  today('ux:X6', 'the portfolio panel stays hidden while search builds (the card is up)',
-    await inColumn((column) => column('projects')?.querySelector('.ah-meta__body') !== null), false);
+  today('ux:X6', 'while search builds the portfolio panel stays up, the card under its head',
+    await inColumn(portfolio), { panel: true, cardUnderHead: true });
   // Every stage of the index build, as the card draws it.
   for (const stage of ['optimizing', 'validating', 'publishing']) {
     await advanceToPhase(`search-${stage}`);
     await settle();
   }
 
-  // ── The end: ALL SET, then the card goes ─────────────────────────────
+  // ── The end: one line, "Search ready ✓", then the card folds away ─────
+  await rowsAtRest();
+  await check(() => { window.coldImport.startSampling(); return true; });
   await advanceToPhase('search-ready');
-  await shows('ux:X9', 'search ready: the card reads ALL SET',
-    () => document.querySelector('.ah-ingest-status')?.dataset.state === 'complete' && document.querySelector('.ah-ingest-status__eyebrow')?.textContent === 'ALL SET✓');
+  await shows('ux:X9', 'search ready: the card collapses in place to one line, "Search ready ✓", nothing else drawn',
+    () => {
+      const section = document.querySelector('.ah-ingest-status');
+      return section?.dataset.state === 'complete' && section.hasAttribute('data-compact') &&
+        section.querySelector('h3')?.textContent === 'Search ready ✓' &&
+        !section.querySelector('.ah-ingest-status__detail, .ah-ingest-meter, .ah-ingest-status__eyebrow');
+    });
+  await rowsAtRest();
+  const collapse = await check(() => window.coldImport.stopSampling());
   // I1's end state, as far as a fixture sees it: the board completed, the
   // count reached everything readable in the unit it counts (whichever that
   // is), and the open project draws every root the catalog has.
@@ -751,14 +770,17 @@ async function freshImport() {
     { boardComplete: true, countComplete: true, rows: true });
   today('ux:X3', 'the end count is in conversations: data-ready-count the readable roots, data-ready-total every root but placeholders',
     { count: end.shown === end.readableRoots, total: end.shownTotal === end.countedRoots }, { count: true, total: true });
-  // The card's exit, frame by frame: the head swap and the card's unmount.
-  await frames(4);
+  // The card's exit, frame by frame: its fold to nothing, under a head that
+  // was already there.
+  today('ux:X9', 'at ALL SET the portfolio already heads the column, the card under it: no head swap waits',
+    await inColumn(portfolio), { panel: true, cardUnderHead: true });
   await check(() => { window.coldImport.startSampling(); return true; });
-  await shows('ux:X9', 'five seconds after ALL SET the card unmounts and the head swaps to the portfolio panel',
-    () => !document.querySelector('.ah-ingest-status') && [...document.querySelectorAll('.ah-col')].some((col) => col.querySelector(':scope > .ah-veilhost .ah-project-list-item') && col.querySelector('.ah-meta__body')));
+  await shows('ux:X9', 'five seconds after "Search ready" the card folds away and goes; the portfolio head stays',
+    () => !document.querySelector('.ah-ingest-status') && !document.querySelector('.ah-ingest-fold') && [...document.querySelectorAll('.ah-col')].some((col) => col.querySelector(':scope > .ah-veilhost .ah-project-list-item') && col.querySelector('.ah-meta__body')));
   await frames(8);
-  const exit = await check(() => {
-    const samples = window.coldImport.stopSampling();
+  const exitSamples = await check(() => window.coldImport.stopSampling());
+  /** How the project rows travelled over sampled frames. */
+  const travel = (samples) => {
     const first = samples[0];
     const last = samples.at(-1);
     const ids = Object.keys(first).filter((id) => id in last);
@@ -771,10 +793,20 @@ async function freshImport() {
     const order = (sample) => Object.keys(sample).sort((a, b) => sample[a] - sample[b]).join();
     return { sameOrder: order(first) === order(last), uniform: Math.max(...shifts) - Math.min(...shifts) <= 1, shift: shifts[0] ?? 0,
       movingFrames: steps.length, maxStep: Math.max(0, ...steps), frames: samples.length };
-  });
-  today('ux:X9', 'the card\'s exit moves every project row by one common shift, all of it in a single frame (no animation)',
-    { sameOrder: exit.sameOrder, uniform: exit.uniform, moved: Math.abs(exit.shift) > 1, inOneFrame: exit.movingFrames === 1 },
-    { sameOrder: true, uniform: true, moved: true, inOneFrame: true });
+  };
+  // A logic bound, not a timing one: the move is spread over frames, so no
+  // single frame carries more than half of it (an ease of a few hundred ms
+  // keeps each step far below that at any frame rate this test sees).
+  const glides = (move) => ({ sameOrder: move.sameOrder, uniform: move.uniform, moved: Math.abs(move.shift) > 1,
+    spread: move.movingFrames > 1, largestStepAtMostHalf: move.maxStep <= Math.ceil(Math.abs(move.shift) / 2) });
+  const calm = { sameOrder: true, uniform: true, moved: true, spread: true, largestStepAtMostHalf: true };
+  const collapsed = travel(collapse);
+  today('ux:X9', 'ALL SET\'s collapse to one line moves every project row by one common shift, spread over frames',
+    glides(collapsed), calm);
+  const exit = travel(exitSamples);
+  today('ux:X9', 'the card\'s exit moves every project row by one common shift, spread over frames (its height eases to zero)',
+    glides(exit), calm);
+  console.log(`  card collapse: every row moved ${collapsed.shift} px; the largest one-frame step ${collapsed.maxStep} px over ${collapsed.movingFrames} moving frame(s) of ${collapsed.frames}`);
   // The failing project no longer veils the portfolio: the rest show, a
   // line says one is missing, and it is asked again until it lands.
   await until(() => document.querySelector('.ah-col .ah-meta__body [data-figures-failed]'), 'the failed-figures line');

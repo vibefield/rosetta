@@ -23,10 +23,12 @@
 //                    or while starting
 //
 // The import card                        IngestStatus (in .ah-cold-start, and
-//                    above the project list; gone once the panel closes)
+//                    in .ah-ingest-fold above the project list, under the
+//                    projects head; gone once the card has folded away)
 //   .ah-ingest-status[data-state]
 //     disconnected  the status feed is interrupted
-//     complete      the archive and search are ready (briefly, then gone)
+//     complete      the archive and search are ready: one line, five
+//                   seconds, then it folds away
 //     otherwise the step: discovering, metadata, restoring, reading,
 //     organizing, finalizing, publishing, paused, pausing, failed,
 //     search_failed, search_waiting, search_indexing, search_optimizing,
@@ -40,6 +42,11 @@
 //                    catalog but metadata-only placeholders. Both always
 //                    present (0 before the catalog names a conversation); the
 //                    words show them while reading, organizing or finalizing
+//   .ah-ingest-status[data-compact]  present on the one-line end card
+//   .ah-ingest-fold                  IngestStatusFold: the card's place in
+//                    the projects column, its height following the card's
+//   .ah-ingest-fold[data-ending]     present from "complete": the height eases
+//   .ah-ingest-fold[data-leaving]    present while it folds to zero height
 //
 // Projects                               ProjectListItem
 //   .ah-project-list-item[data-motion-key]  the project id (the unassigned
@@ -124,7 +131,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { HistoryRoom } from "../../room/src/HistoryRoom.tsx";
 import { ColdStartPanel } from "../../room/src/components/ColdStart.tsx";
-import { IngestStatus } from "../../room/src/components/IngestStatus.tsx";
+import { IngestStatus, IngestStatusFold } from "../../room/src/components/IngestStatus.tsx";
 import { ListActivityNotice } from "../../room/src/components/ListActivityNotice.tsx";
 import { TranscriptColumn } from "../../room/src/components/Transcript.tsx";
 import { ProjectListItem } from "../../room/src/components/projects/ProjectListItem.tsx";
@@ -256,6 +263,23 @@ test("the import card carries the readable conversations and their total, also w
     { ...conversations, canonicalReady: true, searchReadiness: "ready" }), ["complete", "2", "3"]);
   // No catalog yet counts nothing.
   assert.deepEqual(card({ projects: [board(3)] }), ["reading", "0", "0"]);
+});
+
+test("the end is one line in a fold that eases, then folds to nothing", () => {
+  const done = activityOf({ phase: "live", runtimes: [runtime({ state: "done" })] }, { canonicalReady: true, searchReadiness: "ready" });
+  const fold = (activity) => inRoom(createElement(IngestStatusFold, { activity }, createElement(IngestStatus, { activity })));
+  const shown = fold(done);
+  const card = only(classed(shown, "ah-ingest-status"), "card");
+  assert.deepEqual([card["data-state"], card["data-compact"]], ["complete", ""]);
+  assert.deepEqual(classed(shown, "ah-ingest-status__detail"), []);
+  const box = only(classed(shown, "ah-ingest-fold"), "fold");
+  assert.deepEqual([box["data-ending"], box["data-leaving"]], ["", undefined]);
+  assert.equal(only(classed(fold({ ...done, leaving: true }), "ah-ingest-fold"), "fold")["data-leaving"], "");
+  // Before the end the height follows at once, and the card is the full one.
+  const reading = fold(activityOf({ projects: [board(3)] }));
+  assert.deepEqual([only(classed(reading, "ah-ingest-fold"), "fold")["data-ending"],
+    only(classed(reading, "ah-ingest-status"), "card")["data-compact"]], [undefined, undefined]);
+  assert.equal(fold(null), "");
 });
 
 /* ── the project list ─────────────────────────────────────────────────── */

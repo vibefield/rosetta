@@ -930,7 +930,7 @@ function RoomBody({
         onOpenSession={openSession}
       />}
       {receipt !== null && <div className="ah-receipt">{receipt}</div>}
-      {catalog.artifacts && <ArtifactLibrary open={artifactsOpen} onClose={() => setArtifactsOpen(false)} returnFocus={() => artifactLauncherRef.current?.focus()} agents={kinds} projects={meta?.projects ?? []} onOpenSession={(sessionId, timelineId) => setPendingOpen({ sessionId, timelineId })} />}
+      {catalog.artifacts && <ArtifactLibrary open={artifactsOpen} onClose={() => setArtifactsOpen(false)} returnFocus={() => artifactLauncherRef.current?.focus()} agents={kinds} projects={meta?.projects ?? []} canonicalReady={canonicalReady === true} onOpenSession={(sessionId, timelineId) => setPendingOpen({ sessionId, timelineId })} />}
       </MenuLayerProvider>
     </div>
   );

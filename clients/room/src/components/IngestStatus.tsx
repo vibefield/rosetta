@@ -1,4 +1,5 @@
-import { useId } from "react";
+import { useId, useLayoutEffect, useRef } from "react";
+import type { ReactNode } from "react";
 import { AgentMark, agentLabel } from "../lib/agents";
 import { phaseHeading, readyConversations, runtimeActivity } from "../lib/ingest-activity";
 import type { IngestActivity } from "../lib/ingest-activity";
@@ -24,6 +25,14 @@ export function IngestStatus({ activity }: { readonly activity: IngestActivity |
   const paused = interrupted || !phase.active;
   const count = readyConversations(feed);
   const horizon = interrupted ? null : phase.horizon ?? null;
+  // The end collapses in place to one line, which the column then folds away.
+  if (ready && !interrupted) return (
+    <section className="ah-ingest-status" aria-labelledby={titleId} data-state="complete" data-compact=""
+      data-ready-count={count.readable} data-ready-total={count.total}>
+      <span className="ah-visually-hidden" aria-live="polite" aria-atomic="true">{phase.title}</span>
+      <h3 id={titleId}>{phase.title} <span aria-hidden="true">✓</span></h3>
+    </section>
+  );
   return (
     // `data-ready-count` / `data-ready-total` are the readable conversations
     // and their total, carried (inert) even where the copy leaves them out.
@@ -61,7 +70,10 @@ export function IngestStatus({ activity }: { readonly activity: IngestActivity |
         <span>{elapsed}</span>
       </div>
       <IngestionControls run={feed.ingest?.run} />
-      {!ready && (feed.ingest?.runtimes.length ?? 0) > 0 && <details className="ah-ingest-status__agents">
+      {/* Past publication (search, step 4) every agent is done: the card
+          keeps to the search it waits for, and leaves the column room for
+          the portfolio above it. */}
+      {phase.step < 4 && (feed.ingest?.runtimes.length ?? 0) > 0 && <details className="ah-ingest-status__agents">
         <summary>Agent details <span aria-hidden="true">⌄</span></summary>
         <ul>
           {feed.ingest?.runtimes.map((runtime) => {
@@ -81,5 +93,40 @@ export function IngestStatus({ activity }: { readonly activity: IngestActivity |
         </ul>
       </details>}
     </section>
+  );
+}
+
+/**
+ * The card's place in the projects column, whose height follows the card's
+ * and eases when the end changes it: ALL SET's collapse to one line, then
+ * its fold to nothing (`leaving`), so the rows below glide rather than jump.
+ * Before the end the height follows at once. Reduced motion jumps
+ * (ingest.css). The height is written straight to the element from a layout
+ * effect and a ResizeObserver, so it never trails the card by a frame.
+ */
+export function IngestStatusFold({ activity, children }: {
+  readonly activity: IngestActivity | null;
+  readonly children: ReactNode;
+}) {
+  const outer = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
+  const ending = activity?.phase.key === "ready";
+  const open = activity !== null && activity.leaving !== true;
+  useLayoutEffect(() => {
+    const box = outer.current;
+    const content = inner.current;
+    if (box === null || content === null) return;
+    const fit = () => { box.style.height = open ? `${content.offsetHeight}px` : "0px"; };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [open]);
+  if (activity === null) return null;
+  return (
+    <div ref={outer} className="ah-ingest-fold" data-ending={ending ? "" : undefined}
+      data-leaving={open ? undefined : ""}>
+      <div ref={inner} className="ah-ingest-fold__content">{children}</div>
+    </div>
   );
 }

@@ -492,3 +492,12 @@ test("the project card counts its readable conversations, the unit the lists dra
   assert.equal(card(project(10, 10), 7, 7, false), "Preparing activity summaries");
   assert.doesNotMatch(renderProject(project(0, 10), { readable: 0, total: 7 }), /Reading conversations/);
 });
+
+test("once the archive is published the card moves on to search, though the phase still says publishing", () => {
+  const publishing = (canonicalReady) => activityPhase(feed({ phase: "publishing", runtimes: [runtime({ state: "done" })] },
+    { canonicalReady, conversations: conversations(9, 9) }));
+  assert.equal(publishing(false).title, "Saving your archive");
+  assert.deepEqual([publishing(true).key, publishing(true).title], ["search_waiting", "Preparing search"]);
+  const done = activityPhase(feed({ phase: "live", runtimes: [runtime({ state: "done" })] }, { canonicalReady: true, searchReadiness: "ready" }));
+  assert.deepEqual([done.key, done.title], ["ready", "Search ready"]);
+});

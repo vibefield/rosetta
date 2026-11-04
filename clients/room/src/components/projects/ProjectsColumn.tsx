@@ -8,7 +8,7 @@ import type { ActivityOrder } from "../../lib/activity-order";
 import { PortfolioSummaryPanel } from "../SummaryPanels";
 import { ListSummaryHeader, ListToolbar, SegmentedControl } from "../ui";
 import type { SegmentedControlOption } from "../ui/SegmentedControl";
-import { IngestStatus } from "../IngestStatus";
+import { IngestStatus, IngestStatusFold } from "../IngestStatus";
 import type { IngestActivity } from "../../lib/ingest-activity";
 import type { ConversationReadiness } from "../../lib/conversation-readiness";
 import { ProjectList } from "./ProjectList";
@@ -100,11 +100,14 @@ export function ProjectsColumn({
     [projectSections, visibleProjects],
   );
 
+  // The portfolio panel shows once figures land, whatever search is doing,
+  // and the import or search card sits under its head; so the end folds the
+  // card away under a head that is already there. Before any figure there
+  // is nothing to chart: the bare count heads the column.
+  const figuresLanded = useMemo(() => projects.some((project) => project.statsReady), [projects]);
   return (
     <div className="ah-col">
-      {activity !== null ? (
-        <ListSummaryHeader label="Projects" count={projects.length} singularNoun="project" />
-      ) : (
+      {activity === null || figuresLanded ? (
         <PortfolioSummaryPanel
           projects={projects}
           selectedProjectId={selectedProjectId}
@@ -112,8 +115,12 @@ export function ProjectsColumn({
           censusRunning={censusRunning}
           onProjectSelect={onProjectSelect}
         />
+      ) : (
+        <ListSummaryHeader label="Projects" count={projects.length} singularNoun="project" />
       )}
-      <IngestStatus activity={activity} />
+      <IngestStatusFold activity={activity}>
+        <IngestStatus activity={activity} />
+      </IngestStatusFold>
       <ListToolbar>
         {projectFilters !== undefined && projectFilters.length > 0 && <FilterChips filters={projectFilters} />}
         <SegmentedControl

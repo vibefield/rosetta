@@ -166,6 +166,9 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
   const counted = conversations !== null && conversations.total > 0 ? conversations : null;
   const allReadable = counted !== null && counted.readable >= counted.total;
   const count = counted === null ? null : ` · ${readableText(counted)}`;
+  // Canonical readiness comes while the phase still says publishing: the
+  // archive is installed by then, so the card moves on to search.
+  const published = feed.canonicalReady === true && ingest?.phase === "publishing";
   if (ingest?.phase === "finalizing" && allReadable) return {
     ...base, key: ingest.phase, step: 3,
     title: `All ${number(counted.total)} ${plural(counted.total, "conversation")} readable`,
@@ -173,7 +176,7 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
     detail: `Finishing the archive so search and charts can start. ${ARCHIVE_PAUSE}`,
     amount: `${number(sessions)} sessions imported`,
   };
-  if (ingest?.phase === "finalizing" || ingest?.phase === "publishing") return {
+  if (ingest?.phase === "finalizing" || (ingest?.phase === "publishing" && !published)) return {
     ...base, key: ingest.phase, step: 3,
     title: ingest.phase === "publishing" ? "Saving your archive" : "Finishing your archive",
     count: ingest.phase === "finalizing" ? count : null,
@@ -182,7 +185,7 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
       : `Finishing the archive so search and charts can start. ${ARCHIVE_PAUSE}`,
     amount: `${number(sessions)} sessions imported`,
   };
-  if (ingest && ingest.phase !== "live") {
+  if (ingest && ingest.phase !== "live" && !published) {
     const scanning = runtimes.length === 0 || runtimes.some((row) => row.state === "skimming") ||
       runtimes.every((row) => row.state === "queued");
     if (scanning) {
