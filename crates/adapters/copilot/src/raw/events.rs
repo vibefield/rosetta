@@ -1,8 +1,8 @@
 //! Raw types for the `events` stream
 //! (`session-state/<session-id>/events.jsonl`).
 //!
-//! Evidence: THE CANONICAL `groundtruth.json` — fixtures at 1.0.80 merged with
-//! the writer JSON Schema (`sources/1.0.80.writer-schema.json`). Fixture-backed
+//! Evidence: THE CANONICAL `groundtruth.json` — fixtures at 1.0.80 and 1.0.105
+//! merged with the writer JSON Schemas (`sources/<version>.writer-schema.json`). Fixture-backed
 //! types are typed below. The other persisted writer types (permission.*,
 //! subagent.*, compaction, …) parse as `ParsedLine::UnknownType` until a
 //! scenario writes them. Ephemeral streaming types are not persisted.
@@ -49,6 +49,7 @@ const KNOWN_TYPES: &[&str] = &[
     "session.schedule_rearmed",
     "session.task_complete",
     "session.usage_checkpoint",
+    "session.usage_record",
     "session.warning",
     "session.error",
     "session.workspace_file_changed",
@@ -163,6 +164,8 @@ pub enum EventPayload {
     SessionTaskComplete(SessionTaskComplete),
     #[serde(rename = "session.usage_checkpoint")]
     SessionUsageCheckpoint(SessionUsageCheckpoint),
+    #[serde(rename = "session.usage_record")]
+    SessionUsageRecord(SessionUsageRecord),
     #[serde(rename = "session.warning")]
     SessionWarning(SessionNotice),
     #[serde(rename = "session.error")]
@@ -225,6 +228,7 @@ impl Drift for EventPayload {
             EventPayload::SessionScheduleRearmed(p) => note_unknown(&p.unknown, prefix, out),
             EventPayload::SessionTaskComplete(p) => note_unknown(&p.unknown, prefix, out),
             EventPayload::SessionUsageCheckpoint(p) => note_unknown(&p.unknown, prefix, out),
+            EventPayload::SessionUsageRecord(p) => note_unknown(&p.unknown, prefix, out),
             EventPayload::SessionWorkspaceFileChanged(p) => note_unknown(&p.unknown, prefix, out),
             EventPayload::SkillInvoked(p) => note_unknown(&p.unknown, prefix, out),
             EventPayload::SubagentCompleted(p) => note_unknown(&p.unknown, prefix, out),
@@ -445,6 +449,17 @@ pub struct SessionShutdown {
     /// because of model multipliers.
     #[serde(default, skip_serializing_if = "skip_none")]
     pub total_premium_requests: Option<Value>,
+    /// 1.0.105 fixtures: the session's usage accounting, kept as written.
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub accounting_snapshot: Option<Value>,
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub agent_metrics: Option<Value>,
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub provider_model_metrics: Option<Value>,
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub tool_usage_request_ids: Option<Value>,
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub usage_accounting_watermarks: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -660,6 +675,17 @@ pub struct SessionUsageCheckpoint {
     pub unknown: Unknown,
 }
 
+/// `session.usage_record` (persisted since 1.0.8x; 1.0.105 fixtures): one
+/// record per model request, `data.usage` required by the writer schema. It
+/// carries what the ephemeral `assistant.usage` stream did; normalization does
+/// not consume it yet (usage stays sourced as before), so it is ledger-only.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SessionUsageRecord {
+    pub usage: Value,
+    #[serde(flatten)]
+    pub unknown: Unknown,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SessionWorkspaceFileChanged {
     pub operation: String,
@@ -802,6 +828,11 @@ pub struct UserMessage {
     pub interaction_id: Option<String>,
     #[serde(default, skip_serializing_if = "skip_none")]
     pub parent_agent_task_id: Option<String>,
+    /// 1.0.105 fixtures.
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub turn_id: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -863,6 +894,9 @@ pub struct AssistantMessage {
     pub server_tools: Option<Value>,
     #[serde(default, skip_serializing_if = "skip_none")]
     pub service_request_id: Option<String>,
+    /// 1.0.105 fixtures: the user message this reply answers.
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub originating_message_id: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -939,6 +973,9 @@ pub struct ToolExecutionStart {
     pub tool_description: Option<Value>,
     #[serde(default, skip_serializing_if = "skip_none")]
     pub turn_id: Option<String>,
+    /// 1.0.105 fixtures.
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub tool_title: Option<String>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -974,6 +1011,9 @@ pub struct ToolExecutionComplete {
     pub tool_telemetry: Option<Value>,
     #[serde(default, skip_serializing_if = "skip_none")]
     pub turn_id: Option<String>,
+    /// 1.0.105 fixtures: `{exitCode}` of a shell tool call.
+    #[serde(default, skip_serializing_if = "skip_none")]
+    pub shell_execution: Option<Value>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }

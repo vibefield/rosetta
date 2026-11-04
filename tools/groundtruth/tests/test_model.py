@@ -151,6 +151,30 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(record["observed"], 3)
         self.assertEqual(record["evidence"], "writer")
 
+        # Writer documents for several farmed releases: the newest farmed one
+        # names the canonical version whatever the file order; writer evidence
+        # for an unfarmed release never moves it.
+        pinned = merge_docs(
+            [
+                document("writer", "0.84.3", {"x": 1}),
+                document("writer", "1.5.0", {"x": 2}),
+                document("writer", "2.0.0", {"x": 3}),
+                document("fixture", "0.84.3", {"x": 4}),
+                document("fixture", "1.5.0", {"x": 5}),
+            ]
+        )
+        self.assertEqual(pinned["agent_version"], "1.5.0")
+        self.assertEqual(
+            merge_docs(
+                [
+                    document("writer", "0.149.1", {"x": 1}),
+                    document("writer", "0.155.1", {"x": 2}),
+                    document("fixture", "0.149.1", {"x": 3}),
+                ]
+            )["agent_version"],
+            "0.149.1",
+        )
+
     def test_census_keeps_protocol_enums_but_not_payload_values(self) -> None:
         document = {
             "format": "rosetta-groundtruth/1",

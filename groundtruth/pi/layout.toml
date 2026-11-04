@@ -8,7 +8,7 @@ glob = "agent/sessions/*/*.jsonl"
 file_format = "jsonl"
 discipline = "append_only"
 evidence = "fixture"
-notes = "JSONL with versioned SessionHeader first line (v1 linear → v2 tree → v3 current). 0.84.3 fixtures: session (parentSession on --fork), session_info (--name), model_change, thinking_level_change, message (user/assistant/toolResult, stopReason=error). Auto-compaction did not fire under a 1024-token mock window; compaction/branch_summary/custom/label remain writer-source (research) until a scenario writes them. Writer types at this pin require compaction.firstKeptEntryId; retainedTail is documented but absent from session-manager.ts. parentId is string|null. Farm strips auth.json, npm/, git/, logs/, bin/."
+notes = "JSONL with versioned SessionHeader first line (v1 linear → v2 tree → v3 current). 0.84.3 fixtures: session (parentSession on --fork), session_info (--name), model_change, thinking_level_change, message (user/assistant/toolResult, stopReason=error). Auto-compaction did not fire under a 1024-token mock window; compaction/branch_summary/custom/label remain writer-source (research) until a scenario writes them. 1.5.0 fixtures add role=system message entries (base prompt, sections, toolsAdded) and compaction.systemMessage; usage and context_edit entries are writer-only. Writer types at this pin require compaction.firstKeptEntryId; retainedTail is documented but absent from session-manager.ts. parentId is string|null. Farm strips auth.json, npm/, git/, logs/, bin/."
 
 [[streams]]
 id = "settings"

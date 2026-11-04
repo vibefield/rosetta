@@ -1,0 +1,45 @@
+{
+  "agent": "pi",
+  "agent_version": "1.5.0",
+  "scenario": "fork",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "openai-chat",
+  "files": [
+    {
+      "path": "pi-home/agent/models-store.json",
+      "bytes": 2
+    },
+    {
+      "path": "pi-home/agent/models.json",
+      "bytes": 693
+    },
+    {
+      "path": "pi-home/agent/sessions/--tmp-rosetta-farm-fork-project--/2026-11-03T19-35-35-613Z_01a1a2e8-e9bc-72dc-bbcc-bb6ae209e301.jsonl",
+      "bytes": 6729
+    },
+    {
+      "path": "pi-home/agent/sessions/--tmp-rosetta-farm-fork-project--/2026-11-03T19-35-36-104Z_01a1a2e8-eba8-76da-948a-157281aab2eb.jsonl",
+      "bytes": 7730
+    },
+    {
+      "path": "pi-home/agent/settings.json",
+      "bytes": 111
+    },
+    {
+      "path": "stderr-1.log",
+      "bytes": 0
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout-1.jsonl",
+      "bytes": 4091
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 20141
+    }
+  ]
+}

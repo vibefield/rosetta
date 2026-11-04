@@ -612,16 +612,37 @@ def _reduce_copilot_store(db_path: Path) -> None:
     connection = sqlite3.connect(db_path)
     try:
         connection.execute("PRAGMA journal_mode = DELETE")
-        tables = [
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-            )
+        rows = connection.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        tables = [name for name, _ in rows]
+        # A virtual table (the 1.0.8x+ FTS5 `search_index`) owns its shadow
+        # tables: emptying it through the module clears them consistently,
+        # while deleting a shadow table's rows directly corrupts the index.
+        virtual = [
+            name
+            for name, sql in rows
+            if (sql or "").lstrip().upper().startswith("CREATE VIRTUAL TABLE")
         ]
+        shadows = {
+            table
+            for table in tables
+            for owner in virtual
+            if table != owner and table.startswith(f"{owner}_")
+        }
         for table in tables:
-            if table in COPILOT_STORE_KEEP_TABLES or table == "sessions":
+            if table in COPILOT_STORE_KEEP_TABLES or table == "sessions" or table in shadows:
                 continue
             connection.execute(f'DELETE FROM "{table}"')
+            if table in virtual:
+                # FTS5 keeps deleted terms in its segments until a merge;
+                # rebuilding from the now-empty content drops them.
+                try:
+                    connection.execute(
+                        f'INSERT INTO "{table}"("{table}") VALUES (\'rebuild\')'
+                    )
+                except sqlite3.Error:
+                    pass
         if "sessions" in tables:
             assignments = []
             for _, name, kind, not_null, default, primary in connection.execute(
@@ -642,6 +663,36 @@ def _reduce_copilot_store(db_path: Path) -> None:
         connection.close()
     for suffix in ("-wal", "-shm"):
         (db_path.parent / (db_path.name + suffix)).unlink(missing_ok=True)
+
+
+def _extract_copilot_payload(binary: Path, install: Path) -> None:
+    """Let a single-file Copilot executable unpack its payload under ``install``.
+
+    1.0.85+ platform packages carry only the executable; its writer schema
+    exists on disk only after the first run unpacks it into
+    ``$COPILOT_CACHE_HOME/pkg``. ``--version`` performs that unpack offline
+    and touches no session state.
+    """
+
+    home = install / "extract-home"
+    home.mkdir(parents=True, exist_ok=True)
+    environment = _minimal_env(
+        HOME=home,
+        COPILOT_HOME=home / ".copilot",
+        COPILOT_CACHE_HOME=install / "extract-cache",
+        COPILOT_OFFLINE="true",
+        CI="1",
+    )
+    try:
+        subprocess.run(
+            [str(binary), "--version"],
+            env=environment,
+            check=True,
+            capture_output=True,
+            timeout=RUN_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise GroundTruthError(f"could not unpack {binary}: {error}") from error
 
 
 def _strip_grok_harvest(tree: Path) -> None:
@@ -1353,8 +1404,14 @@ def _strip_harvest(agent: str, harvested: Path) -> None:
         shutil.rmtree(harvested / "logs", ignore_errors=True)
         shutil.rmtree(harvested / "pkg", ignore_errors=True)
         shutil.rmtree(harvested / "installed-plugins", ignore_errors=True)
-        for lock in harvested.rglob("inuse.*.lock"):
+        # Process locks are empty run-time coordination files
+        # (inuse.*.lock; 1.0.8x+ settings.json.lock, .workspace-fork.lock,
+        # session-state/.session-operation-locks/).
+        for lock in harvested.rglob("*.lock"):
             lock.unlink(missing_ok=True)
+        shutil.rmtree(
+            harvested / "session-state" / ".session-operation-locks", ignore_errors=True
+        )
         return
     if agent == "pi":
         coding = harvested / "agent"
@@ -1459,6 +1516,7 @@ def _generate_fixtures(
             actual = _detect_version(binary)
         print(f"installed version: {actual}")
         if agent == "copilot":
+            _extract_copilot_payload(binary, install)
             schema_doc = write_copilot_writer_schema(install, agent_dir, actual)
             print(f"writer schema -> {schema_doc}")
 

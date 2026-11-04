@@ -4,8 +4,9 @@
 status = "captured"
 known_gaps = [
   "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
-  "The writer schema defines 53 persisted event types; hermetic fixtures currently exercise 12, and hosted-model parity is not captured.",
-  "session-store.db assistant_usage_events (per-call usage, CLI 1.0.69+) is evidenced by an observed structure census of a 1.0.80-written store and the runtime DDL; the farm still strips the database at harvest, so a hermetic capture proving the rows (BYOK and hosted) is pending.",
+  "The 1.0.105 writer schema defines 80 persisted event types (1.0.80: 53); hermetic fixtures exercise 12 at each pin, and hosted-model parity is not captured.",
+  "session-store.db assistant_usage_events (per-call usage, CLI 1.0.69+) is fixture-backed for BYOK at 1.0.105 (schema_version 8; the farm keeps a reduced store); hosted-model (metered) rows remain evidenced only by the observed 1.0.80 census and runtime DDL.",
+  "1.0.105 hermetic scenarios create no per-session session.db (todos/inbox); that stream's table shapes remain 1.0.80 fixture evidence.",
 ]
 
 [agent]
@@ -17,8 +18,8 @@ tier = "B"
 [release]
 channel = "npm"
 id = "@github/copilot"                   # 8 KB loader shim; real product = native binaries in optionalDependencies
-surveyed = "1.0.80"                      # 2026-08-24
-pinned = "1.0.80"                        # fixtures + schemas committed for this version (2026-08-25)
+surveyed = "1.0.105"                     # 2026-11-03
+pinned = "1.0.105"                       # fixtures + schemas committed for this version (2026-11-03, linux-x64); 1.0.80 corpus retained
 changelog = "https://github.com/github/copilot-cli/blob/main/changelog.md"
 
 [source]                                 # closed — binaries only, no JS to diff
@@ -30,4 +31,4 @@ headless = "copilot -p <prompt> -s --allow-all"
 mock_dialect = "openai-chat"             # BYOK: COPILOT_PROVIDER_BASE_URL + COPILOT_PROVIDER_API_KEY + COPILOT_MODEL (anthropic dialect also accepted)
 home_env = "COPILOT_HOME"
 data_root = "~/.copilot"
-notes = "events.jsonl is ground truth. Writer schema is copied from the platform npm package (sources/vendor/<ver>.session-events.schema.json) and folded in as research evidence; fixtures are stronger. Harvest currently strips session-store.db* (its assistant_usage_events table is per-call usage, not a derived index; a future harvest should keep it), logs/, pkg/ (binaries; schemas extracted first), installed-plugins/, inuse.*.lock. Per-session session.db (todos/inbox) is kept. Farm: COPILOT_OFFLINE + BYOK Chat Completions; --output-format json; --share=share.md; --continue appends session.resume; tool-denied uses --deny-tool=shell. Keep one scheduled credentialed run to check BYOK vs hosted-model event-stream parity."
+notes = "events.jsonl is ground truth. Writer schema is copied from the platform npm package (through 1.0.84) or from the single-file executable's self-extracted payload (1.0.85+, $COPILOT_CACHE_HOME/pkg/<platform>/<ver>/schemas) to sources/vendor/<ver>.session-events.schema.json and folded in as research evidence; fixtures are stronger. Harvest reduces session-store.db to schema_version, sessions(id, created_at, updated_at) and assistant_usage_events (FTS5 search_index emptied through its module), and strips logs/, pkg/ (binaries; schemas extracted first), installed-plugins/, and empty process locks (*.lock, session-state/.session-operation-locks/). Per-session session.db (todos/inbox) is kept. Farm: COPILOT_OFFLINE + BYOK Chat Completions; --output-format json; --share=share.md; --continue appends session.resume; tool-denied uses --deny-tool=shell. Keep one scheduled credentialed run to check BYOK vs hosted-model event-stream parity."

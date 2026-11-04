@@ -5,6 +5,7 @@ status = "captured"
 known_gaps = [
   "Input-image normalization has writer-derived conformance tests; an isolated native image-prompt capture is still needed.",
   "Compaction is fixture-backed; branch summaries and extension-defined custom/label entries remain writer-only.",
+  "1.5.0 usage and context_edit entries (and ToolResultMessage.nestedCalls) are writer-only; no hermetic scenario writes them yet.",
 ]
 
 [agent]
@@ -16,8 +17,8 @@ tier = "A"
 [release]
 channel = "npm"
 id = "@earendil-works/pi-coding-agent"   # @mariozechner/pi-coding-agent deprecated at 0.73.1 — keep only for historical fixtures
-surveyed = "0.84.3"                      # 2026-08-24; weekly-to-biweekly
-pinned = "0.84.3"                     # fixtures + groundtruth doc committed (2026-08-25)
+surveyed = "1.5.0"                       # 2026-11-03; weekly-to-biweekly
+pinned = "1.5.0"                         # fixtures (linux-x64) + writer doc committed (2026-11-03); 0.84.3 corpus retained
 changelog = "https://github.com/earendil-works/pi/releases"
 
 [source]
@@ -36,4 +37,4 @@ headless = "pi -p <prompt> --mode json"  # plus PI_OFFLINE=1, PI_SKIP_VERSION_CH
 mock_dialect = "openai-chat"             # models.json custom providers; also speaks anthropic-messages + gemini dialects
 home_env = "PI_CODING_AGENT_DIR"      # config dir override (~/.pi/agent); sessions live under it unless PI_CODING_AGENT_SESSION_DIR is set
 data_root = "~/.pi"
-notes = "JSONL with versioned SessionHeader first line (v3 current; auto-migrates old). Install with --ignore-scripts. Farm isolates via PI_CODING_AGENT_DIR. Harvest strips auth.json, npm/, git/, logs/, bin/ (credentials, package installs, managed binaries). Writer types at this pin do not include compaction.retainedTail (docs mention it; session-manager.ts does not). Pre-1.0: breaking format bumps expected; watch for further org/scope moves; cwd-hyphenated session dir naming is an implementation detail."
+notes = "JSONL with versioned SessionHeader first line (v3 current; auto-migrates old). Install with --ignore-scripts. Farm isolates via PI_CODING_AGENT_DIR. Harvest strips auth.json, npm/, git/, logs/, bin/ (credentials, package installs, managed binaries). Writer types at 0.84.3 and 1.5.0 do not include compaction.retainedTail (docs mention it; session-manager.ts does not). 1.5.0 persists the system prompt as role=system message entries (sections, toolsAdded) and on compaction.systemMessage. Pre-1.0: breaking format bumps expected; watch for further org/scope moves; cwd-hyphenated session dir naming is an implementation detail."

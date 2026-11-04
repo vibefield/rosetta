@@ -1,0 +1,221 @@
+[
+  {
+    "op": "message",
+    "timeline_id": "41ef89ebb43712e05180936363438f3a17d6c98cdcf695c2a74885546d05fd0d",
+    "session_id": "6bd942e9794e8d50547cd909bd2d23fbbe081112a004b7b96bc37f6f8e1dffbd",
+    "ordinal": 0,
+    "group": {
+      "id": "41ef89ebb43712e05180936363438f3a17d6c98cdcf695c2a74885546d05fd0d",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "4d18a48e-190f-447e-8adb-4fe987e51050",
+    "parent_native_id": "7351f5c2-87f5-4443-8173-8204abc1b315",
+    "at": 1793733269470,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "Run the echo command now. [use-tool]"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": "1.0.105",
+      "src_cursor": 3,
+      "src_offset": 725
+    }
+  },
+  {
+    "op": "drift",
+    "runtime_id": "bf17f75aa2b713a54a2e829fceffaff24d056177d9c881e5ce2e77c56f926921",
+    "agent_version": "1.0.105",
+    "stream": "events",
+    "record_kind": "tool/request/bash",
+    "error_code": "projection_unregistered",
+    "shape_hash": "27f0ba860d5e87c7dad46fe314c87989fbc43ae320eaf587efb24fcbf0a751b4",
+    "at": 1793733269675,
+    "sample_cursor": 7,
+    "sample_offset": 25265
+  },
+  {
+    "op": "message",
+    "timeline_id": "0993228293033e2d84f61c8844d1abb7b2861481156273f8d6b9e7d86a136140",
+    "session_id": "6bd942e9794e8d50547cd909bd2d23fbbe081112a004b7b96bc37f6f8e1dffbd",
+    "ordinal": 2,
+    "group": {
+      "id": "0993228293033e2d84f61c8844d1abb7b2861481156273f8d6b9e7d86a136140",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "f00969c4-5550-4e49-8de6-49aab8a1d60d",
+    "parent_native_id": "4576071a-a185-4d13-8a28-c3b63a09f974",
+    "at": 1793733269675,
+    "model": "mock-model",
+    "effort": null,
+    "body": {
+      "type": "tool_use",
+      "tool": {
+        "correlation": {
+          "key": "call_mock_0005",
+          "derivation": "native_id"
+        },
+        "native": {
+          "id": "call_mock_0005",
+          "namespace": null,
+          "name": "bash",
+          "provider": null
+        },
+        "status": {
+          "value": "pending",
+          "basis": "request_observed"
+        },
+        "action": {
+          "type": "unknown"
+        },
+        "failure": null,
+        "timing": null
+      }
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": "1.0.105",
+      "src_cursor": 7,
+      "src_offset": 25265
+    }
+  },
+  {
+    "op": "tool_update",
+    "session_id": "6bd942e9794e8d50547cd909bd2d23fbbe081112a004b7b96bc37f6f8e1dffbd",
+    "correlation_key": "call_mock_0005",
+    "evidence": {
+      "source_identity": "direct:bf17f75aa2b713a54a2e829fceffaff24d056177d9c881e5ce2e77c56f926921/6bd942e9794e8d50547cd909bd2d23fbbe081112a004b7b96bc37f6f8e1dffbd",
+      "generation": 0,
+      "record_offset": 26289,
+      "mutation_index": 0
+    },
+    "patch": {
+      "native_id": null,
+      "request": null,
+      "outcome": null,
+      "status": {
+        "value": "failed",
+        "basis": "native_terminal_record"
+      },
+      "failure": {
+        "kind": "unknown",
+        "summary": null,
+        "diagnostic": "Permission to run this tool was denied due to the following rules: `shell`"
+      },
+      "timing": {
+        "started_at": null,
+        "completed_at": 1793733269704,
+        "duration_ms": null
+      }
+    },
+    "at": 1793733269704
+  },
+  {
+    "op": "message",
+    "timeline_id": "b45a975940870b5dcd24344bb93cf83247ff7ab3d3c520d6312fc5567b91ba01",
+    "session_id": "6bd942e9794e8d50547cd909bd2d23fbbe081112a004b7b96bc37f6f8e1dffbd",
+    "ordinal": 3,
+    "group": {
+      "id": "b45a975940870b5dcd24344bb93cf83247ff7ab3d3c520d6312fc5567b91ba01",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": "9aea5afa-9d12-4016-9055-b6cc0c2af5d7",
+    "parent_native_id": "73a889a4-de85-46c6-b159-5ce7328fcb63",
+    "at": 1793733269728,
+    "model": "mock-model",
+    "effort": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "The tool ran successfully and printed: rosetta-mock. Scenario complete."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": "1.0.105",
+      "src_cursor": 13,
+      "src_offset": 28563
+    }
+  },
+  {
+    "op": "session_usage",
+    "session_id": "6bd942e9794e8d50547cd909bd2d23fbbe081112a004b7b96bc37f6f8e1dffbd",
+    "key": "0cd0479b520f5c5671a6a4873c73c2e73b76bd2209e8c978ce4ddb5407ea720d",
+    "ts": 1793733269766,
+    "model": "mock-model",
+    "tokens": {
+      "input": 256,
+      "output": 64,
+      "cache_read": 0,
+      "cache_write": 0,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "aggregate",
+      "requests": 2
+    }
+  }
+]
