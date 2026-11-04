@@ -116,8 +116,8 @@
                 {
                   "enum": [
                     "enrolled-ok", "enrolled-mismatch", "consent-begin", "select-newest-project",
-                    "select-newest-project-missed", "open-newest", "open-pending", "open-recent", "aim-horizon",
-                    "reselect", "open-finalizing", "open-post-canonical", "search-open", "search-query",
+                    "select-newest-project-missed", "reselect-missed", "open-newest", "open-pending", "open-recent",
+                    "aim-horizon", "reselect", "open-finalizing", "open-post-canonical", "search-open", "search-query",
                     "search-close", "park", "done", "newest-never-ready", "horizon-via-all-readable", "timeout-cols",
                     "timeout-frozen", "timeout-newest-ready", "timeout-open", "timeout-horizon",
                     "timeout-all-readable", "timeout-canonical", "timeout-search", "timeout-sheet",
@@ -553,8 +553,8 @@
                 {
                   "enum": [
                     "enrolled-ok", "enrolled-mismatch", "consent-begin", "select-newest-project",
-                    "select-newest-project-missed", "open-newest", "open-pending", "open-recent", "aim-horizon",
-                    "reselect", "open-finalizing", "open-post-canonical", "search-open", "search-query",
+                    "select-newest-project-missed", "reselect-missed", "open-newest", "open-pending", "open-recent",
+                    "aim-horizon", "reselect", "open-finalizing", "open-post-canonical", "search-open", "search-query",
                     "search-close", "park", "done", "newest-never-ready", "horizon-via-all-readable", "timeout-cols",
                     "timeout-frozen", "timeout-newest-ready", "timeout-open", "timeout-horizon",
                     "timeout-all-readable", "timeout-canonical", "timeout-search", "timeout-sheet",

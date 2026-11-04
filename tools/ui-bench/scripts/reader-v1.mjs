@@ -65,11 +65,11 @@ async function untilState(ctx, test, timeoutMs) {
   return null;
 }
 
-/** Step 2: aim at NEWEST's project card until the page says it is selected. The
+/** Step 2 (and each horizon's reselect): aim at NEWEST's project card until the page says it is selected. The
  * probe judges each press (it met the aimed card, or another); after a miss the
  * reader looks again once the card is at rest (two reads 50 ms apart agree), so a
  * card still sliding from the reorder is not aimed at where it was. */
-async function selectNewestProject(ctx) {
+async function selectNewestProject(ctx, mark = 'select-newest-project') {
   for (let tries = 0; tries < 3; tries += 1) {
     if (tries > 0) {
       let last = null;
@@ -87,8 +87,8 @@ async function selectNewestProject(ctx) {
       hit = await ctx.q('aimHit', aimed.aimId);
       if (hit === null) await ctx.sleep(50);
     }
-    if (hit === true && (await untilState(ctx, (s) => s.newestSelected, 1_000))) { ctx.mark('select-newest-project'); return; }
-    ctx.mark('select-newest-project-missed');
+    if (hit === true && (await untilState(ctx, (s) => s.newestSelected, 1_000))) { ctx.mark(mark); return; }
+    ctx.mark(`${mark}-missed`);
   }
 }
 
@@ -122,7 +122,10 @@ export default {
       if (got === null) { ctx.mark('timeout-horizon'); continue; }
       if (got !== horizon) ctx.mark('horizon-via-all-readable');
       if ((await ctx.aim('other-project:1')).ok) ctx.mark('aim-horizon');
-      if ((await ctx.aim('newest-project')).ok) ctx.mark('reselect');
+      // Back to NEWEST's project, judged like step 2: a card the import is still
+      // reordering can slide under the pointer, and the charts step reads the
+      // selection.
+      await selectNewestProject(ctx, 'reselect');
     }
 
     if (await ctx.until('all-readable', { timeoutMs: 300_000 })) await open(ctx, 'ready-next', 'open-finalizing');
