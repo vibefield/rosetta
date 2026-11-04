@@ -1090,7 +1090,10 @@ timing.
 > and scheduling boundary, not a loading effect: an earlier renderer launched two aggregate queries
 > for each of 135 projects every five seconds, and those shared-cache readers starved the sole cold
 > writer. After publication the renderer hydrates project figures with four workers and a quiet
-> refresh cadence. Contribution SQL constrains the project session tree before aggregating instead
+> refresh cadence: the selected project first, then the project cards on screen, then the rest of
+> the list as drawn. A project whose figures fail is asked again on its own (8 s, doubling, at most
+> 2 min); it no longer holds the portfolio's veil up, which instead says how many failed and that
+> they are being retried. Contribution SQL constrains the project session tree before aggregating instead
 > of re-grouping the whole corpus for every project.
 >
 > The app also owns first-run recovery and binary selection. `pnpm dev` builds release `rosettad`

@@ -5,6 +5,7 @@ import * as head from "../../../room/src/lib/transcript/head-state.ts";
 import * as historyWindow from "../../../room/src/lib/transcript/history-window.ts";
 import { createSessionLeases } from "../../../room/src/lib/session-leases.ts";
 import { catalogStatusOf } from "../../../room/src/lib/catalog-status.ts";
+import * as figureOrder from "../../../room/src/lib/figure-order.ts";
 
 // The hooks that read one session's body take the room's session leases; the
 // rest take the catalog. A fake client stands in for both, as rosetta's app
@@ -75,6 +76,7 @@ export function dataHooks(client) {
     "./model": { getActivityGridStartTimestamp: () => 0, getViewerUtcOffsetMinutes: () => 0 },
     "./transcript/head-state": head,
     "./transcript/history-window": historyWindow,
+    "./figure-order": figureOrder,
   };
   const source = fs.readFileSync(
     new URL("../../../room/src/lib/hooks.ts", import.meta.url),

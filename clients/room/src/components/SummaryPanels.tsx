@@ -26,6 +26,7 @@ import type { RoomAct } from "../host-inputs";
 import { useHostInputs } from "../host-inputs";
 import { HostAct } from "./HostAct";
 import { RenameHeading } from "./RenameHeading";
+import { failedFiguresLine } from "../lib/figure-order";
 
 type TintStyle = CSSProperties & { "--tint": string };
 const MAX_TREEMAP_PROJECT_COUNT = 10;
@@ -202,6 +203,7 @@ export function ProjectSummaryPanel({
             <Veil
               label={ingestActive
                 ? censusRunning ? "Discovering conversations…" : CHARTS_AFTER_IMPORT
+                : project.statsFailed === true ? "Figures for this project failed · retrying"
                 : "Loading activity summaries…"}
               progress={null}
             />
@@ -318,7 +320,11 @@ export function PortfolioSummaryPanel({
   onProjectSelect,
 }: PortfolioSummaryPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
-  const summariesPending = ingestActive || projects.some((project) => !project.statsReady);
+  // A project whose figures failed no longer holds the veil up: the rest
+  // show, and a line says how many are missing while they are retried.
+  const failedCount = ingestActive ? 0 : projects.filter((project) => project.statsFailed === true).length;
+  const summariesPending = ingestActive ||
+    projects.some((project) => !project.statsReady && project.statsFailed !== true);
   const summary = useMemo(() => {
     // Match the project list's lifetime spend ranking, tokens breaking ties.
     const treemapProjects = [...projects]
@@ -404,6 +410,11 @@ export function PortfolioSummaryPanel({
           <SummaryMetrics sessionCount={summary.sessionCount} messageCount={summary.messageCount}
             tokenCount={summary.tokenCount} spend={summary.spend}
             pending={summariesPending} period="all time" />
+          {!summariesPending && failedCount > 0 && (
+            <p className="ah-meta__facts" role="status" data-figures-failed={failedCount}>
+              {failedFiguresLine(failedCount)}
+            </p>
+          )}
           <div className="ah-chartcard">
             <Treemap
               data={summary.treemapData}

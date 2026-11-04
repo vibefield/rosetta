@@ -208,6 +208,9 @@ export interface ColdImportController {
   connectionChange(): number;
   /** Put a host-side event on the trail, in order with the daemon's. */
   mark(what: string, detail?: string): void;
+  /** Make one project's figures fail (a 500, as a daemon mid-restart
+   * answers) until called with `false`; the ask is still logged. */
+  failFigures(projectId: string, failing: boolean): void;
 }
 
 export interface ColdImport {
@@ -629,6 +632,7 @@ export function createColdImport(options: ColdImportOptions): ColdImport {
     };
   };
   const published = () => clock >= at("canonical");
+  const failingFigures = new Set<string>();
   const searchAt = (t: number): SearchState => {
     const total = Math.max(1, Math.round(899_402 * corpus.scale));
     const building = (progress: SearchBuildProgress | null): SearchState => ({
@@ -722,6 +726,7 @@ export function createColdImport(options: ColdImportOptions): ColdImport {
     heatmap(projectId) {
       log.projectStats.push({ projectId, at: clock });
       if (!published()) throw notReady("Project figures");
+      if (failingFigures.has(projectId)) throw new ColdWireError(500, "internal", "Project figures failed");
       return { days: [] };
     },
     contribution(projectId): ContributionResponse {
@@ -856,6 +861,10 @@ export function createColdImport(options: ColdImportOptions): ColdImport {
       return listeners.length;
     },
     mark(what, detail) { mark(what, detail ?? null); },
+    failFigures(projectId, failing) {
+      if (failing) failingFigures.add(projectId);
+      else failingFigures.delete(projectId);
+    },
   };
 
   return {

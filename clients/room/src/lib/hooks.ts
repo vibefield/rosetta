@@ -19,6 +19,7 @@ import type {
 import { CursorExpiredError } from "@vibefield/rosetta-protocol";
 import type { ProjectStats } from "./model";
 import { getActivityGridStartTimestamp, getViewerUtcOffsetMinutes } from "./model";
+import { figureRetryDelay } from "./figure-order";
 import type { CatalogPort, CollaborationFeed, SessionClient, SessionFeed } from "../ports";
 import type { SessionLeases } from "./session-leases";
 import { conversationStart, readConversationPage } from "./transcript/history-window";
@@ -186,16 +187,40 @@ export function useDaemonStatus(catalog: CatalogPort, asked = 0): DaemonStatusFe
   return feed;
 }
 
+/** Project figures as they land, and the projects whose latest ask failed. */
+export interface ProjectFigures {
+  readonly stats: Map<string, ProjectStats>;
+  /** Each earns a retry (`figureRetryDelay`); empty when none failed. */
+  readonly failed: ReadonlySet<string>;
+}
+
+/** Which project to ask next: `first` (the selected project) is read at
+ * every ask, so a click mid-hydration jumps the queue; `order` (the list as
+ * drawn, `figureOrder`) is read once per round. */
+export interface FigurePriority {
+  readonly first: string | null;
+  readonly order: () => readonly string[];
+}
+
+const NO_FAILURES: ReadonlySet<string> = new Set();
+
 /** Per-project heatmaps and contributions. These are global derived reads,
  * so they begin only after the daemon's canonical publication gate. Four
- * workers hydrate the list progressively; unbounded Promise.all here once
- * launched two full-corpus queries per project and starved cold ingestion. */
+ * workers hydrate the list progressively — the selected project first, then
+ * the cards on screen, then the rest (`priority`) — and unbounded
+ * Promise.all here once launched two full-corpus queries per project and
+ * starved cold ingestion. A project that fails is asked again on its own,
+ * with backoff; the others wait for the quiet periodic refresh. */
 export function useProjectStats(
   catalog: CatalogPort,
   projectIds: string[],
   ready = false,
-): Map<string, ProjectStats> {
+  priority?: FigurePriority,
+): ProjectFigures {
   const [stats, setStats] = useState<Map<string, ProjectStats>>(new Map());
+  const [failed, setFailed] = useState<ReadonlySet<string>>(NO_FAILURES);
+  const priorityRef = useRef(priority);
+  priorityRef.current = priority;
   const key = projectIds.join("\n");
   useEffect(() => {
     let cancelled = false;
@@ -204,72 +229,84 @@ export function useProjectStats(
     const ids = key === "" ? [] : key.split("\n");
     if (!ready || ids.length === 0) {
       setStats(new Map());
+      setFailed(NO_FAILURES);
       return () => {
         cancelled = true;
         controller.abort();
       };
     }
-    async function loadAll() {
-      const sinceMs = getActivityGridStartTimestamp(Date.now());
-      const offsetMinutes = getViewerUtcOffsetMinutes();
+    const land = (answered: ReadonlyMap<string, ProjectStats>) => {
+      if (cancelled || answered.size === 0) return;
+      setStats((current) => {
+        const next = new Map(current);
+        for (const [id, figures] of answered) next.set(id, figures);
+        return next;
+      });
+    };
+    /** One ask of every target; resolves to the ones that failed. */
+    async function round(targets: readonly string[]): Promise<Set<string>> {
+      const span = { sinceMs: getActivityGridStartTimestamp(Date.now()), offsetMinutes: getViewerUtcOffsetMinutes() };
+      const missed = new Set<string>();
       // A host that answers every project at once is asked once.
       if (catalog.projectStatsBatch !== undefined) {
-        let missing = true;
         try {
-          const answer = await catalog.projectStatsBatch(ids, { sinceMs, offsetMinutes }, controller.signal);
-          missing = ids.some((id) => !answer.has(id));
-          if (!cancelled) {
-            setStats((current) => {
-              const next = new Map(current);
-              for (const id of ids) {
-                const figures = answer.get(id);
-                if (figures !== undefined) next.set(id, figures);
-              }
-              return next;
-            });
-          }
+          const answer = await catalog.projectStatsBatch([...targets], span, controller.signal);
+          for (const id of targets) if (!answer.has(id)) missed.add(id);
+          land(new Map(targets.flatMap((id) => {
+            const figures = answer.get(id);
+            return figures === undefined ? [] : [[id, figures] as const];
+          })));
         } catch {
           // as below: unfigured projects degrade honestly and earn a retry
+          for (const id of targets) missed.add(id);
         }
-        if (cancelled) return;
-        timer = window.setTimeout(loadAll, missing ? 8_000 : 5 * 60_000);
-        return;
+        return missed;
       }
-      const queue = [...ids];
-      let failed = false;
+      const left = new Set(targets);
+      const drawn = priorityRef.current?.order() ?? [];
+      const next = (): string | undefined => {
+        const first = priorityRef.current?.first ?? null;
+        if (first !== null && left.delete(first)) return first;
+        for (const id of drawn) if (left.delete(id)) return id;
+        const rest = left.values().next();
+        if (rest.done) return undefined;
+        left.delete(rest.value);
+        return rest.value;
+      };
       async function worker() {
         while (!cancelled) {
-          const id = queue.shift();
+          const id = next();
           if (id === undefined) return;
           try {
-            const figures = await catalog.projectStats(id, { sinceMs, offsetMinutes }, controller.signal);
-            if (!cancelled) {
-              setStats((current) => {
-                const next = new Map(current);
-                next.set(id, figures);
-                return next;
-              });
-            }
+            land(new Map([[id, await catalog.projectStats(id, span, controller.signal)]]));
           } catch {
             // an unfigured project degrades honestly — and earns a retry
-            failed = true;
+            missed.add(id);
           }
         }
       }
-      await Promise.all(Array.from({ length: Math.min(4, ids.length) }, () => worker()));
-      if (cancelled) return;
-      // A failed figure (a daemon mid-restart, a dropped socket) retries in
-      // seconds. Stable canonical figures need only a quiet periodic refresh.
-      timer = window.setTimeout(loadAll, failed ? 8_000 : 5 * 60_000);
+      await Promise.all(Array.from({ length: Math.min(4, targets.length) }, () => worker()));
+      return missed;
     }
-    loadAll();
+    async function load(targets: readonly string[], failures: number) {
+      const missed = await round(targets);
+      if (cancelled) return;
+      setFailed(missed.size === 0 ? NO_FAILURES : missed);
+      // A failed figure (a daemon mid-restart, a dropped socket) is asked
+      // again on its own, in seconds and then less often. Stable canonical
+      // figures need only a quiet periodic refresh of every project.
+      timer = missed.size > 0
+        ? window.setTimeout(() => load([...missed], failures + 1), figureRetryDelay(failures + 1))
+        : window.setTimeout(() => load(ids, 0), 5 * 60_000);
+    }
+    load(ids, 0);
     return () => {
       cancelled = true;
       controller.abort();
       window.clearTimeout(timer);
     };
   }, [catalog, key, ready]);
-  return stats;
+  return useMemo(() => ({ stats, failed }), [stats, failed]);
 }
 
 /** The selected project's usage decomposition — per-model days and the

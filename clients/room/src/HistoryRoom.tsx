@@ -74,6 +74,7 @@ import {
 } from "./lib/search-sheet";
 import type { SearchFilters } from "./lib/search-sheet";
 import { fullTextUnavailable, matchSessionTitles, searchableTitleCount, titlesStandIn } from "./lib/title-search";
+import { drawnProjectCards, figureOrder } from "./lib/figure-order";
 import { spendOf } from "./lib/spend";
 
 function useNow(refreshKey: unknown): number {
@@ -380,8 +381,13 @@ function RoomBody({
   }, [meta]);
   // Cross-session figures wait for canonical publication. Metadata and
   // completed timelines remain progressive; aggregate scans never compete
-  // with the sole cold writer for the shared RAM projection.
-  const stats = useProjectStats(catalog, projectIds, canonicalReady === true);
+  // with the sole cold writer for the shared RAM projection. The sorted ids
+  // are only the set's identity: the selected project is asked first, then
+  // the cards on screen, then the rest as drawn (lib/figure-order.ts).
+  const { stats, failed: figuresFailed } = useProjectStats(catalog, projectIds, canonicalReady === true, {
+    first: projectId,
+    order: () => figureOrder(projectIds, null, drawnProjectCards(roomRef.current)),
+  });
 
   const projectRows = useMemo(() => {
     const rows = [...(meta?.projects ?? [])];
@@ -423,9 +429,10 @@ function RoomBody({
       projectRows.map((p) =>
         buildProjectViewModelFromSessions(
           p, sessionsOfProject(sessionsByProject, p.id), stats.get(p.id), kindOf, nowMs, tintOf,
+          figuresFailed.has(p.id),
         ),
       ),
-    [projectRows, sessionsByProject, stats, kindOf, nowMs, tintOf],
+    [projectRows, sessionsByProject, stats, figuresFailed, kindOf, nowMs, tintOf],
   );
   const projectById = useMemo(
     () => new Map(projectViewModels.map((project) => [project.row.id, project])),

@@ -74,6 +74,9 @@
 //
 // Summaries                              Veil, in the summary panels
 //   .ah-veil         aggregate figures are not ready yet (role=status)
+//   [data-figures-failed]  integer: in the portfolio panel, the projects
+//                    whose figures failed (and are being retried) once
+//                    every other project's have landed; absent with none
 //
 // The transcript                         TranscriptColumn and its parts
 //   .tr-stage[data-session-key]  the open session's id; absent with none open
@@ -127,6 +130,7 @@ import { SessionListItem } from "../../room/src/components/sessions/SessionListI
 import { TranscriptDocument } from "../../room/src/components/transcript/Document.tsx";
 import { ImportEmptyState } from "../../room/src/components/transcript/ImportState.tsx";
 import { Veil } from "../../room/src/components/ui/Veil.tsx";
+import { PortfolioSummaryPanel } from "../../room/src/components/SummaryPanels.tsx";
 import { TranscriptLoading } from "../../room/src/components/transcript/TranscriptLoading.tsx";
 import { transcriptModel } from "../../room/src/components/transcript/document-model.ts";
 import { buildThreadIndex } from "../../room/src/components/transcript/thread-index.ts";
@@ -400,6 +404,30 @@ test("a held list's update pill, the summary veil and a filling project row mark
   // A running import with a board: the row's byte meter fills it.
   assert.equal(only(classed(projectRow(), "ah-project-list-item"), "project row")["data-fill"], "");
   assert.equal(only(classed(projectRow({ act }), "ah-project-list-item"), "project row")["data-fill"], "");
+});
+
+test("one project's failed figures no longer veil the portfolio: it counts them instead", () => {
+  const figures = { heat: [], contribution: [] };
+  const view = (id, stats, failed) => buildProjectViewModelFromSessions(
+    { id, name: id, root_paths: [], git_repo: null }, [session(`${id}-s`, { project_id: id })], stats,
+    () => "claude-code", NOW, () => "#888", failed);
+  const panel = (projects, ingestActive = false) => elements(renderToStaticMarkup(createElement(PortfolioSummaryPanel, {
+    projects, selectedProjectId: null, ingestActive, censusRunning: false, onProjectSelect: nothing,
+  })));
+  const failed = (markup) => markup.filter((element) => "data-figures-failed" in element.attrs);
+  const veiled = (markup) => markup.some((element) => (element.attrs.class ?? "").split(" ").includes("ah-veil"));
+
+  const one = panel([view("a", figures, false), view("b", undefined, true)]);
+  assert.equal(veiled(one), false);
+  assert.equal(only(failed(one), "failed line")["data-figures-failed"], "1");
+  // Still loading another: the veil stays, the line waits.
+  const loading = panel([view("a", undefined, false), view("b", undefined, true)]);
+  assert.deepEqual([veiled(loading), failed(loading).length], [true, 0]);
+  // During the import the veil names the import, never a failure.
+  const importing = panel([view("a", figures, false), view("b", undefined, true)], true);
+  assert.deepEqual([veiled(importing), failed(importing).length], [true, 0]);
+  // A failure with older figures on screen is not missing.
+  assert.equal(view("c", figures, true).statsFailed, false);
 });
 
 /* ── the transcript ───────────────────────────────────────────────────── */

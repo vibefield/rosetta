@@ -591,6 +591,23 @@ async function freshImport() {
   // Publication, measured from just before it to just after it settles.
   await rowsAtRest();
   const beforePublication = { rule: await agreed(projectsByToday), tops: await check(tops) };
+  // The list as the reader sees it when figures may start: the selected
+  // card, the cards inside the scrolled list, the rest top to bottom.
+  const drawnAtPublication = await check(() => {
+    const cards = [...document.querySelectorAll('.ah-project-list-item[data-motion-key]')].map((card) => {
+      const box = card.getBoundingClientRect();
+      const view = card.closest('.ah-scroll').getBoundingClientRect();
+      return { id: card.dataset.motionKey, top: box.top, onScreen: box.bottom > view.top && box.top < view.bottom };
+    }).sort((a, b) => a.top - b.top);
+    return { cards, selected: document.querySelector('.ah-project-list-item[aria-current="true"]')?.dataset.motionKey ?? null };
+  });
+
+  // One project's figures fail from publication on: the last card drawn,
+  // neither selected nor on screen.
+  const failingProject = drawnAtPublication.cards.at(-1).id;
+  assert.ok(failingProject !== drawnAtPublication.selected && !drawnAtPublication.cards.at(-1).onScreen,
+    'fixture precondition: the last card is off screen and not selected');
+  await check((id) => { window.coldImport.c.failFigures(id, true); return true; }, failingProject);
 
   // ── Canonical readiness, still publishing ─────────────────────────────
   await advanceToPhase('canonical');
@@ -622,14 +639,16 @@ async function freshImport() {
     await check(tokenSort), { disabled: false, title: null, pressed: 'false' });
   today('ux:X6', 'live, search not started: the portfolio panel stays hidden while the card is up',
     await inColumn((column) => column('projects')?.querySelector('.ah-meta__body') !== null), false);
-  const hydration = await check(() => {
-    const asked = window.coldImport.c.log.projectStats.map((s) => s.projectId);
-    const listed = [...document.querySelectorAll('.ah-project-list-item')].map((row) => row.dataset.motionKey);
-    const selected = document.querySelector('.ah-project-list-item[aria-current="true"]')?.dataset.motionKey;
-    return { asked: asked.slice(0, listed.length), sorted: [...listed].sort(), selectedAt: asked.indexOf(selected), selectedSortedAt: [...listed].sort().indexOf(selected) };
-  });
-  today('ux:X6', 'figures hydrate in sorted-id order, the selected project wherever its id falls',
-    { order: hydration.asked, selectedAt: hydration.selectedAt }, { order: hydration.sorted, selectedAt: hydration.selectedSortedAt });
+  const askedFigures = await check((n) => window.coldImport.c.log.projectStats.map((s) => s.projectId).slice(0, n), drawnAtPublication.cards.length);
+  const { cards: drawnCards, selected: selectedAtPublication } = drawnAtPublication;
+  const onScreen = drawnCards.filter((card) => card.onScreen && card.id !== selectedAtPublication).map((card) => card.id);
+  assert.ok(selectedAtPublication !== null && onScreen.length > 0 && onScreen.length + 1 < drawnCards.length,
+    'fixture precondition: a selected project, and both on-screen and off-screen cards');
+  today('ux:X6', 'figures hydrate the selected project first, then the on-screen cards top to bottom, then the rest as drawn',
+    { order: askedFigures, selectedAt: askedFigures.indexOf(selectedAtPublication), onScreen: onScreen.length },
+    { order: [selectedAtPublication, ...onScreen, ...drawnCards.map((card) => card.id).filter((id) => id !== selectedAtPublication && !onScreen.includes(id))],
+      selectedAt: 0, onScreen: onScreen.length });
+  console.log(`  figures: the selected project first, then ${onScreen.length} on-screen card(s), then ${drawnCards.length - 1 - onScreen.length} more`);
 
   // Search right after publication, the index still building (ux:X6).
   await advanceToPhase('search-indexing');
@@ -709,6 +728,30 @@ async function freshImport() {
   today('ux:X9', 'the card\'s exit moves every project row by one common shift, all of it in a single frame (no animation)',
     { sameOrder: exit.sameOrder, uniform: exit.uniform, moved: Math.abs(exit.shift) > 1, inOneFrame: exit.movingFrames === 1 },
     { sameOrder: true, uniform: true, moved: true, inOneFrame: true });
+  // The failing project no longer veils the portfolio: the rest show, a
+  // line says one is missing, and it is asked again until it lands.
+  await until(() => document.querySelector('.ah-col .ah-meta__body [data-figures-failed]'), 'the failed-figures line');
+  today('ux:X6', 'one project\'s failing figures: the portfolio unveils and says "figures for 1 project failed · retrying"',
+    await inColumn((column) => {
+      const body = column('projects')?.querySelector('.ah-meta__body');
+      return { veil: body?.querySelector('.ah-veil') !== null, line: body?.querySelector('[data-figures-failed]')?.textContent ?? null };
+    }), { veil: false, line: 'figures for 1 project failed · retrying' });
+  const retried = await check((id) => window.coldImport.c.log.projectStats.filter((s) => s.projectId === id).length, failingProject);
+  await check((id) => { window.coldImport.c.failFigures(id, false); return true; }, failingProject);
+  // Retries back off (8 s, 16 s, … at most 2 min), so this wait is longer
+  // than `until`'s; the retry timers are the room's own, in real time.
+  const landedAt = Date.now();
+  let landed = false;
+  while (!landed && Date.now() - landedAt < 40_000) {
+    landed = await check((id, n) => window.coldImport.c.log.projectStats.filter((s) => s.projectId === id).length > n &&
+      !document.querySelector('.ah-col .ah-meta__body [data-figures-failed]'), failingProject, retried);
+    if (!landed) await pause(100);
+  }
+  const reasked = await check((id, n) => window.coldImport.c.log.projectStats.slice(n).filter((s) => s.projectId !== id).length,
+    failingProject, drawnAtPublication.cards.length);
+  today('ux:X6', 'a failed project is asked again on its own (no other project re-asked), and once it answers the line goes',
+    { landed, reasked }, { landed: true, reasked: 0 });
+  console.log(`  the failed project was asked ${retried} time(s) before it answered; it landed ${((Date.now() - landedAt) / 1000).toFixed(1)} s after`);
   console.log(`  card exit: every row moved ${exit.shift} px; the largest one-frame step ${exit.maxStep} px over ${exit.movingFrames} moving frame(s) of ${exit.frames}`);
   const cards = (await check(() => window.coldImport.report())).cards;
   const tail = cards.map((c) => c.state).filter((state, i, all) => i === 0 || all[i - 1] !== state);

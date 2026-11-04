@@ -58,6 +58,9 @@ export interface ProjectViewModel {
   readonly readiness: "pending" | "partial" | "ready";
   /** Aggregate requests finish separately from transcript publication. */
   readonly statsReady: boolean;
+  /** Its figures' latest ask failed and none have landed; a retry is due.
+   * Absent reads as false. */
+  readonly statsFailed?: boolean;
 }
 
 const DAY_IN_MS = 86_400_000;
@@ -192,6 +195,7 @@ export function buildProjectViewModelFromSessions(
   getRuntimeKind: (runtimeId: string) => string,
   currentTimestamp: number,
   projectTint: (projectId: string) => string,
+  statsFailed = false,
 ): ProjectViewModel {
   const rootSessions = projectSessions.filter(
     (session) => session.parent_session_id === null,
@@ -288,6 +292,7 @@ export function buildProjectViewModelFromSessions(
     indexedSessionCount,
     readiness,
     statsReady: projectStats !== undefined,
+    statsFailed: projectStats === undefined && statsFailed,
   };
 }
 
