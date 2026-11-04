@@ -45,7 +45,10 @@ function goodDoc() {
     probe: { h5: [] },
   };
 }
-const verdict = (doc, opts = {}) => checkRun(doc, { script: 'reader-v1', manifest: MANIFEST, expected: EXPECTED, newestFlipMs: 1203.7, lastRootFlipMs: 1203.7, search: SEARCH, ...opts });
+// The daemon's flips: each batch's commit stamp, its publication 0.3 ms later.
+const FLIPS = { newestMs: 1203.4, h24Ms: 1203.4, h7dMs: 1203.4, lastRootMs: 1203.4, lastRootPublishedMs: 1203.7 };
+const verdict = (doc, { flips = {}, ...opts } = {}) =>
+  checkRun(doc, { script: 'reader-v1', manifest: MANIFEST, expected: EXPECTED, flips: { ...FLIPS, ...flips }, search: SEARCH, ...opts });
 const failing = (r) => r.checks.filter((c) => c.ok === false).map((c) => c.id);
 const byId = (r, id) => r.checks.find((c) => c.id === id);
 
@@ -65,8 +68,8 @@ test('each planted fault fails its own check', () => {
     [(d) => { d.metrics.I1.pass = false; d.metrics.I1.checks.c2NeverReverts = { violations: 1, exercised: 14, pass: false }; }, ['i1-pass']],
     [(d) => { d.metrics.I1.checks.c2NeverReverts.exercised = 0; }, ['i1-exercised:c2NeverReverts']],
     [(d) => { d.metrics.H5.p50Ms = 0; }, ['reached:H5.samples']],
-    [(d) => { d.metrics.H2.receiptMs = 1190; d.metrics.D2.newestGiant.receiptMs = 1190; }, ['order:H2-receipt>=daemon-flip-of-NEWEST']],
-    [(d) => { d.metrics.H3.h24.receiptMs = 1200; }, ['order:H3-24h-receipt>=recent-ready-24h@newest']],
+    [(d) => { d.metrics.H2.receiptMs = 1190; d.metrics.D2.newestGiant.receiptMs = 1190; }, ['order:H2-receipt>=daemon-commit-of-NEWEST']],
+    [(d) => { d.metrics.H3.h24.receiptMs = 1200; }, ['order:H3-24h-receipt>=daemon-commit-of-24h@newest']],
     [(d) => { d.metrics.H3.h7d.roots = 11; }, ['shape:h7d-members']],
     [(d) => { d.run.outcome = 'incomplete'; }, ['outcome-complete']],
     [(d) => { d.privacy.forbiddenSource = 'unavailable'; }, ['privacy']],
@@ -74,7 +77,8 @@ test('each planted fault fails its own check', () => {
     [(d) => { d.privacy.forbiddenValues = 12; }, ['privacy-scan-input']],
     // A missing ordering end fails; it is never skipped as passed.
     [(d) => { d.metrics.H1.metaPushMs = null; }, ['order:H1>=first-project-frame']],
-    [(d) => { d.metrics.H3.h7d.daemonMs = null; }, ['order:H3-7d-receipt>=recent-ready-7d@newest']],
+    [(d) => { d.metrics.H3.h7d.receiptMs = null; d.metrics.H3.reached['h7d.receiptMs'] = 'not-reached'; },
+      ['order:H3-7d-receipt>=daemon-commit-of-7d@newest', 'must-reach:H3.h7d.receiptMs']],
     // Every H5 sample is checked, not only its percentiles.
     [(d) => { d.probe.h5 = [[100, 95], [100, 110], [100, 120]]; Object.assign(d.metrics.H5, { n: 3, p50Ms: 10, p95Ms: 20, maxMs: 20, reached: { samples: 'yes' } }); },
       ['order:H5-samples>=0']],
@@ -93,12 +97,34 @@ test('each planted fault fails its own check', () => {
     ['expected:fixtureSearch', 'search:fixture-workload']);
   assert.deepEqual(failing(verdict(goodDoc(), { search: { ...SEARCH, rankedIdsSha256: HEX('7') } })), ['expected:fixtureSearch']);
   assert.deepEqual(failing(verdict(goodDoc(), { search: { error: 'warm start never reported ready' } })).sort(), ['expected:fixtureSearch', 'search:fixture-workload']);
-  // The H-all receipt is held to the daemon's last root flip, within the clock error.
-  assert.deepEqual(failing(verdict(goodDoc(), { lastRootFlipMs: 1210 })), ['order:Hall-receipt>=daemon-last-root-flip']);
+  // The H-all receipt is held to the commit of the daemon's last root flip, within the clock error.
+  assert.deepEqual(failing(verdict(goodDoc(), { flips: { lastRootMs: 1210 } })), ['order:Hall-receipt>=daemon-commit-of-last-root']);
   // Without the daemon's flips the orderings that need them fail, never pass.
-  assert.deepEqual(failing(verdict(goodDoc(), { newestFlipMs: null })), ['order:H2-receipt>=daemon-flip-of-NEWEST']);
-  assert.deepEqual(failing(verdict(goodDoc(), { lastRootFlipMs: null })).sort(),
-    ['order:Hall-receipt>=daemon-last-root-flip', 'order:last-runtime-readable>=daemon-last-root-flip']);
+  assert.deepEqual(failing(verdict(goodDoc(), { flips: { newestMs: null } })), ['order:H2-receipt>=daemon-commit-of-NEWEST']);
+  assert.deepEqual(failing(verdict(goodDoc(), { flips: { h7dMs: null } })), ['order:H3-7d-receipt>=daemon-commit-of-7d@newest']);
+  assert.deepEqual(failing(verdict(goodDoc(), { flips: { lastRootMs: null } })), ['order:Hall-receipt>=daemon-commit-of-last-root']);
+  assert.deepEqual(failing(verdict(goodDoc(), { flips: { lastRootPublishedMs: null } })), ['order:last-runtime-readable>=daemon-last-root-flip']);
+});
+
+test('a receipt is ordered after the flip\'s commit, not its publication stamp', () => {
+  // The flake: the UI received NEWEST's batch 1.3 ms before the daemon stamped
+  // publishedS (after the hub send returned), beyond the 1.04 ms clock slack; the
+  // commit, 0.4 ms before publishedS, precedes the send, so the receipt follows it.
+  const d = goodDoc();
+  for (const z of [d.metrics.H2, d.metrics.H3.h24, d.metrics.H3.h7d, d.metrics.Hall]) z.receiptMs = 1202.4;
+  d.metrics.D2.newestGiant.receiptMs = 1202.4;
+  const published = 1203.7;
+  const commit = 1203.3;
+  assert.ok(1202.4 < published - d.clocks.estimatedErrorMs, 'the receipt would fail against the publication stamp');
+  const r = verdict(d, { flips: { newestMs: commit, h24Ms: commit, h7dMs: commit, lastRootMs: commit, lastRootPublishedMs: published } });
+  assert.deepEqual(failing(r), []);
+  assert.match(byId(r, 'order:H2-receipt>=daemon-commit-of-NEWEST').detail, /^1202\.4 >= 1203\.3 - 1\.04$/);
+  // Still a real bound: a receipt before the commit by more than the clock error fails.
+  for (const z of [d.metrics.H2, d.metrics.H3.h24, d.metrics.H3.h7d, d.metrics.Hall]) z.receiptMs = 1202.1;
+  d.metrics.D2.newestGiant.receiptMs = 1202.1;
+  assert.deepEqual(failing(verdict(d, { flips: { newestMs: commit, h24Ms: commit, h7dMs: commit, lastRootMs: commit, lastRootPublishedMs: published } })).sort(),
+    ['order:H2-receipt>=daemon-commit-of-NEWEST', 'order:H3-24h-receipt>=daemon-commit-of-24h@newest', 'order:H3-7d-receipt>=daemon-commit-of-7d@newest',
+      'order:Hall-receipt>=daemon-commit-of-last-root']);
 });
 
 test('passive-v1: no hit digest, only c3 must examine something, and only its declared ordering is n/a', () => {

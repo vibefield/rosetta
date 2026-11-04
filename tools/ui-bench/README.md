@@ -379,19 +379,24 @@ and a home holding anything but the spec's data roots.
 - every H1–H5 / H-all `reached` entry agrees with its value (a number with `yes`, null
   otherwise), and the values the fixture always produces are reached;
 - orderings, with the run's own clock error as slack: H1 ≥ the first project frame
-  received; H2 painted ≥ H2 receipt ≥ the daemon's flip of NEWEST (the `publishedS` of the
-  tree-admission batch that printed `newest-giant-ready`: NEWEST is the newest giant); each
-  H3 receipt ≥ its `recent-ready …@newest`; H-all receipt ≥ the daemon's last root-flipping
-  batch, and that batch ≤ the last `runtime-readable`; every H5 sample ≥ 0 (from the
-  probe's own pairs, vacuous while H5 is not reached). A missing end fails the ordering,
-  except passive-v1's H2 painted, which it declares not applicable;
+  received; H2 painted ≥ H2 receipt ≥ the commit of the daemon's flip of NEWEST (the
+  `elapsedS` of the tree-admission batch that printed `newest-giant-ready`: NEWEST is the
+  newest giant); each H3 receipt ≥ the commit of the batch that printed its
+  `recent-ready …@newest`; H-all receipt ≥ the commit of the daemon's last root-flipping
+  batch, and that batch's `publishedS` ≤ the last `runtime-readable`; every H5 sample ≥ 0
+  (from the probe's own pairs). A batch's commit stamp precedes every byte the hub sends
+  of it, so a receipt after it is causal. Its `publishedS`, and the milestones printed
+  after it, are stamped once the hub send returns: under load the UI received NEWEST's
+  batch 1.3 ms before `publishedS`, beyond the ~1.05 ms clock slack (1 of 6 runs), so the
+  receipts are no longer held to them. A missing end fails the ordering, except
+  passive-v1's H2 painted, which it declares not applicable;
 - the harness's newest giant, the daemon's and the fixture's are one tree (tree bytes),
   NEWEST's receipt is the giant's, and each horizon holds the spec's roots for the UI and
   for the daemon;
 - the daemon's flips were found in its stdout, which is this run's; the home is unchanged
   after the run; and the digests equal `fixture-expected.json`.
 
-The test runs run_ui with `--keep` to read the daemon's stdout for those two flips, then
+The test runs run_ui with `--keep` to read the daemon's stdout for those flips, then
 deletes what run_ui would have. run_ui's exit code is not the verdict.
 
 What it does not assert, and why:

@@ -105,3 +105,33 @@ export function allReadableS(daemon) {
   const xs = Object.entries(daemon.milestones).filter(([k]) => k.startsWith('runtime-readable:')).map(([, v]) => v.elapsedS);
   return xs.length ? Math.max(...xs) : null;
 }
+
+/**
+ * The daemon's flips the UI's receipts are ordered after, on the daemon clock (seconds):
+ *   - `newest`, `h24`, `h7d`: the tree-admission batch that `newest-giant-ready`,
+ *     `recent-ready:24h@newest` and `recent-ready:7d@newest` were printed in, the
+ *     latest whose `publishedS` is at or before the milestone's unrounded stamp (the
+ *     daemon computes them in the same flip, right after `publishedS`);
+ *   - `lastRoot`: the latest batch that flipped a root.
+ * Each gives `commitS`, the batch's `elapsedS`, stamped when its store transaction
+ * committed: before any of its rows can be read and before the hub sends a byte, so
+ * a client's receipt of the flip can never precede it. `publishedS` is stamped after
+ * the hub send returns (crates/rosettad/src/cold_stream/flips.rs), so a client may
+ * receive the batch before it, by however long the rest of that send took: an order
+ * against it is not a causal one. Null when the milestone has no unrounded twin or no
+ * batch precedes it; `commitS` null when the batch carried no `elapsedS`.
+ */
+export function flipStamps(daemon) {
+  const batches = daemon.treeAdmissions.filter((b) => Number.isFinite(b.publishedS));
+  const stamps = (b) => (b === null ? null : { commitS: Number.isFinite(b.elapsedS) ? b.elapsedS : null, publishedS: b.publishedS });
+  const closing = (key) => {
+    const m = daemon.milestones[key];
+    if (!m?.precise || !Number.isFinite(m.elapsedS)) return null;
+    let best = null;
+    for (const b of batches) if (b.publishedS <= m.elapsedS + 1e-9 && (best === null || b.publishedS > best.publishedS)) best = b;
+    return best === null ? null : { ...stamps(best), milestoneS: m.elapsedS };
+  };
+  let last = null;
+  for (const b of batches) if ((b.roots ?? 0) > 0 && (last === null || b.publishedS > last.publishedS)) last = b;
+  return { newest: closing('newest-giant-ready'), h24: closing('recent-ready:24h@newest'), h7d: closing('recent-ready:7d@newest'), lastRoot: stamps(last) };
+}

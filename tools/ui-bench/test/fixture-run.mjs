@@ -40,7 +40,7 @@
 // it), over one fixture home (fixture.mjs) generated under WORK (a fresh temp directory
 // unless --work):
 //   1. run_ui.mjs --home, with --keep so the daemon's stdout can name the flips of
-//      NEWEST and of the last root;
+//      NEWEST, of each @newest horizon and of the last root;
 //   2. the fixture-vocabulary ranked digest (fixture-search.mjs, a warm start on the
 //      run's own db: the R1 workload finds nothing in a synthetic corpus);
 //   3. delete what run_ui would have deleted (the db only once no daemon can hold it),
@@ -63,7 +63,7 @@ import { copyFileSync, chmodSync, existsSync, accessSync, constants, lstatSync, 
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseDaemonLog } from '../daemon-lines.mjs';
+import { flipStamps, parseDaemonLog } from '../daemon-lines.mjs';
 import { buildFixture, removeFixture, verifyFixture } from '../fixture.mjs';
 import { DOCUMENTED_REGIME, checkRun, digestsOf, sameHomeDigestsOf } from './fixture-checks.mjs';
 import { fixtureSearch } from './fixture-search.mjs';
@@ -178,32 +178,35 @@ function runUi(args) {
 }
 
 /**
- * Two daemon flips on the import clock (daemon seconds after `consent-granted`), from the
- * tree-admission events' unrounded `publishedS` (the batch is public on the hub from then):
- *   - NEWEST's: NEWEST is the fixture's newest giant, so its batch is the one whose
- *     `newest-giant-ready` milestone it printed, the latest `publishedS` at or before that
- *     milestone (computed in the same flip, right after the publication is stamped);
- *   - the last root flip: the latest batch that flipped a root. H-all is checked against
- *     it, not against `runtime-readable`: that milestone is stamped at the runtime's
- *     close, after its last tree flip, and has no unrounded JSON twin (10 ms steps), so
- *     the UI can receive the last flip before it (README, "Fixture test").
+ * The daemon's flips on the import clock (daemon seconds after `consent-granted`), from
+ * the tree-admission events (daemon-lines.mjs flipStamps): the batches that printed
+ * `newest-giant-ready` (NEWEST is the fixture's newest giant) and the two @newest
+ * horizons, and the last batch that flipped a root. The UI's receipts are ordered after
+ * each batch's COMMIT stamp (`elapsedS`), which precedes every byte the hub sends of it;
+ * its `publishedS` is stamped after the send returns, so a receipt may precede it (by
+ * 1.3 ms in one run under load). The last root's `publishedS` is kept for the daemon's
+ * own order against `runtime-readable`. H-all is checked against that batch, not
+ * against `runtime-readable`: that milestone is stamped at the runtime's close, after
+ * its last tree flip, and has no unrounded JSON twin (10 ms steps), so the UI can
+ * receive the last flip before it (README, "Fixture test").
  */
 function daemonFlips(stdoutLog, doc) {
-  if (!existsSync(stdoutLog)) return { ms: null, lastRootMs: null, why: 'no daemon stdout' };
+  const none = { ms: null, h24Ms: null, h7dMs: null, lastRootMs: null, lastRootPublishedMs: null };
+  if (!existsSync(stdoutLog)) return { ...none, why: 'no daemon stdout' };
   const d = parseDaemonLog(readFileSync(stdoutLog, 'utf8'));
   const ng = d.milestones['newest-giant-ready'];
   const consent = d.milestones['consent-granted'];
-  if (!ng?.precise || !consent?.precise) return { ms: null, lastRootMs: null, why: 'no unrounded newest-giant-ready / consent-granted' };
-  const imp = (s) => Math.round((s - consent.elapsedS) * 1e4) / 10;
-  const published = d.treeAdmissions.filter((b) => b.publishedS !== null);
-  const before = published.filter((b) => b.publishedS <= ng.elapsedS + 1e-9).map((b) => b.publishedS);
-  const roots = published.filter((b) => (b.roots ?? 0) > 0).map((b) => b.publishedS);
-  const flipS = before.length ? Math.max(...before) : null;
-  const why = [flipS === null ? 'no tree-admission batch before newest-giant-ready' : null, roots.length ? null : 'no tree-admission batch that flipped a root']
-    .filter(Boolean).join('; ') || null;
-  return { ms: flipS === null ? null : imp(flipS), milestoneMs: imp(ng.elapsedS), gapUs: flipS === null ? null : Math.round((ng.elapsedS - flipS) * 1e6),
-    docMilestoneMs: doc?.daemon?.milestonesMs?.['newest-giant-ready'] ?? null, lastRootMs: roots.length ? imp(Math.max(...roots)) : null,
-    batches: published.length, why };
+  if (!ng?.precise || !consent?.precise) return { ...none, why: 'no unrounded newest-giant-ready / consent-granted' };
+  const imp = (s) => (s === null || s === undefined ? null : Math.round((s - consent.elapsedS) * 1e4) / 10);
+  const f = flipStamps(d);
+  const missing = [['NEWEST', f.newest, 'newest-giant-ready'], ['24h@newest', f.h24, 'recent-ready:24h@newest'], ['7d@newest', f.h7d, 'recent-ready:7d@newest'],
+    ['last root', f.lastRoot, null]]
+    .filter(([, x]) => x === null || x.commitS === null)
+    .map(([name, x, key]) => (x === null ? (key ? `no tree-admission batch before ${key}` : 'no tree-admission batch that flipped a root') : `${name}'s batch has no commit stamp`));
+  return { ms: imp(f.newest?.commitS), h24Ms: imp(f.h24?.commitS), h7dMs: imp(f.h7d?.commitS), lastRootMs: imp(f.lastRoot?.commitS),
+    lastRootPublishedMs: imp(f.lastRoot?.publishedS), publishUs: f.newest?.commitS == null ? null : Math.round((f.newest.publishedS - f.newest.commitS) * 1e6),
+    milestoneMs: imp(ng.elapsedS), gapUs: f.newest === null ? null : Math.round((ng.elapsedS - f.newest.publishedS) * 1e6),
+    docMilestoneMs: doc?.daemon?.milestonesMs?.['newest-giant-ready'] ?? null, batches: d.treeAdmissions.length, why: missing.join('; ') || null };
 }
 
 /** Why a daemon may still hold the run's db (then it is kept), or null. */
@@ -309,9 +312,11 @@ async function main() {
         const tail = existsSync(path.join(out, 'run.log')) ? readFileSync(path.join(out, 'run.log'), 'utf8').trim().split('\n').slice(-8).join('\n  ') : 'no run.log';
         checks = [{ id: 'document', ok: false, detail: `run_ui exited ${code} and wrote no ui-run.json (its reason is the \`ui-bench:\` line above); run.log ends:\n  ${tail}` }];
       } else {
-        ({ checks, recorded } = checkRun(doc, { script, manifest: fx.manifest, expected, newestFlipMs: flip.ms, lastRootFlipMs: flip.lastRootMs, search }));
-        checks.push({ id: 'daemon-flips-found', ok: flip.ms !== null && flip.lastRootMs !== null,
-          detail: flip.why ?? `NEWEST's flip ${flip.ms} ms (${flip.gapUs} µs before newest-giant-ready), last root flip ${flip.lastRootMs} ms, ${flip.batches} batches` });
+        ({ checks, recorded } = checkRun(doc, { script, manifest: fx.manifest, expected, search,
+          flips: { newestMs: flip.ms, h24Ms: flip.h24Ms, h7dMs: flip.h7dMs, lastRootMs: flip.lastRootMs, lastRootPublishedMs: flip.lastRootPublishedMs } }));
+        checks.push({ id: 'daemon-flips-found', ok: flip.why === null,
+          detail: flip.why ?? `NEWEST's flip committed at ${flip.ms} ms (published ${flip.publishUs} µs later, ${flip.gapUs} µs before newest-giant-ready), `
+            + `24h@newest ${flip.h24Ms} ms, 7d@newest ${flip.h7dMs} ms, last root ${flip.lastRootMs} ms (published ${flip.lastRootPublishedMs} ms), ${flip.batches} batches` });
         checks.push({ id: 'daemon-stdout-is-this-run', ok: flip.docMilestoneMs !== null && flip.milestoneMs !== undefined && Math.abs(flip.milestoneMs - flip.docMilestoneMs) <= 0.2,
           detail: `newest-giant-ready ${flip.milestoneMs} ms from the kept stdout, ${flip.docMilestoneMs} ms in the document` });
       }

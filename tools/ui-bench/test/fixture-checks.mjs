@@ -1,7 +1,8 @@
 // The verdict of one fixture run (fixture-run.mjs): invariants and digests only, never
 // a timing threshold. Pure: it reads the run's ui-run.json, the fixture's manifest, the
-// committed expected digests, the daemon's flips of NEWEST and of the last root
-// (fixture-run.mjs finds them in the kept daemon stdout) and the fixture search digest,
+// committed expected digests, the daemon's flips of NEWEST, of each @newest horizon and
+// of the last root (fixture-run.mjs finds them in the kept daemon stdout) and the
+// fixture search digest,
 // and returns every check with its verdict and detail.
 //
 // The regime this fixture runs in (REGIME, recorded per run, never asserted: it is the
@@ -29,9 +30,11 @@
 //   - every H1–H5 / H-all `reached` entry agrees with its value: a number with `yes`,
 //     null with `not-reached` or `not-applicable`;
 //   - orderings (err = clocks.estimatedErrorMs): H1 ≥ the first project frame received;
-//     H2 painted ≥ H2 receipt ≥ the daemon's flip of NEWEST − err; each H3 receipt ≥ its
-//     `recent-ready …@newest` − err; H-all receipt ≥ the daemon's last root flip − err,
-//     and that flip ≤ the last `runtime-readable` (a 10 ms-rounded stamp taken at the
+//     H2 painted ≥ H2 receipt ≥ the commit of NEWEST's flip − err; each H3 receipt ≥ the
+//     commit of the flip its `recent-ready …@newest` was printed in − err; H-all receipt ≥
+//     the commit of the daemon's last root flip − err (a commit precedes the hub's send;
+//     the batch's `publishedS` follows it, so it is no causal bound), and that flip's
+//     publication ≤ the last `runtime-readable` (a 10 ms-rounded stamp taken at the
 //     runtime's close, so the UI may receive the flip before it: the receipt's lag after
 //     it is recorded, not asserted); every H5 sample ≥ 0. A missing end FAILS the
 //     ordering, unless ORDER_NOT_APPLICABLE declares it for the script and the metric
@@ -148,15 +151,19 @@ const sortKeys = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? Objec
 const same = (a, b) => JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
 
 /**
- * checkRun(doc, { script, manifest, expected, newestFlipMs, lastRootFlipMs, search }) → { checks, recorded }.
- * `newestFlipMs`: the daemon's flip of NEWEST on the import clock (the publishedS of the
- * tree-admission batch that made NEWEST, the newest giant, readable); `lastRootFlipMs`:
- * the publishedS of the last batch that flipped a root; null when unknown (the orderings
- * that need them then fail). `search`: fixture-search.mjs's result over this run's db
- * (undefined: not checked). Each check: { id, ok, detail }; ok null only for an ordering
- * the script declares not applicable (ORDER_NOT_APPLICABLE).
+ * checkRun(doc, { script, manifest, expected, flips, search }) → { checks, recorded }.
+ * `flips`: the daemon's flips on the import clock (fixture-run.mjs daemonFlips, from
+ * daemon-lines.mjs flipStamps): `newestMs`, `h24Ms`, `h7dMs` and `lastRootMs` are the
+ * COMMIT stamps of the tree-admission batches that made NEWEST (the newest giant), each
+ * @newest horizon and the last root readable, which precede anything the hub sends of
+ * them; `lastRootPublishedMs` is that last batch's `publishedS`, stamped after the hub
+ * send. A value null when unknown (the orderings that need it then fail). `search`:
+ * fixture-search.mjs's result over this run's db (undefined: not checked). Each check:
+ * { id, ok, detail }; ok null only for an ordering the script declares not applicable
+ * (ORDER_NOT_APPLICABLE).
  */
-export function checkRun(doc, { script, manifest, expected, newestFlipMs = null, lastRootFlipMs = null, search = undefined }) {
+export function checkRun(doc, { script, manifest, expected, flips = {}, search = undefined }) {
+  const { newestMs = null, h24Ms = null, h7dMs = null, lastRootMs = null, lastRootPublishedMs = null } = flips;
   const checks = [];
   const add = (id, ok, detail = '') => checks.push({ id, ok, detail });
   const m = doc.metrics || {};
@@ -207,13 +214,17 @@ export function checkRun(doc, { script, manifest, expected, newestFlipMs = null,
   add('clock-error-known', err !== null && doc.clocks?.method === 'clock-line', `method ${doc.clocks?.method}, error ${err} ms`);
   order('order:H1>=first-project-frame', m.H1?.ms, m.H1?.metaPushMs);
   order('order:H2-painted>=H2-receipt', m.H2?.ms, m.H2?.receiptMs);
-  order('order:H2-receipt>=daemon-flip-of-NEWEST', m.H2?.receiptMs, newestFlipMs, err ?? 0);
-  order('order:H3-24h-receipt>=recent-ready-24h@newest', m.H3?.h24?.receiptMs, m.H3?.h24?.daemonMs, err ?? 0);
-  order('order:H3-7d-receipt>=recent-ready-7d@newest', m.H3?.h7d?.receiptMs, m.H3?.h7d?.daemonMs, err ?? 0);
-  order('order:Hall-receipt>=daemon-last-root-flip', m.Hall?.receiptMs, lastRootFlipMs, err ?? 0);
-  // The daemon's own order: a runtime closes after its last tree flip. 5 ms is half the
-  // rounding step of `runtime-readable`'s text stamp (no JSON twin), plus its r1.
-  order('order:last-runtime-readable>=daemon-last-root-flip', m.Hall?.daemonMs, lastRootFlipMs, 5.1);
+  // A receipt follows the flip's commit, which precedes the hub's send: causal, so
+  // only the clock error is slack. Not the batch's `publishedS` (stamped after the
+  // send returns; a receipt preceded it by 1.3 ms in one run) nor a milestone printed
+  // after it.
+  order('order:H2-receipt>=daemon-commit-of-NEWEST', m.H2?.receiptMs, newestMs, err ?? 0);
+  order('order:H3-24h-receipt>=daemon-commit-of-24h@newest', m.H3?.h24?.receiptMs, h24Ms, err ?? 0);
+  order('order:H3-7d-receipt>=daemon-commit-of-7d@newest', m.H3?.h7d?.receiptMs, h7dMs, err ?? 0);
+  order('order:Hall-receipt>=daemon-commit-of-last-root', m.Hall?.receiptMs, lastRootMs, err ?? 0);
+  // The daemon's own order: a runtime closes after its last tree flip is published. 5 ms
+  // is half the rounding step of `runtime-readable`'s text stamp (no JSON twin), plus its r1.
+  order('order:last-runtime-readable>=daemon-last-root-flip', m.Hall?.daemonMs, lastRootPublishedMs, 5.1);
   // Every H5 sample, from the probe's own [receipt, paint] pairs in the document. The
   // probe records a pair only when receipt ≤ paint (probe.js, I1(1)); a paint before its
   // receipt is c1's violation instead, so this guards the derivation, and holds vacuously

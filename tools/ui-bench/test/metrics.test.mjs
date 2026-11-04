@@ -3,13 +3,52 @@
 // can fail. No snapshot, no live directory.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { allReadableS, parseDaemonLog } from '../daemon-lines.mjs';
+import { allReadableS, flipStamps, parseDaemonLog } from '../daemon-lines.mjs';
 import { alignClocks, derive, pct } from '../metrics.mjs';
 import { W0, at, daemonStdout, mainNotes, probeLog } from './fixtures.mjs';
 
 const pings = { start: { offsetMs: 0.05, rttMs: 0.2 }, end: { offsetMs: 0.06, rttMs: 0.1 } };
 const run = (probeOver = {}, { daemon = daemonStdout(), main = mainNotes(), notApplicable = [] } = {}) =>
   derive({ probe: probeLog(probeOver), main, daemon: parseDaemonLog(daemon), mainPings: pings, notApplicable });
+
+test('flip stamps: the batch each milestone was printed in, by its commit and its publication', () => {
+  // As the daemon prints them: each batch's milestones are stamped right after its
+  // publishedS, and the JSON twins may reach stdout before the batch's own event.
+  const put = (receiptMs, ev) => `${(W0 + receiptMs).toFixed(3)}\t${JSON.stringify(ev)}`;
+  const batch = (e, p, roots) => ({ event: 'stage-profile', stage: 'tree-admission', elapsedS: e, publishedS: p, roots, sessions: roots, trees: roots });
+  const ms = (name, s, horizon) => ({ event: 'milestone', milestone: name, elapsedS: s, ...(horizon ? { horizon } : {}) });
+  // Each milestone's text line (two decimals) beside its unrounded JSON twin.
+  const line = (receiptMs, name, s, horizon) => `${(W0 + receiptMs).toFixed(3)}\tmilestone: ${name}${horizon ? ` horizon=${horizon}` : ''} elapsed_s=${s.toFixed(2)}`;
+  const text = [
+    put(1, { event: 'clock', wallMs: W0 }),
+    line(806, 'consent-granted', 0.806115167), put(806, ms('consent-granted', 0.806115167)),
+    put(872, batch(0.871376292, 0.871586958, 1)),
+    put(1021, ms('small-recent-ready', 1.02012, '24h@newest')),
+    put(1021, batch(1.019821292, 1.02011075, 14)),
+    put(1500, batch(1.4, 1.4002, 0)),
+    line(2310, 'recent-ready', 2.309250458, '24h@newest'), put(2310, ms('recent-ready', 2.309250458, '24h@newest')),
+    line(2310, 'recent-ready', 2.309250458, '7d@newest'), put(2310, ms('recent-ready', 2.309250458, '7d@newest')),
+    line(2310, 'newest-giant-ready', 2.309250458), put(2310, ms('newest-giant-ready', 2.309250458)),
+    put(2310, batch(2.309035375, 2.309246542, 1)),
+    put(2400, batch(2.39, 2.3903, 0)),
+  ].join('\n');
+  const f = flipStamps(parseDaemonLog(text));
+  const giant = { commitS: 2.309035375, publishedS: 2.309246542, milestoneS: 2.309250458 };
+  assert.deepEqual(f.newest, giant);
+  assert.deepEqual(f.h24, giant);
+  assert.deepEqual(f.h7d, giant);
+  // The last batch that flipped a root, not the last batch.
+  assert.deepEqual(f.lastRoot, { commitS: 2.309035375, publishedS: 2.309246542 });
+  // No unrounded milestone, or no batch before it: null, never a guess.
+  const bare = flipStamps(parseDaemonLog([put(1, { event: 'clock', wallMs: W0 }), line(500, 'newest-giant-ready', 0.5), put(500, ms('newest-giant-ready', 0.5)),
+    line(950, 'recent-ready', 0.95, '24h@newest'), put(1000, batch(0.9, 0.9001, 1))].join('\n')));
+  assert.equal(bare.newest, null, 'no batch before it');
+  assert.equal(bare.h24, null, 'a text line only (two decimals)');
+  assert.equal(bare.h24, null);
+  assert.deepEqual(bare.lastRoot, { commitS: 0.9, publishedS: 0.9001 });
+  const noCommit = flipStamps(parseDaemonLog(put(1000, { ...batch(0.9, 0.9001, 1), elapsedS: undefined })));
+  assert.deepEqual(noCommit.lastRoot, { commitS: null, publishedS: 0.9001 });
+});
 
 test('daemon lines: clock, milestones (precise JSON twins win), admissions, peak', () => {
   const d = parseDaemonLog(daemonStdout());
