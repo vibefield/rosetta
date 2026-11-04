@@ -2988,7 +2988,10 @@ now does too, through a start-time **enrollment file**:
   single-row readiness, consent and audit writes need no W1. The discipline rules
   `SQLITE_LOCKED` out, so a refusal is a counted bug: one at the prologue retries once on a
   fresh connection and then answers 503 `not_ready`, and one inside the read — which cannot be
-  retried — answers a counted 503 too. A durable file target is a WAL reader and runs no
+  retried — answers a counted 503 too. A session socket's first snapshot keeps that
+  `not_ready` code in its closing error frame (any other failure stays an opaque internal
+  “snapshot read failed”), so the SDK reconnects quietly and the room keeps its “Preparing
+  messages…” cover (2026-11-03). A durable file target is a WAL reader and runs no
   prologue. `--json --profile` reports the waits (Cold-build measurement, `shared-cache-locks`).
 - **Content-addressed image members** are part of the one canonical projection, not a third
   representation. An adapter may recognize a verified native inline image and decode its

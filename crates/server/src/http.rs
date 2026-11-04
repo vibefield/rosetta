@@ -448,7 +448,7 @@ impl Failure {
         )
     }
 
-    fn not_ready(message: impl Into<String>) -> Self {
+    pub(crate) fn not_ready(message: impl Into<String>) -> Self {
         Self(
             StatusCode::SERVICE_UNAVAILABLE,
             ApiError {
@@ -457,6 +457,11 @@ impl Failure {
                 message: message.into(),
             },
         )
+    }
+
+    /// The error a client sees, without its HTTP status (a socket frame).
+    pub(crate) fn into_error(self) -> ApiError {
+        self.1
     }
 
     fn cursor_expired() -> Self {

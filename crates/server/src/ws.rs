@@ -387,16 +387,8 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
                     return;
                 }
             }
-            Err(_) => {
-                let _ = sink
-                    .send(ServerFrame::Error {
-                        error: rosetta_protocol::ApiError {
-                            details: None,
-                            code: rosetta_protocol::ErrorCode::Internal,
-                            message: "snapshot read failed".into(),
-                        },
-                    })
-                    .await;
+            Err(failure) => {
+                let _ = sink.send(snapshot_failure(failure)).await;
                 return;
             }
         }
@@ -452,6 +444,25 @@ pub(crate) async fn run_session_stream<S: FrameSink>(
             }
         }
     }
+}
+
+/// The error frame a failed first snapshot ends its subscription with. A
+/// `not_ready` refusal (the shared-cache lock discipline's retryable answer
+/// during a cold build, `http/shared_reads.rs`) keeps its code, so a client
+/// reconnects quietly instead of showing an error; any other failure stays
+/// one opaque internal error.
+fn snapshot_failure(failure: Failure) -> ServerFrame {
+    let error = failure.into_error();
+    let error = if error.code == rosetta_protocol::ErrorCode::NotReady {
+        error
+    } else {
+        rosetta_protocol::ApiError {
+            details: None,
+            code: rosetta_protocol::ErrorCode::Internal,
+            message: "snapshot read failed".into(),
+        }
+    };
+    ServerFrame::Error { error }
 }
 
 /// Whether `session_id` is behind the cold admission barrier right now. A
@@ -1027,6 +1038,35 @@ mod tests {
             }
             task.abort();
         }
+    }
+
+    /// A lock refusal on the first snapshot (during a cold build) keeps its
+    /// retryable `not_ready` code and message, so the client reconnects
+    /// quietly; every other failure is still one opaque internal error.
+    #[test]
+    fn a_failed_first_snapshot_passes_only_not_ready_through() {
+        use rosetta_protocol::{ApiError, ErrorCode};
+        let locked = "the canonical RAM view is momentarily locked; retry";
+        assert_eq!(
+            snapshot_failure(Failure::not_ready(locked)),
+            ServerFrame::Error {
+                error: ApiError {
+                    details: None,
+                    code: ErrorCode::NotReady,
+                    message: locked.into(),
+                },
+            }
+        );
+        assert_eq!(
+            snapshot_failure(Failure::internal("disk I/O error")),
+            ServerFrame::Error {
+                error: ApiError {
+                    details: None,
+                    code: ErrorCode::Internal,
+                    message: "snapshot read failed".into(),
+                },
+            }
+        );
     }
 
     #[tokio::test]

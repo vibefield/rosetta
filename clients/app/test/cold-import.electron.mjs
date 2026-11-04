@@ -568,10 +568,20 @@ async function freshImport() {
     const pick = roots[0];
     return pick === undefined ? null : { id: pick.id, project: pick.project_id ?? '__rosetta_unassigned__', flip: c.flipAt(pick.id) };
   }, exclude);
-  const openPending = async (target) => {
+  const openPending = async (target, { refused = false } = {}) => {
     await click(`.ah-project-list-item[data-motion-key="${target.project}"]`);
     await until((id) => document.querySelector(`.ah-session-list-item[data-motion-key="${id}"]`), 'the target\'s row', target.id);
+    if (refused) await check(() => { window.coldImport.c.refuseNextSnapshot(); return true; });
     await click(`.ah-session-list-item[data-motion-key="${target.id}"]`);
+    if (refused) {
+      // The lock refused its first snapshot during the build: the daemon
+      // keeps `not_ready` and the SDK reconnects (ux:X5).
+      await until((id) => window.coldImport.c.log.trail.some((e) => e.what === 'snapshot-refused' && e.detail === id), 'the refused snapshot', target.id);
+      await frames(3);
+      today('ux:X5', 'a first snapshot refused not_ready (the lock, mid-import) keeps the "Preparing messages…" cover while the SDK retries',
+        await check(() => document.querySelector('.ah-col--measure .tr-loading')?.dataset.loadingLabel ?? null), 'preparing');
+      await check(() => window.coldImport.c.retryRefused());
+    }
     await until((id) => document.querySelector(`.tr-stage[data-session-key="${id}"][data-ready]`) && document.querySelector('.ah-col--measure .ah-empty[data-import-face="not-imported"]'), 'its not-imported face', target.id);
   };
   // The socket resyncs before the catalog lands (the daemon's own order).
@@ -601,7 +611,7 @@ async function freshImport() {
     const row = c.meta().sessions.find((s) => s.parent_session_id === null && c.kindOf(s.id) === 'root' && c.treeOf(s.id).bound && s.stream_state === 'pending');
     return row === undefined ? null : { id: row.id, project: row.project_id ?? '__rosetta_unassigned__', flip: c.flipAt(row.id) };
   });
-  await openPending(bound);
+  await openPending(bound, { refused: true });
   today('ux:X5', 'a bound tree (opens only at its runtime\'s close) gets the same newest-first promise',
     await check(transcript).then((t) => ({ course: t.course, why: t.why })),
     { course: 'newest-first', why: 'Your newest conversations import first. This one opens as soon as the import reaches it.' });

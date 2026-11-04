@@ -24,7 +24,10 @@
 //   (crates/server/src/http.rs:1030-1036); a resync barrier makes the client
 //   reset and re-read it (clients/ts/client.ts:1005-1016, 1063-1067;
 //   crates/server/src/ws.rs:437-452). Snapshots read the store, which a
-//   resume's withheld commit reaches before the hub does.
+//   resume's withheld commit reaches before the hub does. A first snapshot
+//   the shared-cache lock refuses ends the socket with a `not_ready` error
+//   frame (ws.rs `snapshot_failure`; crates/server/src/http/shared_reads.rs),
+//   and the SDK reconnects with backoff (client.ts `retry`).
 // - /api/status: phases, runtime meters and the progress board
 //   (crates/server/src/health.rs:208-366; crates/server/src/board.rs:63-140),
 //   canonical readiness only once the read router is published (http.rs:821).
@@ -200,6 +203,12 @@ export interface ColdImportController {
   heldStatus(): number;
   /** Deliver the resyncs `manual` mode held; returns how many. */
   deliverResyncs(): number;
+  /** Refuse the next subscription's first snapshot as the shared-cache lock
+   * does during the build: the SDK hears the `not_ready` error frame and
+   * reconnects, which `retryRefused()` completes. */
+  refuseNextSnapshot(): void;
+  /** The refused subscriptions' reconnect: their snapshots; returns how many. */
+  retryRefused(): number;
   /** The run's control state as the wire says it (`run.state`). Only the
    * wire changes: a test that pauses does not advance until it resumes. */
   setRunState(state: IngestionState): void;
@@ -279,6 +288,8 @@ export function createColdImport(options: ColdImportOptions): ColdImport {
   const metaSubs = new Set<{ handlers: MetaSubscriptionHandlers; open: boolean }>();
   const sessionSubs = new Map<string, Set<SessionSub>>();
   const heldResyncs: SessionSub[] = [];
+  let refuseNext = false;
+  const refused: SessionSub[] = [];
   const heldStatus: { resolve: (status: StatusResponse) => void }[] = [];
   let holding = false;
   const kindOf = (id: string) => corpus.kind.get(id) ?? null;
@@ -414,7 +425,19 @@ export function createColdImport(options: ColdImportOptions): ColdImport {
       const subs = sessionSubs.get(sessionId) ?? new Set<SessionSub>();
       subs.add(sub);
       sessionSubs.set(sessionId, subs);
-      queueMicrotask(() => deliverSnapshot(sub));
+      if (refuseNext) {
+        refuseNext = false;
+        refused.push(sub);
+        mark("snapshot-refused", sessionId);
+        // The SDK's view of the error frame, then of the closed socket.
+        queueMicrotask(() => {
+          if (!sub.open) return;
+          sub.handlers.onError?.({ code: "not_ready", message: "the canonical RAM view is momentarily locked; retry" });
+          sub.handlers.onStatus?.("connecting");
+        });
+      } else {
+        queueMicrotask(() => deliverSnapshot(sub));
+      }
       return {
         entries: () => sub.rows,
         fetchPage: async () => ({ entries: [], cursor: null, watermark: String(watermark) }),
@@ -852,6 +875,12 @@ export function createColdImport(options: ColdImportOptions): ColdImport {
     deliverResyncs() {
       const waiting = heldResyncs.splice(0);
       for (const sub of waiting) resync(sub);
+      return waiting.length;
+    },
+    refuseNextSnapshot() { refuseNext = true; },
+    retryRefused() {
+      const waiting = refused.splice(0);
+      for (const sub of waiting) deliverSnapshot(sub);
       return waiting.length;
     },
     setRunState(next) { runOverride = next === "running" ? null : next; },
