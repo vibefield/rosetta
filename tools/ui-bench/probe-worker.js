@@ -248,7 +248,9 @@ function onStatus(m) {
   postMessage({ k: 'status', t: m.t, phase, canonical: s.canonical_ready === true,
     search: s.search?.readiness ?? null, run: ingest?.run?.state ?? null, metaReadyAt, done, total,
     kinds: (s.daemon?.runtimes ?? []).map((r) => r.kind).sort(),
-    ingestKinds: (ingest?.runtimes ?? []).map((r) => r.kind).sort() });
+    ingestKinds: (ingest?.runtimes ?? []).map((r) => r.kind).sort(),
+    // Each runtime's admission course (protocol, nullable from older daemons).
+    courses: [...new Set((ingest?.runtimes ?? []).map((r) => r.admission_course).filter((c) => typeof c === 'string'))].sort() });
   if (frozen === null && metaReadyAt !== null && phase !== 'awaiting_consent') freeze(m.t);
   else if (frozen !== null && (phase === 'finalizing' || phase === 'publishing' || phase === 'live')) horizons(m.t, true);
 }

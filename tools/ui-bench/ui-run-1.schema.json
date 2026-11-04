@@ -654,7 +654,7 @@
                   ]
                 },
                 "canonical": "bool", "contentAt": "num?", "faceAt": "num?",
-                "course": {"enum": ["none", "newest-first", "resumed", "stopped", "other"]},
+                "course": {"enum": ["none", "newest-first", "runtime-close", "resumed", "stopped", "other"]},
                 "coverAt": "num?", "coverEndAt": "num?",
                 "label": {"enum": ["error", "team", "seeking", "preparing", "loading", "other", "none"]},
                 "revealAt": "num?", "wsAt": "num?", "openAt": "num?", "helloAt": "num?", "snapAt": "num?",

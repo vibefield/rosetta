@@ -141,7 +141,7 @@ probe = O({
           | {'h24ViaCaptureOver': B, 'h7dViaCaptureOver': B}),
   'hall': O({'paintSelAt': N}),
   'opens': A(O({'clickAt': NN, 'standing': E('ready', 'not-imported', 'unavailable'), 'phase': E(*PHASES), 'canonical': B, 'contentAt': N, 'faceAt': N,
-                'course': E('none', 'newest-first', 'resumed', 'stopped', 'other'), 'coverAt': N, 'coverEndAt': N, 'label': E(*LABELS, 'none'), 'revealAt': N,
+                'course': E('none', 'newest-first', 'runtime-close', 'resumed', 'stopped', 'other'), 'coverAt': N, 'coverEndAt': N, 'label': E(*LABELS, 'none'), 'revealAt': N,
                 'wsAt': N, 'openAt': N, 'helloAt': N, 'snapAt': N, 'snapBytes': N, 'parseMs': N}), 64),
   'h5': A(R('pair')), 'loaf': A(R('triple')), 'events': A(T(NN, NN, E(*EVENTS), NN, NN)),
   'layoutShift': O({'sum': NN, 'sumNoInput': NN, 'n': NN}),

@@ -80,7 +80,10 @@
   const STATES = new Set(['disconnected', 'complete', 'discovering', 'metadata', 'restoring', 'reading', 'organizing', 'finalizing', 'publishing', 'paused', 'pausing', 'failed', 'search_failed', 'search_waiting', 'search_indexing', 'search_optimizing', 'search_validating', 'search_publishing', 'none']);
   const LABELS = new Set(['error', 'team', 'seeking', 'preparing', 'loading']);
   const RUNSTATE = new Set(['running', 'pausing', 'paused', 'succeeded', 'failed']);
-  const COURSE = new Set(['newest-first', 'resumed', 'stopped']);
+  const COURSE = new Set(['newest-first', 'runtime-close', 'resumed', 'stopped']);
+  // The face's course each daemon admission course allows (ImportCourse, room import-state.ts).
+  const FACE_OF_COURSE = { per_tree: 'newest-first', at_runtime_close: 'runtime-close', at_publication: 'resumed' };
+  let statusCourses = []; // in-page only, never exported
   const AGENTS = new Set(['antigravity', 'claude-code', 'codex', 'copilot', 'grok', 'hermes', 'kimi-code', 'opencode', 'pi']);
   const enumOf = (set, v) => (set.has(v) ? v : 'other');
 
@@ -149,6 +152,7 @@
       const S = L.status;
       const code = m.phase === null ? 'none' : enumOf(PHASE, m.phase);
       S.last = { phase: code, canonical: m.canonical, search: m.search === null ? 'none' : enumOf(SEARCH, m.search), done: m.done, total: m.total, run: m.run === null ? 'none' : enumOf(RUNSTATE, m.run) };
+      statusCourses = (m.courses || []).map((c) => FACE_OF_COURSE[c]).filter(Boolean);
       S.kinds = m.kinds.map((k) => enumOf(AGENTS, k)); S.ingestKinds = m.ingestKinds.map((k) => enumOf(AGENTS, k));
       if (m.metaReadyAt !== null && S.metaReadyAtWall === null) S.metaReadyAtWall = m.metaReadyAt;
       if (L.d1.beginAt !== null && S.firstNonConsentAt === null && m.phase !== 'awaiting_consent' && m.phase !== null) {
@@ -549,9 +553,12 @@
         if (ready && sitting && !importFace && o.contentAt === null) { o.contentAt = t; emit('content', { n: L.opens.length }); }
         if (importFace && importFace.getAttribute('data-import-face') === 'not-imported' && o.faceAt === null) {
           o.faceAt = t; o.course = enumOf(COURSE, importFace.getAttribute('data-import-course'));
-          const want = L.status.last && (L.status.last.run === 'paused' || L.status.last.run === 'pausing' || L.status.last.run === 'failed') ? 'stopped' : 'newest-first';
+          // Stopped runs promise only a continue; otherwise the face must name a course
+          // some runtime's status reports (a daemon that names none: newest-first).
+          const stopped = L.status.last && (L.status.last.run === 'paused' || L.status.last.run === 'pausing' || L.status.last.run === 'failed');
+          const allowed = stopped ? ['stopped'] : (statusCourses.length ? statusCourses : ['newest-first']);
           L.i1.c7Faces += 1;
-          if (o.course !== want) L.i1.c7 += 1;
+          if (!allowed.includes(o.course)) L.i1.c7 += 1;
           emit('pending-face', { n: L.opens.length });
         }
       }
