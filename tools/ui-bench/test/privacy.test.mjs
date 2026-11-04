@@ -27,7 +27,7 @@ function validRunParts() {
   return {
     script: { name: 'reader-v1', sha256: HEX('3') },
     identity: { rosettadSha256: HEX('4'), distSha256: HEX('5'), distFiles: 3, electron: '43.7.9',
-      snapshot: { walkInputsDigest: HEX('6'), manifestSha256: HEX('7'), files: 639, bytes: 1778445372 }, harnessSha256: harness,
+      snapshot: { walkInputsDigest: HEX('6'), manifestSha256: HEX('7'), files: 639, bytes: 1778445372 }, fixture: null, harnessSha256: harness,
       machine: { model: 'Mac16,10', os: '26.7.2', cpus: 10, memGb: 16 }, windowPx: '1500x940', dpr: 2, dprMeasured: 2, deviations: DEVIATIONS, enrolled: ['claude-code', 'codex'] },
     run: { startedAt: '2026-11-03T20:14:55.151Z', outcome: 'complete', outcomeReasons: [], wallS: 60.2, daemonExit: { code: 0, signal: null }, electronExit: 0,
       guard: { cpuIdleAtStart: 85, waitedS: 4, proceededOverGuard: false, load1: 2.9, idleMin: 75, swapMbBefore: 3000, swapMbAfter: 3000, freeGbBefore: 44.2 },
@@ -57,6 +57,26 @@ test('the run document carries the absolute invariants as one flag', () => {
   assert.equal(doc.metrics.I1.pass, true);
   assert.equal(doc.metrics.H7.invariant.pass, false);
   assert.equal(doc.run.invariantsPass, false, 'an aim miss is an invariant failure even when I1 passes');
+});
+
+test('a fixture run (run_ui.mjs --home) passes with its own identity in place of the snapshot\'s', () => {
+  const parts = validRunParts();
+  parts.identity.snapshot = null;
+  parts.identity.fixture = { name: 'ui-fixture-v1', specSha256: HEX('a'), treeSha256: HEX('b'), files: 26, bytes: 80774498, walkInputsDigest: HEX('c'),
+    generatorSha256: HEX('d'), baseEpochMs: 1788220800000, giantAgeH: 3, agesH: [5, 8, 216], stride: 7,
+    corpora: [{ agent: 'claude-code', sessions: 16, lines: 4000, seed: 41, toolRatio: 0.3, giant: false }], verifyWallMs: 120, idleGuard: false };
+  parts.run.snapshotVerify = null;
+  assert.deepEqual(validateRun(buildRunDoc(parts), { forbidden }).errors, []);
+  // Exactly one source: both set, or neither, is refused (the schema alone admits either).
+  const both = validRunParts();
+  both.identity.fixture = parts.identity.fixture;
+  assert.deepEqual(validateRun(buildRunDoc(both), { forbidden }).errors, ['$.identity: exactly one of snapshot and fixture must be set']);
+  const neither = validRunParts();
+  neither.identity.snapshot = null;
+  assert.deepEqual(validateRun(buildRunDoc(neither), { forbidden }).errors, ['$.identity: exactly one of snapshot and fixture must be set']);
+  // Its strings are enums and digests only: a path in the spec is refused.
+  parts.identity.fixture.corpora[0].agent = PATH;
+  assert.match(validateRun(buildRunDoc(parts), { forbidden }).errors.join('\n'), /fixture\.corpora\[0\]\.agent: string is not a whitelisted enum value/);
 });
 
 test('every deviation and harness file the driver records is whitelisted', () => {

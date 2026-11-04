@@ -8,15 +8,41 @@
       "identity": {
         "obj": {
           "rosettadSha256": "sha256", "distSha256": "sha256", "distFiles": "num", "electron": {"id": "version"},
-          "snapshot": {"obj": {"walkInputsDigest": "sha256", "manifestSha256": "sha256", "files": "num", "bytes": "num"}},
+          "snapshot": {
+            "obj": {"walkInputsDigest": "sha256", "manifestSha256": "sha256", "files": "num", "bytes": "num"},
+            "null": true
+          },
+          "fixture": {
+            "obj": {
+              "name": {"enum": ["ui-fixture-v1"]}, "specSha256": "sha256", "treeSha256": "sha256", "files": "num",
+              "bytes": "num", "walkInputsDigest": "sha256", "generatorSha256": "sha256", "baseEpochMs": "num",
+              "giantAgeH": "num", "agesH": {"arr": "num", "max": 64}, "stride": "num",
+              "corpora": {
+                "arr": {
+                  "obj": {
+                    "agent": {
+                      "enum": [
+                        "antigravity", "claude-code", "codex", "copilot", "grok", "hermes", "kimi-code", "opencode",
+                        "pi"
+                      ]
+                    },
+                    "sessions": "num", "lines": "num", "seed": "num", "toolRatio": "num", "giant": "bool"
+                  }
+                },
+                "max": 8
+              },
+              "verifyWallMs": "num", "idleGuard": "bool"
+            },
+            "null": true
+          },
           "harnessSha256": {
             "map": "sha256",
             "keys": [
               "run_ui.mjs", "app-entry.mjs", "reader-context.mjs", "probe.js", "probe-worker.js", "drain.mjs",
-              "daemon-lines.mjs", "metrics.mjs", "privacy.mjs", "digests.mjs", "ui-run-1.schema.json",
-              "scripts/reader-v1.mjs", "scripts/passive-v1.mjs", "r1-bench/verify_r1_snapshot.js",
-              "r1-bench/r1_snapshot_lib.js", "r1-bench/r1_logical_digest.sql", "r1-bench/r1_cursor_order.sql",
-              "r1-bench/r1_ranked.py", "r1-bench/product-diagnostic-v3.json"
+              "daemon-lines.mjs", "metrics.mjs", "privacy.mjs", "digests.mjs", "source.mjs", "fixture.mjs",
+              "ui-run-1.schema.json", "scripts/reader-v1.mjs", "scripts/passive-v1.mjs",
+              "r1-bench/verify_r1_snapshot.js", "r1-bench/r1_snapshot_lib.js", "r1-bench/r1_logical_digest.sql",
+              "r1-bench/r1_cursor_order.sql", "r1-bench/r1_ranked.py", "r1-bench/product-diagnostic-v3.json"
             ]
           },
           "machine": {"obj": {"model": {"id": "machine-model"}, "os": {"id": "os-version"}, "cpus": "num", "memGb": "num"}},
@@ -61,7 +87,7 @@
               "idleMin": "num", "swapMbBefore": "num?", "swapMbAfter": "num?", "freeGbBefore": "num"
             }
           },
-          "snapshotVerify": {"obj": {"ok": "bool", "files": "num", "bytes": "num", "wallMs": "num"}},
+          "snapshotVerify": {"obj": {"ok": "bool", "files": "num", "bytes": "num", "wallMs": "num"}, "null": true},
           "scriptOk": "bool", "scriptTimeouts": "num", "selfTestPass": "bool", "invariantsPass": "bool",
           "stubbed": {
             "map": "num",

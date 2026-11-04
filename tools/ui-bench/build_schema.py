@@ -37,7 +37,7 @@ MILESTONES = ['consent-granted', 'metadata-ready', 'first-session-complete', 'fi
   'runtime-metadata-public:claude-code', 'runtime-metadata-public:codex', 'runtime-readable:claude-code', 'runtime-readable:codex',
   'canonical-ready', 'memory-peak', 'search-ready', 'search-failed']
 HARNESS = ['run_ui.mjs', 'app-entry.mjs', 'reader-context.mjs', 'probe.js', 'probe-worker.js', 'drain.mjs', 'daemon-lines.mjs', 'metrics.mjs', 'privacy.mjs',
-  'digests.mjs', 'ui-run-1.schema.json', 'scripts/reader-v1.mjs', 'scripts/passive-v1.mjs'] + ['r1-bench/' + f for f in
+  'digests.mjs', 'source.mjs', 'fixture.mjs', 'ui-run-1.schema.json', 'scripts/reader-v1.mjs', 'scripts/passive-v1.mjs'] + ['r1-bench/' + f for f in
   ['verify_r1_snapshot.js', 'r1_snapshot_lib.js', 'r1_logical_digest.sql', 'r1_cursor_order.sql', 'r1_ranked.py', 'product-diagnostic-v3.json']]
 DEVIATIONS = ['background-throttling-off', 'worktree-ipc-denied', 'favicon-ipc-denied', 'browser-ipc-denied', 'external-links-denied',
   'network-local-only', 'announce-dir-private', 'fresh-profile', 'about-blank-before-load', 'focus-emulated', 'device-scale-factor-forced']
@@ -164,13 +164,20 @@ root = O({
   'format': E('ui-run/1'),
   'script': O({'name': E('reader-v1', 'passive-v1'), 'sha256': H}),
   'identity': O({'rosettadSha256': H, 'distSha256': H, 'distFiles': NN, 'electron': ID('version'),
-    'snapshot': O({'walkInputsDigest': H, 'manifestSha256': H, 'files': NN, 'bytes': NN}),
+    # Exactly one of snapshot (--snapshot, the frozen R1 corpus) and fixture (--home, a
+    # synthetic fixture home from fixture.mjs) is set; the other is null. The schema
+    # forms cannot say "exactly one", so privacy.mjs validateRun enforces it.
+    'snapshot': O({'walkInputsDigest': H, 'manifestSha256': H, 'files': NN, 'bytes': NN}, null=True),
+    'fixture': O({'name': E('ui-fixture-v1'), 'specSha256': H, 'treeSha256': H, 'files': NN, 'bytes': NN, 'walkInputsDigest': H,
+      'generatorSha256': H, 'baseEpochMs': NN, 'giantAgeH': NN, 'agesH': A(NN, 64), 'stride': NN,
+      'corpora': A(O({'agent': E(*AGENTS), 'sessions': NN, 'lines': NN, 'seed': NN, 'toolRatio': NN, 'giant': B}), 8),
+      'verifyWallMs': NN, 'idleGuard': B}, null=True),
     'harnessSha256': M(H, HARNESS), 'machine': O({'model': ID('machine-model'), 'os': ID('os-version'), 'cpus': NN, 'memGb': NN}),
     'windowPx': ID('window'), 'dpr': N, 'dprMeasured': N, 'deviations': A(E(*DEVIATIONS), 16), 'enrolled': A(E(*AGENTS), 16)}),
   'run': O({'startedAt': ID('iso-time'), 'outcome': E('complete', 'incomplete', 'timeout', 'failed'), 'outcomeReasons': A(E(*OUTCOME_REASONS), 16), 'wallS': NN,
     'daemonExit': O({'code': N, 'signal': E('SIGINT', 'SIGKILL', 'SIGTERM', null=True)}), 'electronExit': N,
     'guard': O({'cpuIdleAtStart': NN, 'waitedS': NN, 'proceededOverGuard': B, 'load1': NN, 'idleMin': NN, 'swapMbBefore': N, 'swapMbAfter': N, 'freeGbBefore': NN}),
-    'snapshotVerify': O({'ok': B, 'files': NN, 'bytes': NN, 'wallMs': NN}), 'scriptOk': B, 'scriptTimeouts': NN, 'selfTestPass': B, 'invariantsPass': B,
+    'snapshotVerify': O({'ok': B, 'files': NN, 'bytes': NN, 'wallMs': NN}, null=True), 'scriptOk': B, 'scriptTimeouts': NN, 'selfTestPass': B, 'invariantsPass': B,
     'stubbed': M(NN, STUBBED, null=True),
     'window': O({'contentW': NN, 'contentH': NN, 'dpr': NN, 'displayW': NN, 'displayH': NN}, null=True),
     'page': O({'dpr': N, 'innerW': N, 'innerH': N, 'focusedAtStart': B, 'focusedAtRollCall': BN}, null=True),

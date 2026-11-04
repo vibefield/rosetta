@@ -1,8 +1,8 @@
 # tools/ui-bench
 
 One UI readiness run: the production Agent History app (`clients/app`, unchanged) over a
-frozen snapshot, read by a versioned script, measured by an injected probe, written as one
-`ui-run/1` JSON. What the metrics mean, their roles and the pair rules are in
+frozen snapshot (or a synthetic fixture home), read by a versioned script, measured by an
+injected probe, written as one `ui-run/1` JSON. What the metrics mean, their roles and the pair rules are in
 `docs/ARCHITECTURE.md`, "Cold-build measurement" → *UI readiness*. This file is how to run
 it and read the output.
 
@@ -25,18 +25,27 @@ them run in place; no hashed R1 file changed.
 node tools/ui-bench/run_ui.mjs --rosettad BIN --snapshot SNAP --out OUT_DIR \
   --script reader-v1|passive-v1 [--keep] [--timeout-s 600] [--dpr 2] \
   [--idle-min 75] [--guard-wait-s 1800] [--no-idle-guard] [--min-free-gb 25]
+node tools/ui-bench/run_ui.mjs --rosettad BIN --home DIR --fixture MANIFEST --out OUT_DIR \
+  --script reader-v1|passive-v1 [--idle-guard] [the same options]
 ```
 
-`OUT_DIR` must not exist and must be outside the repository and the snapshot. A run takes
+`OUT_DIR` must not exist and must be outside the repository and the snapshot (or the
+fixture home). `--home DIR --fixture MANIFEST` runs over a fixture home that `fixture.mjs`
+generated (see "Fixture test"); its identity (`identity.fixture`: spec, seeds, tree
+digest, generator sha256) replaces the snapshot's (`identity.snapshot` is then null), it
+is verified against its manifest instead of by the R1 kit (`run.snapshotVerify` is null;
+a home outside a fixture's place is refused before any file is read: see "Fixture test"),
+and the idle guard is off unless `--idle-guard` (declared as `identity.fixture.idleGuard`).
+Snapshot runs are unchanged but for `identity.fixture: null` and two more harness hashes. A run takes
 about a minute on the R1 snapshot. An Electron window (1500×940 at device scale factor
 `--dpr`, default 2, the MacBook's) opens and is driven by trusted CDP input; leave the mouse
 alone while it runs. In order, the driver:
 
 1. refuses below `--min-free-gb` free disk, then waits for two consecutive 2 s `top` samples
    with CPU idle ≥ `--idle-min` (up to `--guard-wait-s`, then proceeds and records it);
-2. verifies the snapshot; hashes the binary, the renderer dist (sha256 tree digest), the
-   script and every harness file;
-3. starts `rosettad serve --home SNAP/home --db OUT/db/rosetta.sqlite --addr 127.0.0.1:0
+2. verifies the snapshot (or the fixture home against its manifest); hashes the binary,
+   the renderer dist (sha256 tree digest), the script and every harness file;
+3. starts `rosettad serve --home SNAP/home (or DIR) --db OUT/db/rosetta.sqlite --addr 127.0.0.1:0
    --json --announce --announce-dir OUT/announce --profile` behind `drain.mjs`, which reads
    its stdout and stderr straight to files with receipt stamps (no `--agent`: consent is
    the roll call's; no `--ticks 0`: the run outlives publication and search);
@@ -72,6 +81,8 @@ outcome `incomplete`.
 | File | Role |
 |---|---|
 | `run_ui.mjs` | Single-run driver; `buildRunDoc` assembles the document |
+| `source.mjs` | The run's input home: the R1 snapshot or a fixture home, verified, with its identity and newest giant |
+| `fixture.mjs` | The fixture home: its spec, generation through bench-corpus, mtimes, manifest and verification |
 | `drain.mjs` | The daemon's dedicated stdout/stderr reader |
 | `app-entry.mjs` | Electron main entry: fresh userData (and temp), throttling off, focus emulated, worktree/git, favicon, file-browser and browser-preview IPC and `shell.openExternal` denied, every request but the app's own scheme, its renderer files and the run's daemon cancelled, CDP probe registered before the first app load (its binding honoured only from the main frame), then `clients/app/electron/main.mjs` |
 | `reader-context.mjs` | The scripts' API in the main process: probe events, CDP `Input.*`, rects |
@@ -82,10 +93,11 @@ outcome `incomplete`.
 | `build_schema.py` | Generates the schema: `python3 -I tools/ui-bench/build_schema.py tools/ui-bench/ui-run-1.schema.json` (edit the generator, never the JSON) |
 | `digests.mjs` | Read-only equality digests via the R1 kit |
 | `test/` | `node --test tools/ui-bench/test/*.test.mjs` (synthetic fixtures only; `probe-dom.test.mjs` runs `probe-dom.electron.mjs`, the probe in a hidden Electron page with planted breaches) |
+| `test/fixture-run.mjs` | The real-daemon fixture test (`npm run test:ui-readiness`, local-only; below), with `fixture-checks.mjs` (its verdict, unit-tested by `fixture-checks.test.mjs`), `fixture-search.mjs` and `fixture-expected.json`; `fixture.test.mjs` tests where a fixture home may be |
 
 ## Reading `ui-run.json`
 
-- `identity`: binary, dist, snapshot, script, harness hashes, machine, window, DPR
+- `identity`: binary, dist, snapshot (or fixture), script, harness hashes, machine, window, DPR
   (requested and measured), declared deviations, the enrolled set. Two runs are comparable
   only when these match as the pair rules require.
 - `run`: `outcome` (`complete`, `incomplete`, `timeout`, `failed`) and `outcomeReasons`,
@@ -110,3 +122,146 @@ outcome `incomplete`.
 
 Ids, titles, paths and query text never leave the page; the probe returns rectangles to
 the script, and the document holds counts, sizes, timings, enums and digests only.
+
+## Fixture test (local-only)
+
+```sh
+npm run test:ui-readiness       # npm run build, then cargo build --release --locked -p rosettad
+                                # -p rosetta-bench-corpus, then the test over both scripts
+node tools/ui-bench/test/fixture-run.mjs [--rosettad BIN --bench-corpus BIN] [--work DIR] \
+  [--reader-only] [--expected FILE] [--write-expected] [--keep] [--timeout-s 600]
+```
+
+The real release rosettad, SDK, hooks and renderer over a home anyone can regenerate,
+asserting invariants and digests only, never a timing threshold.
+
+**What it covers, and what it does not.** On this fixture the whole import, canonical
+readiness included, is over before the app paints its first columns. Every root is
+readable 1.2–1.6 s after consent and canonical readiness follows 0.3–0.4 s later (1.4–1.9
+s), while the columns wait for the roll call's next status poll, which runs every 2.5 s
+while awaiting consent (ux:X7), so H1 is 1.7–2.2 s (36 fixture documents, 2026-11-03). So
+no row is ever painted Pending. The test covers flip *delivery* (every root's
+flip reaches the UI, after the daemon made it and in its order), the end state, the
+selection and list invariants, privacy and the digests. It does **not** test Pending →
+paint: I1 c1's breach class (a Pending row painted ready), c4, c7, H5 and the
+opened-while-Pending face are unreachable here, and a planted Pending-painted-ready
+renderer breach passes (a reviewer showed it). Each run records its **regime**
+(`fixture-checks.mjs` `regimeOf`: `import-done-before-first-paint` in all 36 documents,
+canonical readiness 155–732 ms before H1) and prints it. A run in another regime
+(rows painted Pending, or the import outlasting H1) is flagged with a NOTE, not failed: it
+is the order of two timings no one guarantees. Reaching Pending paint deterministically
+would need a slower import than the fixture's 100 MB budget allows, or the ux:X7 immediate
+status poll. Pausing the cold build (`POST /api/ingestions/{id}/pause`) is no substitute:
+a resumed build runs the cross-launch resume path, which withholds every readiness
+decision until publication (no per-tree flips, no `newest-giant-ready`), and the pause
+would still have to win a race against the giant's flip.
+
+It takes about 32 s and peaks near 0.3 GB of disk (the binaries, the 81 MB home and one
+153 MB run db at a time) in a fresh temp directory (`--work DIR` instead; it must not exist
+and must lie outside the repository and the home directory). At the end it deletes the
+home, dbs and profiles; a db stays only while a daemon may still hold it, and the test says
+so. `--keep` keeps all of it (about 0.45 GB); the home is read-only (directories 0555), so
+run `chmod -R u+w WORK` before deleting a kept WORK. Without `--rosettad`/`--bench-corpus`
+it builds both and takes the exact executables cargo reports (no mtime-picked artifact); it
+hashes each as cargo returns, copies it into the work directory and refuses if the copy's
+hash differs (a concurrent build of a shared target directory). Exit 0: every check passed;
+1: a check failed (each is printed with its reason, and `WORK/report.json` holds every
+check, digest, regime and headline value); 2: setup (a precondition, a missing binary, a
+failed build, no renderer build); 130, 143 or 129: SIGINT, SIGTERM or SIGHUP. run_ui runs
+in its own process group, so a terminal's Ctrl-C reaches only the test, which forwards one
+signal; every child stops and the home, dbs and profiles are still deleted.
+
+**Machine precondition.** bench-corpus writes every cwd as `/tmp/bench/project-N`, and the
+meta resolver looks for a `.git` at each cwd and at every ancestor
+(`crates/pipeline/src/project.rs`, `find_git_dir`). A checkout there would merge or rename
+the fixture's four projects and move every digest, so the test refuses (exit 2) while
+`/tmp/bench` exists in any form, or a `.git` sits at `/tmp` or `/`.
+
+**Local-only, on purpose.** It needs a release rosettad, the built renderer, Electron with
+a display, and macOS (the driver's guards read `top`, `sysctl` and `sw_vers`, and the
+digests use `/usr/bin/sqlite3`). CI's one Electron job (`test:room-host` under xvfb on
+Linux) has no release rosettad, and no CI job that builds one and runs this has ever been
+run. It is not `*.test.mjs`, so the unit suite never runs it.
+
+**The fixture** (`fixture.mjs`, `ui-fixture-v1`). bench-corpus writes every transcript
+under `.claude` and `.codex` of one home, all with `--tool-ratio 0.3`:
+- `gen claude-code --sessions 16 --lines 4000 --seed 41`;
+- `gen claude-code --sessions 1 --lines 36000 --seed 42`, one 71 MB session over the
+  daemon's 64 MiB big-tree line;
+- `gen codex --sessions 9 --lines 1500 --seed 43`.
+
+That makes 26 files, 80.8 MB (77 MiB), and 26 single-session root trees (bench-corpus
+writes no subagent transcripts) over 4 projects that both agents share (each cwd is its
+own project, given the precondition above). The test then sets every mtime from a fixed
+base (2026-09-01Z): the giant is NEWEST (3 h before it), and the other 25 files take fixed
+ages over their sorted paths (4 more within 24 h of NEWEST, 7 more within 7 d, 14 from 9 to
+60 days). So 24h@newest holds 5 roots and 7d@newest 12, from both agents. Finally it makes
+the tree read-only, as the R1 snapshot is. The manifest beside the home (never inside it)
+records the spec's sha256, the generator's sha256 and a tree digest over each file's path,
+size, mtime and content. `run_ui --home` refuses, before reading any file, a home that is,
+contains or lies inside the home directory or the repository, a manifest not beside it,
+and a home holding anything but the spec's data roots.
+
+**What it asserts** (`fixture-checks.mjs`), per script:
+- outcome complete, self-test, privacy (the list read from the run's db, and holding at
+  least the db's session, native and project ids);
+- I1 passes, and the checks that can catch something here examined something: c3 for both
+  scripts, and c2 for reader-v1 (a row drawn ready can still revert after the first paint,
+  though not during the import, which is over by then). c1 is not asserted as exercised
+  (above). c5 and c6 are not either: c5's count is 0 exactly when it already counts a
+  violation, and c6's is a constant 1 (a document exists only if the gate passed);
+- every H1–H5 / H-all `reached` entry agrees with its value (a number with `yes`, null
+  otherwise), and the values the fixture always produces are reached;
+- orderings, with the run's own clock error as slack: H1 ≥ the first project frame
+  received; H2 painted ≥ H2 receipt ≥ the daemon's flip of NEWEST (the `publishedS` of the
+  tree-admission batch that printed `newest-giant-ready`: NEWEST is the newest giant); each
+  H3 receipt ≥ its `recent-ready …@newest`; H-all receipt ≥ the daemon's last root-flipping
+  batch, and that batch ≤ the last `runtime-readable`; every H5 sample ≥ 0 (from the
+  probe's own pairs, vacuous while H5 is not reached). A missing end fails the ordering,
+  except passive-v1's H2 painted, which it declares not applicable;
+- the harness's newest giant, the daemon's and the fixture's are one tree (tree bytes),
+  NEWEST's receipt is the giant's, and each horizon holds the spec's roots for the UI and
+  for the daemon;
+- the daemon's flips were found in its stdout, which is this run's; the home is unchanged
+  after the run; and the digests equal `fixture-expected.json`.
+
+The test runs run_ui with `--keep` to read the daemon's stdout for those two flips, then
+deletes what run_ui would have. run_ui's exit code is not the verdict.
+
+What it does not assert, and why:
+- Pending paint, as above.
+- H-all against `runtime-readable`: that milestone is stamped at the runtime's close, after
+  its last tree flip, and has no unrounded JSON twin (two decimals), so the UI can and does
+  receive the last flip a few ms before it (−2.3 ms in one run). Its lag is recorded.
+- H7's invariant: recorded. In the first 13 reader-v1 fixture runs (2026-11-03) one aim
+  missed: the first aim at NEWEST's project, −92 px, as the end-of-import reorder landed
+  between its rect read and its press. That is the R1 snapshot's product finding (ux:X9).
+  The script then marked `newest-never-ready`, and H2's painted leg timed its later
+  reselect.
+
+**Digests.** Pinned:
+- logical TOTAL;
+- strict_noid **TOTAL_R**, every strict_noid component but `ingest_cursor_file_evidence`. A
+  cursor's tail checkpoint encodes the file's device and inode, so that component changes
+  whenever the home is regenerated, wherever it is. Within one test run both scripts must
+  agree on strict_noid TOTAL too;
+- `sourceSetDigest`, ranked ids, the UI hit digest, roots, ready sessions and every count.
+
+The R1 ranked workload and reader-v1's three queries ask for words bench-corpus never
+writes, so on the fixture they pin empty hit lists. `fixture-search.mjs` therefore also
+digests seven queries of the fixture's own vocabulary (a warm start on the run's db, as
+`r1_ranked.py` does), each of which must find something. Nothing pinned depends on the
+home's location; the generated files depend only on bench-corpus and the spec, and the
+projects on the machine precondition.
+
+**Refreshing the expected digests** (`--write-expected`, written only when every other
+check passed; review the diff). It is legitimate when the change is meant to alter what the
+fixture produces, and the commit says which:
+- bench-corpus's output or the fixture spec (the tree digest moves);
+- the canonical model, an adapter or normalization (logical and strict_noid);
+- ledger framing of a source (`sourceSetDigest`);
+- ranking (the ranked digests);
+- what the room draws for a search (UI hit digest).
+
+Never refresh to make a failing invariant pass, or because a digest moved without such a
+change: that is the regression this test exists to catch.

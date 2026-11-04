@@ -670,6 +670,21 @@ timing.
 > (with pointer motion not counted as input, the reader's run shows about the same 20 project
 > moves as the passive one).
 >
+> *Fixture test (local-only).* `npm run test:ui-readiness` (`tools/ui-bench/test/fixture-run.mjs`)
+> runs the same harness, the real release rosettad and app, over a synthetic home that
+> bench-corpus regenerates from fixed seeds at test time (26 single-session root trees of both
+> agents, 81 MB, a 71 MB newest giant as NEWEST, mtimes fixed so both @newest horizons have
+> members), and asserts invariants and digests only: I1, the `reached` contract, the orderings
+> H1 ≥ the first project frame, H2 painted ≥ receipt ≥ the daemon's flip of NEWEST, H3 ≥ its
+> `recent-ready …@newest`, H-all ≥ the daemon's last root flip (not `runtime-readable`, a
+> rounded stamp at the runtime's close), and digests equal to a committed file (strict_noid
+> as TOTAL_R, since cursor file evidence carries inodes). It is local-only, as no CI job
+> builds rosettad for Electron and the harness is macOS-specific. It tests flip delivery,
+> not Pending paint: the whole import, canonical readiness included, ends before the columns
+> are up (they wait for the roll call's next 2.5 s status poll, ux:X7), so no row is ever
+> painted Pending and I1 c1's breach class, c4, c7, H5 and the opened-while-Pending face are
+> not exercised. Each run records that regime and flags a run in another one.
+>
 > **Newest trees first (R1, 2026-11-02).** The organic MacBook trace of 1301bdb (M1 Max; 21.25 GB
 > of Claude Code in 13,477 files, 8,447 sessions, 1,139 root trees) published metadata at 2.7 s
 > but made nothing readable until 140.8 s — first-readable, both recent horizons and the runtime's

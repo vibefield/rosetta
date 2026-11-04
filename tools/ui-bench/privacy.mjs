@@ -107,6 +107,11 @@ export function validateRun(run, { schema = loadSchema(), forbidden = [] } = {})
   const errors = [];
   const free = [];
   check(run, schema.root, '$', schema.defs || {}, errors, free);
+  // A ui-run/1 document reads exactly one source: the R1 snapshot or a fixture home.
+  const id = run?.format === 'ui-run/1' && run.identity && typeof run.identity === 'object' ? run.identity : null;
+  if (id && [id.snapshot, id.fixture].filter((x) => x !== null && x !== undefined).length !== 1) {
+    errors.push('$.identity: exactly one of snapshot and fixture must be set');
+  }
   const exact = new Set();
   const partial = [];
   for (const f of forbidden) {

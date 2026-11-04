@@ -1,0 +1,85 @@
+{
+ "format": "ui-fixture-expected/1",
+ "fixture": {
+  "name": "ui-fixture-v1",
+  "specSha256": "572e409bdd0b9d9a3c63a4438b54f286bcf6a638b23f5194228a17c8d1597170",
+  "treeSha256": "42b6836bb998d4938ca0bfad9b617862738d6ffdd4d7e09d981f25f8f9b915c7",
+  "files": 26,
+  "bytes": 80774498
+ },
+ "equality": {
+  "logicalTotal": "3835d518b8fa76d42dbb30a4e16ee4b24cce5379360cf8260aa653912becf3e1",
+  "strictNoidRTotal": "9ffcb308c70ca32fec2ebabcc7f87755536ebf1f3647dc45bf17184dfe18d656",
+  "sourceSetDigest": "6e781dcf1ce5752376cc2858d021f52e2f1157959e33578fab223e3947f60bfc",
+  "rankedIdsSha256": "4c5264f7190b46b895f0b06be9a1d86e0f4bc2f089e1d701f71fefcff2901deb",
+  "hitDigest": "da93df32855bdcc0ecd7c33363e98cb12ae3065dd7a82d1d8ae5be00ff2d8ae2",
+  "finalRoots": 26,
+  "finalReadySessions": 26,
+  "counts": {
+   "sessions": 26,
+   "projects": 4,
+   "messages": 38409,
+   "tool_rows": 6698,
+   "usage_bearing_messages": 19574,
+   "session_usage_rows": 40,
+   "session_usage_total_rows": 0,
+   "usage_bucket_rows": 162,
+   "file_edit_rows": 2210,
+   "git_commit_rows": 0,
+   "plan_rows": 0,
+   "task_rows": 0,
+   "workflow_run_rows": 0,
+   "workflow_journal_rows": 0,
+   "html_artifact_rows": 0,
+   "drift_agg_rows": 0,
+   "drift_seen_rows": 0,
+   "ingest_cursor_rows": 26,
+   "ingest_cursor_active": 26,
+   "ingest_cursor_sqlite_members_active": 0,
+   "agent_runtime_rows": 2,
+   "message_type:agent": 16150,
+   "message_type:thinking": 2685,
+   "message_type:tool_use": 6698,
+   "message_type:user": 12876,
+   "session_stream_state:indexed": 26,
+   "session_kind:claude-code": 17,
+   "session_kind:codex": 9,
+   "rows_with_asset_refs:message.detail": 0,
+   "rows_with_asset_refs:message.tool_detail": 0,
+   "rows_with_asset_refs:html_artifact.asset": 0
+  }
+ },
+ "search": {
+  "rankedIdsSha256": "8b92546905e34794176bf1e2d8df68aa8a4c3ab4f3c2f6fdc5d21315cf94fa28",
+  "perCase": [
+   {
+    "label": "broad-1",
+    "hits": 200
+   },
+   {
+    "label": "medium-1",
+    "hits": 200
+   },
+   {
+    "label": "phrase-1",
+    "hits": 200
+   },
+   {
+    "label": "selective-1",
+    "hits": 200
+   },
+   {
+    "label": "prompt-filter-1",
+    "hits": 200
+   },
+   {
+    "label": "reply-filter-1",
+    "hits": 200
+   },
+   {
+    "label": "agent-codex-1",
+    "hits": 200
+   }
+  ]
+ }
+}

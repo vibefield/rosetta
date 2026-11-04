@@ -16,6 +16,7 @@
     "build": "npm run build:packages && npm run build -w @vibefield/rosetta-agent-history",
     "test": "node --test tools/npm/*.test.mjs && npm test -w @vibefield/rosetta-protocol && npm test -w @vibefield/rosetta-agent-history",
     "check:packages": "node tools/npm/check-packages.mjs",
-    "pack:packages": "node tools/npm/pack.mjs"
+    "pack:packages": "node tools/npm/pack.mjs",
+    "test:ui-readiness": "npm run build && node tools/ui-bench/test/fixture-run.mjs"
   }
 }

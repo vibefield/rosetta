@@ -1,13 +1,19 @@
 #!/usr/bin/env node
-// One ui-bench run: the production app over a frozen snapshot, read by a versioned
-// script, measured by the injected probe, digested read-only, written as ui-run/1.
+// One ui-bench run: the production app over a frozen snapshot (or a fixture home),
+// read by a versioned script, measured by the injected probe, digested read-only,
+// written as ui-run/1.
 //
-//   node tools/ui-bench/run_ui.mjs --rosettad BIN --snapshot SNAP --out OUT_DIR
-//        --script reader-v1|passive-v1 [--keep] [--timeout-s 600] [--dpr 2]
-//        [--idle-min 75] [--guard-wait-s 1800] [--no-idle-guard] [--min-free-gb 25]
+//   node tools/ui-bench/run_ui.mjs --rosettad BIN (--snapshot SNAP | --home DIR --fixture
+//        MANIFEST) --out OUT_DIR --script reader-v1|passive-v1 [--keep] [--timeout-s 600]
+//        [--dpr 2] [--idle-min 75] [--guard-wait-s 1800] [--no-idle-guard | --idle-guard]
+//        [--min-free-gb 25]
 //
-// OUT_DIR must not exist and must lie outside the repository and the snapshot.
-// Steps: free-disk and quiet-machine guards; verify_r1_snapshot.js; rosettad `serve
+// OUT_DIR must not exist and must lie outside the repository and the snapshot (or the
+// fixture home). --snapshot is the frozen R1 corpus; --home is a synthetic fixture home
+// written by fixture.mjs, verified against its manifest, whose identity (spec, seeds,
+// tree digest) replaces the snapshot's (source.mjs). The idle guard is on by default
+// for a snapshot and off for a fixture (declared in identity.fixture.idleGuard).
+// Steps: free-disk and quiet-machine guards; verify the source; rosettad `serve
 // --home SNAP/home --db OUT/db/rosetta.sqlite --addr 127.0.0.1:0 --json --announce
 // --announce-dir OUT/announce --profile` (no --agent: consent is the roll call's; no
 // --ticks 0) behind drain.mjs; Electron with app-entry.mjs at a forced device scale
@@ -28,6 +34,7 @@ import { parseDaemonLog } from './daemon-lines.mjs';
 import { ENROLLED, derive } from './metrics.mjs';
 import { SCHEMA_PATH, validateRun } from './privacy.mjs';
 import { digestRun, forbiddenFromDb } from './digests.mjs';
+import { prepareSource } from './source.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
@@ -39,24 +46,28 @@ const tell = (child, msg) => { try { if (child.connected) child.send(msg, () => 
 export const DEVIATIONS = ['background-throttling-off', 'worktree-ipc-denied', 'favicon-ipc-denied', 'browser-ipc-denied', 'external-links-denied',
   'network-local-only', 'announce-dir-private', 'fresh-profile', 'about-blank-before-load', 'focus-emulated', 'device-scale-factor-forced'];
 export const HARNESS_FILES = ['run_ui.mjs', 'app-entry.mjs', 'reader-context.mjs', 'probe.js', 'probe-worker.js', 'drain.mjs', 'daemon-lines.mjs',
-  'metrics.mjs', 'privacy.mjs', 'digests.mjs', 'ui-run-1.schema.json', 'scripts/reader-v1.mjs', 'scripts/passive-v1.mjs'];
+  'metrics.mjs', 'privacy.mjs', 'digests.mjs', 'source.mjs', 'fixture.mjs', 'ui-run-1.schema.json', 'scripts/reader-v1.mjs', 'scripts/passive-v1.mjs'];
 export const R1_FILES = ['verify_r1_snapshot.js', 'r1_snapshot_lib.js', 'r1_logical_digest.sql', 'r1_cursor_order.sql', 'r1_ranked.py', 'product-diagnostic-v3.json'];
 
 function parseArgs(argv) {
-  const a = { keep: false, timeoutS: 600, idleMin: 75, guardWaitS: 1800, idleGuard: true, minFreeGb: 25, dpr: 2 };
+  const a = { keep: false, timeoutS: 600, idleMin: 75, guardWaitS: 1800, idleGuard: null, minFreeGb: 25, dpr: 2 };
   for (let i = 0; i < argv.length; i += 1) {
     const k = argv[i];
     const v = () => argv[++i];
     if (k === '--rosettad') a.bin = v(); else if (k === '--snapshot') a.snap = v(); else if (k === '--out') a.out = v();
+    else if (k === '--home') a.home = v(); else if (k === '--fixture') a.fixture = v(); else if (k === '--idle-guard') a.idleGuard = true;
     else if (k === '--script') a.script = v(); else if (k === '--keep') a.keep = true; else if (k === '--timeout-s') a.timeoutS = Number(v());
     else if (k === '--idle-min') a.idleMin = Number(v()); else if (k === '--guard-wait-s') a.guardWaitS = Number(v());
     else if (k === '--no-idle-guard') a.idleGuard = false; else if (k === '--min-free-gb') a.minFreeGb = Number(v());
     else if (k === '--dpr') a.dpr = Number(v());
     else throw new Error(`unknown option ${k}`);
   }
-  if (!a.bin || !a.snap || !a.out || !['reader-v1', 'passive-v1'].includes(a.script) || !(a.dpr > 0 && a.dpr <= 4)) {
-    throw new Error('usage: run_ui.mjs --rosettad BIN --snapshot SNAP --out OUT_DIR --script reader-v1|passive-v1 [--keep] [--dpr N]');
+  const oneSource = a.snap ? !a.home && !a.fixture : Boolean(a.home && a.fixture);
+  if (!a.bin || !oneSource || !a.out || !['reader-v1', 'passive-v1'].includes(a.script) || !(a.dpr > 0 && a.dpr <= 4)) {
+    throw new Error('usage: run_ui.mjs --rosettad BIN (--snapshot SNAP | --home DIR --fixture MANIFEST) --out OUT_DIR --script reader-v1|passive-v1 [--keep] [--dpr N]');
   }
+  // The quiet-machine guard: on for the snapshot, off for a fixture, unless asked.
+  if (a.idleGuard === null) a.idleGuard = Boolean(a.snap);
   return a;
 }
 
@@ -97,26 +108,6 @@ async function quietGuard(a, log) {
   }
   return { cpuIdleAtStart: idle, waitedS: Math.round((Date.now() - t0) / 1000), proceededOverGuard: ok < 2, load1: Math.round(os.loadavg()[0] * 100) / 100 };
 }
-
-/** D2(c): the newest big tree's root native id, from the frozen snapshot, in memory only. */
-function newestGiant(snap) {
-  const lib = createRequire(path.join(R1, 'package.json'))('./r1_snapshot_lib.js');
-  const meta = JSON.parse(readFileSync(path.join(snap, 'snapshot.json'), 'utf8'));
-  if (!meta.agents['claude-code']) return { native: null, treeBytes: null };
-  const { entries } = lib.walkInputs(path.join(snap, 'home'), [{ agent: 'claude-code', dataRoot: meta.agents['claude-code'].dataRoot }]);
-  const trees = new Map();
-  for (const e of entries) {
-    const m = e.rel.match(/^projects\/([^/]+)\/([0-9a-f-]{36})(\.jsonl$|\/)/);
-    if (!m) continue;
-    const key = `${m[1]}/${m[2]}`;
-    const t = trees.get(key) || { native: m[2], k: 0, max: 0, bytes: 0 };
-    t.k = Math.max(t.k, e.mtimeMs); t.max = Math.max(t.max, e.size); t.bytes += e.size;
-    trees.set(key, t);
-  }
-  const big = [...trees.values()].filter((t) => t.max > 64 * 2 ** 20).sort((x, y) => y.k - x.k);
-  return big.length ? { native: big[0].native, treeBytes: big[0].bytes } : { native: null, treeBytes: null };
-}
-
 
 /** The ui-run/1 document from its parts (pure; the tests build the same way). */
 export function buildRunDoc({ script, identity, run, probe, mainNotes, derived, daemonLog, stderr, digests, forbiddenCount }) {
@@ -211,9 +202,9 @@ async function stopChildren(log) {
 async function main() {
   const a = parseArgs(process.argv.slice(2));
   const out = path.resolve(a.out);
-  const snap = path.resolve(a.snap);
+  const inputRoot = path.resolve(a.snap ?? a.home);
   if (!isOutside(path.relative(REPO, out))) throw new Error('OUT_DIR must be outside the repository');
-  if (!isOutside(path.relative(snap, out))) throw new Error('OUT_DIR must be outside the snapshot');
+  if (!isOutside(path.relative(inputRoot, out))) throw new Error(`OUT_DIR must be outside the ${a.snap ? 'snapshot' : 'fixture home'}`);
   if (existsSync(out)) throw new Error('OUT_DIR exists; refusing');
   const bin = path.resolve(a.bin);
   const scriptPath = path.join(HERE, 'scripts', `${a.script}.mjs`);
@@ -237,22 +228,21 @@ async function main() {
   const guard = a.idleGuard ? await quietGuard(a, log) : { cpuIdleAtStart: cpuIdle(), waitedS: 0, proceededOverGuard: true, load1: Math.round(os.loadavg()[0] * 100) / 100 };
   log(`guard: idle ${guard.cpuIdleAtStart}% waited ${guard.waitedS}s`);
 
-  // Identity, then the snapshot check right before the run.
-  const verify = spawnSync(process.execPath, [path.join(R1, 'verify_r1_snapshot.js'), snap], { encoding: 'utf8', maxBuffer: 1 << 24 });
-  const verified = JSON.parse(verify.stdout.trim().split('\n').pop() || '{}');
-  if (verify.status !== 0 || verified.ok !== true) throw new Error(`snapshot verification failed: ${(verified.problems || []).length} problems`);
-  const snapMeta = JSON.parse(readFileSync(path.join(snap, 'snapshot.json'), 'utf8'));
+  // The source's check right before the run (the R1 kit, or the fixture's manifest),
+  // then the identity.
+  const source = prepareSource(a);
+  const home = source.home;
   const dist = treeDigest(DIST);
   const harnessSha256 = {};
   for (const f of HARNESS_FILES) harnessSha256[f] = sha256File(path.join(HERE, f));
   for (const f of R1_FILES) harnessSha256[`r1-bench/${f}`] = sha256File(path.join(R1, f));
   const scriptMod = await import(pathToFileURL(scriptPath).href);
-  const giant = newestGiant(snap);
+  const giant = source.giant;
   const electronBin = createRequire(path.join(REPO, 'clients', 'app', 'package.json'))('electron');
   const electronVersion = JSON.parse(readFileSync(path.join(REPO, 'node_modules', 'electron', 'package.json'), 'utf8')).version;
   const identity = {
     rosettadSha256: sha256File(bin), distSha256: dist.sha256, distFiles: dist.files, electron: electronVersion,
-    snapshot: { walkInputsDigest: snapMeta.walkInputsDigest, manifestSha256: snapMeta.manifestSha256, files: snapMeta.totals?.files ?? verified.files, bytes: snapMeta.totals?.bytes ?? verified.bytes },
+    snapshot: source.identity.snapshot, fixture: source.identity.fixture,
     harnessSha256, machine: { model: sysctl('hw.model'), os: spawnSync('sw_vers', ['-productVersion'], { encoding: 'utf8' }).stdout.trim(), cpus: os.cpus().length, memGb: Math.round(os.totalmem() / 2 ** 30) },
     windowPx: '1500x940', dpr: a.dpr, dprMeasured: null, deviations: DEVIATIONS, enrolled: ENROLLED,
   };
@@ -260,7 +250,7 @@ async function main() {
   // The daemon, behind its dedicated reader.
   for (const d of ['db', 'user-data', 'announce']) mkdirSync(path.join(out, d), { mode: 0o700 });
   const db = path.join(out, 'db', 'rosetta.sqlite');
-  const serve = ['serve', '--home', path.join(snap, 'home'), '--db', db, '--addr', '127.0.0.1:0', '--json', '--announce',
+  const serve = ['serve', '--home', home, '--db', db, '--addr', '127.0.0.1:0', '--json', '--announce',
     '--announce-dir', path.join(out, 'announce'), '--profile'];
   const swap0 = swapMb();
   const startedAt = new Date().toISOString();
@@ -369,11 +359,11 @@ async function main() {
   // only once the daemon is gone (immutable=1 needs no live writer).
   checkStop();
   const rawLog = path.join(out, 'digest-errors.log');
-  const digests = live.daemonDone ? await digestRun({ bin, db, snapHome: path.join(snap, 'home'), outDir: path.join(out, 'digests'), r1: R1, log, track, rawLog })
+  const digests = live.daemonDone ? await digestRun({ bin, db, snapHome: home, outDir: path.join(out, 'digests'), r1: R1, log, track, rawLog })
     : await digestRun({ bin, db: path.join(out, 'no-db'), snapHome: '', outDir: path.join(out, 'digests'), r1: R1, log, track, rawLog });
   const fromDb = live.daemonDone ? await forbiddenFromDb({ db, track }) : { ok: false, values: [], reason: 'daemon-alive' };
   if (!fromDb.ok) log(`privacy: the forbidden-value list could not be read from the db (${fromDb.reason}); the document will not be written`);
-  const forbidden = [...new Set([snap, out, bin, os.homedir(), os.userInfo().username, os.hostname(), giant.native, ...(scriptMod.QUERIES ?? []), ...fromDb.values].filter(Boolean))];
+  const forbidden = [...new Set([...source.privatePaths, out, bin, os.homedir(), os.userInfo().username, os.hostname(), giant.native, ...(scriptMod.QUERIES ?? []), ...fromDb.values].filter(Boolean))];
   const daemonLog = parseDaemonLog(readFileSync(path.join(out, 'stdout.log'), 'utf8'));
   const stderr = readFileSync(path.join(out, 'stderr.log'), 'utf8').split('\n').filter(Boolean);
   const probe = app.result?.probe ?? null;
@@ -394,7 +384,7 @@ async function main() {
       startedAt, outcome, outcomeReasons: [...new Set(reasons)], wallS: Math.round(wallS * 10) / 10,
       daemonExit: { code: daemon.exit?.code ?? null, signal: daemon.exit?.signal ?? null }, electronExit: app.exit,
       guard: { ...guard, idleMin: a.idleMin, swapMbBefore: swap0, swapMbAfter: swap1, freeGbBefore: Math.round(free0 * 10) / 10 },
-      snapshotVerify: { ok: verified.ok, files: verified.files, bytes: verified.bytes, wallMs: verified.wallMs },
+      snapshotVerify: source.verify,
       scriptOk: app.scriptDone?.ok === true, scriptTimeouts: timeouts, newestGiantKnown: giant.native !== null, newestGiantTreeBytes: giant.treeBytes,
     },
   });
@@ -444,7 +434,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   };
   // A signal aimed at this process alone (an orchestrator's timeout, `kill -INT pid`)
   // still stops Electron, the drain's daemon and any digest child, and cleans up.
-  process.once('SIGINT', () => { void finish(130, 'SIGINT: stopping the run'); });
-  process.once('SIGTERM', () => { void finish(143, 'SIGTERM: stopping the run'); });
+  // `on`, not `once`: a terminal's Ctrl-C reaches the whole process group, and a parent
+  // may forward it too; a second signal must not take Node's default action (exit at
+  // once, no cleanup) while the first one's stop is still running. finish() runs once.
+  process.on('SIGINT', () => { void finish(130, 'SIGINT: stopping the run'); });
+  process.on('SIGTERM', () => { void finish(143, 'SIGTERM: stopping the run'); });
   main().then((code) => finish(code, null), (error) => finish(2, error.message));
 }
