@@ -1,0 +1,194 @@
+{
+  "format": "ui-pair-schema/1",
+  "about": "Whitelist schema of ui-pair/1 (tools/ui-bench/pair-eval.mjs, gated by privacy.mjs). Strings are enums, sha256 digests or identity forms only.",
+  "root": {
+    "obj": {
+      "format": {"enum": ["ui-pair/1"]}, "gateSet": {"enum": ["a"]}, "kind": {"enum": ["daemon", "ux", "aa"]},
+      "campaignSha256": "sha256", "startedAt": {"id": "iso-time", "null": true},
+      "finishedAt": {"id": "iso-time", "null": true}, "order": {"enum": ["abab", "abba"]}, "runsPerSide": "num",
+      "scripts": {"arr": {"enum": ["reader-v1", "passive-v1"]}, "max": 2},
+      "sides": {
+        "map": {"obj": {"rosettadSha256": "sha256", "distSha256": "sha256", "distFiles": "num?"}},
+        "keys": ["before", "after", "a1", "a2"]
+      },
+      "identity": {
+        "obj": {
+          "snapshot": {
+            "obj": {"walkInputsDigest": "sha256", "manifestSha256": "sha256", "files": "num", "bytes": "num"},
+            "null": true
+          },
+          "fixture": {
+            "obj": {
+              "name": {"enum": ["ui-fixture-v1"]}, "specSha256": "sha256", "treeSha256": "sha256", "files": "num",
+              "bytes": "num", "walkInputsDigest": "sha256", "generatorSha256": "sha256", "idleGuard": "bool"
+            },
+            "null": true
+          },
+          "harnessSha256": {
+            "map": "sha256",
+            "keys": [
+              "run_ui.mjs", "app-entry.mjs", "reader-context.mjs", "probe.js", "probe-worker.js", "drain.mjs",
+              "daemon-lines.mjs", "metrics.mjs", "privacy.mjs", "digests.mjs", "source.mjs", "fixture.mjs",
+              "ui-run-1.schema.json", "scripts/reader-v1.mjs", "scripts/passive-v1.mjs",
+              "r1-bench/verify_r1_snapshot.js", "r1-bench/r1_snapshot_lib.js", "r1-bench/r1_logical_digest.sql",
+              "r1-bench/r1_cursor_order.sql", "r1-bench/r1_ranked.py", "r1-bench/product-diagnostic-v3.json"
+            ],
+            "null": true
+          },
+          "machine": {
+            "obj": {"model": {"id": "machine-model"}, "os": {"id": "os-version"}, "cpus": "num", "memGb": "num"},
+            "null": true
+          },
+          "windowPx": {"id": "window", "null": true}, "dpr": "num?", "dprMeasured": "num?",
+          "electron": {"id": "version", "null": true},
+          "deviations": {
+            "arr": {
+              "enum": [
+                "background-throttling-off", "worktree-ipc-denied", "favicon-ipc-denied", "browser-ipc-denied",
+                "external-links-denied", "network-local-only", "announce-dir-private", "fresh-profile",
+                "about-blank-before-load", "focus-emulated", "device-scale-factor-forced"
+              ]
+            },
+            "max": 16, "null": true
+          },
+          "enrolled": {
+            "arr": {
+              "enum": ["antigravity", "claude-code", "codex", "copilot", "grok", "hermes", "kimi-code", "opencode", "pi"]
+            },
+            "max": 16, "null": true
+          }
+        },
+        "null": true
+      },
+      "scriptSha256": {"map": "sha256?", "keys": ["reader-v1", "passive-v1"]},
+      "options": {
+        "obj": {
+          "timeoutS": "num", "idleMin": "num", "guardWaitS": "num", "idleGuard": "bool", "minFreeGb": "num",
+          "dpr": "num", "swapRedoMb": "num"
+        }
+      },
+      "claims": {
+        "arr": {
+          "obj": {
+            "script": {"enum": ["reader-v1", "passive-v1"]},
+            "metric": {
+              "enum": [
+                "H2.ms", "H2.receiptMs", "H3.h24.receiptMs", "H3.h24.paintedSelMs", "H3.h7d.receiptMs",
+                "H3.h7d.paintedSelMs", "Hall.receiptMs", "Hall.paintedSelMs", "H5.p95Ms", "D2.inversionCorpusMs",
+                "D2.inversionSelectedMs", "H4.p95Ms", "H6.streaming.blockingMs", "H6.finalizing.blockingMs",
+                "H6.post.blockingMs", "H1.ms", "H1.metaPushMs", "H1.statusPollMs", "H2.lag.ms", "H2.heldReadyMs",
+                "H4.p50Ms", "H4.maxMs", "H4.pendingFace.p50Ms", "H5.p50Ms", "H5.maxMs", "H6.streaming.longestMs",
+                "H6.finalizing.longestMs", "H6.post.longestMs", "H6.input.p98Ms", "H6.input.maxMs", "H6.heapPeakMb",
+                "H6.appWorkingSetPeakMb", "H6.probeMainPctOfWall", "H7.projectsMoves", "H7.sessionsMoves",
+                "H7.aimMisses", "H7.selectionJumps", "H8.chartsSelectedMs", "H8.chartsAllMs", "H8.portfolioMs",
+                "H8.searchLagMs", "D1.consentToProgressMs", "D2.newestGiant.receiptMs", "D3.wire.p95Ms",
+                "daemon.metadata-ready", "daemon.first-readable", "daemon.newest-giant-ready",
+                "daemon.recent-ready:24h@newest", "daemon.recent-ready:7d@newest", "daemon.canonical-ready",
+                "daemon.search-ready", "daemon.footprintMb", "run.wallS"
+              ]
+            },
+            "maxRatio": "num?", "maxP": "num?"
+          }
+        },
+        "max": 64
+      },
+      "floors": {"obj": {"source": {"enum": ["none", "aa"]}, "aaCampaignSha256": "sha256?"}},
+      "equality": {
+        "map": {
+          "obj": {
+            "logicalTotal": {"obj": {"value": {"anyOf": ["sha256?", "num?"]}, "equal": "bool"}},
+            "sourceSetDigest": {"obj": {"value": {"anyOf": ["sha256?", "num?"]}, "equal": "bool"}},
+            "rankedIdsSha256": {"obj": {"value": {"anyOf": ["sha256?", "num?"]}, "equal": "bool"}},
+            "hitDigest": {"obj": {"value": {"anyOf": ["sha256?", "num?"]}, "equal": "bool"}},
+            "finalRoots": {"obj": {"value": {"anyOf": ["sha256?", "num?"]}, "equal": "bool"}},
+            "finalReadySessions": {"obj": {"value": {"anyOf": ["sha256?", "num?"]}, "equal": "bool"}}
+          }
+        },
+        "keys": ["reader-v1", "passive-v1"]
+      },
+      "void": "bool",
+      "voidReasons": {
+        "arr": {
+          "enum": [
+            "run-missing", "wrong-document", "run-not-complete", "self-test-failed", "i1-failed", "privacy-failed",
+            "rosettad-differs-from-declared", "dist-differs-from-declared", "identity-differs",
+            "source-differs-from-declared", "script-differs", "digest-missing", "digest-differs"
+          ]
+        },
+        "max": 16
+      },
+      "runs": {
+        "arr": {
+          "obj": {
+            "slot": "num", "round": "num", "side": {"enum": ["before", "after", "a1", "a2"]},
+            "script": {"enum": ["reader-v1", "passive-v1"]}, "discarded": "bool", "present": "bool",
+            "outcome": {"enum": ["complete", "incomplete", "timeout", "failed"], "null": true},
+            "selfTestPass": "bool?", "i1Pass": "bool?", "h7InvariantPass": "bool?", "wallS": "num?",
+            "cpuIdleAtStart": "num?", "guardWaitedS": "num?", "proceededOverGuard": "bool?", "load1": "num?",
+            "swapMbBefore": "num?", "swapMbAfter": "num?",
+            "power": {"obj": {"source": {"enum": ["ac", "battery", "unknown"]}, "lowPowerMode": "bool?"}},
+            "exitCode": "num?"
+          }
+        },
+        "max": 2000
+      },
+      "metrics": {
+        "arr": {
+          "obj": {
+            "script": {"enum": ["reader-v1", "passive-v1"]},
+            "metric": {
+              "enum": [
+                "H2.ms", "H2.receiptMs", "H3.h24.receiptMs", "H3.h24.paintedSelMs", "H3.h7d.receiptMs",
+                "H3.h7d.paintedSelMs", "Hall.receiptMs", "Hall.paintedSelMs", "H5.p95Ms", "D2.inversionCorpusMs",
+                "D2.inversionSelectedMs", "H4.p95Ms", "H6.streaming.blockingMs", "H6.finalizing.blockingMs",
+                "H6.post.blockingMs", "H1.ms", "H1.metaPushMs", "H1.statusPollMs", "H2.lag.ms", "H2.heldReadyMs",
+                "H4.p50Ms", "H4.maxMs", "H4.pendingFace.p50Ms", "H5.p50Ms", "H5.maxMs", "H6.streaming.longestMs",
+                "H6.finalizing.longestMs", "H6.post.longestMs", "H6.input.p98Ms", "H6.input.maxMs", "H6.heapPeakMb",
+                "H6.appWorkingSetPeakMb", "H6.probeMainPctOfWall", "H7.projectsMoves", "H7.sessionsMoves",
+                "H7.aimMisses", "H7.selectionJumps", "H8.chartsSelectedMs", "H8.chartsAllMs", "H8.portfolioMs",
+                "H8.searchLagMs", "D1.consentToProgressMs", "D2.newestGiant.receiptMs", "D3.wire.p95Ms",
+                "daemon.metadata-ready", "daemon.first-readable", "daemon.newest-giant-ready",
+                "daemon.recent-ready:24h@newest", "daemon.recent-ready:7d@newest", "daemon.canonical-ready",
+                "daemon.search-ready", "daemon.footprintMb", "run.wallS"
+              ]
+            },
+            "role": {"enum": ["claim", "guard", "report-only"]},
+            "before": {
+              "obj": {
+                "n": "num", "median": "num?", "iqr": "num?", "min": "num?", "max": "num?",
+                "reached": {"obj": {"yes": "num", "notReached": "num", "notApplicable": "num"}}
+              }
+            },
+            "after": {
+              "obj": {
+                "n": "num", "median": "num?", "iqr": "num?", "min": "num?", "max": "num?",
+                "reached": {"obj": {"yes": "num", "notReached": "num", "notApplicable": "num"}}
+              }
+            },
+            "deltaMedian": "num?", "ratio": "num?", "toleranceMs": "num?",
+            "toleranceSource": {"enum": ["none", "before-iqr", "aa-floor"]},
+            "maxRatio": "num?", "maxP": "num?", "mannWhitneyP": "num?",
+            "verdict": {"enum": ["pass", "fail", "incomparable", "not-reached", "not-applicable", "report"]},
+            "floorMs": "num?"
+          },
+          "opt": ["floorMs"]
+        },
+        "max": 1000
+      },
+      "summary": {
+        "obj": {
+          "verdict": {"enum": ["pass", "fail", "void", "aa"]},
+          "claims": {"obj": {"pass": "num", "fail": "num", "incomparable": "num"}},
+          "guards": {"obj": {"pass": "num", "fail": "num", "incomparable": "num", "notMeasured": "num"}},
+          "quiet": {
+            "obj": {
+              "runsOverGuard": "num", "swapRedos": "num", "maxSwapGrowthMb": "num?", "onBattery": "num",
+              "lowPowerMode": "num"
+            }
+          }
+        }
+      }
+    }
+  },
+  "defs": {}
+}

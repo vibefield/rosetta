@@ -235,3 +235,57 @@ def dump(x, ind=0):
         return '[\n' + ',\n'.join(pad + dump(v, ind + 2) for v in x) + '\n' + ' ' * ind + ']'
     return s
 open(sys.argv[1], 'w').write(dump(doc) + '\n')
+
+# ui-pair/1 (pair-eval.mjs): one BEFORE/AFTER pair or A/A campaign over ui-run/1
+# documents. Written only when a second path is given:
+#   python3 -I tools/ui-bench/build_schema.py tools/ui-bench/ui-run-1.schema.json tools/ui-bench/ui-pair-1.schema.json
+# METRIC_IDS must equal pair-eval.mjs METRICS (test/pair-eval.test.mjs checks it).
+SCRIPTS = ['reader-v1', 'passive-v1']
+SIDES = ['before', 'after', 'a1', 'a2']
+MILESTONE_METRICS = ['metadata-ready', 'first-readable', 'newest-giant-ready', 'recent-ready:24h@newest', 'recent-ready:7d@newest', 'canonical-ready', 'search-ready']
+METRIC_IDS = ['H2.ms', 'H2.receiptMs', 'H3.h24.receiptMs', 'H3.h24.paintedSelMs', 'H3.h7d.receiptMs', 'H3.h7d.paintedSelMs', 'Hall.receiptMs',
+  'Hall.paintedSelMs', 'H5.p95Ms', 'D2.inversionCorpusMs', 'D2.inversionSelectedMs', 'H4.p95Ms', 'H6.streaming.blockingMs', 'H6.finalizing.blockingMs',
+  'H6.post.blockingMs', 'H1.ms', 'H1.metaPushMs', 'H1.statusPollMs', 'H2.lag.ms', 'H2.heldReadyMs', 'H4.p50Ms', 'H4.maxMs', 'H4.pendingFace.p50Ms',
+  'H5.p50Ms', 'H5.maxMs', 'H6.streaming.longestMs', 'H6.finalizing.longestMs', 'H6.post.longestMs', 'H6.input.p98Ms', 'H6.input.maxMs', 'H6.heapPeakMb',
+  'H6.appWorkingSetPeakMb', 'H6.probeMainPctOfWall', 'H7.projectsMoves', 'H7.sessionsMoves', 'H7.aimMisses', 'H7.selectionJumps', 'H8.chartsSelectedMs',
+  'H8.chartsAllMs', 'H8.portfolioMs', 'H8.searchLagMs', 'D1.consentToProgressMs', 'D2.newestGiant.receiptMs', 'D3.wire.p95Ms'] + \
+  ['daemon.' + k for k in MILESTONE_METRICS] + ['daemon.footprintMb', 'run.wallS']
+VOID_REASONS = ['run-missing', 'wrong-document', 'run-not-complete', 'self-test-failed', 'i1-failed', 'privacy-failed', 'rosettad-differs-from-declared',
+  'dist-differs-from-declared', 'identity-differs', 'source-differs-from-declared', 'script-differs', 'digest-missing', 'digest-differs']
+EQUALITY_KEYS = ['logicalTotal', 'sourceSetDigest', 'rankedIdsSha256', 'hitDigest', 'finalRoots', 'finalReadySessions']
+VERDICTS = ['pass', 'fail', 'incomparable', 'not-reached', 'not-applicable', 'report']
+pair_stat = O({'n': NN, 'median': N, 'iqr': N, 'min': N, 'max': N, 'reached': O({'yes': NN, 'notReached': NN, 'notApplicable': NN})})
+pair_source_snapshot = O({'walkInputsDigest': H, 'manifestSha256': H, 'files': NN, 'bytes': NN}, null=True)
+pair_source_fixture = O({'name': E('ui-fixture-v1'), 'specSha256': H, 'treeSha256': H, 'files': NN, 'bytes': NN, 'walkInputsDigest': H,
+  'generatorSha256': H, 'idleGuard': B}, null=True)
+pair_root = O({
+  'format': E('ui-pair/1'), 'gateSet': E('a'), 'kind': E('daemon', 'ux', 'aa'), 'campaignSha256': H,
+  'startedAt': ID('iso-time', null=True), 'finishedAt': ID('iso-time', null=True),
+  'order': E('abab', 'abba'), 'runsPerSide': NN, 'scripts': A(E(*SCRIPTS), 2),
+  'sides': M(O({'rosettadSha256': H, 'distSha256': H, 'distFiles': N}), SIDES),
+  'identity': O({'snapshot': pair_source_snapshot, 'fixture': pair_source_fixture, 'harnessSha256': M(H, HARNESS, null=True),
+    'machine': O({'model': ID('machine-model'), 'os': ID('os-version'), 'cpus': NN, 'memGb': NN}, null=True), 'windowPx': ID('window', null=True),
+    'dpr': N, 'dprMeasured': N, 'electron': ID('version', null=True), 'deviations': A(E(*DEVIATIONS), 16, null=True),
+    'enrolled': A(E(*AGENTS), 16, null=True)}, null=True),
+  'scriptSha256': M(HN, SCRIPTS),
+  'options': O({'timeoutS': NN, 'idleMin': NN, 'guardWaitS': NN, 'idleGuard': B, 'minFreeGb': NN, 'dpr': NN, 'swapRedoMb': NN}),
+  'claims': A(O({'script': E(*SCRIPTS), 'metric': E(*METRIC_IDS), 'maxRatio': N, 'maxP': N}), 64),
+  'floors': O({'source': E('none', 'aa'), 'aaCampaignSha256': HN}),
+  'equality': M(O({k: O({'value': {'anyOf': [HN, N]}, 'equal': B}) for k in EQUALITY_KEYS}), SCRIPTS),
+  'void': B, 'voidReasons': A(E(*VOID_REASONS), 16),
+  'runs': A(O({'slot': NN, 'round': NN, 'side': E(*SIDES), 'script': E(*SCRIPTS), 'discarded': B, 'present': B,
+    'outcome': E('complete', 'incomplete', 'timeout', 'failed', null=True), 'selfTestPass': BN, 'i1Pass': BN, 'h7InvariantPass': BN, 'wallS': N,
+    'cpuIdleAtStart': N, 'guardWaitedS': N, 'proceededOverGuard': BN, 'load1': N, 'swapMbBefore': N, 'swapMbAfter': N,
+    'power': O({'source': E('ac', 'battery', 'unknown'), 'lowPowerMode': BN}), 'exitCode': N}), 2000),
+  'metrics': A(O({'script': E(*SCRIPTS), 'metric': E(*METRIC_IDS), 'role': E('claim', 'guard', 'report-only'), 'before': pair_stat, 'after': pair_stat,
+    'deltaMedian': N, 'ratio': N, 'toleranceMs': N, 'toleranceSource': E('none', 'before-iqr', 'aa-floor'), 'maxRatio': N, 'maxP': N,
+    'mannWhitneyP': N, 'verdict': E(*VERDICTS), 'floorMs': N}, opt=['floorMs']), 1000),
+  'summary': O({'verdict': E('pass', 'fail', 'void', 'aa'), 'claims': O({'pass': NN, 'fail': NN, 'incomparable': NN}),
+    'guards': O({'pass': NN, 'fail': NN, 'incomparable': NN, 'notMeasured': NN}),
+    'quiet': O({'runsOverGuard': NN, 'swapRedos': NN, 'maxSwapGrowthMb': N, 'onBattery': NN, 'lowPowerMode': NN})}),
+})
+if len(sys.argv) > 2:
+    pair_doc = {'format': 'ui-pair-schema/1',
+                'about': 'Whitelist schema of ui-pair/1 (tools/ui-bench/pair-eval.mjs, gated by privacy.mjs). Strings are enums, sha256 digests or identity forms only.',
+                'root': pair_root, 'defs': {}}
+    open(sys.argv[2], 'w').write(dump(pair_doc) + '\n')

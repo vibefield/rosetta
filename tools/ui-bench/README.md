@@ -90,7 +90,9 @@ outcome `incomplete`.
 | `probe.js`, `probe-worker.js` | The injected page probe and its Blob worker |
 | `daemon-lines.mjs`, `metrics.mjs` | Daemon stdout parsing; metric derivation |
 | `privacy.mjs`, `ui-run-1.schema.json` | The whitelist gate and schema |
-| `build_schema.py` | Generates the schema: `python3 -I tools/ui-bench/build_schema.py tools/ui-bench/ui-run-1.schema.json` (edit the generator, never the JSON) |
+| `build_schema.py` | Generates both schemas: `python3 -I tools/ui-bench/build_schema.py tools/ui-bench/ui-run-1.schema.json tools/ui-bench/ui-pair-1.schema.json` (edit the generator, never the JSON) |
+| `pair.mjs` | The pair runner: side files, the pre-run refusals, ABAB interleaving, frozen inputs, the dist swap, swap redos (below) |
+| `pair-eval.mjs`, `ui-pair-1.schema.json` | The pair evaluator (gate set (a), void rules, A/A floors), its CLI and the ui-pair/1 whitelist |
 | `digests.mjs` | Read-only equality digests via the R1 kit |
 | `test/` | `node --test tools/ui-bench/test/*.test.mjs` (synthetic fixtures only; `probe-dom.test.mjs` runs `probe-dom.electron.mjs`, the probe in a hidden Electron page with planted breaches) |
 | `test/fixture-run.mjs` | The real-daemon fixture test (`npm run test:ui-readiness`, local-only; below), with `fixture-checks.mjs` (its verdict, unit-tested by `fixture-checks.test.mjs`), `fixture-search.mjs` and `fixture-expected.json`; `fixture.test.mjs` tests where a fixture home may be |
@@ -122,6 +124,159 @@ outcome `incomplete`.
 
 Ids, titles, paths and query text never leave the page; the probe returns rectangles to
 the script, and the document holds counts, sizes, timings, enums and digests only.
+
+## Pairs and A/A campaigns
+
+`pair.mjs` turns runs into the frozen before/after pair a perf commit cites (CLAUDE.md,
+Conventions); `pair-eval.mjs` judges it. `run_ui.mjs` is unchanged: the runner only
+schedules it.
+
+```sh
+# 1. one side file per side (hashes computed here; edit nothing by hand)
+node tools/ui-bench/pair.mjs side --rosettad BIN --dist DIST_DIR --snapshot SNAP \
+  [--scripts reader-v1,passive-v1] [--runs 11] [--timeout-s 600] [--idle-min 75] \
+  [--guard-wait-s 1800] [--no-idle-guard | --idle-guard] [--min-free-gb 25] [--dpr 2] \
+  [--swap-redo-mb 256] > SIDE.json            # or --home DIR --fixture MANIFEST
+# 2. an A/A campaign first: the same side twice, report-only, sets the noise floors
+node tools/ui-bench/pair.mjs run --aa SIDE.json --out AA_OUT [--order abab|abba] [--dry-run]
+# 3. the pair, claims declared before it runs, floors from the A/A
+node tools/ui-bench/pair.mjs run --before A.json --after B.json --out OUT [--kind daemon|ux] \
+  [--claims CLAIMS.json] [--floors AA_OUT/ui-pair.json] [--order abab|abba] [--dry-run]
+# re-evaluate a pair directory exactly as declared (no new options)
+node tools/ui-bench/pair-eval.mjs OUT
+```
+
+**Sides.** A side names the rosettad binary and the renderer dist (a `clients/app/dist`
+build, copied anywhere) with their sha256 (the dist as `run_ui.mjs` hashes it), one source,
+the scripts, N runs and run_ui's options. The kind says what may differ (metrics:X7): a
+`daemon` pair (R1.5) varies rosettad only and pins the dist; a `ux` pair varies the dist
+only and pins rosettad; `--kind` is inferred when omitted. Before any run the runner
+refuses (exit 2) a pair whose sides read different sources, run different scripts, run
+counts or options, break the kind's rule (both differ, or neither: use `--aa`), whose
+declared hashes are not the files', or whose claims name an unknown metric or a script
+the campaign does not run. `OUT` must not exist and must lie outside the repository and
+the source.
+
+**What it does.** It copies each side's binary and dist into `OUT/inputs/<side>/` and
+re-hashes them (a concurrent build cannot change a side mid-campaign), copies the
+checkout's own `clients/app/dist` to `OUT/inputs/original-dist`, writes
+`OUT/declared.json` (no paths: kind, sides' hashes, the source's identity, scripts,
+options, order, claims and floors; its sha256 is the campaign id) and `OUT/plan.json`
+(private: the paths). Then, per round, per script, both sides in order (`abab`: A then B
+every round; `abba`: B first on odd rounds), it installs the side's dist as
+`clients/app/dist` (the app and `run_ui.mjs` read it there; so do not build the renderer
+in this checkout during a campaign), records the power source and Low Power Mode
+(`pmset`), and runs `run_ui.mjs` into `OUT/runs/NNN-<script>-<side>/` with the side's
+frozen binary. run_ui's own guards run before every run: free disk, then the CPU-idle
+guard (two consecutive 2 s samples ≥ `idleMin`% idle, up to `guardWaitS`; on by default for
+a snapshot, off for a fixture home, and the choice is part of the declared options). A slot
+whose swap grew by more than `swapRedoMb` during it runs once more (`…-redo`); the first is
+kept, marked discarded. At the end (and on any failure) it restores the checkout's dist,
+then evaluates and writes `OUT/ui-pair.json` (privacy-gated: the `ui-pair-1.schema.json`
+whitelist and a scan against every path the campaign used) and `OUT/verdict.txt`. SIGINT
+or SIGTERM stops the running `run_ui.mjs` (it cleans up its own children), restores the
+dist, evaluates what ran (a short campaign is void) and exits 130/143. Exit 0: pass (or
+an A/A campaign completed); 1: fail or void; 2: refused or a harness error. Each run keeps
+only what `run_ui.mjs` keeps (no db); `OUT/inputs` holds the binaries and dists (about
+45 MB a side).
+
+**Void.** A pair is void (no verdict) when any run is missing, not `complete`, failed the
+probe self-test or I1, or did not pass the privacy gate; when any run's snapshot (or
+fixture) identity, harness hashes, machine, window, DPR, Electron, deviations, enrolled set
+or script hash differs from another's or from the declaration, or its rosettad or dist hash
+from its side's; or when, within one script, any run's logical TOTAL, `sourceSetDigest`,
+ranked ids, UI hit digest, final roots or final ready sessions differ from another's
+(logical, sourceSet and ranked must also be non-null). H7's aim misses and selection jumps
+do not void a pair: they are a product finding (every reader-v1 run on the R1 snapshot has
+one), reported per run.
+
+**Gate set (a)** (the user's decision, 2026-11-03), on these ui-run/1 fields, every one
+"lower is better":
+
+| Gate | Fields |
+|---|---|
+| ui.newest_readable (H2) | `metrics.H2.ms` (painted), `metrics.H2.receiptMs` |
+| horizon 24h @newest (H3) | `metrics.H3.h24.receiptMs`, `metrics.H3.h24.paintedSelMs` |
+| horizon 7d @newest (H3) | `metrics.H3.h7d.receiptMs`, `metrics.H3.h7d.paintedSelMs` |
+| all readable (H-all) | `metrics.Hall.receiptMs`, `metrics.Hall.paintedSelMs` |
+| flip→paint p95 | `metrics.H5.p95Ms` |
+| inversion | `metrics.D2.inversionCorpusMs`, `metrics.D2.inversionSelectedMs` (count × ms) |
+| open-ready p95 (reader) | H4's p95: ready opens' `contentAt − clickAt` from `probe.opens` (metrics.mjs records only p50 and max, so the evaluator re-derives it with the same `pct`) |
+| long-task ms | `metrics.H6.byWindow.{streaming,finalizing,post}.blockingMs` |
+
+A gated value is a **guard** unless `CLAIMS.json` declared it a **claim** before the
+campaign (`[{"script": "reader-v1", "metric": "H2.ms", "maxRatio": 0.75, "maxP": 0.05}]`;
+the metric ids are those of the table in `verdict.txt`). Every other metric (H1, H2's lag,
+H4 p50/max, H5 p50/max, H6 longest frames, input and memory, H7, H8, D1–D3, the daemon's
+milestones and footprint, run wall) is **report-only**. Per script and metric:
+- a guard passes when AFTER's median ≤ BEFORE's median + BEFORE's IQR (inclusive
+  quartiles, as the R1 kit's `summarize.median_iqr`; with fewer than four values the IQR is
+  max − min). With `--floors`, the tolerance is max(BEFORE's IQR, the A/A floor);
+- a claim passes when AFTER's median ≤ `maxRatio` × BEFORE's (without a ratio: below
+  BEFORE's median minus the tolerance) and, if `maxP` is set, the one-sided Mann–Whitney p
+  (AFTER smaller; normal approximation, tie-corrected) is below it;
+- a value is compared only when every run of both sides reached it (`reached: yes`).
+  Never reached on either side is `not-reached`, declared unexercised by the script is
+  `not-applicable` (neither counts against the pair); reached in some runs and not others
+  is `incomparable`, which fails the pair: a state that appears or disappears is a change
+  the lead must look at, not noise.
+
+The pair passes when it is not void and no claim or guard fails or is incomparable.
+
+**A/A.** `--aa SIDE.json` runs one side twice (`a1`, `a2`), interleaved the same way. Every
+metric is report-only; each gated one gets `floorMs` = max(IQR a1, IQR a2, |median a1 −
+median a2|). Pass the A/A `ui-pair.json` to a later pair with `--floors`: its campaign id
+and floors go into that pair's declaration.
+
+**Reading `verdict.txt` / `ui-pair.json`.** The first lines give the verdict (PASS, FAIL,
+VOID with its reasons, or AA), the campaign id, both sides' hashes and the quiet record
+(runs that proceeded over the idle guard, swap redos, the largest swap growth, runs on
+battery or in Low Power Mode). Then one row per script and metric: role, each side's
+median and IQR, Δ median, the tolerance and the verdict (an A/A shows the floor instead);
+then each equality key, equal or DIFFERS. `ui-pair.json` holds the same plus each run's
+outcome, I1, H7 invariant, guard and power, and the reached counts behind every row.
+
+**Smoke test (2026-11-03).** One 2+2 `ux` pair on the fixture home (`--home/--fixture`,
+idle guard off, declared; the after dist was the before dist plus one inert file), both
+scripts, 8 runs in 2 min 37 s: not void, every equality key equal, PASS; and one 2+2 A/A
+of reader-v1. These test the runner, not the app: on the fixture the import is over
+before the first paint (see below), so H5 is never reached, and two runs a side make the
+IQR max − min.
+
+## The MacBook-shape snapshot
+
+`bench-corpus snapshot --shape macbook-shape-v1` (crates/bench-corpus `shape.rs`,
+`snapshot.rs`; metrics:X8b) writes a frozen snapshot in the R1 kit's format (files 0444,
+directories 0555 with the root, `SHA256SUMS`, a deterministic `snapshot.json` with
+`walkInputsDigest`), so `run_ui.mjs --snapshot` and `verify_r1_snapshot.js` take it as they
+take the R1 snapshot:
+
+```sh
+cargo build --release -p rosetta-bench-corpus
+target/release/bench-corpus snapshot --shape macbook-shape-v1 --out /Users/jasper/james-test/frozen/macbook-shape-v1   # ~40 s
+node tools/r1-bench/verify_r1_snapshot.js /Users/jasper/james-test/frozen/macbook-shape-v1                           # ~23 s
+target/release/bench-corpus snapshot --shape macbook-shape-v1 --out X --plan   # the plan's summary, nothing written
+```
+
+It is synthetic (no live data; the same spec and seed give the same bytes and mtimes) and
+shaped on the MacBook's structure-only census aggregates (trace of 1301bdb's R1 build): 1,139
+claude-code root trees (40 big: largest own source over 64 MiB) with subagent children
+(6,923 subagent transcripts, 5,245 sidecars beside them, 550 sidecar-only subagents; 351
+single-file trees), 119 projects, 13,857 claude-code files and 8,612 metadata sessions (8,062
+on the roster), plus 9 Codex rollouts so both agents are enrolled. NEWEST is the newest
+giant, exactly 668,350,304 bytes in 459 files (its 210,808,432-byte root transcript the
+largest file). Trees sit in the census's age rings: 24 in the newest day (23 within 1 h; 13
+big), 15 more within 7 d (9 big), 14 within 30 d (3 big), 1,086 older (15 big). **Scaled:**
+bytes only, never counts. The newest day is kept at full scale (5.68 GB: the giant exactly,
+the other trees as synthetic draws summing to the census's newest-day bytes); every older
+big tree stays big (its root transcript is 64 MiB + 0.5–4 MiB) but its other files and
+every older small tree are a heavy-tailed size × 1/40 (6 KiB floor a transcript). So
+7.76 GB on disk (13,866 files) against the MacBook's 21.76 GB; the 7 d and 30 d horizons
+and the tail are much lighter than on the MacBook, and the newest day carries 3,323 files
+(2,555 there). Not modelled: workflow files, todos and other non-transcript streams, and
+nested subagents. A metadata-only `rosettad meta` over it reports 8,612 claude-code
+sessions, 119 projects, 13,857 files (2026-11-03). `walkInputsDigest` da20e10f…02fe1,
+`manifestSha256` 0e9b1c1e…bb09c (seed 1).
 
 ## Fixture test (local-only)
 

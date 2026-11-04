@@ -663,17 +663,29 @@ timing.
 >   memory) received and drawn; each open's socket, hello, snapshot bytes, Worker parse, reveal
 >   and cover, re-covers, error covers, second sockets and meta cost.
 >
-> *Pairs* (the pair runner and evaluator come later; the run JSON is shaped for them). A UX
+> *Pairs* (`tools/ui-bench/pair.mjs` runs them, `pair-eval.mjs` judges them, `ui-pair/1`). A UX
 > commit pins the rosettad binary and varies the renderer dist; a daemon commit (R1.5) pins the
-> dist and varies rosettad; same machine, window and device scale factor, the same script
-> version, interleaved runs a side behind the CPU-idle and swap guards, and the daemon-only R1
-> pair kept as its own gate, since a UI run's daemon carries the renderer's read load (UI
-> milestones are never compared with daemon-only runs). An A/A campaign sets each metric's noise
-> floor before any claim; claims and their thresholds are declared before the campaign; guards
-> hold within the A/A floor (at least one frame, 17 ms; 250 ms for poll-quantized values such as
-> H1's status part and H8); H7's selection jumps and aim misses and I1 are absolute. A pair is
-> void unless the logical digest, `sourceSetDigest`, the ranked digest and the UI hit digest are
-> equal in every run. *Targets* for the MacBook shape are design goals, not measurements: H1 ≤
+> dist and varies rosettad; same machine, window and device scale factor, the same script version,
+> interleaved runs a side behind the CPU-idle and swap guards, and the daemon-only R1 pair kept as
+> its own gate, since a UI run's daemon carries the renderer's read load (UI milestones are never
+> compared with daemon-only runs). An A/A campaign (one side run twice, report-only) measures each
+> gated metric's noise floor before any claim; claims and their thresholds are declared before the
+> campaign; I1 is absolute, and H7's selection jumps and aim misses are recorded per run as a
+> product finding, not a void. A pair is void unless the logical digest, `sourceSetDigest`, the
+> ranked digest, the UI hit digest and the final root and ready-session counts are equal in every
+> run of a script. The evaluator applies gate set (a) (user decision, 2026-11-03): H2, H3 24 h and
+> 7 d @newest, H-all (receipt and painted legs each), H5 p95, D2's inversion, H4's p95 over the
+> reader's opens and H6's blocking time per window are guards unless declared claims; a guard
+> passes when the AFTER median is at most the BEFORE median plus the BEFORE IQR (widened to the
+> A/A floor when one is declared), a value is compared only when every run of both sides reached
+> it, and everything else is report-only. A pair is also void if any run is not complete or fails
+> its self-test or I1, or if the snapshot, harness, machine or a side's hash differs from the
+> declaration. The MacBook-shape corpus is `bench-corpus snapshot --shape macbook-shape-v1`: the
+> MacBook census's counts (1,139 root trees with subagent children, 40 big, 8,612 metadata
+> sessions, 119 projects), its age rings and its newest day at full byte scale (the 668 MB newest
+> giant exact), the older tail scaled to 1/40 of its bytes (every older big tree kept just over 64
+> MiB), 7.76 GB in all.
+> *Targets* for the MacBook shape are design goals, not measurements: H1 ≤
 > metadata-ready + 0.5 s; H2 ≤ 6 s after R1.5 with paint lag p50 ≤ 150 ms; H3 ≤ 20 s / 60 s with
 > lag ≤ 300 ms; H4 p50 ≤ 300 ms and max ≤ 1 s; H5 p95 ≤ 100 ms and max ≤ 250 ms; H6 longest frame
 > ≤ 100 ms while streaming, input max ≤ 200 ms, blocking ≤ 2%; H7 project moves ≤ 10 per import;
