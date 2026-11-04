@@ -1,0 +1,27 @@
+{
+  "agent": "antigravity",
+  "agent_version": "1.4.12",
+  "scenario": "resume",
+  "generator": "tools.groundtruth farm 1",
+  "platform": "darwin-arm64",
+  "executable": {
+    "source": "local-binary",
+    "sha256": "34423fc9b0af3841e7646aa72a2d40ffeab8218b22d1cb99eac7355f9eba31e3",
+    "bytes": 197589952,
+    "digest_checks": 10,
+    "unchanged": true
+  },
+  "environment": {
+    "AGY_CLI_DISABLE_AUTO_UPDATE": "true",
+    "AGY_CLI_HIDE_ACCOUNT_INFO": "1"
+  },
+  "home": "disposable",
+  "network": "loopback-only (macOS sandbox-exec)",
+  "mock": {
+    "dialect": "gemini-generatecontent",
+    "bind": "127.0.0.1",
+    "requests": 3
+  },
+  "started_at": "2026-11-04T18:57:52Z",
+  "finished_at": "2026-11-04T18:57:53Z"
+}

@@ -1,0 +1,9 @@
+{
+  "reason": "opaque, encrypted-looking blobs whose contents redaction cannot check for operator paths; only their names and sizes are kept",
+  "files": [
+    {
+      "path": "antigravity-cli/implicit/8476adba-3289-4ebd-859e-7d45d6db8d0b.pb",
+      "bytes": 271
+    }
+  ]
+}

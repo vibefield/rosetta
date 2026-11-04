@@ -552,6 +552,45 @@ def _strip_antigravity_harvest(tree: Path) -> None:
     changelog.unlink(missing_ok=True)
 
 
+# Scenario-root inventory of the opaque blobs the farm does not publish.
+WITHHELD_INVENTORY = "withheld.json"
+
+
+def _withhold_antigravity_implicit(destination: Path, tree_name: str) -> None:
+    """Keep only the name and size of each `implicit/*.pb` blob.
+
+    The blobs carry no protobuf framing, no known compression and about seven
+    bits of entropy per byte, so they read as encrypted. Neither
+    `_redact_bytes` nor `_assert_redacted` can see an operator path inside
+    them, and their sizes track the length of the scenario paths that redaction
+    replaces elsewhere. The inventory sits at the scenario root, outside the
+    agent data root, so the layout's `implicit/*.pb` stream stays a native claim.
+    """
+
+    implicit = destination / tree_name / "implicit"
+    blobs = sorted(implicit.glob("*.pb")) if implicit.is_dir() else []
+    if not blobs:
+        return
+    files = [
+        {"path": blob.relative_to(destination).as_posix(), "bytes": blob.stat().st_size}
+        for blob in blobs
+    ]
+    for blob in blobs:
+        blob.unlink()
+    if not any(implicit.iterdir()):
+        implicit.rmdir()
+    write_json(
+        destination / WITHHELD_INVENTORY,
+        {
+            "reason": (
+                "opaque, encrypted-looking blobs whose contents redaction cannot "
+                "check for operator paths; only their names and sizes are kept"
+            ),
+            "files": files,
+        },
+    )
+
+
 def _write_grok_config(agent_home: Path, base_url: str) -> None:
     (agent_home / "config.toml").write_text(
         "[cli]\n"
@@ -1138,20 +1177,84 @@ def _redact(
                 (f"/home/{username}", "/home/<USER>"),
             ]
         )
+    # The macOS per-user temp directory (DARWIN_USER_TEMP_DIR) is fixed for the
+    # operator's account, so it identifies them even when nothing else does.
+    temp_root = Path(tempfile.gettempdir())
+    for temp in {str(temp_root), str(temp_root.resolve())}:
+        if temp not in {"/", "/tmp", "/private/tmp"}:
+            replacements.append((temp, "<TMPDIR>"))
     replacements.sort(key=lambda pair: len(pair[0]), reverse=True)
-    for path in destination.rglob("*"):
-        if not path.is_file():
-            continue
+    files = [path for path in destination.rglob("*") if path.is_file()]
+    # Databases first: redacting one folds and truncates its WAL, which must
+    # never be byte-edited afterwards (frame checksums would reject the edit).
+    for path in files:
         if _is_sqlite_database(path):
             _redact_sqlite(path, replacements)
+    for path in files:
+        if _is_sqlite_database(path) or path.name.endswith(("-wal", "-shm")):
             continue
         try:
             text = path.read_text()
-        except (OSError, UnicodeDecodeError):
+        except UnicodeDecodeError:
+            # Binary stores (protobuf snapshots and the like) frame strings by
+            # length, so only a same-length rewrite keeps them decodable.
+            data = path.read_bytes()
+            redacted = _redact_bytes(data, replacements)
+            if redacted != data:
+                path.write_bytes(redacted)
+            continue
+        except OSError:
             continue
         for needle, replacement in replacements:
             text = text.replace(needle, replacement)
         path.write_text(text)
+    _assert_redacted(destination, replacements)
+
+
+# Any surviving macOS per-user temp directory, whoever's it is.
+_DARWIN_TEMP_PATTERN = re.compile(rb"/var/folders/[A-Za-z0-9_+-]+/[A-Za-z0-9_+-]+")
+
+
+def _same_length_placeholder(needle: bytes, replacement: str) -> bytes:
+    token = replacement.encode()
+    pad = len(needle) - len(token)
+    if pad >= 0 and token.endswith(b">"):
+        return token[:-1] + b"_" * pad + b">"
+    if pad >= 0:
+        return token + b"_" * pad
+    if len(needle) >= 2:
+        return b"<" + b"_" * (len(needle) - 2) + b">"
+    return b"_" * len(needle)
+
+
+def _redact_bytes(data: bytes, replacements: list[tuple[str, str]]) -> bytes:
+    """Replace each needle with a placeholder of exactly its byte length.
+
+    Protobuf and other length-prefixed encodings stay structurally valid because
+    no field changes size; `replacements` must already be longest-first.
+    """
+
+    for needle, replacement in replacements:
+        encoded = needle.encode()
+        if encoded and encoded in data:
+            data = data.replace(encoded, _same_length_placeholder(encoded, replacement))
+    return data
+
+
+def _assert_redacted(destination: Path, replacements: list[tuple[str, str]]) -> None:
+    needles = [needle.encode() for needle, _ in replacements if needle]
+    for path in sorted(destination.rglob("*")):
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        leaked = [needle.decode() for needle in needles if needle in data]
+        if _DARWIN_TEMP_PATTERN.search(data):
+            leaked.append("a /var/folders per-user temp directory")
+        if leaked:
+            raise GroundTruthError(
+                f"redaction left operator paths in {path.relative_to(destination)}: "
+                + ", ".join(sorted(set(leaked)))
+            )
 
 
 def _manifest(
@@ -1875,6 +1978,8 @@ def _generate_fixtures(
                 destination = fixture_root / name
                 _harvest(agent_home, tree_name, scenario_dir, destination)
                 _strip_harvest(agent, destination / tree_name)
+                if agent == "antigravity":
+                    _withhold_antigravity_implicit(destination, tree_name)
                 if agent == "hermes":
                     _dump_sqlite_jsonl(destination / tree_name / "state.db", destination)
                 _redact(destination, scenario_dir, work, project)
@@ -1921,6 +2026,9 @@ def _is_sqlite_database(path: Path) -> bool:
 def _redact_sqlite(path: Path, replacements: list[tuple[str, str]]) -> None:
     try:
         connection = sqlite3.connect(path)
+        # Zero the pages and cells that redaction frees, so the replaced bytes
+        # do not survive in free space of the committed file.
+        connection.execute("PRAGMA secure_delete = ON")
         tables = [
             row[0]
             for row in connection.execute(
@@ -1947,8 +2055,28 @@ def _redact_sqlite(path: Path, replacements: list[tuple[str, str]]) -> None:
                 for needle, replacement in replacements:
                     connection.execute(
                         f"UPDATE {quoted_table} SET {quoted} = replace({quoted}, ?, ?) "
-                        f"WHERE {quoted} IS NOT NULL AND instr({quoted}, ?) > 0",
+                        f"WHERE typeof({quoted}) = 'text' AND instr({quoted}, ?) > 0",
                         (needle, replacement, needle),
+                    )
+            # BLOB values (Antigravity keeps every step as protobuf) are
+            # rewritten byte for byte at the same length, whatever the column's
+            # declared type, so their length prefixes stay valid.
+            for _, column, *_ in columns:
+                quoted = _quote_identifier(column)
+                values: set[bytes] = set()
+                for needle, _ in replacements:
+                    values.update(
+                        row[0]
+                        for row in connection.execute(
+                            f"SELECT DISTINCT {quoted} FROM {quoted_table} "
+                            f"WHERE typeof({quoted}) = 'blob' AND instr({quoted}, ?) > 0",
+                            (needle.encode(),),
+                        )
+                    )
+                for value in values:
+                    connection.execute(
+                        f"UPDATE {quoted_table} SET {quoted} = ? WHERE {quoted} = ?",
+                        (_redact_bytes(value, replacements), value),
                     )
         connection.commit()
         # Fold redactions into the main file so the committed DB is complete,

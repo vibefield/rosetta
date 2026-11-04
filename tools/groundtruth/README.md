@@ -48,6 +48,9 @@ version probe included, runs in a disposable HOME with
 `--loopback-only` runs the agent under `sandbox-exec` so only loopback and Unix-socket
 egress is possible. Each Antigravity scenario records a `provenance.json` with the
 executable digest, the switches, the network policy and the run's own timestamps.
+Its `implicit/*.pb` blobs read as encrypted, so redaction cannot check them for
+operator paths: the farm withholds them and records only each name and size in the
+scenario's `withheld.json`.
 
 ```sh
 python3 -m tools.groundtruth farm antigravity --version 1.4.12 \
