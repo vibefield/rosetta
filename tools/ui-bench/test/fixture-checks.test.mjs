@@ -27,7 +27,7 @@ function goodDoc() {
     clocks: { method: 'clock-line', estimatedErrorMs: 1.04 },
     daemon: { newestGiantTreeBytes: GIANT, milestonesMs: { 'canonical-ready': 1539.4 } },
     metrics: {
-      H1: { ms: 1721.3, metaPushMs: 29.3, reached: { ms: 'yes' } },
+      H1: { ms: 152.6, metaPushMs: 29.3, reached: { ms: 'yes' } },
       H2: { ms: 8162.7, receiptMs: 1204.2, firstDrawStanding: 'ready', flippedBeforeDrawn: true, reached: { ms: 'yes', receiptMs: 'yes' } },
       H3: { h24: horizon(5), h7d: horizon(12), reached: { 'h24.receiptMs': 'yes', 'h24.paintedSelMs': 'yes', 'h7d.receiptMs': 'yes', 'h7d.paintedSelMs': 'yes' } },
       // The last runtime-readable (a 10 ms-rounded close stamp) after the UI's receipt:
@@ -126,9 +126,12 @@ test('constant and redundant I1 counts are not asserted; every check is either a
 
 test('the regime is read from the document, never asserted', () => {
   const d = goodDoc();
-  assert.equal(regimeOf(d).name, 'import-done-before-first-paint');
-  d.daemon.milestonesMs['canonical-ready'] = 1800;
   assert.equal(regimeOf(d).name, 'flips-done-before-first-paint');
+  d.daemon.milestonesMs['canonical-ready'] = 140;
+  assert.equal(regimeOf(d).name, 'import-done-before-first-paint');
+  // Another regime alone fails nothing.
+  assert.deepEqual(failing(verdict(d)), []);
+  d.daemon.milestonesMs['canonical-ready'] = 1539.4;
   d.metrics.D2.notImportedSelected = [[1750, 3], [1900, 0]];
   assert.equal(regimeOf(d).name, 'pending-painted');
   assert.equal(regimeOf(d).notImportedDrawnMax, 3);

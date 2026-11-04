@@ -290,24 +290,29 @@ node tools/ui-bench/test/fixture-run.mjs [--rosettad BIN --bench-corpus BIN] [--
 The real release rosettad, SDK, hooks and renderer over a home anyone can regenerate,
 asserting invariants and digests only, never a timing threshold.
 
-**What it covers, and what it does not.** On this fixture the whole import, canonical
-readiness included, is over before the app paints its first columns. Every root is
-readable 1.2–1.6 s after consent and canonical readiness follows 0.3–0.4 s later (1.4–1.9
-s), while the columns wait for the roll call's next status poll, which runs every 2.5 s
-while awaiting consent (ux:X7), so H1 is 1.7–2.2 s (36 fixture documents, 2026-11-03). So
-no row is ever painted Pending. The test covers flip *delivery* (every root's
-flip reaches the UI, after the daemon made it and in its order), the end state, the
-selection and list invariants, privacy and the digests. It does **not** test Pending →
-paint: I1 c1's breach class (a Pending row painted ready), c4, c7, H5 and the
-opened-while-Pending face are unreachable here, and a planted Pending-painted-ready
+**What it covers, and what it does not.** Since ux:X7 (the room asks status as soon as
+the roll call's grant is taken) the columns are up 130–262 ms after consent, well inside
+the import: the first roots read ready at 40–150 ms, the giant (NEWEST) at 1.5–5.7 s,
+canonical readiness at 1.9–6.5 s (12 fixture documents, 2026-11-03, on a machine shared
+with other builds). Before it, the columns waited for the roll call's 2.5 s status poll
+and the whole import was over by H1 (1.7–2.5 s). Still, no session row is drawn Pending:
+reader-v1 selects NEWEST's project 0.5–0.7 s after Begin, while NEWEST is Pending, yet no
+not-imported row is drawn there, and NEWEST is first drawn, already ready, when the reader
+re-selects that project after aiming at another card (7.2–11.4 s; its step 3 then marks
+`newest-never-ready`, although NEWEST was rostered). The test covers flip *delivery*
+(every root's flip reaches the UI, after the daemon made it and in its order), the end
+state, the selection and list invariants, privacy and the digests. It does **not** test
+Pending → paint: I1 c1's breach class (a Pending row painted ready), c4, c7, H5 and the
+opened-while-Pending face are not reached here, and a planted Pending-painted-ready
 renderer breach passes (a reviewer showed it). Each run records its **regime**
-(`fixture-checks.mjs` `regimeOf`: `import-done-before-first-paint` in all 36 documents,
-canonical readiness 155–732 ms before H1) and prints it. A run in another regime
-(rows painted Pending, or the import outlasting H1) is flagged with a NOTE, not failed: it
-is the order of two timings no one guarantees. Reaching Pending paint deterministically
-would need a slower import than the fixture's 100 MB budget allows, or the ux:X7 immediate
-status poll. Pausing the cold build (`POST /api/ingestions/{id}/pause`) is no substitute:
-a resumed build runs the cross-launch resume path, which withholds every readiness
+(`fixture-checks.mjs` `regimeOf`: `flips-done-before-first-paint` in all 12 documents,
+that is no row drawn Pending and canonical readiness after H1; the name predates X7) and
+prints it. A run in another regime (a row painted Pending, or the import over by H1) is
+flagged with a NOTE, not failed: it is the order of timings no one guarantees (a build
+that re-asked every 500 ms instead of 100 ms drew NEWEST not-imported once:
+`pending-painted`), so nothing new is asserted from it. Pausing the cold build
+(`POST /api/ingestions/{id}/pause`) is no way to reach Pending paint either: a resumed
+build runs the cross-launch resume path, which withholds every readiness
 decision until publication (no per-tree flips, no `newest-giant-ready`), and the pause
 would still have to win a race against the giant's flip.
 
@@ -361,9 +366,8 @@ and a home holding anything but the spec's data roots.
 - outcome complete, self-test, privacy (the list read from the run's db, and holding at
   least the db's session, native and project ids);
 - I1 passes, and the checks that can catch something here examined something: c3 for both
-  scripts, and c2 for reader-v1 (a row drawn ready can still revert after the first paint,
-  though not during the import, which is over by then). c1 is not asserted as exercised
-  (above). c5 and c6 are not either: c5's count is 0 exactly when it already counts a
+  scripts, and c2 for reader-v1 (its rows are drawn during the import and after it). c1
+  is not asserted as exercised (above). c5 and c6 are not either: c5's count is 0 exactly when it already counts a
   violation, and c6's is a constant 1 (a document exists only if the gate passed);
 - every H1–H5 / H-all `reached` entry agrees with its value (a number with `yes`, null
   otherwise), and the values the fixture always produces are reached;

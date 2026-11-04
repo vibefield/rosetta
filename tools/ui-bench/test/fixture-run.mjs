@@ -3,10 +3,10 @@
 // rosettad, SDK, hooks and renderer over a home anyone can regenerate, asserting
 // invariants and digests only, never a timing threshold.
 //
-// What it covers, honestly: on this fixture the whole import, canonical readiness
-// included, is over before the app paints its first columns (the app's first status
-// poll comes at about 2.5 s, ux:X7; the import takes under 2 s), so no row is ever
-// painted Pending. It tests flip DELIVERY (every root's flip reaches the UI, in the
+// What it covers, honestly: since ux:X7 the app's columns are up about 0.15 s after
+// consent, well before the import ends, but no session row is drawn Pending (reader-v1
+// first draws NEWEST, already ready, when it re-selects NEWEST's project; see
+// fixture-checks.mjs). It tests flip DELIVERY (every root's flip reaches the UI, in the
 // daemon's order, after the daemon made it), the end state, selection and list
 // invariants, privacy and the digests; it does NOT test Pending paint (I1 c1's breach
 // class, c4, c7, H5, the opened-while-Pending face). Each run's regime is recorded and

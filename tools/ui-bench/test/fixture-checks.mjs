@@ -5,14 +5,16 @@
 // and returns every check with its verdict and detail.
 //
 // The regime this fixture runs in (REGIME, recorded per run, never asserted: it is the
-// order of two timings nothing guarantees): the whole import, canonical readiness
-// included, is over before the app paints its first columns (H1 waits for the roll
-// call's 2.5 s status poll, ux:X7; the fixture imports in under 2 s). So no row is ever
-// painted Pending: the test covers flip delivery through the real daemon, SDK, hooks and
-// renderer, the end state, the orderings, privacy and the digests — not Pending paint.
-// What that leaves unreachable (c1's breach class, c4, c7, H5, the opened-while-Pending
-// face) is listed in NOT_ASSERTED; fixture-run.mjs prints the regime and flags a run
-// whose regime differs.
+// order of timings nothing guarantees): since ux:X7 the columns are up well before the
+// import ends (H1 about 0.13-0.26 s after consent, canonical readiness 1.9-6.5 s), yet
+// no session row is drawn Pending: reader-v1 selects NEWEST's project while NEWEST is
+// still Pending, but no not-imported row is drawn there, and NEWEST is first drawn,
+// already ready, when the reader re-selects that project after aiming at another card.
+// So the test covers flip delivery through the real daemon, SDK, hooks and renderer,
+// the end state, the orderings, privacy and the digests — still not Pending paint. What
+// that leaves unreachable (c1's breach class, c4, c7, H5, the opened-while-Pending face)
+// is listed in NOT_ASSERTED; fixture-run.mjs prints the regime and flags a run whose
+// regime differs.
 //
 // Asserted:
 //   - the run: outcome complete, probe self-test, privacy gate (from the run db's list,
@@ -48,15 +50,17 @@ export const EXERCISED = {
 /** Why the other I1 checks are not asserted to examine something (they must still pass). */
 export const NOT_ASSERTED = {
   c1ReadyBeforeReceipt: 'its breach class (a Pending row painted ready, or a row painted ready before its receipt) needs a row '
-    + 'drawn while still Pending; in this regime every flip is received before the first paint, so its count is of rows first '
-    + 'drawn already ready (a planted Pending-painted-ready breach passes here); passive-v1 draws no session row at all',
-  c2NeverReverts: 'passive-v1 selects no project, so no session row is drawn (reader-v1: asserted; a row drawn ready can still '
-    + 'revert after the first paint, though not during the import, which is over by then)',
-  c4NoFlashOfEmpty: 'counts opens before the status says live; the import is live before the reader\'s first open',
+    + 'drawn while still Pending; in this regime no session row is drawn Pending, so its count is of rows first drawn already '
+    + 'ready (a planted Pending-painted-ready breach passes here); passive-v1 draws no session row at all',
+  c2NeverReverts: 'passive-v1 selects no project, so no session row is drawn (reader-v1: asserted; its rows are drawn during '
+    + 'the import and after it)',
+  c4NoFlashOfEmpty: 'counts opens before the status says live; the import is live before the reader\'s first open (that open '
+    + 'waits for NEWEST drawn ready, or every root readable)',
   c5EndState: 'asserted through i1-pass: its count is 0 exactly when its evidence is missing, which it already counts as a violation',
   c6Privacy: 'run_ui sets its count to 1 whenever the gate ran, and a document exists only if the gate passed; what the scan had '
     + 'to look for is asserted by privacy-scan-input',
-  c7PendingFaceCourse: 'needs a row still not imported when the reader opens one; every root is readable before the columns are up',
+  c7PendingFaceCourse: 'needs a row still not imported when the reader opens one; it opens one only if one is drawn after NEWEST '
+    + 'reads ready, and every root is readable by then',
 };
 /** Orderings whose missing end the script declares: id → the `reached` key that must say not-applicable. */
 export const ORDER_NOT_APPLICABLE = {
@@ -65,7 +69,7 @@ export const ORDER_NOT_APPLICABLE = {
 /** Values the fixture makes happen whatever the timing (metric.reached keys), per script:
  * NEWEST, both horizons and every root become ready, and reader-v1 selects NEWEST's
  * project and opens ready rows. H5 and the opened-while-Pending face need a flip while
- * the row is drawn, which this regime does not leave room for. */
+ * the row is drawn, which no run in this regime has shown (no row is drawn Pending). */
 export const MUST_REACH = {
   'reader-v1': ['H1.ms', 'H2.ms', 'H2.receiptMs', 'H3.h24.receiptMs', 'H3.h24.paintedSelMs', 'H3.h7d.receiptMs', 'H3.h7d.paintedSelMs',
     'Hall.receiptMs', 'Hall.paintedSelMs', 'H4.samples'],
@@ -78,7 +82,7 @@ export const MUST_REACH = {
  * location. Every other strict_noid component, cursor paths included, is pinned. */
 export const PINNED = ['logicalTotal', 'strictNoidRTotal', 'sourceSetDigest', 'rankedIdsSha256', 'hitDigest', 'finalRoots', 'finalReadySessions'];
 /** The regime the docs describe (README, "Fixture test"); fixture-run.mjs flags any other. */
-export const DOCUMENTED_REGIME = 'import-done-before-first-paint';
+export const DOCUMENTED_REGIME = 'flips-done-before-first-paint';
 
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const get = (o, dotted) => dotted.split('.').reduce((v, k) => (v == null ? undefined : v[k]), o);
