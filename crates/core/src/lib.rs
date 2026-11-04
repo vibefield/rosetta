@@ -13,6 +13,7 @@ pub mod assets;
 pub mod fold;
 pub mod html_artifacts;
 pub mod ids;
+mod op_scope;
 pub mod ops;
 pub mod rows;
 pub mod timeline;

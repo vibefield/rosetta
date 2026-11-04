@@ -39,7 +39,7 @@ use rosetta_adapter_hermes::HermesAdapter;
 use rosetta_adapter_kimi_code::KimiCodeAdapter;
 use rosetta_adapter_opencode::OpenCodeAdapter;
 use rosetta_adapter_pi::PiAdapter;
-use rosetta_adapter_support::AgentAdapter;
+use rosetta_adapter_support::{AgentAdapter, ColdAdmission};
 use rosetta_capture::{Ledger, NotifyEvents, SourceWake};
 use rosetta_pipeline::{
     IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, MetaReport, Metric,
@@ -56,6 +56,32 @@ use rosetta_store::Store;
 use crate::enroll::{Enrollment, RuntimeTarget, resolve_targets};
 use crate::runtime_ledger::{LedgerRuntime, ledger_runtimes, open_runtime_ledger};
 
+/// Stdout is a report (the ready line, milestones, census, profiles), never
+/// control. std's `println!` panics when a write fails: a reader that went
+/// away (EPIPE) would kill the sole canonical writer mid-import with exit
+/// 101 and nothing published. Every module below prints through this one
+/// instead; a line still goes out whole under the stdout lock, and a failed
+/// write is dropped. Tests keep std's, whose output the harness captures.
+#[cfg(not(test))]
+macro_rules! println {
+    () => {
+        $crate::report_line(::std::format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::report_line(::std::format_args!($($arg)*))
+    };
+}
+
+/// [`println!`]'s writer.
+#[cfg(not(test))]
+pub(crate) fn report_line(line: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout
+        .write_fmt(line)
+        .and_then(|()| stdout.write_all(b"\n"));
+}
+
 mod announce;
 mod auth_files;
 mod bench;
@@ -65,14 +91,26 @@ mod cold_stage;
 mod cold_stream;
 mod engine;
 mod enroll;
+mod image_renditions;
+mod ingest_metrics;
 mod ingestion_control;
+#[cfg(target_os = "macos")]
+mod large_alloc;
 mod ledger_cmd;
 mod ledger_compression;
 mod ledger_verify;
+mod maintenance_pace;
 mod publication;
 mod recovery;
 mod runtime_ledger;
 mod serve;
+#[cfg(test)]
+mod test_support;
+
+/// Freed large blocks leave the footprint at once (`large_alloc`).
+#[cfg(target_os = "macos")]
+#[global_allocator]
+static GLOBAL: large_alloc::DirectLarge = large_alloc::DirectLarge;
 
 fn registry() -> Vec<&'static dyn AgentAdapter> {
     vec![
@@ -222,6 +260,9 @@ struct Flags {
     /// readiness); `zstd-frames:LEVEL` has the capture workers compress each
     /// batch instead.
     cold_ledger_codec: rosetta_capture::SegmentCodec,
+    /// serve only, hidden (tests and measurement): `--image-renditions off`
+    /// holds the background rendition sweep; first views still render.
+    image_renditions: bool,
     /// `ledger compact` only: the zstd level for rewritten segments.
     /// `None` = the write path's blessed default.
     level: Option<i32>,
@@ -289,6 +330,30 @@ struct Flags {
     /// Build the private canonical projection in RAM, then stream its
     /// validated pages once to the staged SQLite file before publication.
     experiment_sqlite_in_memory: bool,
+    /// Fresh cold serve, hidden (`--experiment-cold-admission runtime`):
+    /// admit every runtime whole after a path-order walk, whatever its
+    /// adapter declares. The kill switch and equivalence check for root-tree
+    /// admission: it reproduces the runtime-granular build byte for byte.
+    experiment_cold_admission_runtime: bool,
+    /// Fresh cold serve: how root-tree runtimes walk — the kill switch above
+    /// (`admission_override`) and the hidden `--experiment-cold-lanes 1`, one
+    /// strict recency lane and one writer budget (the L1 comparator).
+    cold_walk: rosetta_pipeline::ColdWalkOptions,
+    /// Fresh cold serve, hidden: the bound of one apply transaction during
+    /// capture. `None` = the default (16 MiB); `--experiment-cold-chunks 0`
+    /// = no Stage or resolved-row slices (`u64::MAX`); tests set others.
+    cold_chunk_bytes: Option<u64>,
+}
+
+impl Flags {
+    /// The admission unit a fresh cold build asks for `adapter`'s runtime.
+    pub(crate) fn cold_admission(&self, adapter: &dyn AgentAdapter) -> ColdAdmission {
+        if self.experiment_cold_admission_runtime {
+            ColdAdmission::Runtime
+        } else {
+            adapter.cold_admission()
+        }
+    }
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, String> {
@@ -316,6 +381,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         capture_workers: None,
         capture_look_ahead: None,
         cold_ledger_codec: DEFAULT_COLD_LEDGER_CODEC,
+        image_renditions: true,
         level: None,
         long_window: false,
         force: false,
@@ -336,6 +402,9 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         experiment_cold_completion_order: false,
         experiment_async_ledger: false,
         experiment_sqlite_in_memory: false,
+        experiment_cold_admission_runtime: false,
+        cold_walk: rosetta_pipeline::ColdWalkOptions::default(),
+        cold_chunk_bytes: None,
     };
     let mut at = 0;
     while at < args.len() {
@@ -395,6 +464,15 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--cold-ledger-codec" => {
                 let value = take_value(args, &mut at)?;
                 flags.cold_ledger_codec = parse_cold_ledger_codec(&value)?;
+            }
+            "--image-renditions" => {
+                flags.image_renditions = match take_value(args, &mut at)?.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    other => {
+                        return Err(format!("--image-renditions needs on or off, got {other}"));
+                    }
+                };
             }
             "--level" => {
                 let value = take_value(args, &mut at)?;
@@ -484,6 +562,36 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--experiment-sqlite-in-memory" => {
                 flags.experiment_sqlite_in_memory = true;
                 at += 1;
+            }
+            "--experiment-cold-admission" => {
+                flags.experiment_cold_admission_runtime = match take_value(args, &mut at)?.as_str()
+                {
+                    "runtime" => true,
+                    "declared" => false,
+                    other => {
+                        return Err(format!(
+                            "--experiment-cold-admission needs runtime or declared, got {other}"
+                        ));
+                    }
+                };
+                flags.cold_walk.admission_override = flags.experiment_cold_admission_runtime;
+            }
+            "--experiment-cold-chunks" => {
+                flags.cold_chunk_bytes = match take_value(args, &mut at)?.as_str() {
+                    "0" => Some(u64::MAX),
+                    other => {
+                        return Err(format!("--experiment-cold-chunks needs 0, got {other}"));
+                    }
+                };
+            }
+            "--experiment-cold-lanes" => {
+                flags.cold_walk.single_lane = match take_value(args, &mut at)?.as_str() {
+                    "1" => true,
+                    "2" => false,
+                    other => {
+                        return Err(format!("--experiment-cold-lanes needs 1 or 2, got {other}"));
+                    }
+                };
             }
             "--json" => {
                 flags.json = true;
@@ -979,6 +1087,8 @@ pub(crate) struct ColdCaptureRequest {
     pub(crate) root: PathBuf,
     pub(crate) inventory: Vec<rosetta_capture::ScannedFile>,
     pub(crate) discovery_truncated: bool,
+    /// The admission unit the runtime asks for ([`Flags::cold_admission`]).
+    pub(crate) admission: ColdAdmission,
     pub(crate) ledger_root: PathBuf,
     pub(crate) opts: IngestOptions,
     pub(crate) write_raw_ledger: bool,
@@ -994,6 +1104,7 @@ pub(crate) struct PlannedColdRuntime {
     pub(crate) root: PathBuf,
     pub(crate) files: Vec<rosetta_pipeline::SessionFile>,
     pub(crate) discovery_truncated: bool,
+    pub(crate) admission: ColdAdmission,
     pub(crate) meta: MetaReport,
     pub(crate) planner: Store,
     pub(crate) ledger: Option<Ledger>,
@@ -1014,6 +1125,7 @@ pub(crate) fn plan_parallel_cold_runtime(
         root,
         inventory,
         discovery_truncated,
+        admission,
         ledger_root,
         opts,
         write_raw_ledger,
@@ -1061,6 +1173,7 @@ pub(crate) fn plan_parallel_cold_runtime(
         root,
         files,
         discovery_truncated,
+        admission,
         meta,
         planner,
         ledger,
@@ -1082,6 +1195,8 @@ pub(crate) fn finish_parallel_cold_runtime(
         root,
         files,
         discovery_truncated,
+        // The retained build admits each runtime whole.
+        admission: _,
         meta,
         mut planner,
         mut ledger,
@@ -1375,6 +1490,8 @@ fn ingest_parallel_cold(
                         root,
                         inventory,
                         discovery_truncated,
+                        // This retained build admits each runtime whole.
+                        admission: ColdAdmission::Runtime,
                         ledger_root,
                         opts,
                         write_raw_ledger,
@@ -1424,6 +1541,8 @@ fn ingest_parallel_cold(
                         root,
                         inventory,
                         discovery_truncated,
+                        // This retained build admits each runtime whole.
+                        admission: ColdAdmission::Runtime,
                         ledger_root,
                         opts,
                         write_raw_ledger,
@@ -2227,8 +2346,9 @@ fn publish_private_projection(
         before_install()?;
         install_rebuilt_projection(db, temp.as_ref())?;
         let _installed = temp.keep();
-        // The old projection is no longer observable. Remove its unused PNG/JPEG
-        // copies now, never during preparation or before atomic installation.
+        // The old projection is no longer observable. Remove image members no
+        // row names (old WebP bundles included) and stale or orphan rendition
+        // caches now, never during preparation or before atomic installation.
         let cleanup =
             rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map_err(|error| error.to_string())
@@ -2391,6 +2511,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
                             prefetch_ledger,
                             allow_unsealed_sources: allow_retired_unsealed,
                             cancel: None,
+                            withhold_session_health: false,
                         },
                     )
                     .map_err(|error| error.to_string())?;
@@ -2484,6 +2605,7 @@ fn cmd_rebuild(args: &[String]) -> Result<(), String> {
                     prefetch_ledger: flags.experiment_prefetch_ledger,
                     allow_unsealed_sources: allow_retired_unsealed,
                     cancel: None,
+                    withhold_session_health: false,
                 },
             )
             .map_err(|error| error.to_string())?;
@@ -2620,6 +2742,78 @@ mod tests {
                 "pi",
             ]
         );
+    }
+
+    #[test]
+    fn the_cold_admission_kill_switch_admits_every_runtime_whole() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["--db".to_string(), "projection.sqlite".to_string()];
+            args.extend(extra.iter().map(|arg| (*arg).to_string()));
+            parse_flags(&args)
+        };
+        for (extra, expected) in [
+            (&[][..], ColdAdmission::RootTree),
+            (
+                &["--experiment-cold-admission", "declared"][..],
+                ColdAdmission::RootTree,
+            ),
+            (
+                &["--experiment-cold-admission", "runtime"][..],
+                ColdAdmission::Runtime,
+            ),
+        ] {
+            let flags = parse(extra).unwrap();
+            assert_eq!(flags.cold_admission(registry()[1]), expected, "{extra:?}");
+            // A runtime-admitted adapter stays runtime-admitted either way.
+            assert_eq!(flags.cold_admission(registry()[0]), ColdAdmission::Runtime);
+        }
+        let error = parse(&["--experiment-cold-admission", "tree"])
+            .err()
+            .unwrap();
+        assert!(error.contains("runtime or declared"), "{error}");
+    }
+
+    #[test]
+    fn the_cold_walk_flags_set_the_walk_options() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["--db".to_string(), "projection.sqlite".to_string()];
+            args.extend(extra.iter().map(|arg| (*arg).to_string()));
+            parse_flags(&args)
+        };
+        let walk = parse(&[]).unwrap().cold_walk;
+        assert!(!walk.single_lane && !walk.admission_override);
+        let walk = parse(&["--experiment-cold-lanes", "1"]).unwrap().cold_walk;
+        assert!(walk.single_lane && !walk.admission_override);
+        assert!(
+            !parse(&["--experiment-cold-lanes", "2"])
+                .unwrap()
+                .cold_walk
+                .single_lane
+        );
+        let walk = parse(&["--experiment-cold-admission", "runtime"])
+            .unwrap()
+            .cold_walk;
+        assert!(walk.admission_override && !walk.single_lane);
+        let error = parse(&["--experiment-cold-lanes", "3"]).err().unwrap();
+        assert!(error.contains("needs 1 or 2"), "{error}");
+    }
+
+    #[test]
+    fn the_cold_chunks_flag_turns_slicing_off() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["--db".to_string(), "projection.sqlite".to_string()];
+            args.extend(extra.iter().map(|arg| (*arg).to_string()));
+            parse_flags(&args)
+        };
+        assert_eq!(parse(&[]).unwrap().cold_chunk_bytes, None);
+        assert_eq!(
+            parse(&["--experiment-cold-chunks", "0"])
+                .unwrap()
+                .cold_chunk_bytes,
+            Some(u64::MAX)
+        );
+        let error = parse(&["--experiment-cold-chunks", "1"]).err().unwrap();
+        assert!(error.contains("needs 0"), "{error}");
     }
 
     #[test]

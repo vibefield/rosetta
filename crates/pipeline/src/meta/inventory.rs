@@ -160,10 +160,19 @@ pub(super) fn read_inventory(
                         report.files_unfinished += 1;
                         instrument.add(Metric::FilesUnfinished, 1);
                     }
-                    crate::skim::Skimmed::Transcript(skim) => {
+                    crate::skim::Skimmed::Transcript(skim, cut) => {
                         report.files_skimmed += 1;
                         admit_skim(
-                            runtime, report, output, file, stream, driver, *skim, false, instrument,
+                            runtime,
+                            report,
+                            output,
+                            file,
+                            stream,
+                            driver,
+                            *skim,
+                            false,
+                            Some(cut),
+                            instrument,
                         );
                     }
                     // One physical document may enumerate several native
@@ -176,7 +185,7 @@ pub(super) fn read_inventory(
                         report.files_skimmed += 1;
                         for skim in skims {
                             admit_skim(
-                                runtime, report, output, file, stream, driver, skim, true,
+                                runtime, report, output, file, stream, driver, skim, true, None,
                                 instrument,
                             );
                         }

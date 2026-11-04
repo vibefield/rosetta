@@ -1,6 +1,7 @@
 import type { SessionRow } from "@vibefield/rosetta-protocol";
 import { AgentMark } from "../../lib/agents";
 import { duration, lastActive, tokenText } from "../../lib/format";
+import { importStanding } from "../../lib/import-state";
 import { isSessionCooking } from "../../lib/ingest";
 import { sessionLastActive } from "../../lib/session-activity";
 import { spendDescription, spendText } from "../../lib/spend";
@@ -17,6 +18,8 @@ export interface SessionListItemProps {
   readonly currentTimestamp: number;
   /** A backfill is running — an unindexed session's dot says "indexing". */
   readonly duringBackfill: boolean;
+  /** No transcript of its own was found; see `isMetadataOnly`. */
+  readonly metadataOnly?: boolean;
   readonly onSessionSelect: (session: SessionRow) => void;
 }
 
@@ -27,18 +30,27 @@ export function SessionListItem({
   isSelected,
   currentTimestamp,
   duringBackfill,
+  metadataOnly = false,
   onSessionSelect,
 }: SessionListItemProps) {
-  const status = getSessionStatus(session, duringBackfill);
+  const status = getSessionStatus(session, duringBackfill, metadataOnly);
+  // Where the row stands with the import, as the list placed it: the list
+  // already settled "unavailable" (`metadataOnly`), so only the running
+  // import's "not-imported" is left to read. Inert, for the DOM contract.
+  const standing = metadataOnly ? "unavailable" : (importStanding(session, duringBackfill, false) ?? "ready");
+  const notImported = standing === "not-imported";
   // The cooking card: identity is real from the skim; the figure slots are
   // what is still unknown, and they alone carry the processing state. A
   // facts row whose figures have not landed — a cooking session still
   // counting from zero — is not a claim: the shimmer keeps the slot.
-  const cookingState = isSessionCooking(session);
+  // Nothing is read yet for a row the import has not reached, so it does
+  // not shimmer as if it were; a metadata-only row has nothing to cook.
+  const cookingState = isSessionCooking(session) && !metadataOnly && !notImported;
   const landedFacts = facts !== null && (facts.messages > 0 || !cookingState) ? facts : null;
   const isCooking = cookingState && landedFacts === null;
   const title = getSessionTitle(session);
-  const lastActiveLabel = lastActive(sessionLastActive(session), currentTimestamp);
+  // Its time is not "unknown": it is not imported yet, and says so.
+  const lastActiveLabel = notImported ? "not imported yet" : lastActive(sessionLastActive(session), currentTimestamp);
   const roleLabel = session.role === "main" ? null : session.role;
   const accessibleMetadata = [
     roleLabel === null ? null : `${roleLabel} session`,
@@ -63,7 +75,8 @@ export function SessionListItem({
     title,
     status.label,
     ...accessibleMetadata,
-    `last active ${lastActiveLabel}`,
+    // The status already said "not imported yet".
+    ...(notImported ? [] : [`last active ${lastActiveLabel}`]),
   ].join(" · ");
   // With an act the row holds two buttons, and a button cannot hold another:
   // the row becomes a box, one button covers it (the selection, named as the
@@ -160,6 +173,8 @@ export function SessionListItem({
         data-cooking={isCooking ? "" : undefined}
         aria-current={isSelected ? "true" : undefined}
         aria-label={accessibleName}
+        data-standing={standing}
+        data-stream-state={session.stream_state}
         onClick={() => onSessionSelect(session)}
       >
         {body}
@@ -173,6 +188,8 @@ export function SessionListItem({
       data-role={session.role}
       data-cooking={isCooking ? "" : undefined}
       data-host-act=""
+      data-standing={standing}
+      data-stream-state={session.stream_state}
     >
       <button
         type="button"

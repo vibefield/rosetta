@@ -37,7 +37,7 @@ import { SessionsColumn } from "./components/sessions";
 import type { SessionFacts } from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
 import type { MatchStepperState, ThreadFocus } from "./components/Transcript";
-import { EmptyState } from "./components/ui";
+import { EmptyState, Meter } from "./components/ui";
 import { sessionFilePaths } from "./components/git";
 import { useWorktreeGuest, WorktreeColumn } from "./components/worktree";
 import {
@@ -49,17 +49,23 @@ import {
   useTimeline,
 } from "./lib/hooks";
 import { useIngestActivity } from "./lib/use-ingest-activity";
+import { ConversationFold } from "./lib/conversation-readiness";
 import { isAwaitingConsent, isIngestActive } from "./lib/ingest";
 import {
   UNASSIGNED_PROJECT_ID,
-  buildProjectViewModel,
+  buildProjectViewModelFromSessions,
   getActivityGridStartTimestamp,
+  indexSessionsByProject,
   projectKey,
+  rootSessionsOfProject,
+  sessionsOfProject,
   unassignedProject,
 } from "./lib/model";
 import type { ProjectViewModel } from "./lib/model";
 
 import { compareOrderedSessions } from "./lib/activity-order";
+import { agentLabel } from "./lib/agents";
+import { importCourse, parentIds } from "./lib/import-state";
 import { useActivityOrder } from "./lib/use-activity-order";
 import { createSearchResultsViewModel } from "./lib/search-results";
 import {
@@ -69,7 +75,11 @@ import {
   sessionResultOf,
 } from "./lib/search-sheet";
 import type { SearchFilters } from "./lib/search-sheet";
+import { fullTextUnavailable, matchSessionTitles, searchableTitleCount, titlesStandIn } from "./lib/title-search";
+import { drawnProjectCards, figureOrder } from "./lib/figure-order";
 import { spendOf } from "./lib/spend";
+
+const NO_SESSION_ROWS: readonly SessionRow[] = [];
 
 function useNow(refreshKey: unknown): number {
   const [tick, setTick] = useState(() => Date.now());
@@ -202,6 +212,11 @@ export interface HistoryRoomHandle {
    * messages when given. A session the index has not delivered yet is opened
    * when it arrives; one it does not have is said so in a receipt. */
   openAt(target: RoomTarget): void;
+  /** Ask the index's status now, not at the next poll: for a host that just
+   * moved the index's state itself (its consent screen granted consent).
+   * While the index still answers that it awaits consent, the room asks
+   * again every 100 ms, not at the consent pause's 2.5 s. */
+  refreshStatus(): void;
 }
 
 function insetStyle(inset: RoomInset | undefined): CSSProperties {
@@ -311,9 +326,8 @@ function RoomBody({
   const overlayOpen = useRoomOverlayOpen();
   // The room's root, where a host's menus are drawn over every column.
   const [frameElement, setFrameElement] = useState<HTMLDivElement | null>(null);
-  const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog);
-  const nowMs = useNow(meta);
-  const daemonStatus = useDaemonStatus(catalog);
+  const [statusAsked, setStatusAsked] = useState(0);
+  const daemonStatus = useDaemonStatus(catalog, statusAsked);
   const {
     connectionError,
     canonicalReady,
@@ -321,8 +335,19 @@ function RoomBody({
     searchProgress,
     ingest,
   } = daemonStatus;
-  const activity = useIngestActivity(daemonStatus);
   const ingestActive = isIngestActive(ingest);
+  // While an import runs, metadata arrives in bursts and every one rebuilds
+  // the project models: those renders yield to the reader's keys and clicks.
+  const { meta, snapshotVersion, status: metaStatus } = useMeta(catalog, { transition: ingestActive });
+  const nowMs = useNow(meta);
+  // One fold of the readable conversations per metadata delivery, from the
+  // rows the lists draw, so the card and the project cards count in step.
+  const [conversationFold] = useState(() => new ConversationFold());
+  const conversations = useMemo(
+    () => conversationFold.read(meta?.sessions ?? NO_SESSION_ROWS, nowMs),
+    [conversationFold, meta, nowMs],
+  );
+  const activity = useIngestActivity(daemonStatus, conversations);
   const activityOrder = useActivityOrder(
     meta, snapshotVersion, metaStatus === "live" && canonicalReady === true && !ingestActive,
     canonicalReady !== true || ingestActive, nowMs,
@@ -350,11 +375,13 @@ function RoomBody({
     filters.scope === "project" && projectId !== null && projectId !== UNASSIGNED_PROJECT_ID
       ? projectId
       : null;
+  // Re-asked when full text starts (or stops) answering, so the empty answer
+  // an unpublished index gave never outlives it.
   const search = useSearch(catalog, query, {
     project: scopedProjectId,
     kind: filters.kind === "any" ? null : filters.kind,
     agent: filters.agent,
-  });
+  }, !fullTextUnavailable(readiness, canonicalReady));
 
   const projectIds = useMemo(() => {
     const ids = (meta?.projects ?? []).map((p) => p.id);
@@ -365,8 +392,13 @@ function RoomBody({
   }, [meta]);
   // Cross-session figures wait for canonical publication. Metadata and
   // completed timelines remain progressive; aggregate scans never compete
-  // with the sole cold writer for the shared RAM projection.
-  const stats = useProjectStats(catalog, projectIds, canonicalReady === true);
+  // with the sole cold writer for the shared RAM projection. The sorted ids
+  // are only the set's identity: the selected project is asked first, then
+  // the cards on screen, then the rest as drawn (lib/figure-order.ts).
+  const { stats, failed: figuresFailed } = useProjectStats(catalog, projectIds, canonicalReady === true, {
+    first: projectId,
+    order: () => figureOrder(projectIds, null, drawnProjectCards(roomRef.current)),
+  });
 
   const projectRows = useMemo(() => {
     const rows = [...(meta?.projects ?? [])];
@@ -398,12 +430,20 @@ function RoomBody({
     () => (hostTint === undefined ? tints.projectTint : (id: string) => hostTint(id) ?? tints.projectTint(id)),
     [hostTint, tints],
   );
+  // One pass over the sessions per metadata change; every project and the
+  // selected project's list read their own slice of it.
+  const sessionsByProject = useMemo(() => indexSessionsByProject(meta?.sessions ?? []), [meta]);
+  // A metadata-only row is known by its children, which may sit in any project.
+  const sessionParents = useMemo(() => parentIds(meta?.sessions ?? []), [meta]);
   const projectViewModels: ProjectViewModel[] = useMemo(
     () =>
       projectRows.map((p) =>
-        buildProjectViewModel(p, meta?.sessions ?? [], stats.get(p.id), kindOf, nowMs, tintOf),
+        buildProjectViewModelFromSessions(
+          p, sessionsOfProject(sessionsByProject, p.id), stats.get(p.id), kindOf, nowMs, tintOf,
+          figuresFailed.has(p.id),
+        ),
       ),
-    [projectRows, meta, stats, kindOf, nowMs, tintOf],
+    [projectRows, sessionsByProject, stats, figuresFailed, kindOf, nowMs, tintOf],
   );
   const projectById = useMemo(
     () => new Map(projectViewModels.map((project) => [project.row.id, project])),
@@ -436,14 +476,9 @@ function RoomBody({
 
   const projectSessions = useMemo(() => {
     if (projectId === null) return [];
-    return (meta?.sessions ?? [])
-      .filter(
-        (s) =>
-          projectKey(s) === projectId &&
-          s.parent_session_id === null,
-      )
+    return rootSessionsOfProject(sessionsByProject, projectId)
       .sort((left, right) => compareOrderedSessions(left, right, activityOrder));
-  }, [meta, projectId, activityOrder]);
+  }, [sessionsByProject, projectId, activityOrder]);
 
   useEffect(() => {
     if (sessionId !== null && !projectSessions.some((s) => s.id === sessionId)) {
@@ -600,6 +635,20 @@ function RoomBody({
     if (search.query === "" || search.response === null || meta === null) return null;
     return createSearchResultsViewModel(search.response.hits, meta.sessions, projectById);
   }, [search.query, search.response, meta, projectById]);
+  // While full text cannot answer yet, and until the answer on screen is one
+  // it gave, the sheet matches the titles the room already holds. Computed
+  // only while the sheet is open.
+  const titleMatches = useMemo(
+    () =>
+      !sheetOpen || meta === null || !titlesStandIn(readiness, canonicalReady, search.response)
+        ? null
+        : matchSessionTitles(search.query, meta.sessions, projectById, {
+            project: scopedProjectId,
+            agent: filters.agent,
+            runtimeKind: kindOf,
+          }),
+    [sheetOpen, meta, readiness, canonicalReady, search.response, search.query, projectById, scopedProjectId, filters.agent, kindOf],
+  );
 
   // Opening a hit is a continuation, not a navigation: the sheet leaves, the
   // room opens the thread, the transcript lands on the message, and the
@@ -617,6 +666,18 @@ function RoomBody({
       (h) => h.timeline_id === hit.timeline_id && h.session_id === hit.session_id,
     );
     setStepper({ sessionId: rootSession.id, hits, at: Math.max(0, at) });
+  };
+
+  // A title match opens its thread the way a hit does, with no message to
+  // land on: the transcript opens as it always does and shows its own state.
+  const openSession = (rootSession: SessionRow) => {
+    rememberQuery(storage, query);
+    setSheetOpen(false);
+    setProjectId(projectKey(rootSession));
+    setSessionId(rootSession.id);
+    setInspectedThread(null);
+    setFocus(null);
+    setStepper(null);
   };
 
   const stepMatch = useCallback(
@@ -669,6 +730,9 @@ function RoomBody({
     openAt(target) {
       setPendingOpen({ sessionId: target.sessionId, timelineId: target.timelineId ?? null });
     },
+    refreshStatus() {
+      setStatusAsked((value) => value + 1);
+    },
   }), [stepMatch]);
 
   // The stepper belongs to the session it was born in.
@@ -692,12 +756,20 @@ function RoomBody({
     () => (meta?.sessions ?? []).filter((s) => s.parent_session_id === null).length,
     [meta],
   );
+  // While full text cannot answer, the sheet searches titles: the launcher
+  // counts those, in conversations (placeholders have none).
+  const titleCount = useMemo(
+    () => (fullTextUnavailable(readiness, canonicalReady) ? searchableTitleCount(meta?.sessions ?? []) : null),
+    [meta, readiness, canonicalReady],
+  );
   // The launcher states the scope in a breath; the sheet's foot states it in
   // full — the strip is always honest and never furniture (Q5, answered).
   const launcherPlaceholder =
-    meta === null || threadCount === 0
+    meta === null || threadCount === 0 || titleCount === 0
       ? "Search your whole agentic past"
-      : `Search ${threadCount.toLocaleString("en-US")} sessions across ${kinds.length} ${kinds.length === 1 ? "agent" : "agents"}`;
+      : titleCount !== null
+        ? `Search ${titleCount.toLocaleString("en-US")} conversation ${titleCount === 1 ? "title" : "titles"}`
+        : `Search ${threadCount.toLocaleString("en-US")} sessions across ${kinds.length} ${kinds.length === 1 ? "agent" : "agents"}`;
   const stepperState: MatchStepperState | null =
     stepper === null || stepper.sessionId !== sessionId
       ? null
@@ -740,10 +812,11 @@ function RoomBody({
             style={{ flex: 1 }}
             title={metaStatus === "closed" ? unavailableTitle : connectingTitle}
             description={connectionError ?? unavailable}
+            data-face={metaStatus === "closed" ? "not-answering" : "connecting"}
           >
-            <div className="ah-meter">
-              <i style={{ width: metaStatus === "connecting" ? "30%" : "8%" }} />
-            </div>
+            {/* Reaching the index has no amount, and a closed feed is not
+                working on anything: a sweep while connecting, then nothing. */}
+            {metaStatus !== "closed" && <Meter fraction={null} />}
           </EmptyState>
         ) : awaitingConsent ? (
           consent ?? (
@@ -751,6 +824,7 @@ function RoomBody({
               style={{ flex: 1 }}
               title="Waiting for consent"
               description="The index has found agents on this machine and reads nothing until it is told which ones to read."
+              data-face="consent"
             />
           )
         ) : coldStarting ? (
@@ -767,6 +841,7 @@ function RoomBody({
               currentTimestamp={nowMs}
               ingest={ingest}
               activity={activity}
+              conversations={conversations}
               onProjectSelect={(id) => {
                 setProjectId(id);
                 setSessionId(null);
@@ -788,6 +863,7 @@ function RoomBody({
               }
               onToggleWorktree={worktree.toggle}
               onSessionSelect={(selectedSession) => { setSessionId(selectedSession.id); setInspectedThread(null); }}
+              parentIds={sessionParents}
               hostActs={projectId === null ? null : (hostProjectActs?.(projectId, { folder: shownFolderKey }) ?? null)}
               hostCard={projectId === null || hostProjectCard === undefined ? null : hostProjectCard(projectId)}
             />
@@ -807,6 +883,8 @@ function RoomBody({
             <TranscriptColumn
               session={session}
               duringBackfill={ingestActive}
+              importCourse={importCourse(ingest, session?.runtime_id ?? null, activity?.feed.resumed === true)}
+              importAgent={session === null ? undefined : agentLabel(kindOf(session.runtime_id))}
               sessions={meta?.sessions ?? []}
               project={session ? (projectById.get(projectKey(session)) ?? null) : null}
               feed={feed}
@@ -839,6 +917,7 @@ function RoomBody({
         progress={searchProgress}
         canonicalReady={canonicalReady}
         ingestPaused={ingest?.phase === "metadata_ready" || ingest?.run?.state === "paused" || ingest?.run?.state === "failed"}
+        duringBackfill={ingestActive}
         agentKinds={kinds}
         currentProject={
           projectId !== null && projectId !== UNASSIGNED_PROJECT_ID
@@ -849,9 +928,11 @@ function RoomBody({
         nowMs={nowMs}
         getRuntimeKind={kindOf}
         onOpenHit={openHit}
+        titles={titleMatches}
+        onOpenSession={openSession}
       />}
       {receipt !== null && <div className="ah-receipt">{receipt}</div>}
-      {catalog.artifacts && <ArtifactLibrary open={artifactsOpen} onClose={() => setArtifactsOpen(false)} returnFocus={() => artifactLauncherRef.current?.focus()} agents={kinds} projects={meta?.projects ?? []} onOpenSession={(sessionId, timelineId) => setPendingOpen({ sessionId, timelineId })} />}
+      {catalog.artifacts && <ArtifactLibrary open={artifactsOpen} onClose={() => setArtifactsOpen(false)} returnFocus={() => artifactLauncherRef.current?.focus()} agents={kinds} projects={meta?.projects ?? []} canonicalReady={canonicalReady === true} onOpenSession={(sessionId, timelineId) => setPendingOpen({ sessionId, timelineId })} />}
       </MenuLayerProvider>
     </div>
   );

@@ -82,7 +82,9 @@ fn tool_binary_assets_resolve_after_checkpoint_and_correct_the_same_occurrences(
         resolved.iter().map(|a| &a.id).collect::<Vec<_>>(),
         first.iter().map(|a| &a.id).collect::<Vec<_>>()
     );
-    assert!(resolved.iter().all(|a| matches!(&a.source,AttachmentSource::Asset { asset } if asset.media_type == "image/webp" && asset.image_variants.as_ref().unwrap().len() == 4)));
+    // The resolved member is the recorded binary itself: its native length.
+    assert!(resolved.iter().all(|a| matches!(&a.source,AttachmentSource::Asset { asset }
+        if asset.media_type == "image/png" && asset.image_variants.is_none() && asset.byte_len == 68)));
     // A conflicting original source identity invalidates the already visible slots.
     let mut corrupt = binary();
     corrupt["byteLength"] = json!(99);

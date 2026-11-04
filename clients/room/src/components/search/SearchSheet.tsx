@@ -26,6 +26,9 @@ import { SearchGlyph } from "../../lib/icons";
 import { parseSnippet } from "../../lib/model";
 import type { ProjectViewModel } from "../../lib/model";
 import type { SearchResultsViewModel } from "../../lib/search-results";
+import { NOT_IMPORTED_LABEL } from "../../lib/import-state";
+import { FULL_TEXT_PENDING, titleCountLabel, titlesNote } from "../../lib/title-search";
+import type { TitleMatch, TitleMatches } from "../../lib/title-search";
 import {
   KIND_FILTER_OPTIONS,
   buildSheetLines,
@@ -33,14 +36,18 @@ import {
   forgetQuery,
   hitWhen,
   isCursorKey,
+  keptTitleCursor,
   kindWord,
   moveCursor,
   moveSection,
   readRecentQueries,
   sessionCrumb,
+  sheetMeter,
+  shownTitleMatches,
   stateSentence,
 } from "../../lib/search-sheet";
 import type {
+  HeldTitleCursor,
   SearchFilters,
   SearchKindFilter,
   SearchScopeFilter,
@@ -48,7 +55,7 @@ import type {
   SheetOption,
 } from "../../lib/search-sheet";
 import { ActivityGlyph } from "../transcript/glyphs";
-import { SegmentedControl } from "../ui";
+import { Meter, SegmentedControl } from "../ui";
 import { hasPrimaryModifier } from "./shortcut";
 import { useRoom, useRoomOverlay, useRoomPortal } from "../../room-context";
 
@@ -67,6 +74,9 @@ export interface SearchSheetProps {
   readonly progress: SearchBuildProgress | null;
   readonly canonicalReady: boolean | null;
   readonly ingestPaused: boolean;
+  /** An import is running: a Pending title row says it is not imported yet,
+   * as its session row does (the session list's `duringBackfill`). */
+  readonly duringBackfill?: boolean;
   /** Runtime families the daemon reads, for the agent chip and the scope line. */
   readonly agentKinds: readonly string[];
   /** The selected project, so the sheet can offer to stay inside it. */
@@ -75,9 +85,12 @@ export interface SearchSheetProps {
   readonly nowMs: number;
   readonly getRuntimeKind: (runtimeId: string) => string;
   readonly onOpenHit: (session: SessionRow, hit: SearchHit) => void;
+  /** Threads whose titles match, while full text cannot answer yet; null
+   * otherwise, and then the sheet is exactly the full-text sheet. */
+  readonly titles: TitleMatches | null;
+  /** Opens a title match's thread, as a hit's, with no message to land on. */
+  readonly onOpenSession: (session: SessionRow) => void;
 }
-
-
 
 type TintStyle = CSSProperties & { "--tint": string };
 
@@ -149,7 +162,9 @@ function HeadLine({
   );
 }
 
-function OptionRow({
+/** A full-text hit. `data-hit-kind` (inert, for the DOM contract) tells it
+ * from a title row, which says `title`. */
+export function OptionRow({
   option,
   active,
   home,
@@ -179,6 +194,7 @@ function OptionRow({
       aria-selected={active}
       aria-label={`${who}: ${spoken} · ${when} · ${project.row.name} › ${crumb.text}`}
       className="ah-sheet__row"
+      data-hit-kind="fulltext"
       onPointerMove={onHover}
       onClick={onOpen}
     >
@@ -195,12 +211,127 @@ function OptionRow({
   );
 }
 
+/** A title match: the thread's name with the query marked, its project, and
+ * when it was last active — what a session row says, in a search row's shape.
+ * A thread the running import has not reached says so, as its session row
+ * does, rather than "Activity unknown". */
+function TitleRow({
+  match,
+  active,
+  nowMs,
+  duringBackfill,
+  runtimeKind,
+  onHover,
+  onOpen,
+}: {
+  readonly match: TitleMatch;
+  readonly active: boolean;
+  readonly nowMs: number;
+  readonly duringBackfill: boolean;
+  readonly runtimeKind: string;
+  readonly onHover: () => void;
+  readonly onOpen: () => void;
+}) {
+  const { project, session, parts } = match;
+  const notImported = duringBackfill && session.stream_state === "pending";
+  const when = notImported ? NOT_IMPORTED_LABEL : dayLabel(sessionLastActive(session), nowMs);
+  const spoken = parts.map((part) => part.text).join("");
+  return (
+    <div
+      id={match.id}
+      role="option"
+      aria-selected={active}
+      aria-label={`${spoken} · ${project.row.name} · ${when}`}
+      className="ah-sheet__row"
+      data-title=""
+      data-hit-kind="title"
+      data-standing={notImported ? "not-imported" : "ready"}
+      style={{ "--tint": project.tint } as TintStyle}
+      onPointerMove={onHover}
+      onClick={onOpen}
+    >
+      <span className="ah-sheet__who" title={agentLabel(runtimeKind)} aria-hidden="true">
+        <AgentMark kind={runtimeKind} />
+      </span>
+      <p className="ah-sheet__snippet">
+        <span className="ah-sheet__project">
+          <i aria-hidden="true" />
+          {project.row.name}
+        </span>
+        {parts.map((part, at) =>
+          part.mark ? <mark key={at}>{part.text}</mark> : <span key={at}>{part.text}</span>,
+        )}
+      </p>
+      <span className="ah-sheet__when">{when}</span>
+    </div>
+  );
+}
+
 function Quiet({ title, children }: { readonly title: string; readonly children: ReactNode }) {
   return (
     <div className="ah-sheet__quiet" role="presentation">
       <strong>{title}</strong>
       <p>{children}</p>
     </div>
+  );
+}
+
+/**
+ * The list while full text cannot answer: the titles that match, then the
+ * line that says what full text waits for (`note`, from `titlesNote`) — or,
+ * with none, a quiet that says both. Opening one opens its thread, which
+ * shows its own import state.
+ */
+export function SheetTitles({
+  titles,
+  query,
+  active,
+  nowMs,
+  getRuntimeKind,
+  onHover,
+  onOpen,
+  note = FULL_TEXT_PENDING,
+  duringBackfill = false,
+}: {
+  readonly titles: TitleMatches;
+  readonly query: string;
+  readonly active: number;
+  readonly nowMs: number;
+  readonly getRuntimeKind: (runtimeId: string) => string;
+  readonly onHover: (index: number) => void;
+  readonly onOpen: (session: SessionRow) => void;
+  readonly note?: string;
+  readonly duringBackfill?: boolean;
+}) {
+  if (titles.matches.length === 0) {
+    return (
+      <Quiet title="No titles match">
+        No session title contains every word of <code>{query.trim()}</code>. {note}
+      </Quiet>
+    );
+  }
+  return (
+    <>
+      <div className="ah-sheet__recent-head ah-sheet__titles-head" role="presentation">
+        <span>Titles that match</span>
+        <span>{titleCountLabel(titles)}</span>
+      </div>
+      {titles.matches.map((match) => (
+        <TitleRow
+          key={match.id}
+          match={match}
+          active={match.index === active}
+          nowMs={nowMs}
+          duringBackfill={duringBackfill}
+          runtimeKind={getRuntimeKind(match.session.runtime_id)}
+          onHover={() => onHover(match.index)}
+          onOpen={() => onOpen(match.session)}
+        />
+      ))}
+      <p className="ah-sheet__pending" role="presentation">
+        {note}
+      </p>
+    </>
   );
 }
 
@@ -225,12 +356,15 @@ export function SearchSheet({
   progress,
   canonicalReady,
   ingestPaused,
+  duringBackfill = false,
   agentKinds,
   currentProject,
   homeDirectory,
   nowMs,
   getRuntimeKind,
   onOpenHit,
+  titles,
+  onOpenSession,
 }: SearchSheetProps) {
   useRoomOverlay(open);
   const container = useRoomPortal();
@@ -248,20 +382,47 @@ export function SearchSheet({
     if (open) setRecent(readRecentQueries(storage));
   }, [open]);
 
+  // While full text cannot answer, the list is the titles that match — unless
+  // the index did answer with hits after all, which always win.
+  const titleMatches = shownTitleMatches(query, titles, lines.length);
+
   // New rows → the first one is the cursor, so Enter lands at once. Keyed on
   // the rows' identities, not the array: the model is rebuilt on every clock
   // tick, and a cursor that jumped home every thirty seconds would be a bug.
-  const walking = emptyQuery ? recent.length : options.length;
-  const rowsKey = emptyQuery ? `recent\n${recent.join("\n")}` : options.map((o) => o.id).join("\n");
+  const walking = emptyQuery
+    ? recent.length
+    : titleMatches !== null
+      ? titleMatches.length
+      : options.length;
+  const rowsKey = emptyQuery
+    ? `recent\n${recent.join("\n")}`
+    : titleMatches !== null
+      ? `titles\n${titleMatches.map((m) => m.id).join("\n")}`
+      : options.map((o) => o.id).join("\n");
+  // Titles re-rank under an unchanged query while an import lands activity
+  // and new rows: the cursor stays on its thread rather than jumping home.
+  const titleCursor = useRef<HeldTitleCursor>({ query: "", id: null });
   useEffect(() => {
+    const kept = keptTitleCursor(titleMatches, titleCursor.current, query);
+    if (kept >= 0) {
+      setActive(kept);
+      return;
+    }
     movedBy.current = "keyboard";
-    setActive(rowsKey === "" || rowsKey === "recent\n" ? -1 : 0);
+    setActive(walking === 0 ? -1 : 0);
   }, [rowsKey]);
+  useEffect(() => {
+    titleCursor.current = { query, id: titleMatches?.[active]?.id ?? null };
+  }, [active, titleMatches, query]);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (movedBy.current !== "keyboard" || active < 0) return;
-    const id = emptyQuery ? `ah-sheet-recent-${active}` : options[active]?.id;
+    const id = emptyQuery
+      ? `ah-sheet-recent-${active}`
+      : titleMatches !== null
+        ? titleMatches[active]?.id
+        : options[active]?.id;
     const list = listRef.current;
     const row = id === undefined ? null : document.getElementById(id);
     if (list === null || row === null) return;
@@ -272,7 +433,7 @@ export function SearchSheet({
     const headroom = 30; // a pinned head sits over the first rows
     if (rect.top < frame.top + headroom) list.scrollTop = top - headroom;
     else if (rect.bottom > frame.bottom) list.scrollTop = top - (list.clientHeight - rect.height) + 4;
-  }, [active, emptyQuery, options]);
+  }, [active, emptyQuery, options, titleMatches]);
 
   const hover = (index: number) => {
     if (index === active) return;
@@ -317,6 +478,11 @@ export function SearchSheet({
       if (remembered !== undefined) onQuery(remembered);
       return;
     }
+    if (titleMatches !== null) {
+      const match = titleMatches[active];
+      if (match !== undefined) onOpenSession(match.session);
+      return;
+    }
     const option = options[active];
     if (option !== undefined) onOpenHit(option.session, option.hit);
   };
@@ -332,19 +498,18 @@ export function SearchSheet({
     counts: results?.counts ?? null,
     limit: SEARCH_LIMIT,
   });
-  const meter =
-    building && progress !== null && progress.documents_total > 0
-      ? `${Math.min(100, Math.max(2, (100 * progress.documents_done) / progress.documents_total)).toFixed(1)}%`
-      : building
-        ? "8%"
-        : null;
+  // A real document count fills the meter, work without one sweeps, and
+  // nothing is drawn while nothing moves (a paused import, a failed index).
+  const meter = sheetMeter({ readiness, progress, canonicalReady, ingestPaused });
   const scopeLine =
     agentKinds.length === 0 ? "your whole agentic past" : `across ${agentKinds.join(" · ")}`;
   const activeId = emptyQuery
     ? active >= 0 && recent[active] !== undefined
       ? `ah-sheet-recent-${active}`
       : undefined
-    : options[active]?.id;
+    : titleMatches !== null
+      ? titleMatches[active]?.id
+      : options[active]?.id;
 
   const scopeOptions = useMemo(() => {
     if (currentProject === null) return null;
@@ -405,6 +570,22 @@ export function SearchSheet({
           {GRAMMAR_HINT}
         </Quiet>
       </>
+    );
+  } else if (titleMatches !== null && titles !== null) {
+    // Titles the room already holds, while the full-text index is still on
+    // its way.
+    body = (
+      <SheetTitles
+        titles={titles}
+        query={query}
+        active={active}
+        nowMs={nowMs}
+        getRuntimeKind={getRuntimeKind}
+        onHover={hover}
+        onOpen={onOpenSession}
+        note={titlesNote(readiness, canonicalReady)}
+        duringBackfill={duringBackfill}
+      />
     );
   } else if (lines.length === 0) {
     body = feed.error !== null ? (
@@ -554,17 +735,15 @@ export function SearchSheet({
             className="ah-sheet__list"
             id={LIST_ID}
             role="listbox"
-            aria-label={emptyQuery ? "Recent searches" : "Search results"}
-            data-stale={feed.searching && results !== null ? "" : undefined}
+            aria-label={
+              emptyQuery ? "Recent searches" : titleMatches !== null ? "Titles that match" : "Search results"
+            }
+            data-stale={feed.searching && results !== null && titleMatches === null ? "" : undefined}
           >
             {body}
           </div>
           <div className="ah-sheet__foot">
-            {meter !== null && (
-              <div className="ah-meter" aria-hidden="true">
-                <i style={{ width: meter }} />
-              </div>
-            )}
+            {meter !== undefined && <Meter fraction={meter} />}
             <span
               className="ah-sheet__count"
               role="status"

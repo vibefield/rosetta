@@ -266,7 +266,10 @@ export interface AssetSource {
    * and answers an object URL — a promise while it fetches — bounding and
    * revoking what it made. The room asks on every mount and every retry, so
    * an evicted URL is asked for again, never reused, and a host must not
-   * keep a failure.
+   * keep a failure. Every variant, `full` included, names a WebP the daemon
+   * encoded (`RosettaClient.imageAssetUrl`): a recorded original's plain
+   * member URL returns its recorded bytes, for opening or saving, and is
+   * never an image's address.
    */
   imageAssetUrl(asset: AssetRef, variant: ImageVariant): AssetUrl;
   /** The address that names one stored attachment member, or null when the

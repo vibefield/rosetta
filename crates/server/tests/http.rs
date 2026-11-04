@@ -1334,11 +1334,14 @@ async fn cold_ram_projection_serves_canonical_timeline_before_disk_publish() {
     assert_eq!(search.state.readiness, SearchReadiness::Building);
     assert!(search.hits.is_empty());
 
+    // Pricing's coverage report reads the same rollup, which the RAM build
+    // has not folded yet: an empty unpriced list would read as full coverage.
     for endpoint in [
         "/api/projects/p1/heatmap",
         "/api/projects/p1/usage",
         "/api/projects/p1/usage/day?day=1970-01-01",
         "/api/projects/p1/contribution",
+        "/api/pricing",
     ] {
         let response = app
             .clone()
@@ -1429,17 +1432,19 @@ async fn cold_ram_projection_serves_canonical_timeline_before_disk_publish() {
     .unwrap();
     projection.publish_file(db);
 
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/projects/p1/contribution")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    for endpoint in ["/api/projects/p1/contribution", "/api/pricing"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(endpoint)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{endpoint}");
+    }
 
     let response = app
         .oneshot(
@@ -2137,3 +2142,5 @@ async fn status_reports_daemon_health_only_when_a_loop_feeds_it() {
 
 #[path = "http/image_pipeline.rs"]
 mod image_pipeline;
+#[path = "http/image_renditions.rs"]
+mod image_renditions;

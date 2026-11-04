@@ -1,4 +1,6 @@
-//! New warm sessions and resumed tool outputs publish durable optimized assets.
+//! New warm sessions and resumed tool outputs publish durable recorded
+//! originals: one member per image, its native bytes, before the row is visible.
+use base64::Engine;
 use rosetta_adapter_codex::CodexAdapter;
 use rosetta_capture::{Ledger, ScriptedEvents};
 use rosetta_core::{
@@ -93,7 +95,8 @@ fn new_warm_session_then_resumed_outputs_equal_cold_and_ledger_only_replay() {
     drop(store);
 
     // Append after a restart: both the opener and pending-call checkpoint live on disk.
-    let image = json!({"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="});
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
+    let image = json!({"type":"input_image","image_url":format!("data:image/png;base64,{png}")});
     let output = record(
         json!({"type":"custom_tool_call_output","call_id":"image-call","output":[image,image]}),
     );
@@ -129,26 +132,33 @@ fn new_warm_session_then_resumed_outputs_equal_cold_and_ledger_only_replay() {
     assert_ne!(tool.attachments[0].id, tool.attachments[1].id);
     assert_eq!(tool.attachments[0].source, tool.attachments[1].source);
     let AttachmentSource::Asset { asset } = &tool.attachments[0].source else {
-        panic!("optimized asset")
+        panic!("recorded member")
     };
-    let mut members = Vec::new();
-    for member in std::iter::once(asset).chain(asset.image_variants.as_ref().unwrap().values()) {
-        let name = Path::new(&member.url).file_name().unwrap().to_owned();
-        let bytes = std::fs::read(assets::asset_root(&projection).join(&name)).unwrap();
-        assert_eq!(member.media_type, "image/webp");
-        assert_eq!(&bytes[8..12], b"WEBP");
-        assert_eq!(bytes.len() as u64, member.byte_len);
-        assert_eq!(blake3::hash(&bytes).to_hex().as_str(), member.digest);
-        members.push((name, bytes));
-    }
+    assert!(asset.image_variants.is_none(), "renditions are not members");
+    assert_eq!(asset.media_type, "image/png");
+    let name = Path::new(&asset.url).file_name().unwrap().to_owned();
+    let bytes = std::fs::read(assets::asset_root(&projection).join(&name)).unwrap();
+    assert_eq!(
+        bytes,
+        base64::engine::general_purpose::STANDARD
+            .decode(png)
+            .unwrap(),
+        "the member is the native bytes"
+    );
+    assert_eq!(bytes.len() as u64, asset.byte_len);
+    assert_eq!(blake3::hash(&bytes).to_hex().as_str(), asset.digest);
+    let members = vec![(name, bytes)];
     assert_eq!(
         assets::prune_unreferenced_images(store.conn(), &projection).unwrap(),
         0
     );
     assert_eq!(
-        members.len(),
-        5,
-        "all members exist before the tool row is visible"
+        std::fs::read_dir(assets::asset_root(&projection))
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_file())
+            .count(),
+        1,
+        "the one member exists before the tool row is visible"
     );
     assert!(!serde_json::to_string(&warm).unwrap().contains("base64,"));
     drop(runner);

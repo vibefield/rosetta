@@ -103,7 +103,8 @@ function member(seed: string): AssetRef {
   return { url: `/api/assets/${digest}.webp`, digest, media_type: "image/webp", byte_len: 2048 };
 }
 
-/** An optimized image the room will draw: a member and its four renditions. */
+/** A legacy WebP bundle (a projection built before deferred renditions): a
+ * member and its four renditions, every one encoded at ingestion. */
 function image(id: string, seed: string, name: string, width: number, height: number): AttachmentRef {
   const full = member(seed);
   return {
@@ -112,6 +113,17 @@ function image(id: string, seed: string, name: string, width: number, height: nu
       rail: member(`${seed}:rail`), tile: member(`${seed}:tile`), tile2x: member(`${seed}:tile2x`), preview: member(`${seed}:preview`),
     } } },
     dimensions: { width, height }, message_ranges: [],
+  };
+}
+
+/** A recorded original: the image's own bytes as one member, with no rendition
+ * map. The room draws it only through the host's renditions. */
+function original(id: string, seed: string, name: string, width: number, height: number): AttachmentRef {
+  const digest = digestOf(seed);
+  const asset: AssetRef = { url: `/api/assets/${digest}.png`, digest, media_type: "image/png", byte_len: 48_213 };
+  return {
+    id, kind: "image", label: `[Image #${id}]`, name, media_type: asset.media_type, byte_len: asset.byte_len,
+    source: { type: "asset", asset }, dimensions: { width, height }, message_ranges: [],
   };
 }
 
@@ -208,7 +220,9 @@ export function createRoomDemo(now: number = Date.now()): RoomDemo {
   const timelines = new Map<string, readonly TimelineEntry[]>();
   const one = transcript("s0", sessions[0]!.started_at);
   one.user("Port the latest Godview look and rosetta's History view into the four-views frame, and fix the old flaws while we're there: the keys in the file pill, and the two plus buttons in the composer line.",
-    [image("1", "frame-before", "frame-before.png", 1440, 900), image("2", "frame-after", "frame-after.png", 900, 1200)]);
+    // A projection built before deferred renditions keeps its bundle beside
+    // the original a newer import recorded: one transcript holds both.
+    [image("1", "frame-before", "frame-before.png", 1440, 900), original("2", "frame-after", "frame-after.png", 900, 1200)]);
   one.agent("I'll read DESIGN.md and the composer record first, then capture Godview from the catalog and History from rosetta's own components, so the page shows each view as it really looks.");
   one.tool("Read", read("DESIGN.md"));
   one.tool("Read", read("draft/composer/compact.md"));
@@ -361,3 +375,26 @@ export function demoProjectViewModels(demo: RoomDemo = createRoomDemo()): Projec
 export function demoActivityOrder(demo: RoomDemo = createRoomDemo()): ActivityOrder {
   return advanceActivityOrder(null, demo.meta.sessions, { now: demo.now, live: false, bootstrapping: false });
 }
+
+/* ── a cold import, simulated ───────────────────────────────────────────── */
+
+// The same room through a first import: ports over a seeded synthetic
+// archive and a controller a harness steps through simulated time
+// (`cold-import.ts`). clients/app's cold-import characterization drives it.
+export { createColdImport } from "./cold-import";
+export type {
+  ColdCorpus,
+  ColdCorpusOptions,
+  ColdImport,
+  ColdImportController,
+  ColdImportLog,
+  ColdImportOptions,
+  ColdPhase,
+  ColdTrailEntry,
+  ColdTree,
+  FlipBatch,
+  FlipKind,
+  ResyncMode,
+  RuntimeTimes,
+  SessionKind,
+} from "./cold-import";

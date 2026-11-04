@@ -19,6 +19,36 @@ use crate::{ledger_root, parse_flags, projection_lock, selected};
 
 pub(crate) fn emit(event: &Value) {
     println!("{event}");
+    #[cfg(test)]
+    captured::push(event);
+}
+
+/// Tests: the events this thread emits while a capture is open.
+#[cfg(test)]
+pub(crate) mod captured {
+    use std::cell::RefCell;
+
+    use serde_json::Value;
+
+    thread_local! {
+        static EVENTS: RefCell<Option<Vec<Value>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn push(event: &Value) {
+        EVENTS.with(|events| {
+            if let Some(events) = events.borrow_mut().as_mut() {
+                events.push(event.clone());
+            }
+        });
+    }
+
+    /// Run `body`; also return every event this thread emitted meanwhile.
+    pub(crate) fn events<T>(body: impl FnOnce() -> T) -> (T, Vec<Value>) {
+        EVENTS.with(|events| *events.borrow_mut() = Some(Vec::new()));
+        let result = body();
+        let events = EVENTS.with(|events| events.borrow_mut().take().unwrap_or_default());
+        (result, events)
+    }
 }
 
 pub(crate) fn emit_profile(command: &str, instrument: &Instrument) {

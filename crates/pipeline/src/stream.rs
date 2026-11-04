@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::time::Instant;
 
 use rosetta_adapter_support::{AgentAdapter, StreamDriver};
 use rosetta_capture::Tailer;
@@ -19,6 +20,7 @@ use rosetta_store::{
     ApplyStats, Batch, CheckpointUpdate, SourceMode, SourceWrite, Store, StoreError, queries,
 };
 
+use crate::capture::CaptureClock;
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::meta::SessionFile;
@@ -66,6 +68,12 @@ pub struct StreamReport {
     /// generation restart, so cross-file merges land in the rebuilt rows.
     pub siblings_healed: u64,
     pub stats: ApplyStats,
+    /// What a root-tree runtime's lane-merge walk measured per lane: RAM-only
+    /// measurement, never merged into another report.
+    pub walk: Option<Box<crate::closed::WalkProfile>>,
+    /// What the passes' steps measured (measurement only): one file's when
+    /// the report is that file's own.
+    pub capture: CaptureClock,
 }
 
 impl StreamReport {
@@ -92,6 +100,7 @@ impl StreamReport {
         self.sessions_indexed += part.sessions_indexed;
         self.siblings_healed += part.siblings_healed;
         self.stats.merge_from(&part.stats);
+        self.capture.merge(&part.capture);
     }
 }
 
@@ -120,7 +129,56 @@ pub fn stream_backfill_into(
     files: &[SessionFile],
     opts: &IngestOptions,
     instrument: &Instrument,
+    ledger: Option<&mut rosetta_capture::Ledger>,
+) -> Result<StreamReport, PipelineError> {
+    stream_backfill_inner(
+        adapter, runtime, root, store, files, opts, instrument, ledger, None,
+    )
+}
+
+/// [`stream_backfill_into`] that computes each roster session's readiness
+/// into `withheld` instead of committing it, so every session stays Pending.
+/// A resumed private build reads into the RAM generation its readers already
+/// target, and its timeline order is final only after finalization; the
+/// caller commits these states once it is (`sessions_indexed` stays zero).
+/// Later calls replace an earlier decision for the same session, exactly as
+/// the commits they stand for would have.
+#[allow(clippy::too_many_arguments)]
+pub fn stream_backfill_withholding_health(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    store: &mut Store,
+    files: &[SessionFile],
+    opts: &IngestOptions,
+    instrument: &Instrument,
+    ledger: Option<&mut rosetta_capture::Ledger>,
+    withheld: &mut BTreeMap<String, StreamState>,
+) -> Result<StreamReport, PipelineError> {
+    stream_backfill_inner(
+        adapter,
+        runtime,
+        root,
+        store,
+        files,
+        opts,
+        instrument,
+        ledger,
+        Some(withheld),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stream_backfill_inner(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    store: &mut Store,
+    files: &[SessionFile],
+    opts: &IngestOptions,
+    instrument: &Instrument,
     mut ledger: Option<&mut rosetta_capture::Ledger>,
+    mut withheld: Option<&mut BTreeMap<String, StreamState>>,
 ) -> Result<StreamReport, PipelineError> {
     let tailer = Tailer::new(opts.tail.clone())?;
     // Snapshot-driven virtual sources take their own path: no tailing, and
@@ -294,7 +352,9 @@ pub fn stream_backfill_into(
         } else {
             StreamState::Streaming
         };
-        if store.set_session_stream_state(&session_id, next)? && complete {
+        if let Some(withheld) = withheld.as_deref_mut() {
+            withheld.insert(session_id, next);
+        } else if store.set_session_stream_state(&session_id, next)? && complete {
             report.sessions_indexed += 1;
         }
     }
@@ -464,14 +524,21 @@ pub(crate) fn ingest_file(
         pass.audit(runtime, file, tailer, store, instrument, report)?;
     }
     loop {
-        let output = match pass.step(adapter, runtime, file, tailer, opts, instrument)? {
+        let started = Instant::now();
+        let stepped = pass.step(adapter, runtime, file, tailer, opts, instrument)?;
+        let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let output = match stepped {
             PassStep::Batch(output) => output,
             PassStep::Finished(outcome, deltas) => {
                 deltas.merge_into(report);
+                let step = CaptureClock::step(started, nanos, deltas.max_record_bytes);
+                report.capture.merge(&step);
                 return Ok(outcome);
             }
         };
         output.deltas.merge_into(report);
+        let step = CaptureClock::step(started, nanos, output.deltas.max_record_bytes);
+        report.capture.merge(&step);
 
         // Ledger-first: the raw bytes are durable before the projection tx
         // may reference them.

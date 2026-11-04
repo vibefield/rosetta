@@ -25,7 +25,8 @@ export function attachmentGallery(reader: AttachmentReader, fact: AttachmentFact
   return { images, initialKey: fact.key };
 }
 
-/** Transcript galleries read only optimized members committed during ingestion. */
+/** Transcript galleries draw only recorded members' renditions (see
+ * `isRecordedImageAsset`); a byte read is the viewer's fallback, never a draw. */
 export function createAttachmentGallerySource(reader: AttachmentReader): FileSource {
   return {
     image(handle) { return reader.imageResource(handle.ref as AttachmentFact); },

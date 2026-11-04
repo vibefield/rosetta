@@ -119,6 +119,26 @@ pub enum BackfillState {
     Done,
 }
 
+/// What a runtime's still-`Pending` sessions wait for on this process's cold
+/// attempt — the only promise a client may make about when one opens. It
+/// names no order, position or time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum AdmissionCourse {
+    /// A fresh build admits the runtime per root tree, newest trees first in
+    /// lanes: most trees open as they close, while a bound or tainted tree
+    /// waits for the runtime's close.
+    PerTree,
+    /// A fresh build admits the runtime whole, so each of its sessions opens
+    /// when the runtime finishes importing: an adapter that declares runtime
+    /// admission, a truncated walk's fallback, or the path walk.
+    AtRuntimeClose,
+    /// A resumed attempt, across a launch or in process after a pause,
+    /// withholds every session it has not opened before until it publishes.
+    AtPublication,
+}
+
 /// The ingest block on [`DaemonStatus`]: phase, first-pass boundary, and meters.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -214,6 +234,13 @@ pub struct RuntimeBackfill {
     /// Transcript records parsed so far.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub records: u64,
+    /// When this runtime's `Pending` sessions open on the current cold
+    /// attempt (2026-11-03), kept after it goes live. Null from a daemon that
+    /// predates it and for serve paths without a cold attempt (warm start,
+    /// disk-progressive): a client then falls back to what it can infer.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub admission_course: Option<AdmissionCourse>,
 }
 
 /// One probed agent adapter — the roll call's row. Census facts only

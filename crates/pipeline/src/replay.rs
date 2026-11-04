@@ -32,6 +32,8 @@ use crate::stream::{merge_stats, over_projection_limit, quarantined_record};
 
 mod admission;
 use admission::{AdmissionScan, ReplayAdmission};
+mod stopped;
+pub use stopped::{StoppedSource, activate_stopped_source};
 
 /// Rebuild-only controls. The live path keeps its independently bounded
 /// scheduler; these knobs let a private, unpublished rebuild spend more RAM
@@ -62,6 +64,12 @@ pub struct RebuildOptions {
     /// cancelled replay has touched only a disposable RAM projection; the
     /// named staged ledger remains the next boot's source.
     pub cancel: Option<Arc<AtomicBool>>,
+    /// Resume-only: compute every replayed session's readiness into
+    /// [`RebuildReport::session_health`] instead of committing it. A resumed
+    /// serve replays into the canonical RAM generation readers already
+    /// target, before its cross-file reconciliation and finalization; each
+    /// session it touches must stay Pending until those rows are final.
+    pub withhold_session_health: bool,
 }
 
 impl Default for RebuildOptions {
@@ -74,6 +82,7 @@ impl Default for RebuildOptions {
             prefetch_ledger: false,
             allow_unsealed_sources: false,
             cancel: None,
+            withhold_session_health: false,
         }
     }
 }
@@ -385,6 +394,9 @@ pub struct RebuildReport {
     /// Resume callers use this only as an in-memory generation fence before
     /// rereading the source; it is never canonical application data.
     pub unsealed_sources: BTreeMap<String, (u64, SourceDef)>,
+    /// The readiness each replayed session would have been given, filled only
+    /// under [`RebuildOptions::withhold_session_health`]; its caller commits it.
+    pub session_health: BTreeMap<String, StreamState>,
     pub stats: ApplyStats,
 }
 
@@ -773,9 +785,18 @@ pub fn rebuild_runtime_with_options(
                     PipelineError::Config(format!("undecodable meta batch in ledger: {error}"))
                 })?;
                 admission.filter_meta(&mut ops);
-                for op in &ops {
+                for op in &mut ops {
                     if let IngestOp::SessionMeta(row) = op {
                         sessions_seen.insert(row.id.clone());
+                        if options.withhold_session_health {
+                            // A journaled state is a decision too (an older
+                            // resume journaled what it had committed): it is
+                            // withheld like replay's own, never applied.
+                            match std::mem::replace(&mut row.stream_state, StreamState::Pending) {
+                                StreamState::Pending => report.session_health.remove(&row.id),
+                                state => report.session_health.insert(row.id.clone(), state),
+                            };
+                        }
                     }
                 }
                 report.meta_batches += 1;
@@ -845,45 +866,17 @@ pub fn rebuild_runtime_with_options(
                 let file = files
                     .get_mut(&source.relative_path)
                     .expect("inserted above");
-
-                if file
-                    .last_offset
-                    .is_some_and(|previous| start_offset <= previous)
-                {
-                    report.duplicate_records_skipped += 1;
+                if !stopped::project_raw(
+                    adapter,
+                    runtime,
+                    file,
+                    &source,
+                    start_offset,
+                    &payload,
+                    &mut report,
+                    instrument,
+                ) {
                     return Ok(());
-                }
-                file.last_offset = Some(start_offset);
-                file.ctx.agent_version = source.agent_version.clone();
-
-                report.raw_records += 1;
-                instrument.add(Metric::RecordsFramed, 1);
-                file.ctx.src_offset = Some(start_offset as i64);
-                if over_projection_limit(adapter, &file.source.stream_id, &payload) {
-                    report.quarantined += 1;
-                    instrument.add(Metric::RecordsQuarantined, 1);
-                    file.ops.push(quarantined_record(
-                        &runtime.id,
-                        file.ctx.agent_version.as_deref(),
-                        &file.source.stream_id,
-                        file.ctx.src_cursor,
-                        start_offset,
-                    ));
-                } else {
-                    let outcome = instrument.time(Metric::NormalizeNanos, || {
-                        adapter
-                            .ingest_line(&mut file.ctx, &file.source.stream_id, &payload)
-                            .into_projection()
-                    });
-                    match &outcome.status {
-                        LineStatus::Parsed => report.parsed += 1,
-                        LineStatus::UnknownType => report.unknown += 1,
-                        LineStatus::HardError { .. } => {
-                            file.generation_clean = false;
-                            report.hard_errors += 1;
-                        }
-                    }
-                    file.ops.extend(outcome.ops);
                 }
                 if file.ops.len() >= options.chunk_ops {
                     let mode = if file.activated {
@@ -1065,7 +1058,11 @@ pub fn rebuild_runtime_with_options(
         } else {
             StreamState::Streaming
         };
-        store.set_session_stream_state(&session_id, next)?;
+        if options.withhold_session_health {
+            report.session_health.insert(session_id, next);
+        } else {
+            store.set_session_stream_state(&session_id, next)?;
+        }
     }
 
     Ok(report)

@@ -10,7 +10,8 @@ use rosetta_adapter_support::{LineOutcome, LineStatus};
 use rosetta_capture::{Ledger, LedgerWriteStats};
 use rosetta_core::IngestOp;
 use rosetta_store::{
-    ApplyStats, Batch, BulkLoadStats, ColdReconciliation, Store, StoreError, StreamedSource,
+    ApplyStats, Batch, BulkLoadStats, ColdAdmission, ColdReconciliation, ResolvedSession, Store,
+    StoreError, StreamedSource,
 };
 use serde_json::{Value, json};
 
@@ -92,6 +93,15 @@ pub enum Metric {
     SessionRenumbers,
     SessionRenumberRows,
     BulkToolRowsReconciled,
+    /// Cross-file usage ownership outcomes — identity-bearing usage owned,
+    /// copies dropped, owners displaced — and cold-folded tool-row usage
+    /// records whose identity it never saw.
+    UsageIdentitiesOwned,
+    UsageCopiesDropped,
+    UsageCopiesDisplaced,
+    UsageIdentitiesUnclaimed,
+    UsageVisibleDisplaced,
+    UsageOwnerBytes,
     MessageLookupNanos,
     MessageWriteNanos,
     ToolResultLookupNanos,
@@ -139,7 +149,7 @@ pub enum Metric {
     LiveStreamNanos,
 }
 
-const METRIC_COUNT: usize = 100;
+const METRIC_COUNT: usize = 106;
 
 const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::FilesWalked, "files walked"),
@@ -220,6 +230,15 @@ const ALL: [(Metric, &str); METRIC_COUNT] = [
     (Metric::SessionRenumbers, "session renumbers"),
     (Metric::SessionRenumberRows, "session renumber rows"),
     (Metric::BulkToolRowsReconciled, "bulk tool rows reconciled"),
+    (Metric::UsageIdentitiesOwned, "usage identities owned"),
+    (Metric::UsageCopiesDropped, "usage copies dropped"),
+    (Metric::UsageCopiesDisplaced, "usage owners displaced"),
+    (
+        Metric::UsageIdentitiesUnclaimed,
+        "folded tool-row usage records unclaimed",
+    ),
+    (Metric::UsageVisibleDisplaced, "visible owners displaced"),
+    (Metric::UsageOwnerBytes, "usage owner index peak bytes"),
     (Metric::MessageLookupNanos, "message lookup time"),
     (Metric::MessageWriteNanos, "message write time"),
     (Metric::ToolResultLookupNanos, "tool-result lookup time"),
@@ -449,6 +468,11 @@ impl Instrument {
         self.values[index(metric)].load(Ordering::Relaxed)
     }
 
+    /// Raise a gauge metric to `value`: a peak, not a sum.
+    pub fn raise(&self, metric: Metric, value: u64) {
+        self.values[index(metric)].fetch_max(value, Ordering::Relaxed);
+    }
+
     /// Time a closure into a `*Nanos` metric.
     pub fn time<T>(&self, metric: Metric, work: impl FnOnce() -> T) -> T {
         let started = Instant::now();
@@ -567,6 +591,57 @@ impl Instrument {
         result
     }
 
+    /// One Stage slice of a chunked streamed source, attributed like the
+    /// source's other transactions.
+    pub fn apply_streamed_slice(
+        &self,
+        store: &mut Store,
+        state: &mut ColdReconciliation,
+        slice: StreamedSource,
+    ) -> Result<ApplyStats, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || {
+            store.apply_streamed_slice(state, slice)
+        });
+        if let Ok(stats) = &result {
+            self.record_apply_stats(stats);
+        }
+        result
+    }
+
+    /// One resolved-row slice of a chunked streamed source.
+    pub fn apply_resolved_slice(
+        &self,
+        store: &mut Store,
+        session: &mut ResolvedSession,
+        max_bytes: u64,
+    ) -> Result<(ApplyStats, bool), StoreError> {
+        let result = self.time(Metric::ApplyNanos, || {
+            store.apply_resolved_slice(session, max_bytes)
+        });
+        if let Ok((stats, _)) = &result {
+            self.record_apply_stats(stats);
+        }
+        result
+    }
+
+    /// One streamed admission transaction: a batch of trees, or a
+    /// runtime's remainder.
+    pub fn admit_cold_units(
+        &self,
+        store: &mut Store,
+        fold: ColdReconciliation,
+        renumber: &[String],
+        states: &[(String, rosetta_core::rows::StreamState)],
+    ) -> Result<ColdAdmission, StoreError> {
+        let result = self.time(Metric::ApplyNanos, || {
+            store.admit_cold_units(fold, renumber, states)
+        });
+        if let Ok(admitted) = &result {
+            self.record_apply_stats(&admitted.stats);
+        }
+        result
+    }
+
     /// Fold a streamed cold runtime at its admission, with the same
     /// attribution as [`Instrument::flush_bulk_reconciliation`].
     pub fn fold_cold_reconciliation(
@@ -589,6 +664,15 @@ impl Instrument {
         self.add(Metric::AssetWriteNanos, stats.asset_write_nanos);
         self.add(Metric::CanonicalApplyNanos, stats.canonical_apply_nanos);
         self.add(Metric::SqliteCommitNanos, stats.sqlite_commit_nanos);
+        self.add(Metric::UsageIdentitiesOwned, stats.usage_identities_owned);
+        self.add(Metric::UsageCopiesDropped, stats.usage_copies_dropped);
+        self.add(Metric::UsageCopiesDisplaced, stats.usage_copies_displaced);
+        self.add(
+            Metric::UsageIdentitiesUnclaimed,
+            stats.usage_identities_unclaimed,
+        );
+        self.add(Metric::UsageVisibleDisplaced, stats.usage_displaced_visible);
+        self.raise(Metric::UsageOwnerBytes, stats.usage_owner_bytes);
         let profile = &stats.profile;
         self.add(Metric::MessageApplyAttempts, profile.message_attempts);
         self.add(

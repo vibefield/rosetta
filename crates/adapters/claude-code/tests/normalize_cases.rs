@@ -2295,8 +2295,12 @@ fn unpinned_agent_writer_does_not_emit_a_delegate_only_update() {
 }
 
 #[test]
-fn recorded_read_images_are_optimized_tool_attachments() {
+fn recorded_read_images_are_original_tool_attachments() {
+    use base64::Engine;
     let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
+    let recorded = base64::engine::general_purpose::STANDARD
+        .decode(png)
+        .unwrap();
     let (ops, _) = run(&[user(
         json!([{"type": "tool_result", "tool_use_id": "toolu_image"}]),
         json!({"toolUseResult": {"file": {"base64": png,"type": "image/png"}}}),
@@ -2305,7 +2309,8 @@ fn recorded_read_images_are_optimized_tool_attachments() {
         messages(&ops).is_empty(),
         "tool media must not become a user upload"
     );
-    assert!(ops.iter().any(|op| matches!(op, IngestOp::ProjectionAsset { asset } if asset.media_type == "image/webp" && asset.image_variants.len() == 4)));
+    assert!(ops.iter().any(|op| matches!(op, IngestOp::ProjectionAsset { asset }
+        if asset.media_type == "image/png" && asset.image_variants.is_empty() && asset.bytes == recorded)));
     let attachments = ops
         .iter()
         .find_map(|op| match op {
@@ -2317,8 +2322,9 @@ fn recorded_read_images_are_optimized_tool_attachments() {
         .unwrap();
     assert_eq!(attachments.len(), 1);
     assert!(matches!(
-        attachments[0].source,
-        AttachmentSource::Asset { .. }
+        &attachments[0].source,
+        AttachmentSource::Asset { asset }
+            if asset.url.ends_with(".png") && asset.image_variants.is_none()
     ));
     assert!(!serde_json::to_string(&ops).unwrap().contains(png));
 }

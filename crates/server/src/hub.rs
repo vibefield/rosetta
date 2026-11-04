@@ -274,6 +274,37 @@ impl Hub {
         Ok(delivered)
     }
 
+    /// Hold the cold admission barrier in the mirror: from now on a Pending
+    /// session's activity is withheld and no rollup counts a Pending member,
+    /// as every payload route withholds them. A fresh build sets this before
+    /// its first warm; [`Hub::reveal_pending`] lifts it at publication.
+    pub fn set_hide_pending(&self, hide: bool) {
+        let mut state = self.state.lock().expect("hub state poisoned");
+        state.mirror.set_hide_pending(hide);
+    }
+
+    pub fn hides_pending(&self) -> bool {
+        let state = self.state.lock().expect("hub state poisoned");
+        state.mirror.hides_pending()
+    }
+
+    /// Lift the admission barrier once the read router is published: re-read
+    /// the resident rows it shaped and fan their diffs to meta subscribers,
+    /// so the mirror ends where one warmed after publication would. Returns
+    /// the diffs delivered; a failed read keeps the barrier.
+    pub fn reveal_pending(&self, conn: &Connection) -> Result<usize, StoreError> {
+        let mut state = self.state.lock().expect("hub state poisoned");
+        let state = &mut *state;
+        state
+            .subs
+            .retain(|_, entry| !entry.shared.closed.load(Ordering::SeqCst));
+        let events = state.mirror.reveal_pending(conn)?;
+        let (delivered, resyncs) = publish_meta(state, self.config.subscriber_queue, events);
+        state.totals.meta_events += delivered as u64;
+        state.totals.resyncs += resyncs;
+        Ok(delivered)
+    }
+
     /// Subscribe to one session's timeline. Take the DB snapshot AFTER this
     /// returns and stamp it with the returned [`Stamp`]; mutations delivered
     /// afterwards continue from there (overlap is idempotent).

@@ -8,9 +8,10 @@ use std::path::Path;
 use rosetta_adapter_antigravity::AntigravityAdapter;
 use rosetta_adapter_claude_code::ClaudeCodeAdapter;
 use rosetta_adapter_codex::CodexAdapter;
+use rosetta_adapter_support::ColdAdmission;
 use rosetta_bench_corpus::{Agent, CorpusSpec, generate};
 use rosetta_pipeline::{IngestOptions, discover_root};
-use rosetta_server::{HubConfig, RuntimeIdentity};
+use rosetta_server::{AdmissionCourse, HubConfig, RuntimeIdentity};
 
 use super::*;
 
@@ -34,6 +35,7 @@ fn request(adapter: &'static dyn AgentAdapter, data_root: &str, root: &Path) -> 
             root: root.to_path_buf(),
             inventory: census.inventory,
             discovery_truncated: census.walk_truncated,
+            admission: adapter.cold_admission(),
             ledger_root: root.join("unused-ledger"),
             opts,
             write_raw_ledger: false,
@@ -212,6 +214,51 @@ fn metadata_goes_public_in_registry_order_and_every_runtime_is_admitted() {
             .all(|runtime| runtime.state == rosetta_server::BackfillState::Done),
         "{status:?}"
     );
+    // What each runtime's Pending sessions waited for: its trees one by one
+    // for a root-tree adapter, the runtime's close for Antigravity's.
+    let courses: Vec<_> = status
+        .runtimes
+        .iter()
+        .map(|runtime| (runtime.kind.as_str(), runtime.admission_course))
+        .collect();
+    assert_eq!(
+        courses,
+        [
+            ("claude-code", Some(AdmissionCourse::PerTree)),
+            ("antigravity", Some(AdmissionCourse::AtRuntimeClose)),
+            ("codex", Some(AdmissionCourse::PerTree)),
+            ("claude-code", Some(AdmissionCourse::PerTree)),
+        ]
+    );
+}
+
+/// Under the kill switch (`--experiment-cold-admission runtime`) a root-tree
+/// adapter asks for runtime admission, and its sessions wait for its close.
+#[test]
+fn a_root_tree_runtime_admitted_whole_waits_for_its_close() {
+    let home = tempfile::TempDir::new().unwrap();
+    let claude = home.path().join("claude");
+    corpus(&claude, Agent::ClaudeCode, 4);
+    let mut whole = request(&ClaudeCodeAdapter, "~/.claude", &claude);
+    whole.capture.admission = ColdAdmission::Runtime;
+    let health = Arc::new(DaemonHealth::new(0));
+    health.ingest_register(&whole.capture.identity, 0, 0);
+    let course = |health: &DaemonHealth| {
+        health
+            .snapshot(&Hub::new(HubConfig::default(), 0), 1)
+            .ingest
+            .runtimes[0]
+            .admission_course
+    };
+    assert_eq!(course(&health), None, "no attempt has spoken yet");
+    let built = build(vec![whole], false);
+    built.result.unwrap();
+    assert_eq!(course(&built.health), Some(AdmissionCourse::AtRuntimeClose));
+    assert_eq!(
+        requested_course(ColdAdmission::RootTree),
+        AdmissionCourse::PerTree
+    );
+    assert_eq!(granted_course(false), AdmissionCourse::AtRuntimeClose);
 }
 
 #[test]

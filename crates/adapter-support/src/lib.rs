@@ -14,8 +14,8 @@ pub mod time;
 pub mod tool;
 
 pub use adapter::{
-    AgentAdapter, FileStat, LineOutcome, LineStatus, NormalizeCtx, ProjectHint, SkimResult,
-    SnapshotPlan, SnapshotQuery, StreamDriver,
+    AgentAdapter, ColdAdmission, FileStat, LineOutcome, LineStatus, NormalizeCtx, ProjectHint,
+    SkimResult, SnapshotPlan, SnapshotQuery, StreamDriver,
 };
 pub use glob::Glob;
 pub use time::rfc3339_ms;

@@ -15,6 +15,8 @@ domain ledger "Raw ledger (durable truth)" {
   contains mod:rosetta_capture::{ledger, segment, segment_index, recompress}
   contains mod:rosetta_pipeline::{replay, command}
   contains mod:rosettad::{runtime_ledger, ledger_cmd, ledger_verify, ledger_compression, cold_stage}
+  contains mod:rosettad::maintenance_pace
+  contains mod:rosettad::serve::commands
   see "docs/ARCHITECTURE.md#35-runtime-handoff-watcher-tailer-and-raw-ledger"
 }
 
@@ -24,10 +26,16 @@ domain normalize "Per-agent normalization" {
 }
 
 domain ingest "Cold & live ingestion" {
-  contains mod:rosetta_store::{apply, cold_stream, bulk, reclaim}
-  contains mod:rosetta_server::{health, board, ingestion}
-  contains file:clients/room/src/lib/{ingest, ingest-activity, use-ingest-activity, catalog-status}.ts
+  contains mod:rosetta_store::{apply, cold_stream, bulk, reclaim, lock_order}
+  contains mod:rosetta_pipeline::closed::{walk_order, walk, emit, frontier, lane_profile}
+  contains mod:rosetta_pipeline::capture::pool::lanes, mod:rosetta_pipeline::closed::walk::lane
+  contains mod:rosetta_pipeline::early::closure, mod:rosetta_pipeline::streamed::{item, ordinals, trees}
+  contains mod:rosetta_core::op_scope, mod:rosetta_store::cold_stream::{slices, units}
+  contains mod:rosettad::cold_stream::{emit, walk_report, writer, queues, flips, admit}
+  contains mod:rosetta_server::{health, board, ingestion}, mod:rosetta_server::http::shared_reads
+  contains file:clients/room/src/lib/{ingest, ingest-activity, use-ingest-activity, import-state, catalog-status}.ts
   contains file:clients/room/src/components/{IngestStatus, IngestionControls, ColdStart}.tsx
+  contains file:clients/room/src/components/transcript/ImportState.tsx
   see "CLAUDE.md#current-phase"
   see "docs/ingest-engine.html"
 }
@@ -55,7 +63,7 @@ domain observe "Live observation (job 2)" {
 
 domain usage "Usage & spend" {
   contains path:tools/pricing/
-  contains mod:rosetta_core::{fold, usage_totals}, mod:rosetta_store::apply::usage_owners
+  contains mod:rosetta_core::{fold, usage_totals}, mod:rosetta_store::apply::{usage_owners, usage_claims}
   contains mod:rosetta_store::{pricing, usage_sql, usage_totals}
   contains path:crates/adapters/*/src/usage*.rs, path:crates/adapters/copilot/src/usage/
   contains path:clients/room/src/components/charts/
@@ -67,6 +75,8 @@ domain usage "Usage & spend" {
 domain media "Images & assets" {
   contains mod:rosetta_adapter_support::media, mod:rosetta_core::assets
   contains mod:rosetta_store::assets, mod:rosetta_server::http::images
+  contains mod:rosetta_store::assets::{renditions, image_refs}, mod:rosettad::image_renditions
+  touches mod:rosettad::maintenance_pace
   contains path:crates/adapters/*/src/images.rs, file:crates/adapters/claude-code/src/media.rs
   contains path:clients/room/src/components/file-viewer/, file:clients/room/src/lib/image-media.ts
   see "docs/ARCHITECTURE.md#412-authored-images-2026-09-09"
@@ -119,6 +129,8 @@ domain worktree "Worktree & git column" {
 domain perf "Performance evidence" {
   intent "Frozen before/after pairs authorize optimizations."
   contains mod:rosettad::{bench, brutal}, mod:rosetta_pipeline::instrument, path:tools/ingest-bench/
+  contains path:tools/r1-bench/, path:tools/ui-bench/
+  contains mod:rosettad::ingest_metrics::recency
   see "docs/ARCHITECTURE.md#7-performance-playbook"
   see "CLAUDE.md#conventions"
 }

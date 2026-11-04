@@ -22,9 +22,10 @@ use rosetta_core::{
 use crate::StoreError;
 
 use super::rows::{
-    BULK_MAINTENANCE, BucketKey, apply_reconciled_tool_message, apply_usage, flush_session_touches,
+    BULK_MAINTENANCE, BucketKey, apply_reconciled_tool_message, flush_session_touches,
     touch_session, update_reconciled_tool,
 };
+use super::usage_claims::{RowUsage, apply_row_usage};
 use super::{ApplyStats, Batch, SourceMode, SourceWrite, apply_op, profile_ordinal_lookup};
 
 mod fold;
@@ -51,7 +52,13 @@ pub(crate) struct BulkReconciliationDelta {
     cursor_id: i64,
     generation: u64,
     mode: SourceMode,
+    /// The first operation sequence this delta covers: a Stage slice's
+    /// offset in its source.
+    first_sequence: u64,
     activation_end: u64,
+    /// Σ [`IngestOp::approx_bytes`] of the deferred ops, when measured
+    /// (a streamed source's; zero on the retryable paths).
+    approx_bytes: u64,
     /// Compact identity for every normalized source position. Immediate ops
     /// keep their existing SQLite conflict path; only deferred relational ops
     /// are hashed, so large assets and prose are never serialized a second
@@ -73,6 +80,7 @@ impl BulkReconciliationDelta {
             source,
             batch.ops.iter().map(Cow::Borrowed),
             true,
+            false,
             &mut Vec::new(),
         )
         .map(Some)
@@ -84,7 +92,12 @@ impl BulkReconciliationDelta {
     /// later one — so hashing every deferred op for a retry that cannot
     /// happen would only serialize the runtime's relational payload twice.
     /// The rows SQL has consumed are freed off the calling thread.
-    pub(crate) fn from_owned_batch(batch: Batch) -> Result<Option<Self>, StoreError> {
+    /// `measure` keeps the deferred ops' [`IngestOp::approx_bytes`], which a
+    /// streamed runtime's flip caps read.
+    pub(crate) fn from_owned_batch(
+        batch: Batch,
+        measure: bool,
+    ) -> Result<Option<Self>, StoreError> {
         let Some(source) = batch.source.as_ref() else {
             return Ok(None);
         };
@@ -93,6 +106,7 @@ impl BulkReconciliationDelta {
             source,
             batch.ops.into_iter().map(Cow::Owned),
             false,
+            measure,
             &mut consumed,
         );
         crate::reclaim::release(consumed);
@@ -103,6 +117,7 @@ impl BulkReconciliationDelta {
         source: &SourceWrite,
         ops: impl ExactSizeIterator<Item = Cow<'a, IngestOp>>,
         fingerprint: bool,
+        measure: bool,
         consumed: &mut Vec<IngestOp>,
     ) -> Result<Self, StoreError> {
         let activation_end = source
@@ -119,6 +134,7 @@ impl BulkReconciliationDelta {
             })?;
         let mut fingerprints = BTreeMap::new();
         let mut deferred_ops = BTreeMap::new();
+        let mut approx_bytes = 0_u64;
         for (index, op) in ops.enumerate() {
             let sequence = source
                 .first_sequence
@@ -149,16 +165,69 @@ impl BulkReconciliationDelta {
                     ),
                 );
             }
+            if measure {
+                approx_bytes = approx_bytes.saturating_add(op.as_ref().approx_bytes());
+            }
             deferred_ops.insert(sequence, deferred_op(op.into_owned()));
         }
         Ok(Self {
             cursor_id: source.cursor_id,
             generation: source.generation,
             mode: source.mode,
+            first_sequence: source.first_sequence,
             activation_end,
+            approx_bytes,
             fingerprints,
             deferred: deferred_ops,
         })
+    }
+
+    pub(crate) fn cursor_id(&self) -> i64 {
+        self.cursor_id
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn mode(&self) -> SourceMode {
+        self.mode
+    }
+
+    pub(crate) fn approx_bytes(&self) -> u64 {
+        self.approx_bytes
+    }
+
+    /// Extend a staged slice delta with the next slice of the same source
+    /// generation, which must start exactly where this one ends: one delta
+    /// per (cursor, generation), as if the source had been applied whole.
+    /// The merged delta takes the later slice's mode, so a terminal slice
+    /// seals it.
+    pub(crate) fn merge_slice(&mut self, next: Self) -> Result<(), StoreError> {
+        if next.cursor_id != self.cursor_id || next.generation != self.generation {
+            return Err(StoreError::SourceState {
+                cursor_id: next.cursor_id,
+                message: format!(
+                    "slice of generation {} cannot extend cursor {} generation {}",
+                    next.generation, self.cursor_id, self.generation
+                ),
+            });
+        }
+        if next.first_sequence != self.activation_end {
+            return Err(StoreError::SourceState {
+                cursor_id: self.cursor_id,
+                message: format!(
+                    "slice starting at sequence {} does not follow sequence {}",
+                    next.first_sequence, self.activation_end
+                ),
+            });
+        }
+        self.activation_end = next.activation_end;
+        self.mode = next.mode;
+        self.approx_bytes = self.approx_bytes.saturating_add(next.approx_bytes);
+        self.fingerprints.extend(next.fingerprints);
+        self.deferred.extend(next.deferred);
+        Ok(())
     }
 }
 
@@ -543,6 +612,8 @@ pub(crate) struct BulkReconciliationPlan {
     session_touches: BTreeMap<String, i64>,
     tool_activity: BTreeMap<ToolKey, (i64, i64)>,
     folded_usage: u64,
+    /// Of `folded_usage`, the records carrying a response identity.
+    unclaimed_usage: u64,
     usage_seen: BTreeSet<UsageKey>,
     unmatched_usage: BTreeMap<UsageKey, BufferedTail>,
 }
@@ -568,6 +639,7 @@ pub(crate) fn apply_plan(
     stats.tool_results_merged = plan.matched_updates;
     stats.tool_results_unmatched = plan.unmatched_updates;
     stats.usage_applied = plan.folded_usage;
+    stats.usage_identities_unclaimed = plan.unclaimed_usage;
     stats.profile.bulk_tool_rows_reconciled =
         plan.messages.len().saturating_add(plan.existing.len()) as u64;
 
@@ -618,6 +690,9 @@ pub(crate) fn apply_plan(
     for existing in &plan.existing {
         update_reconciled_tool(tx, existing.message_id, &existing.tool, &mut stats)?;
     }
+    // A fold carries only what `defers` takes, never drift, so the Store's
+    // drift cache is not threaded here: this one is never consulted.
+    let mut no_drift = super::DriftCache::default();
     for tail in &plan.tail {
         if let IngestOp::Usage {
             session_id,
@@ -633,24 +708,10 @@ pub(crate) fn apply_plan(
                 response: response.clone(),
             };
             plan.usage_seen.insert(key.clone());
-            if let Some(identity) = identity
-                && !super::claim_usage(
-                    tx,
-                    owners,
-                    identity,
-                    session_id,
-                    super::OwnerTarget::Row(response.clone()),
-                    !tokens.is_empty(),
-                    &mut stats,
-                    BULK_MAINTENANCE,
-                    &mut dirty_buckets,
-                    None,
-                )?
-            {
-                continue;
-            }
-            if !apply_usage(
+            let applied = apply_row_usage(
                 tx,
+                owners,
+                identity.as_deref(),
                 session_id,
                 response,
                 *ts,
@@ -660,7 +721,8 @@ pub(crate) fn apply_plan(
                 BULK_MAINTENANCE,
                 &mut dirty_buckets,
                 None,
-            )? {
+            )?;
+            if applied == RowUsage::Unmatched {
                 plan.unmatched_usage.insert(key, tail.clone());
             }
             continue;
@@ -673,6 +735,7 @@ pub(crate) fn apply_plan(
             BULK_MAINTENANCE,
             &mut dirty_buckets,
             owners,
+            &mut no_drift,
             None,
         )?;
     }

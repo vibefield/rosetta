@@ -77,7 +77,7 @@ export default function App({ host }: { readonly host: RosettaHost }) {
       }}
       initialSummaryTab={params.get("tab") === "models" ? "models" : "activity"}
       unavailable={<DaemonHint client={host.client} />}
-      consent={<RollCallPanel client={host.client} />}
+      consent={<RollCallPanel client={host.client} onGranted={() => room.current?.refreshStatus()} />}
     />
   );
 }

@@ -20,6 +20,7 @@
     "test:web-search": "electron test/web-search.electron.mjs",
     "test:image-strips": "electron test/image-strips.electron.mjs",
     "test:image-gallery": "electron test/image-gallery.electron.mjs",
+    "test:image-originals": "electron test/image-originals.electron.mjs",
     "test:message-preview": "electron test/message-preview.electron.mjs",
     "test:activity-fold": "electron test/activity-fold.electron.mjs",
     "test:history-window": "electron test/history-window.electron.mjs",
@@ -30,6 +31,7 @@
     "test:activity-chart": "electron test/activity-chart.electron.mjs",
     "test:models-chart": "electron test/models-chart.electron.mjs",
     "test:room-host": "electron test/room-host.electron.mjs",
+    "test:cold-import": "electron test/cold-import.electron.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -41,8 +43,8 @@
     "@vibecook/mille-ui": "^0.3.4",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "@vibefield/rosetta-protocol": "^0.1.2",
-    "@vibefield/rosetta-room": "^0.1.2"
+    "@vibefield/rosetta-protocol": "^0.1.3",
+    "@vibefield/rosetta-room": "^0.1.3"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",

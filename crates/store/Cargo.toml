@@ -10,8 +10,13 @@ serde_json = { workspace = true }
 rusqlite = { workspace = true }
 rosetta-core = { path = "../core" }
 rosetta-pricing = { path = "../pricing" }
+# Display renditions of image members (assets/renditions.rs): a pure kernel below storage.
+rosetta-media = { path = "../media" }
 tempfile.workspace = true
 ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+image.workspace = true
 
 [features]
 # TypeScript binding generation for the wire-visible hot-tier and query

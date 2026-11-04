@@ -531,6 +531,7 @@ fn exemplars() -> serde_json::Value {
                         bytes_streamed: 1_073_741_824,
                         sessions_total: 5_912,
                         records: 214_032,
+                        admission_course: Some(rosetta_protocol::AdmissionCourse::PerTree),
                     },
                     RuntimeBackfill {
                         kind: "claude-code".into(),
@@ -543,6 +544,7 @@ fn exemplars() -> serde_json::Value {
                         bytes_streamed: 0,
                         sessions_total: 0,
                         records: 0,
+                        admission_course: None,
                     },
                 ],
                 projects: vec![
@@ -957,5 +959,45 @@ fn discovery_session_estimates_are_additive_and_distinguish_unknown_from_zero() 
         let wire = serde_json::to_value(&row).unwrap();
         assert_eq!(wire, expected, "only the additive field changes");
         assert_eq!(serde_json::from_value::<DiscoveryRow>(wire).unwrap(), row);
+    }
+}
+
+#[test]
+fn the_admission_course_is_additive_and_unknown_from_an_older_daemon() {
+    let legacy = serde_json::json!({
+        "kind": "codex", "runtime_id": "rt1", "label": null, "state": "streaming",
+        "files_total": 3, "bytes_total": 30, "files_skimmed": 3, "bytes_streamed": 10,
+        "sessions_total": 2, "records": 7,
+    });
+    let mut row: RuntimeBackfill = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(
+        row.admission_course, None,
+        "an older daemon names no course"
+    );
+
+    for (course, word) in [
+        (None, serde_json::Value::Null),
+        (
+            Some(rosetta_protocol::AdmissionCourse::PerTree),
+            "per_tree".into(),
+        ),
+        (
+            Some(rosetta_protocol::AdmissionCourse::AtRuntimeClose),
+            "at_runtime_close".into(),
+        ),
+        (
+            Some(rosetta_protocol::AdmissionCourse::AtPublication),
+            "at_publication".into(),
+        ),
+    ] {
+        row.admission_course = course;
+        let mut expected = legacy.clone();
+        expected["admission_course"] = word;
+        let wire = serde_json::to_value(&row).unwrap();
+        assert_eq!(wire, expected, "only the additive field changes");
+        assert_eq!(
+            serde_json::from_value::<RuntimeBackfill>(wire).unwrap(),
+            row
+        );
     }
 }

@@ -11,9 +11,14 @@
 //! the same entry stream; equal frame digests additionally mean the decoded
 //! segments are byte-identical. Metadata entries carry run-dependent values
 //! (discovery times), so the entry digest is also reported split: a source
-//! digest over the raw and seal entries — what two builds of the same
-//! read-only inputs must share — and a meta digest. The root digests fold
-//! every runtime's, in directory-name order.
+//! digest over the raw, document (without its observation time) and seal
+//! entries — what two builds of the same read-only inputs must share — and a
+//! meta digest. The source digest also
+//! follows the order sources interleave in, which only a path walk fixes; the
+//! source set digest folds each source's own entries in path order instead,
+//! so it is the equality measure for root-tree runtimes, whose walk may frame
+//! sources in another order on every run. The root digests fold every
+//! runtime's, in directory-name order.
 //!
 //! Nothing is written and no lock is taken: a ledger with a live writer reads
 //! as a snapshot whose newest segment may end torn. A torn segment is
@@ -42,7 +47,7 @@ pub(crate) fn cmd_verify(args: &[String]) -> Result<(), String> {
     if flags.json {
         emit(&json_report(&root, &report));
     } else {
-        render(&report);
+        print!("{}", render(&report));
     }
     Ok(())
 }
@@ -98,14 +103,21 @@ fn decoded_bytes(ledger: &LedgerVerify) -> u64 {
         .sum()
 }
 
-fn render(report: &[RuntimeVerify]) {
-    println!(
+/// The text report: one row per runtime, each runtime's source set digest,
+/// then the root digests.
+fn render(report: &[RuntimeVerify]) -> String {
+    let mut out = String::new();
+    let mut line = |text: String| {
+        out.push_str(&text);
+        out.push('\n');
+    };
+    line(format!(
         "{:<16} {:>8} {:>5} {:>10} {:>14} {:>14}  entry digest",
         "runtime", "segments", "torn", "entries", "disk", "decoded"
-    );
+    ));
     for runtime in report {
         let ledger = &runtime.ledger;
-        println!(
+        line(format!(
             "{:<16} {:>8} {:>5} {:>10} {:>14} {:>14}  {}",
             runtime.runtime,
             ledger.segments.len(),
@@ -114,28 +126,45 @@ fn render(report: &[RuntimeVerify]) {
             disk_bytes(ledger),
             decoded_bytes(ledger),
             ledger.entry_digest.to_hex(),
-        );
+        ));
     }
-    println!(
+    for runtime in report {
+        line(format!(
+            "{:<16} source set digest {}",
+            runtime.runtime,
+            runtime.ledger.source_set_digest.to_hex()
+        ));
+    }
+    line(format!(
         "entry digest  {}",
         fold(report, |ledger| ledger.entry_digest)
-    );
-    println!(
+    ));
+    line(format!(
         "source digest {}",
         fold(report, |ledger| ledger.source_digest)
-    );
-    println!(
+    ));
+    line(format!(
+        "source set digest {}",
+        fold(report, |ledger| ledger.source_set_digest)
+    ));
+    line(format!(
         "meta digest   {}",
         fold(report, |ledger| ledger.meta_digest)
-    );
-    println!("frame digest  {}", fold(report, LedgerVerify::frame_digest));
+    ));
+    line(format!(
+        "frame digest  {}",
+        fold(report, LedgerVerify::frame_digest)
+    ));
     let torn: usize = report
         .iter()
         .map(|runtime| runtime.ledger.torn_segments())
         .sum();
     if torn > 0 {
-        println!("{torn} torn segment(s): digests cover their intact prefixes");
+        line(format!(
+            "{torn} torn segment(s): digests cover their intact prefixes"
+        ));
     }
+    out
 }
 
 fn json_report(root: &Path, report: &[RuntimeVerify]) -> Value {
@@ -147,6 +176,7 @@ fn json_report(root: &Path, report: &[RuntimeVerify]) -> Value {
         "ledger": root.display().to_string(),
         "entryDigest": fold(report, |ledger| ledger.entry_digest),
         "sourceDigest": fold(report, |ledger| ledger.source_digest),
+        "sourceSetDigest": fold(report, |ledger| ledger.source_set_digest),
         "metaDigest": fold(report, |ledger| ledger.meta_digest),
         "frameDigest": fold(report, LedgerVerify::frame_digest),
         "runtimes": report.iter().map(json_runtime).collect::<Vec<_>>(),
@@ -172,6 +202,7 @@ fn json_runtime(runtime: &RuntimeVerify) -> Value {
         "runtime": runtime.runtime,
         "entryDigest": ledger.entry_digest.to_hex().to_string(),
         "sourceDigest": ledger.source_digest.to_hex().to_string(),
+        "sourceSetDigest": ledger.source_set_digest.to_hex().to_string(),
         "metaDigest": ledger.meta_digest.to_hex().to_string(),
         "frameDigest": ledger.frame_digest().to_hex().to_string(),
         "indexDigest": ledger.index_digest.map(|digest| digest.to_hex().to_string()),
@@ -282,6 +313,7 @@ mod tests {
         cmd_ledger(&args("compact", &db, &["--force"])).unwrap();
         let compacted = json_report(&root, &verify_root(&root).unwrap());
         assert_eq!(compacted["entryDigest"], plain["entryDigest"]);
+        assert_eq!(compacted["sourceSetDigest"], plain["sourceSetDigest"]);
         assert_eq!(compacted["frameDigest"], plain["frameDigest"]);
         assert_eq!(
             compacted["total"]["decodedBytes"],
@@ -309,7 +341,94 @@ mod tests {
         assert_eq!(torn["runtimes"][1]["tornSegments"], json!(1));
         // The intact prefix is what a replay reads, so the entries still agree.
         assert_eq!(torn["entryDigest"], plain["entryDigest"]);
+        assert_eq!(torn["sourceSetDigest"], plain["sourceSetDigest"]);
         cmd_ledger(&args("verify", &db, &[])).unwrap();
+    }
+
+    /// Two sources whose records `interleave` or not, in one runtime ledger.
+    fn two_sources(dir: &Path, interleave: bool) {
+        let mut ledger = Ledger::open(dir).unwrap();
+        let order: Vec<(&str, u64)> = if interleave {
+            (0..4)
+                .flat_map(|index| [("b.jsonl", index), ("a.jsonl", index)])
+                .collect()
+        } else {
+            ["a.jsonl", "b.jsonl"]
+                .into_iter()
+                .flat_map(|path| (0..4).map(move |index| (path, index)))
+                .collect()
+        };
+        for (path, index) in order {
+            let payload = format!("{{\"type\":\"user\",\"index\":{index}}}\n");
+            ledger
+                .append_raw(&source(path), 1, [(index * 100, payload.into_bytes())])
+                .unwrap();
+        }
+        for path in ["a.jsonl", "b.jsonl"] {
+            ledger
+                .complete_generation(&source(path), 1, 1, true)
+                .unwrap();
+        }
+        ledger.flush().unwrap();
+    }
+
+    #[test]
+    fn ledger_verify_prints_source_set_digest() {
+        let temp = tempfile::tempdir().unwrap();
+        let grouped = temp.path().join("grouped.ledger");
+        let interleaved = temp.path().join("interleaved.ledger");
+        for (root, interleave) in [(&grouped, false), (&interleaved, true)] {
+            fixture(root, "claude-code");
+            two_sources(&root.join("codex"), interleave);
+        }
+        let report = verify_root(&grouped).unwrap();
+        let json = json_report(&grouped, &report);
+        let text = render(&report);
+
+        // Per runtime, text and JSON, exactly the ledger's own digest.
+        let mut root = blake3::Hasher::new();
+        for (index, runtime) in ["claude-code", "codex"].into_iter().enumerate() {
+            let digest = verify_ledger(&grouped.join(runtime))
+                .unwrap()
+                .source_set_digest;
+            let hex = digest.to_hex().to_string();
+            assert_eq!(json["runtimes"][index]["runtime"], json!(runtime));
+            assert_eq!(json["runtimes"][index]["sourceSetDigest"], json!(hex));
+            assert!(
+                text.lines()
+                    .any(|line| line == format!("{runtime:<16} source set digest {hex}")),
+                "{text}"
+            );
+            root.update(&(runtime.len() as u64).to_be_bytes());
+            root.update(runtime.as_bytes());
+            root.update(digest.as_bytes());
+        }
+        // At the root: the runtimes folded in id order.
+        let root = root.finalize().to_hex().to_string();
+        assert_eq!(json["sourceSetDigest"], json!(root));
+        assert!(
+            text.lines()
+                .any(|line| line == format!("source set digest {root}")),
+            "{text}"
+        );
+
+        // Another interleaving of the same sources: only the order-free
+        // digest still agrees.
+        let other = json_report(&interleaved, &verify_root(&interleaved).unwrap());
+        assert_eq!(other["sourceSetDigest"], json["sourceSetDigest"]);
+        assert_ne!(other["sourceDigest"], json["sourceDigest"]);
+        assert_eq!(
+            other["runtimes"][0]["sourceSetDigest"],
+            json["runtimes"][0]["sourceSetDigest"]
+        );
+        assert_eq!(
+            other["runtimes"][0]["sourceDigest"],
+            json["runtimes"][0]["sourceDigest"]
+        );
+        assert_ne!(
+            other["runtimes"][1]["sourceDigest"],
+            json["runtimes"][1]["sourceDigest"]
+        );
     }
 
     #[test]

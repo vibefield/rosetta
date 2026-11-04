@@ -37,6 +37,7 @@ import { parseDiff } from "../file-viewer/diff";
 import { highlight, languageFor, PLAIN_TEXT } from "../file-viewer/syntax";
 import type { Language, TokenLine } from "../file-viewer/syntax";
 import { useRoom } from "../../room-context";
+import { commandFailureLabel } from "../../lib/import-state";
 import { DirectoryGlyph } from "./glyphs";
 
 /** Derived, never re-declared: a document's blocks are whatever the generated
@@ -428,7 +429,7 @@ function CommandSource({ command, code }: { readonly command: CommandFact; reado
   const [full, setFull] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const expandable =
     command.sourceTruncated && command.sessionId !== null && command.timelineId !== null;
 
@@ -443,14 +444,14 @@ function CommandSource({ command, code }: { readonly command: CommandFact; reado
       return;
     }
     setLoading(true);
-    setFailed(false);
+    setFailed(null);
     try {
       const sessionId = command.sessionId!;
       const response = await sessions.run(sessionId, (client) => client.command(sessionId, command.timelineId!));
       setFull(response.command);
       setExpanded(true);
-    } catch {
-      setFailed(true);
+    } catch (error) {
+      setFailed(commandFailureLabel(error));
     } finally {
       setLoading(false);
     }
@@ -471,8 +472,8 @@ function CommandSource({ command, code }: { readonly command: CommandFact; reado
     >
       {loading
         ? "loading full command…"
-        : failed
-          ? "couldn’t load · retry"
+        : failed !== null
+          ? failed
           : expanded
             ? "show preview"
             : "show full command"}

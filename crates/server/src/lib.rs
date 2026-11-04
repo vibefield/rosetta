@@ -41,5 +41,5 @@ pub use health::{DaemonHealth, IngestCounterSource, IngestCounters, RuntimeIdent
 pub use http::{AppState, ProjectionReader, RawCommandReader, router};
 pub use hub::{AbsorbReport, Hub, HubConfig, HubItem, Subscription};
 pub use rosetta_protocol::{
-    BackfillState, DiscoveryRow, IngestPhase, PROTOCOL_VERSION, RuntimeProvenance,
+    AdmissionCourse, BackfillState, DiscoveryRow, IngestPhase, PROTOCOL_VERSION, RuntimeProvenance,
 };

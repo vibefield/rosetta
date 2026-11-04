@@ -38,6 +38,15 @@ impl AgentAdapter for CodexAdapter {
         Some(&[spec::ROLLOUT])
     }
 
+    /// A rollout writes its own session, except a guardian review's usage,
+    /// which lands on the parent its header names: metadata links the
+    /// guardian to that parent, so both are one tree. The state database is
+    /// shared by every tree but declares no record queries, so its members
+    /// emit no ops (`snapshot_plan`).
+    fn cold_admission(&self) -> rosetta_adapter_support::ColdAdmission {
+        rosetta_adapter_support::ColdAdmission::RootTree
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 17: per-response `token_usage_record` (remote compactions), the
         // first settings snapshot's tier back-applied to the first turn, a
@@ -48,6 +57,10 @@ impl AgentAdapter for CodexAdapter {
         // 19: recorded tool images use durable optimized attachment members.
         // 20: explicitly presented HTML deliverables with transcript anchors.
         // 21: capture can recover presented HTML from the recorded workspace.
+        // Still 21 after image members became recorded originals with WebP
+        // renditions made after import (2026-11-01): legacy bundle refs stay
+        // valid, so re-streaming every source is not worth it; a rebuild
+        // converts them (docs/ARCHITECTURE.md).
         21
     }
 

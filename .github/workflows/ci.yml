@@ -114,6 +114,10 @@ jobs:
         # The hosted runner cannot use Chromium's unconfigured SUID helper.
         # This flag applies only to this local fixture on the disposable CI VM.
         run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' npm run test:room-host -w @vibefield/rosetta-agent-history -- --no-sandbox
+      - name: Characterize the cold import in Electron
+        # Step-driven and timing-free (ux:M5); scale 0.25 still sends the
+        # metadata burst through the hub's resync + snapshot path.
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' npm run test:cold-import -w @vibefield/rosetta-agent-history -- --no-sandbox --scale=0.25
 
   check:
     name: CI passed

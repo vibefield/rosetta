@@ -83,6 +83,32 @@ fn post(origin: &str, run: &Value, action: &str, key: usize) -> (u16, Value) {
         serde_json::from_str(body).unwrap(),
     )
 }
+/// Ask the daemon to bring the native session forward; its `queued` answer.
+fn boost(origin: &str) -> Value {
+    let address = origin.strip_prefix("http://").unwrap();
+    let body = json!({"session_id": NATIVE_SESSION}).to_string();
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .unwrap();
+    write!(stream, "POST /api/ingest/boost HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").unwrap();
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let answer: Value = serde_json::from_str(body).unwrap();
+    assert_eq!(answer.as_object().map(|fields| fields.len()), Some(1));
+    answer["queued"].clone()
+}
+fn streaming_started(status: &Value) -> bool {
+    status["daemon"]["ingest"]["metadata_ready_at"].is_i64()
+        && status["daemon"]["ingest"]["runtimes"]
+            .as_array()
+            .is_some_and(|rows| {
+                rows.iter()
+                    .any(|r| r["bytes_streamed"].as_u64().unwrap_or(0) > 0)
+            })
+}
 fn wait(origin: &str, predicate: impl Fn(&Value) -> bool) -> Value {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
@@ -137,6 +163,18 @@ fn cold_pause_stops_capture_keeps_reads_and_resumes_the_same_run() {
             run(&before)["state"],
             "running",
             "fixture finished before pause: {before}"
+        );
+        let courses = |status: &Value| {
+            status["daemon"]["ingest"]["runtimes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["admission_course"].clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            courses(&before).iter().all(|course| course == "per_tree"),
+            "a fresh Claude Code build opens tree by tree: {before}"
         );
         let (code, accepted) = post(&origin, run(&before), "pause", 1);
         assert_eq!(code, 202, "{accepted}");
@@ -194,6 +232,15 @@ fn cold_pause_stops_capture_keeps_reads_and_resumes_the_same_run() {
         let done = wait(&origin, |s| {
             s["canonical_ready"] == true && run(s)["state"] == "succeeded"
         });
+        // The resumed attempt — in process (no workers) or after the restart
+        // — withheld every session it opened until publication, and says so.
+        assert!(
+            !courses(&done).is_empty()
+                && courses(&done)
+                    .iter()
+                    .all(|course| course == "at_publication"),
+            "{done}"
+        );
         if workers == "0" {
             assert_eq!(
                 done["daemon"]["ingest"]["metadata_ready_at"],
@@ -320,4 +367,171 @@ fn paused_restart_applies_new_folder_exclusions() {
             assert!(!String::from_utf8_lossy(&payload).contains("excludedafterpausesentinel"));
         }
     }
+}
+
+/// Boost is queued only where something drains it: today that is the disk
+/// cold engine, until its loop ends. The fresh RAM build (paused while
+/// unpublished, then live after publication), a warm start and a
+/// metadata-only audit answer `queued: false`, in the same shape.
+#[test]
+fn boost_is_queued_only_while_the_disk_cold_engine_drains_it() {
+    let bench = Bench::new();
+    large_history(&bench);
+    let (child, origin) = spawn_serve(&bench);
+    let before = wait(&origin, streaming_started);
+    assert_eq!(
+        run(&before)["state"],
+        "running",
+        "fixture finished before pause: {before}"
+    );
+    assert_eq!(post(&origin, run(&before), "pause", 70).0, 202);
+    let paused = wait(&origin, |s| run(s)["state"] == "paused");
+    assert!(!bench.db.exists(), "the RAM build is unpublished");
+    assert_eq!(boost(&origin), false, "the RAM build drains no boosts");
+    assert_eq!(post(&origin, run(&paused), "resume", 71).0, 202);
+    wait(&origin, |s| {
+        s["canonical_ready"] == true && run(s)["state"] == "succeeded"
+    });
+    assert_eq!(boost(&origin), false, "nor does its live phase");
+    drop(child);
+    let (child, origin) = spawn_serve(&bench);
+    wait(&origin, |s| s["canonical_ready"] == true);
+    assert_eq!(boost(&origin), false, "nor a warm start");
+    drop(child);
+
+    let bench = Bench::new();
+    large_history(&bench);
+    let (metadata, origin) = spawn_serve_with_flags(&bench, &["--stop-after-meta"]);
+    wait(&origin, |s| {
+        s["daemon"]["ingest"]["metadata_ready_at"].is_i64()
+    });
+    assert_eq!(boost(&origin), false, "nor a metadata-only audit");
+    drop(metadata);
+    let (_child, origin) = spawn_serve_with_flags(&bench, &["--slice-budget", "32768"]);
+    let before = wait(&origin, |s| {
+        s["daemon"]["ingest"]["runtimes"]
+            .as_array()
+            .is_some_and(|rows| {
+                rows.iter()
+                    .any(|r| r["bytes_streamed"].as_u64().unwrap_or(0) > 0)
+            })
+    });
+    assert_eq!(post(&origin, run(&before), "pause", 72).0, 202);
+    let paused = wait(&origin, |s| run(s)["state"] == "paused");
+    assert_eq!(boost(&origin), true, "the disk engine drains it on resume");
+    assert_eq!(post(&origin, run(&paused), "resume", 73).0, 202);
+    wait(&origin, |s| {
+        s["canonical_ready"] == true && run(s)["state"] == "succeeded"
+    });
+    assert_eq!(boost(&origin), false, "its finished loop closed the ledger");
+}
+
+/// A serve whose stdout and stderr lines (the latter prefixed `stderr: `)
+/// both arrive on the returned channel, which closes when the process exits.
+fn spawn_logged(bench: &Bench) -> (ChildGuard, String, mpsc::Receiver<String>) {
+    let mut child = bench
+        .command(
+            "serve",
+            &[
+                "--enroll",
+                bench.enroll.to_str().unwrap(),
+                "--addr",
+                "127.0.0.1:0",
+            ],
+        )
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let errors = sender.clone();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = sender.send(line);
+        }
+    });
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = errors.send(format!("stderr: {line}"));
+        }
+    });
+    let origin = loop {
+        let line = receiver.recv_timeout(Duration::from_secs(20)).unwrap();
+        if line.starts_with("stderr: ") {
+            continue;
+        }
+        if let Some(origin) = line
+            .split_whitespace()
+            .find(|word| word.starts_with("http://"))
+        {
+            break origin.to_string();
+        }
+    };
+    (ChildGuard(child), origin, receiver)
+}
+
+/// Quitting mid-build (the app's SIGINT, a terminal's ctrl-c) runs the same
+/// physical sync barrier over the staged ledger that a pause does before the
+/// daemon exits, and the next start resumes that generation, losing and
+/// duplicating nothing.
+#[cfg(unix)]
+#[test]
+fn a_stop_mid_build_syncs_the_staged_ledger_before_exiting() {
+    let bench = Bench::new();
+    large_history(&bench);
+    let (mut child, origin, log) = spawn_logged(&bench);
+    let before = wait(&origin, streaming_started);
+    assert_eq!(
+        run(&before)["state"],
+        "running",
+        "fixture finished before the stop: {before}"
+    );
+    let interrupt = Command::new("kill")
+        .args(["-INT", &child.0.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(interrupt.success());
+    let mut lines = Vec::new();
+    loop {
+        match log.recv_timeout(Duration::from_secs(60)) {
+            Ok(line) => lines.push(line),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!("no exit:\n{}", lines.join("\n")),
+        }
+    }
+    let exit = child.0.wait().unwrap();
+    assert!(exit.success(), "{exit}:\n{}", lines.join("\n"));
+    let barrier = lines
+        .iter()
+        .position(|line| line.starts_with("stderr: stop barrier: staged raw ledger synced"));
+    let stopped = lines
+        .iter()
+        .position(|line| line.starts_with("stderr: cold ingest paused"));
+    // One stderr pipe and one reader: these two keep their written order.
+    assert!(
+        barrier
+            .zip(stopped)
+            .is_some_and(|(barrier, stopped)| barrier < stopped),
+        "the stop syncs before it reports:\n{}",
+        lines.join("\n")
+    );
+    assert!(!bench.db.exists(), "a stop never publishes");
+    assert!(!evidence(&bench.staged_ledger()).is_empty());
+    drop(child);
+
+    let (_child, origin) = spawn_serve(&bench);
+    wait(&origin, |s| {
+        s["canonical_ready"] == true && run(s)["state"] == "succeeded"
+    });
+    let retained: i64 = rusqlite::Connection::open(&bench.db)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM message WHERE content LIKE 'pause recovery fixture %'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained, 10_000, "resume neither loses nor duplicates");
 }

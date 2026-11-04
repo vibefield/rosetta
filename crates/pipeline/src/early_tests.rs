@@ -23,6 +23,9 @@ fn file(path: &str, session_id: &str) -> SessionFile {
         modified_ms: 1,
         agent_version: None,
         source_missing: false,
+        tree_parent: None,
+        cut_len: None,
+        cut_modified_ms: None,
     }
 }
 
@@ -51,6 +54,8 @@ fn closed(path: &str, session_id: &str, ops: Vec<IngestOp>) -> ClosedSource {
         complete: true,
         payload_bytes: 1,
         prepared: None,
+        lane: crate::closed::LaneId::Path,
+        capture: crate::capture::CaptureClock::default(),
     }
 }
 
@@ -107,7 +112,7 @@ fn prepared(sources: &[ClosedSource]) -> Vec<(bool, usize, usize)> {
             let prepared = source.prepared.as_ref().expect("prepared");
             (
                 prepared.withheld,
-                prepared.resolved.len(),
+                prepared.to_resolve.len(),
                 prepared.released.len(),
             )
         })

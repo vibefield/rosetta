@@ -1,5 +1,8 @@
-//! Writer-shaped tool media follows the same pure optimizer as authored media.
-//! These synthetic records exercise declared shapes; they are not native captures.
+//! Writer-shaped tool media follows the same recorded-original path as
+//! authored media: each image becomes its recorded bytes, classified from
+//! headers, with no codec work during normalization. These synthetic records
+//! exercise declared shapes; they are not native captures.
+use base64::Engine;
 use rosetta_adapter_support::{AgentAdapter, LineStatus, NormalizeCtx};
 use rosetta_core::{
     IngestOp,
@@ -23,11 +26,27 @@ fn attachments(ops: &[IngestOp]) -> Vec<&AttachmentRef> {
         .collect()
 }
 
+/// The recorded PNG's decoded bytes.
+fn recorded() -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD
+        .decode(PNG)
+        .unwrap()
+}
+
+/// No other test in this binary runs codec work while `check` normalizes, so
+/// the process-wide admission counter moves only if normalization took a slot.
 fn check(adapter: &dyn AgentAdapter, stream: &str, record: Value, expected: usize) {
     let mut ctx = NormalizeCtx::new("runtime", "session");
     ctx.state = adapter.init_state();
     ctx.src_offset = Some(10);
+    let jobs = rosetta_media::admitted_jobs();
     let result = adapter.ingest_line(&mut ctx, stream, record.to_string().as_bytes());
+    assert_eq!(
+        rosetta_media::admitted_jobs(),
+        jobs,
+        "{}: normalization never decodes, resizes or encodes pixels",
+        adapter.kind()
+    );
     assert_eq!(
         result.status,
         LineStatus::Parsed,
@@ -37,20 +56,33 @@ fn check(adapter: &dyn AgentAdapter, stream: &str, record: Value, expected: usiz
     );
     let refs = attachments(&result.ops);
     assert_eq!(refs.len(), expected, "{}: {:?}", adapter.kind(), result.ops);
+    let recorded = recorded();
     for attachment in refs {
         attachment.validate().unwrap();
         let AttachmentSource::Asset { asset } = &attachment.source else {
             panic!("{attachment:?}")
         };
-        assert_eq!(asset.media_type, "image/webp");
-        assert_eq!(asset.image_variants.as_ref().unwrap().len(), 4);
-        assert!(
-            result
-                .ops
-                .iter()
-                .any(|op| matches!(op, IngestOp::ProjectionAsset { asset: bytes }
-            if bytes.reference() == *asset && &bytes.bytes[8..12] == b"WEBP"))
-        );
+        assert_eq!(asset.media_type, "image/png", "{}", adapter.kind());
+        assert_eq!(asset.image_variants, None);
+        assert_eq!(asset.byte_len, recorded.len() as u64);
+        assert_eq!(attachment.byte_len, Some(recorded.len() as u64));
+        let member = result
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                IngestOp::ProjectionAsset { asset: member } if member.reference() == *asset => {
+                    Some(member)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{}: member op", adapter.kind()));
+        assert_eq!(member.bytes, recorded, "the member is the native bytes");
+        assert!(member.image_variants.is_empty());
+        let permit = rosetta_media::admit(rosetta_media::Lane::Foreground);
+        let thumbs =
+            rosetta_media::renditions(&permit, &member.bytes, rosetta_media::RenditionSet::Thumbs)
+                .unwrap();
+        assert_eq!(thumbs.len(), 3, "display renditions derive from the member");
     }
     assert!(!serde_json::to_string(&result.ops).unwrap().contains(PNG));
     let checkpoint = adapter.checkpoint_state(ctx.state.as_deref()).unwrap();
@@ -58,7 +90,7 @@ fn check(adapter: &dyn AgentAdapter, stream: &str, record: Value, expected: usiz
 }
 
 #[test]
-fn all_established_tool_image_encodings_are_optimized() {
+fn all_established_tool_image_encodings_are_recorded_originals() {
     let url = format!("data:image/png;base64,{PNG}");
     check(
         &rosetta_adapter_codex::CodexAdapter,
@@ -232,14 +264,13 @@ fn selected_local_tool_output_recovers_recorded_images() {
             let AttachmentSource::Asset { asset } = &attachment.source else {
                 continue;
             };
-            assert_eq!(asset.media_type, "image/webp");
-            assert_eq!(asset.image_variants.as_ref().unwrap().len(), 4);
+            assert_eq!(asset.image_variants, None);
             assert!(
                 outcome
                     .ops
                     .iter()
                     .any(|op| matches!(op, IngestOp::ProjectionAsset { asset: bytes }
-                if bytes.reference() == *asset && &bytes.bytes[8..12] == b"WEBP"))
+                if bytes.reference() == *asset && bytes.image_variants.is_empty()))
             );
             recovered.push((asset.byte_len, attachment.dimensions));
         }
@@ -247,5 +278,5 @@ fn selected_local_tool_output_recovers_recorded_images() {
         ctx.state = adapter.restore_state(checkpoint.as_ref()).unwrap();
     }
     assert!(!recovered.is_empty());
-    println!("Recovered optimized images (bytes, dimensions): {recovered:?}");
+    println!("Recovered recorded images (bytes, dimensions): {recovered:?}");
 }

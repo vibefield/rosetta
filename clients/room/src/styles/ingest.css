@@ -1,12 +1,14 @@
 /* Progress describes its named step and never covers available content. */
 .ah-ingest-status {
-  flex: 0 0 auto; margin: 10px 10px 2px; padding: 13px 14px 8px; min-width: 0;
+  position: relative; flex: 0 0 auto; margin: 10px 10px 2px; padding: 13px 14px 8px; min-width: 0;
   border: 1px solid var(--vf-hairline-strong); border-radius: 11px;
   background: var(--vf-chrome-surface); color: var(--vf-text-primary);
   font-size: 11px; text-align: left; font-variant-numeric: tabular-nums;
 }
 .ah-ingest-status__eyebrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--vf-text-secondary); font-size: 9px; font-weight: 600; letter-spacing: .045em; }
 .ah-ingest-status h3 { margin: 7px 0 5px; font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: -.015em; }
+.ah-ingest-status__count { color: var(--vf-text-secondary); font-weight: 500; }
+.ah-ingest-status__horizon { margin: 7px 0 0; color: var(--vf-text-secondary); font-size: 10px; line-height: 1.5; }
 .ah-ingest-status .ah-ingest-status__detail { margin: 0 0 13px; color: var(--vf-text-secondary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .ah-ingest-status__amount { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 7px; line-height: 1.4; }
 .ah-ingest-status__amount b { font-size: 11px; font-weight: 500; }
@@ -41,10 +43,15 @@
 .ah-project-list-item[data-cooking] .ah-project-list-item__metrics { animation: none; }
 .ah-project-list-item__metrics[data-cooking]::after { display: none; }
 .ah-project-list-item[data-cooking]:not([data-fill]) .ah-project-list-item__accent { animation: none; opacity: .3; }
+/* The room's colourless meter (room.css) when nobody knows the amount: it
+   sweeps rather than resting at an invented width — a fixed sliver reads as
+   progress that was never measured. Same travel as the import card's. */
+.ah-meter[data-indeterminate] i { width: 34%; animation: ah-ingest-travel 1.8s ease-in-out infinite; }
 @keyframes ah-ingest-travel { 0% { transform: translateX(-110%); } 100% { transform: translateX(310%); } }
 @media (prefers-reduced-motion: reduce) {
   .ah-ingest-meter i, .ah-ingest-status__agents summary > span { animation: none; transition: none; }
-  .ah-ingest-meter[data-indeterminate] i { width: 100%; opacity: .35; animation: none; }
+  .ah-ingest-meter[data-indeterminate] i,
+  .ah-meter[data-indeterminate] i { width: 100%; opacity: .35; animation: none; }
   .ah-project-list-item__accent { animation: none !important; transition: none !important; }
 }
 
@@ -55,3 +62,19 @@
 .ah-ingest-controls button:disabled { opacity: .55; cursor: default; }
 .ah-ingest-controls button:focus-visible { outline: 2px solid var(--vf-select); outline-offset: 2px; }
 .ah-ingest-controls [role="alert"] { color: var(--vf-text-secondary); line-height: 1.5; }
+
+/* The card's place in the projects column (IngestStatusFold): its height
+   follows the card, easing only at the end, so the rows glide. */
+.ah-ingest-fold { flex: 0 0 auto; overflow: hidden; }
+.ah-ingest-fold__content { display: flow-root; }
+.ah-ingest-fold[data-ending] { transition: height 360ms cubic-bezier(.4, 0, .2, 1); }
+.ah-ingest-status[data-compact] { padding: 8px 14px; }
+.ah-ingest-status[data-compact] h3 { margin: 0; font-size: 12px; font-weight: 500; }
+@media (prefers-reduced-motion: reduce) {
+  .ah-ingest-fold[data-ending] { transition: none; }
+}
+/* A short window shares column ① between the portfolio and a search card:
+   the card keeps its title, amount and meter. */
+@media (max-height: 820px) {
+  .ah-ingest-status[data-state^="search_"]:not([data-state="search_failed"]) .ah-ingest-status__detail { display: none; }
+}

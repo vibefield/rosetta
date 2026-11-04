@@ -43,11 +43,27 @@ pub struct SessionFile {
     /// Only these virtual tombstones may turn a Missing read into an empty
     /// authoritative generation; a racing ordinary read remains incomplete.
     pub source_missing: bool,
+    /// RAM only. A ledger-only source's parent (else root): the one family
+    /// link no row carries (a Codex guardian's usage lands on it).
+    pub tree_parent: Option<String>,
+    /// RAM only. A transcript's length at the skim's own fstat, the cut a
+    /// root-tree build reads it up to; `skim::Cut` says what has none.
+    pub cut_len: Option<u64>,
+    /// RAM only. The mtime (epoch ms) at that fstat, which root trees rank
+    /// by; `modified_ms` is the older census's. `None` exactly when
+    /// `cut_len` is.
+    pub cut_modified_ms: Option<i64>,
 }
 
 impl SessionFile {
     pub(crate) fn projected_session_id(&self) -> Option<String> {
         (!self.ledger_only).then(|| self.session_id.clone())
+    }
+
+    /// The bytes a root-tree cold build reads of this source: its metadata
+    /// cut where it has one, else its census size.
+    pub fn read_len(&self) -> u64 {
+        self.cut_len.unwrap_or(self.size)
     }
 }
 
@@ -302,7 +318,8 @@ pub(crate) fn plan_inventory(
     // can exclude a previously projected source from metadata admission, but
     // a re-skim must not turn its existing cursor into a different source.
     // Preserve that legacy binding while continuing to capture its raw tail;
-    // newly discovered internal sources still have no projected session.
+    // newly discovered internal sources still have no projected session. A
+    // converted source keeps its `tree_parent`: no row of this pass links it.
     for file in files.iter_mut().filter(|file| file.ledger_only) {
         if rosetta_store::queries::cursor_state(store.conn(), &runtime.id, &file.relative_path)?
             .is_some_and(|cursor| cursor.session_id.as_deref() == Some(file.session_id.as_str()))
@@ -635,6 +652,8 @@ struct AdmitSource {
     driver: StreamDriver,
     size: u64,
     modified_ms: i64,
+    /// A skimmed transcript's metadata cut; `None` for snapshot members.
+    cut: Option<crate::skim::Cut>,
 }
 
 /// Mint canonical ids from native facts and stage the session, project, and
@@ -653,6 +672,13 @@ fn admit_identified(
     output.admission.observe(&runtime.id, &session_id, &skim);
 
     if skim.ledger_only {
+        // No row carries this source's family link, so the source does.
+        let tree_parent = skim
+            .parent_session_id
+            .as_deref()
+            .or(skim.root_session_id.as_deref())
+            .map(|native| ids::session_id(&runtime.id, native))
+            .filter(|parent| parent != &session_id);
         output.files.push(SessionFile {
             ledger_only: true,
             relative_path: source.relative_path,
@@ -666,6 +692,9 @@ fn admit_identified(
             modified_ms: source.modified_ms,
             agent_version: skim.agent_version,
             source_missing: false,
+            tree_parent,
+            cut_len: source.cut.map(|cut| cut.len),
+            cut_modified_ms: source.cut.map(|cut| cut.modified_ms),
         });
         return;
     }
@@ -809,6 +838,9 @@ fn admit_identified(
         modified_ms: source.modified_ms,
         agent_version: skim.agent_version,
         source_missing: false,
+        tree_parent: None,
+        cut_len: source.cut.map(|cut| cut.len),
+        cut_modified_ms: source.cut.map(|cut| cut.modified_ms),
     });
     if output.admission.is_empty() {
         instrument.add(
@@ -845,6 +877,7 @@ fn admit_skim(
     driver: StreamDriver,
     mut skim: SkimResult,
     member: bool,
+    cut: Option<crate::skim::Cut>,
     instrument: &Instrument,
 ) {
     let Some(native_session_id) = skim.session_id.clone() else {
@@ -878,6 +911,7 @@ fn admit_skim(
             driver,
             size: file.size,
             modified_ms: file.modified_ms,
+            cut,
         },
         skim,
         native_session_id,
@@ -950,6 +984,7 @@ fn admit_database(
                 driver,
                 size,
                 modified_ms: updated,
+                cut: None,
             },
             skim,
             native,

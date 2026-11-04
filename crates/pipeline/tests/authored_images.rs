@@ -1,4 +1,7 @@
 //! Authored media survives capture, publication and replay without native files.
+//! Each image is stored once, as its recorded bytes; display renditions are a
+//! disposable cache made after ingestion, never projection members.
+use base64::Engine;
 use rosetta_adapter_codex::CodexAdapter;
 use rosetta_capture::Ledger;
 use rosetta_core::{
@@ -16,7 +19,11 @@ use std::{
     path::Path,
 };
 
-fn exercise(header: &str, message: &str) -> Vec<(u64, Option<(u32, u32)>)> {
+type Facts = Vec<(u64, Option<(u32, u32)>)>;
+
+/// The (bytes, dimensions) facts of each image occurrence, and each
+/// occurrence's member file name and bytes.
+fn exercise(header: &str, message: &str) -> (Facts, Vec<(String, Vec<u8>)>) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("codex");
     let path = root.join("sessions/2026/09/09/rollout-images.jsonl");
@@ -88,27 +95,29 @@ fn exercise(header: &str, message: &str) -> Vec<(u64, Option<(u32, u32)>)> {
                 asset.byte_len,
                 "member exists before the published row is readable"
             );
-            assert_eq!(asset.media_type, "image/webp");
-            assert_eq!(&bytes[8..12], b"WEBP");
             assert_eq!(asset.digest, blake3::hash(&bytes).to_hex().to_string());
-            for variant in asset.image_variants.as_ref().unwrap().values() {
-                let name = Path::new(&variant.url)
-                    .file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap();
-                let rendition = std::fs::read(assets::asset_root(&projection).join(name)).unwrap();
-                assert_eq!(&rendition[8..12], b"WEBP");
-                members.push((name.into(), rendition));
-            }
+            assert_eq!(attachment.media_type.as_ref(), Some(&asset.media_type));
+            assert_eq!(attachment.byte_len, Some(asset.byte_len));
+            assert!(
+                asset.image_variants.is_none(),
+                "renditions are never projection members"
+            );
             facts.push((
                 asset.byte_len,
                 attachment.dimensions.map(|d| (d.width, d.height)),
             ));
-            members.push((file.to_owned(), bytes));
+            members.push((file.to_str().unwrap().to_owned(), bytes));
         }
     }
     assert!(!members.is_empty());
+    let distinct: std::collections::BTreeSet<_> = members.iter().map(|(name, _)| name).collect();
+    assert_eq!(
+        std::fs::read_dir(assets::asset_root(&projection))
+            .unwrap()
+            .count(),
+        distinct.len(),
+        "one file per recorded image"
+    );
     let mut search = Vec::new();
     queries::visit_session_search_documents(store.conn(), &session, |document| {
         search.push(format!(
@@ -141,28 +150,35 @@ fn exercise(header: &str, message: &str) -> Vec<(u64, Option<(u32, u32)>)> {
     let replayed = queries::timeline_page(replay.conn(), &session, None, 100).unwrap();
     assert_eq!(replayed[0].timeline_id, rows[0].timeline_id);
     assert_eq!(replayed[0].body, rows[0].body);
-    for (file, bytes) in members {
+    for (file, bytes) in &members {
         assert_eq!(
-            std::fs::read(assets::asset_root(&rebuilt).join(file)).unwrap(),
+            &std::fs::read(assets::asset_root(&rebuilt).join(file)).unwrap(),
             bytes
         );
     }
-    facts
+    (facts, members)
 }
 
 #[test]
 fn authored_images_materialize_before_publication_and_rebuild_from_the_ledger_alone() {
     let header = json!({"timestamp":"2026-09-09T00:00:00Z","type":"session_meta","payload":{"id":"image-session","timestamp":"2026-09-09T00:00:00Z","cwd":"/fixture/project","originator":"codex_exec","cli_version":"0.150.1","source":"cli","model_provider":"openai"}});
-    let image = json!({"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="});
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
+    let image = json!({"type":"input_image","image_url":format!("data:image/png;base64,{png}")});
     let message = json!({"timestamp":"2026-09-09T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[
         {"type":"input_text","text":"<image name=[Image #1] path=\"/gone/screenshot.png\">"},image,
         {"type":"input_text","text":"</image>"},{"type":"input_text","text":"Review [Image #1]."}, image
     ]}});
-    let facts = exercise(&header.to_string(), &message.to_string());
+    let (facts, members) = exercise(&header.to_string(), &message.to_string());
+    let recorded = base64::engine::general_purpose::STANDARD
+        .decode(png)
+        .unwrap();
     assert_eq!(facts.len(), 2);
     assert_eq!(facts[0], facts[1]);
-    assert_eq!(facts[0].1, Some((1, 1)));
-    assert!(facts[0].0 > 0);
+    assert_eq!(facts[0], (recorded.len() as u64, Some((1, 1))));
+    for (name, bytes) in members {
+        assert!(name.ends_with(".png"), "{name}");
+        assert_eq!(bytes, recorded, "the member is the ledger's decoded bytes");
+    }
 }
 
 /// Opt-in local corroboration. No private path/content is a committed fixture.
@@ -179,6 +195,6 @@ fn selected_local_image_record_replays_without_its_temporary_image_path() {
     let message = lines.nth(number - 2).unwrap().unwrap();
     println!(
         "Recovered image facts (bytes, dimensions): {:?}",
-        exercise(&header, &message)
+        exercise(&header, &message).0
     );
 }

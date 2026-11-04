@@ -28,8 +28,15 @@ Archived task/workflow states are likewise last-recorded facts: missing completi
 evidence never starts a wall-clock duration or an indefinite activity animation.
 
 The History room's navigation order is separate client-side memory (2026-10-02).
-Initial discovery sorts by recorded activity. Subsequently, a fresh conversation
-event promotes a session only after at least five minutes of recorded quiet;
+Initial discovery sorts by recorded activity. One import-time exception (decision
+D1, 2026-11-03): while the room bootstraps (no canonical readiness yet, or the
+ingest not live), projects no recorded activity ranks yet follow the ranked ones
+by their newest root's `updated_at` descending, then id, instead of by id alone;
+ranked projects keep activity order, and activity-then-id order returns at
+publication. Spend ranks load only after publication, so the token sort is
+disabled meanwhile (“Spend ranks arrive after the import”). Subsequently, a
+fresh conversation event promotes a session only after at least five minutes of
+recorded quiet;
 continuing output updates its row in place, and quiet expiry itself moves nothing.
 A project promotes only after its whole root-session set has been quiet. Coalesced
 root progress is folded chronologically, so a sibling's continued activity prevents
@@ -41,11 +48,39 @@ Calendar-day grouping still follows recorded activity, including midnight, with
 stable ranks inside each day. Pointer interaction, keyboard focus, and browsing
 below the top hold list positions, new insertions, and day membership together;
 row values continue updating. A deferred group whose dates changed says “Activity
-updated” until reconciliation. “Show recent activity” applies pending geometry
-and returns to the top without changing selection. Authoritative removals retain
-a surviving visible scroll anchor. The activity-order and subscription recovery
-unit tests run in CI; `pnpm test:list-order` exercises production hooks, lists,
+updated” until reconciliation; import-only changes never do. “Show recent
+activity” applies pending geometry and returns to the top without changing
+selection. Authoritative removals retain a surviving visible scroll anchor.
+During a cold import (2026-11-02), sessions the import has not reached (`Pending`)
+are drawn in two groups with no date head, each ordered by `updated_at`
+descending, then id, since no recorded activity can rank or date them yet
+(decision D1, 2026-11-03): “Still importing · N” on top holds those whose
+`updated_at` is newer than every readable row's (all of them while none is
+readable), and “Not imported yet · N” at the foot holds the rest, so a flip
+moves a top row a short way into its day; a metadata-only placeholder (Pending,
+no cwd, title, summary or delegation, and with children) is left out of both and
+reads “Transcript not available”
+(`clients/room/src/lib/import-state.ts`). A Pending row is no §2.5 state while the
+import runs (2026-11-03): a hollow neutral dot, no shimmer, “not imported yet” in
+its time slot and “—” for its span; orange stays for real trouble, and a Streaming
+row keeps its orange dot, shimmer and recorded time. A held list's pill counts
+the imported arrivals (“N conversations imported — show”) and says “older” only
+when every one lands below the reader's anchor; its live region announces a
+count-free sentence (“Newly imported conversations are available in sessions.”),
+so only the button carries the count. A held not-imported group whose rows were
+imported heads itself “N conversations imported”, and held projects the import
+reordered say “Projects reordered by the import · show”. The activity-order and
+subscription recovery unit tests run in CI; `pnpm test:list-order` exercises production hooks, lists,
 focus, scroll, themes, and reduced motion against synthetic data in Electron.
+`test:cold-import` (2026-11-03, CI at scale 0.25) steps the app, its RosettaClient
+and the whole room through a seeded, step-driven cold import of the MacBook trace's
+shape, fresh, resumed, and with one runtime admitted whole
+(`clients/room/src/fixtures/cold-import.ts`), and pins what
+the room does today — project order, the foot group, holds and pills, faces by
+course, counts, search and chart copy, the end transition — each assertion naming
+the UX item that flips it, an I1 honesty rule that holds forever, or `unplanned`; a
+UX commit flips its own assertions in the same commit, and the test asserts no
+timing.
 
 > **Implementation checkpoint (2026-08-31).** Nine ground-truth/runtime-adapter packs are
 > registered. The generic runtime handles adapter-selected JSONL, bounded document snapshots,
@@ -115,14 +150,33 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > order, fails the start. Adapters capture,
 > ledger, and normalize concurrently, each through its own private RAM planner (the cursor CAS
 > chain, generations, and restart detection are unchanged; every roster source's cursor is created
-> before the walk, in path order in one planner transaction, so each keeps the id creation at its
-> turn gave it). Nothing is retained per runtime until
-> its capture ends: a producer walks its roster in source-path order and hands each source to the
+> before the walk, in path order in one planner transaction, so its cursor id and its ledger file
+> id are its *path rank* whatever order the walk then takes). Nothing is retained per runtime until
+> its capture ends: a producer walks its roster and hands each source to the
 > sole canonical writer as a *closed source* — terminal generation, final checkpoint, contiguous
-> validated ops — as soon as nothing can supersede it. Only a transcript whose session still has an
+> validated ops — as soon as nothing can supersede it. A runtime admitted whole walks in
+> source-path order. A root-tree runtime (Claude Code and Codex declare
+> `ColdAdmission::RootTree` through `AgentAdapter::cold_admission`; R1, 2026-11-02) walks newest
+> root trees first (`rosetta_pipeline::closed::walk_order`). A *root tree* is one connected
+> component of the runtime's metadata links — a session's parent, its root where that differs
+> from itself, and a ledger-only source's `tree_parent` — found by union-find and named by its
+> smallest session id (`closed/trees.rs`); a Codex `root_session_id` is the immediate parent, so
+> grouping by the raw root would split a family. The walk takes span `P` first, serially and
+> whole: the members of a physical file several trees read (a Codex `state_N.sqlite`), by physical
+> path. Then come lane `S`, every tree whose largest own source is at most 64 MiB, and one big
+> lane `B` for the rest (`BIG_LANES = 1`), sizes measured as `read_len` (the skim's cut, else the
+> census size). Each lane holds whole trees by recency key `k` (the newest skim mtime over the
+> tree's own sources) descending, then tree id, each tree's sources in path order; the serial
+> driver walks `P`, then every lane's trees merged by the same key. A plan that cannot hoist a
+> shared member (one with per-session record queries) or cannot place a source in a tree walks
+> paths instead, and a truncated discovery or metadata walk falls back to runtime admission
+> before the producer starts. Only a transcript whose session still has an
 > uncaptured transcript, or a pending sibling heal after a restart, is held; the heal runs as soon
 > as the restarted session's last transcript is captured, so the writer sees exactly one terminal
-> generation per source, in path order (the order every order-sensitive upsert assumes). Every
+> generation per source, and each session's sources in path order (they are path-ordered members
+> of one tree in its lane): the order every order-sensitive per-session upsert assumes. The only
+> state shared across trees — usage ownership (§4.1.3) and the drift sample (§3.4) — converges in
+> any order. Every
 > pass of the walk is a *private build* pass (`IngestOptions::private_build`, 2026-09-28): nothing
 > of the source is public yet and publication needs it at a terminal generation, so a generation
 > ends wherever the file stops it, by the end-of-file rules — which decide activation and the
@@ -139,7 +193,27 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > generation stays staged until a read completes it, and an unclean replacement abandons so the
 > published generation survives.
 >
-> **Fresh-start tolerance (2026-09-28).** Publication stays runtime-granular, but a fresh or
+> A root-tree runtime's fresh JSONL passes are also *bounded at the metadata cut* (R1,
+> 2026-11-02; `IngestOptions::cut_bounded`, set by `closed_pass_options` whenever the runtime has
+> trees): each transcript is read only up to `SessionFile::cut_len`, the skim's own fstat length
+> (`Tailer::read_cut`). The checkpoint's observed length is the cut, so growth past it is ordinary
+> append growth: the pass seals its generation at the cut, and after publication the live runner
+> appends the rest to that same generation, each record in the raw ledger exactly once. The cut
+> holds on `Initial`, `Continued` and `ForcedReplay` reads — a sibling heal stays capped, even of a
+> file replaced after its own pass, and an atomic rewrite between the skim and capture reads as
+> `Initial` up to the old cut — and is dropped for the rest of the pass on `Truncated`,
+> `IdentityChanged` or `PrefixMismatch`, so a rewrite reads to its new end. A cut inside a record
+> pauses the pass (`Streaming`); since the skim's identity fallback can name a session from bytes
+> past the cut, a cut before any complete record pauses too, and the session publishes `Streaming`
+> with no rows for catch-up to complete. "Complete as of the metadata cut" therefore holds only
+> for these passes. Document members (of them only Claude Code workflow-run documents frame
+> records, so only they can project content newer than the cut), SQLite snapshot members,
+> rewrites, every runtime-admission adapter, the kill switch and a fallen-back runtime, live
+> passes, resumed builds and finite `ingest` read to their capture-time end. The pool's
+> remaining-bytes estimate uses the same `read_len` (the cut, else the census size).
+>
+> **Fresh-start tolerance (2026-09-28).** Publication stays runtime-granular for runtime-admission
+> adapters, and root-tree adapters publish per closure-proven tree (R1, below), but a fresh or
 > resumed start no longer refuses a runtime for per-file imperfections the live path already
 > absorbs: a file that vanished during metadata; a transcript no skim identifies — counted
 > *unfinished* instead when no delimiter ends its first record yet, which makes it not yet a
@@ -153,9 +227,20 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > reports their count separately from source catch-up, and preserves their raw records and
 > Streaming readiness. The daemon regression exercises a malformed sealed record through
 > resume and canonical publication, not only a malformed suffix first read during catch-up.
+> An interrupted source the resumed roster no longer holds — its file vanished while no daemon
+> ran, or its first record no longer identifies a session (unidentified or unfinished) — no longer
+> refuses either (2026-11-01). It closes the way a fresh build closes a file it loses mid-read:
+> `activate_stopped_source` replays exactly that generation's staged frames (segment-index
+> scoped), appends its seal to the staged ledger (clean or not, as it normalized), and activates it
+> at the generation it was captured under; it counts as `missing=` in that runtime's tolerated
+> line and in the profile, and its session publishes `Streaming` with the rows that were read. The
+> seal is what keeps the published archive rebuildable — `rebuild` refuses a raw-only source it
+> cannot prove retired — and a rebuild projects the same rows, reading that session `Indexed` when
+> the prefix was clean, exactly as after a fresh build's cut-short source. The live runner admits
+> the file if it returns. One whose identity changed still refuses.
 > A start still refuses what no later read can repair: a truncated discovery or metadata walk
-> (the file cap), a checkpoint conflict, a record past the raw frame limit (§3.5), a resumed
-> start's interrupted source that is gone (its reserved generation can never finish), and what
+> (the file cap), a checkpoint conflict, a record past the raw frame limit (§3.5), a root-tree
+> source that names a session of another lane's tree or of a tree already closed (below), and what
 > only a bug or corruption leaves — a closed source with a gap in its operation sequence, an
 > undecodable final checkpoint, or no terminal generation. Finite `ingest`, `watch` and the
 > disk-progressive engine keep the strict gate that refuses every shortfall. The
@@ -165,15 +250,36 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > turn) — whose workers
 > step each source's pass a tail batch at a time (read, normalize, checkpoint, and the batch's
 > finished ledger frames under its roster key) ahead of its producer. The producer becomes the
-> runtime's *sequencer*, the only code that touches its planner and ledger, and commits that
-> output strictly in path order, so the ledger bytes, the planner's CAS chain and every closed
-> source are the serial walk's for any worker count or schedule, and an interrupted build leaves
-> the serial walk's prefix. Look-ahead is bounded in bytes of queued output: 512 MiB across all
-> runtimes (`--capture-lookahead`), a per-runtime share of it, and 64 MiB for the source a
-> sequencer commits next, which workers always serve first; work over its bound parks instead of
-> blocking a worker. Snapshot and document groups, sibling heals and non-fresh cursors stay on the
-> sequencer at their path position. The 2026-09-27 sweep on the frozen snapshot (23 runs, M1
-> Max, 10 cores, host load 40–270, snapshot and ledger on one USB SSD), fitted against host load:
+> runtime's *sequencer*, the only code that touches its planner and ledger. For a runtime admitted
+> whole it commits that output strictly in path order, so the ledger bytes, the planner's CAS chain
+> and every closed source are the serial walk's for any worker count or schedule, and an
+> interrupted build leaves the serial walk's prefix. A root-tree runtime registers each lane that
+> has pool units as its own pool runtime, and its sequencer merges lanes
+> (`rosetta_pipeline::closed::walk`): after span `P`, it retries every held emission, takes the
+> ready lane with the lowest global index — a lane whose next item is sequencer-local is always
+> ready, a pool lane when its head has output queued — processes exactly one event of it (ledger
+> frames first, keyed per file id, then the planner), charges the event's counters to that unit's
+> own report, and closes a finished unit from that report alone, draining only its own cursor's
+> planned batches. Its physical ledger frame order and message rowids may therefore differ
+> between runs (decision U-2, 2026-11-02). On any walk, as already at 3ca7410, so may which
+> runtime's block of cursor ids comes first: it follows which runtime checkpoints first. These do
+> not: per-source ledger content (`sourceSetDigest`), cursor ids within each runtime and ledger
+> file ids (path rank), the logical projection, ranked
+> search, the walk digest for a given snapshot and flag set, and whether the build publishes or
+> refuses. `--experiment-cold-admission runtime` reproduces the path walk byte for byte. Look-ahead
+> is bounded in bytes of queued output: 512 MiB across all runtimes (`--capture-lookahead`), a
+> per-runtime share of it, and 64 MiB for the source a sequencer commits next, which workers
+> always serve first; work over its bound parks instead of blocking a worker. A look-ahead step
+> still running counts against those bounds by the payload it may still read (at most one 32 MiB
+> batch), so workers that start steps together no longer overshoot them by a batch each, which
+> on a big-tree lane, where every source is large, they otherwise did (2026-11-02). A root-tree
+> runtime's lane `S` (and span `P`, when it has pool units) is `Reserved`: a fixed slice of
+> `min(floor, G/8)` (64 MiB by default) while it has steps left, so big-lane overshoot cannot
+> starve it; every other pool runtime shares what the slices leave. Head grants are fair: among
+> runnable heads, the lane granted a head step least recently goes first (`capture/pool.rs`).
+> Snapshot and document groups, sibling heals and non-fresh cursors stay on the
+> sequencer at their position in their span. The 2026-09-27 sweep on the frozen snapshot (23 runs,
+> M1 Max, 10 cores, host load 40–270, snapshot and ledger on one USB SSD), fitted against host load:
 > canonical readiness about 131 s / 195 s serial against 102 s / 170 s pooled at load 100 / 200,
 > Claude Code's capture 96 s / 137 s against 63 s / 81 s, at equal CPU and 0.3–0.7 GiB more peak
 > footprint. Four to ten workers were not separable within the noise; eight and ten did slightly
@@ -181,8 +287,26 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > snapshot and the ledger) and then writer-bound: at 8–10 workers the Codex producer waited up to
 > 40 s for the writer's in-flight budget while the writer applied and admitted Claude Code, and the
 > pool's workers parked. In that sweep the sole canonical writer was the next wall; the preparer
-> below has since taken tool resolution off it. A 256 MiB in-flight budget bounds closed sources
-> between producers and the writer. Before a source leaves its producer (its sequencer, when
+> below has since taken the fold of self-contained sessions off its admission, and R1 runs that
+> resolve on the writer outside any transaction, so it never stalls a sequencer's other lanes.
+> A 256 MiB in-flight budget bounds closed
+> sources between producers and the writer, in budget bytes (a source's framed payload and asset
+> bytes plus the approx bytes of withheld facts it carries from earlier emissions), per class
+> (`rosettad/src/cold_stream/emit.rs`): 64 MiB for lane `S` and span `P` of every root-tree
+> runtime, 192 MiB shared by every big lane and every runtime admitted whole; the pre-R1-compatible
+> modes (`--experiment-cold-admission runtime`, `--experiment-cold-lanes 1`) keep one 256 MiB
+> budget. Each class keeps the earlier rule — one item larger than the class moves alone once
+> nothing else of it is in flight — plus a *drain ticket*: the first acquire that does not fit
+> takes it, and every other acquire of the class waits or fails until that one is admitted, so
+> an item that
+> does not fit waits for at most one drain of its class. The writer releases exactly what each
+> step's share of an item acquired (release by remainder; the profile's `budgetResidualBytes` is
+> what a class still holds at the end), and a writer error aborts every class. On a pooled
+> root-tree walk emission never blocks the sequencer: `ProducerEmit` prepares the emission, tries
+> its class, and on a full class holds it — at most one per lane — while that lane alone pauses;
+> a release, or a drain ticket clearing, wakes the sequencers through the pool's output condvar to
+> retry. The path walk and the serial driver emit blocking, as before. Before a source leaves
+> its producer (its sequencer, when
 > pooled), the runtime's `StreamedPreparer` assigns each message its final presentation ordinal
 > incrementally under the whole-runtime precompute's key (a session a later
 > source repeats a timeline into, or one that receives a source out of path order, is re-ranked by
@@ -190,26 +314,505 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > tool openers, lifecycle updates, usage, file edits — out of its batch until the session's last
 > roster source has been emitted. A session is then *self-contained* unless some source crossed
 > it: a row, tool fact, usage or file edit of another session's (or a ledger-only) source that
-> names it, or one of its own sources naming another session. A self-contained session's facts
-> are folded right there, with the admission fold's own collect-and-finish, so the resolved tool
-> rows travel with the source that completed the session; a crossed session gets its withheld
-> facts back unresolved and keeps the admission fold, and a source that names an already resolved
-> session fails the start closed. The writer applies closed sources while capture continues,
-> several queued sources of one runtime per bounded transaction: the same final canonical rows the
-> retained path writes, plus the resolved tool rows of the sessions they completed, each stamped
+> names it, or one of its own sources naming another session. A self-contained session's
+> withheld facts travel with the source that completed it, and the writer resolves them — the
+> admission fold's own collect-and-finish — on that item's first turn, outside any transaction
+> (R1; the preparer's still-pending withheld bytes are reported as `peakPendingWithheldBytes`,
+> unbudgeted); a crossed session gets its withheld facts back unresolved and keeps the admission
+> fold, and a source that names an already resolved session fails the start closed. The writer
+> applies closed sources while capture continues (`rosettad/src/cold_stream/writer.rs`): one
+> queue per (runtime, lane), filled by a non-blocking drain of the channel and served
+> round-robin, one transaction per key per turn, a runtime's span `P` ahead of its own lanes.
+> Small whole sources of one key coalesce while the total stays within 16 MiB and 256 sources —
+> strictly, where the old loop admitted one message past the bound. A source whose budget bytes
+> exceed `CHUNK_BYTES` (16 MiB) is its own item, stepped one transaction per turn
+> (`rosetta_pipeline::streamed::item`, *chunked apply*): Stage slices of its immediate ops, cut
+> greedily by `IngestOp::approx_bytes`; resolved-row slices of the sessions it completes; then the
+> terminal — the last op slice, the checkpoint CAS, Activate, the last resolved rows and the
+> session touches. So every apply transaction during capture writes at most 16 MiB, or one op or
+> resolved row that alone exceeds it (a projected record is at most 32 MiB). A slice moves no
+> checkpoint, active generation or `stream_state`, and its rows stay behind their session's
+> `Pending` barrier; a Stage slice's deferred facts are staged under its cursor
+> (`ColdReconciliation::is_staged`) and merged into the source's one terminal delta, never the
+> fold, so after a source's terminal its cursor holds no staged slice. An Abandon item and a
+> coalesced item are one terminal transaction: an Abandon applies drift only, exactly as a whole
+> Abandon, so no slice's usage claim is ever followed by a provenance sweep.
+> `--experiment-cold-chunks 0` turns slicing off; the kill switch keeps the pre-R1 single FIFO
+> writer, with no chunks and no flips. Each item writes the same final canonical rows the
+> retained path writes, plus the resolved tool rows of the sessions it completed, each stamped
 > with its own source's cursor and written once. What is left — usage no resolved row absorbed,
 > file edits, and every fact of a crossed session — is collected into that runtime's own RAM fold
-> at its original source positions, never another runtime's. When a producer closes, the writer
-> admits its runtime: the fold resolves each remaining correlation once and writes each remaining
-> tool row once, identity-bearing usage is claimed in runtime tail order exactly as before, then
-> one stream-state commit flips every source-backed session out of
-> `Pending`. Pending sessions are the admission barrier: rows of an unadmitted runtime may sit in the
+> at its original source positions, never another runtime's; a root-tree runtime partitions that
+> fold by tree (`store/src/cold_stream/units.rs`).
+>
+> A root-tree runtime admits each *closure-proven* tree on its own (R1, 2026-11-02). The
+> preparer classifies every op of every activated source by the session it writes
+> (`IngestOp::named_session`, an exhaustive match; `pipeline/src/early/closure.rs`). A target in
+> another tree in the same lane binds both trees for admission at the runtime's close while the
+> target tree is still open, and fails the build closed once it has closed; a target in another
+> lane or in span `P` always fails it closed (`cold source {path} addresses session {s} of tree
+> {t} in lane {l}`). Lanes walk in a fixed order, so the outcome depends only on the walk, never
+> on the
+> schedule; every such reference counts in `crossTreeCrossings`. An abandoned terminal taints its
+> tree; a skipped source does not. A tree whose last roster source is emitted unbound and
+> untainted is *closed*, and the writer's `TreeLedger` makes it ready once every one of its sources
+> — the closing one and any other lane's — has committed its terminal transaction
+> (`pipeline/src/streamed/trees.rs`). A flip batch (`rosettad/src/cold_stream/flips.rs`) is one
+> writer transaction, `Store::admit_cold_units`: with the batch's partitions folded beforehand, it
+> checks that no session the fold addresses already holds a tool row, applies those trees' tails
+> (usage for other rows, file edits, the whole fold of a crossed session), renumbers the sessions a
+> cross-source repeat left to canonicalize, and flips the trees' sessions with a public roster
+> source out of `Pending` last — a metadata-only placeholder never flips. The first ready batch of
+> a runtime flips at once, later ones at most once per 100 ms, each capped at 64 trees, 512
+> sessions and 16 MiB of tails (a single tree over a cap flips alone); a due batch takes the
+> writer's next turn. After each batch the hub hears it in one order (`engine::absorb_around`):
+> row effects, then each changed session's resync barrier, then metadata, so `/ws/meta` announces
+> a new `stream_state` only once the session socket's barrier is up; then the progress board and
+> the milestones count the batch's sessions. After every apply step and flip whose usage
+> displacement undid something in an already flipped tree, those sessions are resynced too
+> (U-1, §4.1.3). A flipped tree is never `Pending` again in this process: a later refusal of the
+> build leaves it readable. A runtime's `Closed` waits until its queues are empty and no item of it
+> is between slices; then its ready trees flip regardless of cadence, every unit not taken — bound
+> and tainted trees, trees closed but never flipped, and the whole of a runtime admitted whole or
+> walked by paths — is absorbed into one fold, which folds exactly as a runtime admitted whole, and
+> one more `admit_cold_units` transaction admits that remainder
+> (`StreamedRuntime::admit_remainder`), published in the same order for the sessions it moved and
+> the flipped ones its fold displaced. Every other runtime is admitted that way at its close, in
+> completion order: the fold resolves each remaining correlation once and writes each remaining
+> tool row once, identity-bearing usage is claimed in runtime tail order, and the readiness flip
+> comes last. A resumed build flips nothing per tree (below). Pending sessions are the admission
+> barrier: rows of an unadmitted tree or runtime may sit in the
 > RAM generation, but no timeline, entry, collaboration, plan, file-target or report-work read
-> exposes them, their stubs stay out of the metadata mirror, and no row effects are observed.
-> Admission remains runtime-granular and in completion order. Watched timelines receive one resync
+> exposes them, their stubs stay out of the metadata mirror, and no row effects are observed. A
+> full command checks its own session too: while the build is unpublished, an admitted session's
+> command is read from the staged ledger root, a Pending one answers `not_ready` (“this
+> conversation is still importing”), and a record its capture worker has not appended yet answers
+> `not_ready` (“still saving · retry”). The metadata mirror holds the same barrier
+> (`Hub::set_hide_pending`, set when a fresh build starts): activity rollups, `/api/activity`
+> turns and Workflow child profiles skip Pending members until `Hub::reveal_pending` lifts it at
+> publication. Watched timelines receive one resync
 > barrier and re-snapshot through the ordinary API. No raw record, parser state, candidate value,
 > or reconciliation map enters the read target. Finite `ingest` and replay keep the retained
 > closed-runtime path (`prepare_captured_runtime` → `apply_prepared_runtime`).
+>
+> **Cold-build measurement (2026-11-01).** The streamed writer prints what it already knows,
+> without changing capture order, admission, or throughput (`rosettad::ingest_metrics`). These
+> are `milestone:` stdout lines whose `elapsed_s` is measured from serve start, like the others:
+> - `runtime-metadata-public runtime=<id> agent=<kind>` as each runtime's metadata becomes public.
+> - `first-session-complete` the first time the writer has applied every roster source of some
+>   session: an optimistic lower bound for a session-granular flip, not a moment that session was
+>   publishable. A crossed session's facts, a resolved session's leftover usage and file edits,
+>   and ordinals still to canonicalize wait for its tree's flip or its runtime's fold.
+> - `runtime-readable runtime=<id> agent=<kind> sessions=<n>` at each runtime's close; `sessions`
+>   counts its flipped trees' sessions plus those its remainder admission moved.
+> - `first-readable` at the first flip or admission that makes a session non-`Pending`.
+> - `recent-ready horizon=24h|7d horizon_sessions=<n>`: the first moment every public roster
+>   session whose newest roster file mtime lies within the horizon of the census cut (the writer's
+>   start) is non-`Pending`. It is decided from session ids and roster mtimes only, once every
+>   roster is known and a flip or admission has made a session readable. So it never precedes
+>   `first-readable`, and a horizon with no sessions reads ready right at it, with
+>   `horizon_sessions=0`.
+> - `recent-ready horizon=24h@newest|7d@newest horizon_sessions=<n>` (2026-11-02,
+>   `ingest_metrics/recency.rs`): the same, for the public roster sessions whose newest source
+>   mtime lies within the span of the newest such session over every roster, not of the census
+>   cut, so a frozen corpus keeps its membership however long ago it was frozen.
+>
+> Three tree milestones cover the root-tree runtimes. "Required" means a tree member with a public
+> roster source, so a metadata-only placeholder (or a session born during the import) never holds
+> a tree back, and a tree with no required session is not ranked. The lines are decided once
+> every roster and every runtime's setup is known, and fire at the flip that makes their last
+> required session readable. Runtime-admission runtimes, a runtime fallen back to that, and every
+> runtime under `--experiment-cold-admission runtime` have no trees and feed only the session
+> horizons.
+> - `newest-trees-ready n=<min(10, trees)>`: every required session of the 10 newest trees, ranked
+>   by recency key `k` descending, then smallest tree id, then runtime id.
+> - `newest-giant-ready tree_bytes=<bytes>`: the newest tree whose largest source exceeds 64 MiB;
+>   absent when there is none.
+> - `small-recent-ready horizon=24h@newest|7d@newest trees=<n>`: every tree whose largest source
+>   is at most 64 MiB and whose `k` lies within the span of the newest ranked tree's `k`.
+>
+> Each milestone added on 2026-11-02 is also a `milestone` JSON event under `--json --profile`
+> (`milestone`, `horizon`, `horizonSessions`, `n`, `treeBytes`, `trees`, `elapsedS`, as they
+> apply).
+>
+> Three anchors serve the UI bench (2026-11-03), measurement only like the rest. Serve's first
+> stdout line is `clock: wall_ms=<Unix ms>`, read right after the instant every `elapsed_s` counts
+> from, so a wall-clock stamp `w` maps to `elapsed_s = (w − wall_ms) / 1000`. Only this line is
+> that base: `/api/status` `daemon.started_at` (and the announcement's `started_at`) is stamped
+> later, after flag parsing and the store's open, so it must not be used as one; the status
+> document's Unix-ms stamps, `daemon.ingest.metadata_ready_at` among them, are on the same wall
+> clock and map through `wall_ms`.
+> `milestone: consent-granted` prints when a roll-call grant ends the consent wait and this start's
+> enrolment is decided; consent from flags, the enrolment file or a standing projection never
+> waits, so it prints nothing. On the fresh and resumed RAM paths, `milestone: search-ready` (or
+> `search-failed`) stamps the detached search worker's first synchronization after canonical
+> readiness that publishes a generation (or fails), on the worker's own clock: a detached observer
+> waits on the worker's latch (`Fts5SearchWorker::first_sync`), so publication, the live runners
+> and shutdown never wait for it, and nothing prints if the worker stops first (as `--ticks 0`
+> usually makes it) or the process exits. The disk path keeps its own search lines. Under `--json`
+> alone (the app passes no `--profile`) the clock is also a `clock` event (`wallMs`) and the grant
+> a `milestone` event (`elapsedS`).
+>
+> Each runtime also prints one structure-only `walk:` line as its producer starts:
+> `walk: runtime=… agent=… order=recency|path reason=… trees= small= big= lanes= groups_hoisted=
+> big_bytes= digest=`. `reason` is `-` for a recency walk, else `runtime` (admitted whole, the kill
+> switch included, since it makes the runtime so before the plan), `fallback` (a truncated walk),
+> `hoist` or `unmapped` (a plan that walks paths, above); the digest is blake3 over the lane
+> split, the big-lane count, the mode and the (span, path) sequence in global order, and
+> `--json --profile` adds a `walk-plan` event of `[path_rank, lane, tree_index, read_len,
+> age_ms]` per source in global order, with the mode and digest — no path, id or content. The
+> `parallel-stream-prepare` stage profile gains a `lanes` array — per lane `units`, `sources`,
+> `bytes`, `headWaitMs`, `heldMs` and `serviceDelayMs` (each `{count, p50Ms, p99Ms, maxMs}`),
+> `heldMsTotal` (every writer-budget hold summed), `endMs`, `inlineMs` (sequencer-local work
+> charged to the lane it served) and `peakUnemittedHeadBytes` — plus `laneSwitches`,
+> `bigLaneChainMs`, `sequencerAllLanesHeldMs` (sequencer waits while every live lane held an
+> emission its writer budget refused), `peakPendingWithheldBytes`, `treesClosed`, `treesBound`,
+> `treesTainted`, `factlessResolved`, `lateSamples`, `crossTreeCrossings` and `bigSourceSplits`
+> (per source over 64 MiB: its read length, the approx bytes of its immediate, relational and
+> asset ops and `assetOps`, their count; and what its capture steps measured — `captureWallMs`
+> from its first step's start to its last step's end, `captureSteps`, `longestStepMs` and
+> `maxRecordBytes`, the largest framed record (JSONL line) a step read; a step is one pool worker
+> step, which reads, normalizes, frames and compresses one batch, or one pass step of the serial
+> driver; structure only). A lane's *service delay* runs from "its head unit has an event queued
+> and the lane holds no emission" to "the sequencer takes that event". The `capture-pool` profile
+> gains `peakSharedLookAheadBytes`, `peakReservedLookAheadBytes` and `peakHeadBytesTotal`. The
+> `streamed-writer` profile gains a
+> `lanes` array (per (runtime, lane): `txs`, `stageTxs`, `resolvedSliceTxs`, queue wait
+> p50/p99/max),
+> `longestApplyTxMs` and `maxApplyTxBytes` over the capture window, `resolveMs` (writer time
+> resolving withheld facts, sampled where that happens, as each item begins: until 2026-11-03 it
+> was sampled around the step and always read 0), `busyShareOfCapture` ((apply wall + flip wall +
+> resolve) / capture wall, where capture runs from the writer's start to the last producer's
+> `Closed`), `nonIdleShareOfCapture` ((writer wall − all its channel waits) / capture wall: like
+> busy it spans the writer's whole life, the post-capture tail included, so busy never exceeds it
+> and their difference is writer time neither counts), `nonIdleShareWithinCapture` ((capture wall
+> − the writer's channel waits within it) / capture wall, at most 1), `captureWallMs`,
+> `captureIdleMs`, `budgetResidualBytes {small, shared}`,
+> the flip totals (`flipBatches`, `flipTrees`, `flipSessions`, `flipWallMs`, `longestFlipTxMs`,
+> `treeAdmissionP99Ms`, `maxFlipTailBytes`, `flipRenumberRows`, `flipLockWaitMs`),
+> `sharedCacheLocks` (the streaming window so far), and the five slowest apply steps and flip
+> transactions, slowest first (`slowestApplySteps`, `slowestFlipTxs`, kept in RAM and printed only
+> here). A step entry gives `elapsedS` at its start, `runtime`, `lane`, `kind` (`Stage`,
+> `ResolvedRows` or `Terminal`), `sources`, `approxBytes` split into `assetBytes` (its asset ops',
+> counted before the step's clock starts and only under `--json --profile`, so no other run scans
+> ops for it), `immediateBytes` and `resolvedBytes`, `ops` (attempted messages, tool updates,
+> usage, drift and other ops, assets, and messages inserted and updated), `wallMs` (the whole
+> step: pre-W1 asset materialization, the transaction and post-commit collection), `lockHeldMs`
+> (W1 taken to commit, inside that wall) and `lockWaitMs`; a flip entry gives `elapsedS`,
+> `runtime`, `kind` `Flip`,
+> `trees`, `sessions`, `roots`, `tailBytes`, `renumberRows`, `ops`, `wallMs`, `lockHeldMs` and
+> `lockWaitMs`. Each flip batch is a `tree-admission` event (`trees`, `sessions`, `roots` — the
+> top-level conversations among them, published with no parent session, as the room lists them —
+> `tailBytes`, `renumberRows`, `wallMs`, `lockWaitMs`, `lockHeldMs`, and on the milestone clock
+> `elapsedS` at its commit and `publishedS` once the hub has absorbed it), and `streamed-apply`
+> adds `resolveMs`, `treesFlipped` and `sessionsFlipped`. After publication a `shared-cache-locks`
+> stage profile reports the RAM generation's lock evidence (§6): a `streaming` and a `finalize`
+> window, each with `sessionLockWait`, `readerPrologueWait` and `readerClosureWall` as `{count,
+> totalMs, p50Ms, p99Ms, maxMs}`, plus `readerLockedRetries`, `readerLockedRefusals` and
+> `writerLockOrderViolations`, all expected 0.
+>
+> For each roster the writer also prints one structure-only `census:` line, once that runtime's
+> producer has started (its one store read never delays capture). It counts physical files: the
+> virtual `<path>#<native-id>` sources of one snapshot database or document are one file, whose
+> age is its newest source's. The line gives files; bytes; *cumulative* `files/bytes` per age
+> (`le1h`, `le24h`, `le7d`, `le30d`, then `older`); `shared=files/bytes` for files several
+> sessions' sources share; and the 20 largest file sizes. It adds nearest-rank p50/p90/p99/max,
+> plus the count over 64 MiB, of the bytes each session owns alone and of those per root tree
+> (sessions joined by union over parent, root ≠ id and ledger-only source parent links: the same
+> `TreeMap` a root-tree runtime is admitted by; fields `roots=`, `root_p50=`…, `rootBytes`).
+> Shared files are charged to no session,
+> and a session that reads only shared files is not counted. It never prints a path, a session
+> id, or content, and `--json --profile` repeats it as a `census` event.
+>
+> A sampler thread probes memory every second. On macOS it reads the `proc_pid_rusage` footprint
+> and resident size, `vm.swapusage`, and the `host_statistics64` pageouts, swap-ins, swap-outs
+> and compressor pages; on Linux it reads procfs, best effort. Every platform also reads SQLite's
+> process-wide allocator, `sqlite3_memory_used` and `sqlite3_memory_highwater`, two cheap global
+> reads that bound the in-RAM canonical store's share of the footprint. `--json --profile` emits
+> every sample as a `memory-sample` event for the life of serve, with the SQLite pair as
+> `sqliteMemoryUsedBytes` and `sqliteMemoryHighwaterBytes`. Otherwise the sampler runs only
+> during a cold build, prints a compact `memory:` line at most every 10 s, and stops at canonical
+> readiness. Right after `milestone: canonical-ready`, every cold path prints two more lines:
+> - `milestone: memory-peak`: peak footprint (including the kernel's lifetime high-water mark),
+>   peak resident and swap, and the host's swap-outs and pageouts since serve start, or `na` where
+>   the platform cannot tell;
+> - `usage-copies: dropped=… displaced=… owned=… unclaimed_usage=… displaced_visible=…
+>   owner_bytes=…` (§4.1.3, counting rule 2). The streamed-writer stage profile carries the same
+>   counters, `usageDisplacedVisible` and `usageOwnerBytes` included.
+>
+> The footprint also counts freed memory the allocator still holds. On macOS the system allocator
+> keeps the 64 most recently freed blocks over 2 MiB, of any size, dirty for reuse, and a cold
+> build frees gigabytes of them: each capture step frames a batch of up to 32 MiB into one buffer
+> and compresses it into another. The daemon's global allocator on macOS therefore maps every
+> block over 2 MiB on its own and unmaps it when it is freed (`rosettad::large_alloc`); smaller
+> blocks stay with the system allocator. On the frozen R1 corpus, an attribution over six
+> interleaved rounds put its share of the cold build's peak at about 215 MB, and about 315 MB with
+> the look-ahead reservation above (1,091 against 776 MB), at unchanged canonical readiness
+> (2026-11-02). It lowers every mode's peak, the path walk's included.
+>
+> **UI readiness (2026-11-03).** The progressive cold import is judged by what a reader sees in
+> the app, not only by daemon milestones. `tools/ui-bench` runs the production app (the built
+> `clients/app/dist` renderer and `clients/app/electron/main.mjs`, unchanged) over a frozen
+> snapshot, driven by a versioned reader script, and writes one `ui-run/1` JSON per run
+> (operations: `tools/ui-bench/README.md`). Nothing ships as telemetry: a harness-injected page
+> script (CDP `Page.addScriptToEvaluateOnNewDocument`, before any app script) wraps
+> `WebSocket` and `fetch` transparently, parses `/ws/meta` frames and `/api/status` bodies in a
+> Worker, stamps the first animation frame after each DOM change it watches, and observes long
+> animation frames, event timing and layout shift. It reads the room only through the inert DOM
+> contract (`clients/app/test/dom-contract.test.mjs`), never copy, writes nothing to the DOM,
+> times its own JavaScript self-time on the main thread (budget 1%, structured-clone posts
+> included), and exports only counts, sizes, timings, enums and digests through a CDP binding
+> honoured only from the main frame. Ids, titles, paths and query text stay in page memory; the
+> reader script gets rectangles back. A whitelist schema (`ui-run-1.schema.json`; own keys only)
+> and a scan against every id, native id, title, summary, cwd, name and root in the run's own
+> projection (read after the daemon stops; every rosetta id is 64 hex, the shape of a digest)
+> refuse to write any other string, and the gate fails closed if that list cannot be read.
+> The harness owns the daemon (`serve --home SNAP/home --json
+> --announce --profile`, no `--agent`, so the roll call grants consent, and no `--ticks 0`, so the
+> run outlives publication and search), reads its stdout through a dedicated drain so a slow
+> reader never stalls the sole writer's stdout lock, and digests the run's projection read-only.
+> Declared deviations from production, the same on both sides of any pair: a fresh userData
+> profile; background and occlusion throttling off; the page's focus emulated over CDP (macOS
+> will not activate an app launched in the background); the worktree/git, favicon, file-browser
+> and browser-preview IPC and `shell.openExternal` denied, and every request but the app's own
+> scheme, its renderer files and the run's daemon cancelled, so no git, walker, browser or site
+> fetch ever runs on a path or host the snapshot names; a private announcement directory; one
+> `about:blank` load before the app's, so the debugger is attached first. The window is 1500×940
+> at a forced device scale factor (`--force-device-scale-factor` on Electron's own argv, 2 by
+> default, the MacBook's), and a run whose page reports another fails. The driver stops every
+> child it started on any exit, a signal to it alone included, and deletes the db only once the
+> daemon's exit was seen.
+>
+> *Clock and T0.* The import clock's zero is the daemon's `milestone: consent-granted`, mapped to
+> wall time through `clock: wall_ms` (fallback: `metadata_ready_at` less the metadata-ready
+> `elapsed_s`); a JSON milestone's unrounded `elapsedS` is preferred to the text line's two
+> decimals. Renderer time is `performance.timeOrigin + now()`, aligned to the Electron main
+> process and that to the driver by min-RTT pings at the start and end (applied above 2 ms);
+> each run records the method, the offsets, their drift and an error estimate. App launch is a
+> second clock, reported only (D1 g). *Count unit:* conversations, that is roots
+> (`parent_session_id` null) of the pushed session list, excluding metadata-only placeholders
+> (`data-standing="unavailable"`) and never-rostered roots (still Pending when the import ends;
+> I1 checks that count against the daemon's own: the sessions its skims published less those
+> its roster planned, Σ `sessions_total`). NEWEST is the root with the largest `updated_at`
+> (ties to the smallest id); RECENT24 and RECENT7 are the roots within 24 h / 7 d of it (the
+> `@newest` anchor of the daemon's horizons, so a frozen corpus keeps its membership); all three
+> freeze at the first status that carries `metadata_ready_at`, and the run records whether the
+> final rows give the same sets. Since rostering is known only at the end, the frozen sets keep
+> every candidate; a horizon whose remaining members are still Pending once capture is over
+> (status finalizing) is reached there, and the receipt legs and set sizes are recomputed at the
+> end over the members that were rostered (a never-rostered NEWEST hands H2 to the newest root
+> that was), with the excluded counts recorded. Every value a pair compares carries `reached`:
+> `yes`, `not-reached` (null: the state never happened) or `not-applicable` (the script declares
+> it unexercised, or its set is empty); a value whose precondition never happened is null, never
+> 0, and a scripted step that timed out makes the run `incomplete`.
+>
+> *Catalog* (roles: claim candidate, guard, invariant, report-only). Unless a name says lag,
+> every value is ms on the import clock, ending at the first animation frame that shows the
+> state; the daemon counterpart is reported beside it, never instead of it.
+> - H1 projects on screen (guard): the first frame with a project row and no connecting, roll
+>   call or cold-start face; split into the meta-push part (first project frame received) and
+>   the status-poll part (first post-consent status answer), with the lag after metadata-ready.
+> - H2 NEWEST ready on screen (claim candidate): its row drawn without
+>   `data-standing="not-imported"`; beside it the receipt of the frame that flipped it, the
+>   paint lag (guard; from the later of that receipt and the row's first draw, the raw
+>   difference kept beside it), the time it sat ready under the held "Not imported yet" head,
+>   and its index at first draw.
+> - H3 RECENT24 / RECENT7 ready (claim candidate, 24 h and 7 d declared separately): the receipt
+>   leg (the last member's flip received) and the painted leg (every member in NEWEST's project
+>   drawn ready) as two numbers, with the daemon's `horizon_sessions` and the lag after
+>   `recent-ready …@newest`.
+> - H-all every readable root ready (claim candidate): the last root flip received and the
+>   moment NEWEST's project lists none not imported, against the last `runtime-readable`.
+> - H4 click → first own content (guard): a scripted press on a ready row until
+>   `.tr-stage[data-ready]` holds that session's sittings and no import face, p50 and max, by
+>   phase (reading, finalizing, after canonical readiness); the opened-while-Pending face beside it.
+> - H5 receipt → paint (guard): per root that flips while its row is drawn, p50/p95/max. The wire
+>   leg, tree-admission `publishedS` → first flip frame received, is a diagnostic.
+> - H6 responsiveness (guard): per window — consent → all readable, → canonical readiness,
+>   → search readiness + 5 s — the longest animation frame, blocking time and its share, frames
+>   ≥ 100 ms; scripted input → next paint p98 and max (an interaction Event Timing does not report
+>   counts as 16 ms). Renderer heap, app working set and the probe's own cost are report-only.
+> - H7 stability (guard): rows moving ≥ 8 px with no input in the previous 500 ms, per list, and
+>   held-pill time; selection jumps and aim misses (the script's event-triggered aims) must be 0
+>   (`H7.invariant.pass`, beside I1 in `run.invariantsPass`). Pointer motion counts as input for
+>   now; moves, jumps and I1(3) are also reported counting only presses, wheel and keys, until
+>   that choice is made.
+> - H8 charts and search (guard): the selected project's panel unveiled and its card uncooked,
+>   every visible card, every card, the portfolio panel mounted, each with the lag after
+>   canonical readiness; the first full-text row after the script's fixed queries, timed from
+>   the later of the UI's own search-ready receipt and the query's last key (so the script's
+>   queue never enters it; the import-clock time and its lag after `search-ready` are
+>   report-only); the UI hit digest (sha256 of the drawn rows' order, kind and DOM id per query,
+>   never the query).
+> - I1 honesty (invariant, zero tolerance, any failure voids the run): no root drawn ready before
+>   its non-Pending frame arrived (or Pending drawn ready before the import ended); a ready row
+>   never reverts and no frame retracts a flip; selection changes only within 500 ms of input; no
+>   "Nothing readable yet" before rows; at the end the UI's roots, pending roots and per-project
+>   counts equal the daemon's `/api/sessions`, its Pending sessions equal the daemon's
+>   never-rostered count and its ready ones the roster (Σ `sessions_total`) and Σ
+>   `runtime-readable`, the drawn rows of NEWEST's project equal the daemon's count,
+>   Σ`sessions_done` reaches its total, the frozen sets are stable and exactly claude-code and
+>   codex are enrolled; the not-imported face names the run's course; the document passes the
+>   privacy gate. Each check reports how much it examined. The probe's self-test (a first meta
+>   frame received, both wraps, the parsing Worker and all three observers) must pass too.
+>   Checks (1) and the course check are self-consistency guards: `data-standing` derives from
+>   the same row data.
+> - D1 wait reasons, D2 order honesty, D3 transcript path and cost (report-only): consent →
+>   progress, status RTT and gaps, ready-count lag after flips, the card's ready count over the
+>   readable roots (1 once it counts conversations), phase-seen lags and app launch; NEWEST's project rank and the unranked count at
+>   H1 + 0/5/30 s, recency inversion time, the newest big tree's root (named only in harness
+>   memory) received and drawn; each open's socket, hello, snapshot bytes, Worker parse, reveal
+>   and cover, re-covers, error covers, second sockets and meta cost.
+>
+> *Pairs* (`tools/ui-bench/pair.mjs` runs them, `pair-eval.mjs` judges them, `ui-pair/1`). A UX
+> commit pins the rosettad binary and varies the renderer dist; a daemon commit (R1.5) pins the
+> dist and varies rosettad; same machine, window and device scale factor, the same script version,
+> interleaved runs a side behind the CPU-idle and swap guards, and the daemon-only R1 pair kept as
+> its own gate, since a UI run's daemon carries the renderer's read load (UI milestones are never
+> compared with daemon-only runs). An A/A campaign (one side run twice, report-only) measures each
+> gated metric's noise floor before any claim; claims and their thresholds are declared before the
+> campaign; I1 is absolute, and H7's selection jumps and aim misses are recorded per run as a
+> product finding, not a void. A pair is void unless the logical digest, `sourceSetDigest`, the
+> ranked digest, the UI hit digest and the final root and ready-session counts are equal in every
+> run of a script. The evaluator applies gate set (a) (user decision, 2026-11-03): H2, H3 24 h and
+> 7 d @newest, H-all (receipt and painted legs each), H5 p95, D2's inversion, H4's p95 over the
+> reader's opens and H6's blocking time per window are guards unless declared claims; a guard
+> passes when the AFTER median is at most the BEFORE median plus the BEFORE IQR (widened to the
+> A/A floor when one is declared), a value is compared only when every run of both sides reached
+> it, and everything else is report-only. A pair is also void if any run is not complete or fails
+> its self-test or I1, or if the snapshot, harness, machine or a side's hash differs from the
+> declaration. The MacBook-shape corpus is `bench-corpus snapshot --shape macbook-shape-v1`: the
+> MacBook census's counts (1,139 root trees with subagent children, 40 big, 8,612 metadata
+> sessions, 119 projects), its age rings and its newest day at full byte scale (the 668 MB newest
+> giant exact), the older tail scaled to 1/40 of its bytes (every older big tree kept just over 64
+> MiB), 7.76 GB in all.
+> *Targets* for the MacBook shape are design goals, not measurements: H1 ≤
+> metadata-ready + 0.5 s; H2 ≤ 6 s after R1.5 with paint lag p50 ≤ 150 ms; H3 ≤ 20 s / 60 s with
+> lag ≤ 300 ms; H4 p50 ≤ 300 ms and max ≤ 1 s; H5 p95 ≤ 100 ms and max ≤ 250 ms; H6 longest frame
+> ≤ 100 ms while streaming, input max ≤ 200 ms, blocking ≤ 2%; H7 project moves ≤ 10 per import;
+> H8 selected charts ≤ canonical-ready + 1.5 s, all ≤ + 10 s, first hit ≤ search-ready + 1 s. On
+> the R1 snapshot (first runs, 2026-11-03) every root is readable within about 3 s of consent,
+> about when the roll call's 2.5 s status poll first lets the columns up, so H2's and H3's painted
+> legs time the reader and H5 has no samples; the MacBook-shape corpus is what will move them.
+> One product failure already shows: in every reader-v1 run so far (4 of 4) an aim at a project
+> card missed, because the status answer that ends the import arrives between the rect read and
+> the press and the end-of-import reorder moves the card about 100 px, so H7's invariant fails
+> (with pointer motion not counted as input, the reader's run shows about the same 20 project
+> moves as the passive one).
+>
+> *Fixture test (local-only).* `npm run test:ui-readiness` (`tools/ui-bench/test/fixture-run.mjs`)
+> runs the same harness, the real release rosettad and app, over a synthetic home that
+> bench-corpus regenerates from fixed seeds at test time (26 single-session root trees of both
+> agents, 81 MB, a 71 MB newest giant as NEWEST, mtimes fixed so both @newest horizons have
+> members), and asserts invariants and digests only: I1, the `reached` contract, the orderings
+> H1 ≥ the first project frame, H2 painted ≥ receipt ≥ the daemon's flip of NEWEST, H3 ≥ its
+> `recent-ready …@newest`, H-all ≥ the daemon's last root flip (not `runtime-readable`, a
+> rounded stamp at the runtime's close), and digests equal to a committed file (strict_noid
+> as TOTAL_R, since cursor file evidence carries inodes). It is local-only, as no CI job
+> builds rosettad for Electron and the harness is macOS-specific. It tests flip delivery,
+> not Pending paint: since ux:X7 the columns are up about 0.15 s after consent, inside the
+> import, but no session row is drawn Pending (reader-v1 first draws NEWEST, already ready,
+> when it re-selects NEWEST's project), so I1 c1's breach class, c4, c7, H5 and the
+> opened-while-Pending face are still not exercised. Each run records that regime
+> (`flips-done-before-first-paint`) and flags a run in another one.
+>
+> **Newest trees first (R1, 2026-11-02).** The organic MacBook trace of 1301bdb (M1 Max; 21.25 GB
+> of Claude Code in 13,477 files, 8,447 sessions, 1,139 root trees) published metadata at 2.7 s
+> but made nothing readable until 140.8 s — first-readable, both recent horizons and the runtime's
+> admission were one moment — and reached canonical readiness at 173.8 s. Capture took 134.3 s
+> with workers 29% busy and 65% parked (sequencer head wait 76.6 s, writer-budget wait 28.2 s);
+> the writer was busy for about 62 of its 139.7 s, and its longest apply transaction held readers
+> for 2.81 s; peak footprint was 5,835 MB. The mechanism: the pool consumed strictly in path
+> order, so a giant at the head was stepped by one worker at about 58 MB/s while the others filled
+> the 512 MiB look-ahead and parked; each closed source was prepared and budgeted on the sequencer,
+> blocking; a source over the budget waited for an empty writer; and nothing was readable before
+> its runtime's close. A simulator calibrated to that trace (capture, head wait and parked share
+> within 2%) chose R1's design, its scenario (g), described above: newest trees first
+> in lane `S` plus one big lane, a reserved small-lane slice, fair head grants, per-class budgets
+> with drain tickets, non-blocking emission, a round-robin writer, chunked apply including
+> resolved-row slices, tool resolution on the writer, per-tree flips, order-free cross-tree usage
+> and drift, the shared-cache lock order (§6) and reads bounded at the metadata cut. Every other
+> adapter keeps the path walk and runtime admission; three hidden diagnostic flags, never in the
+> usage text, isolate the parts: `--experiment-cold-admission runtime|declared` (`runtime`, the
+> kill switch: the path walk, one blocking 256 MiB budget, the pre-R1 FIFO writer, no chunks and
+> runtime admission, its ledger source digest equal to the path walk's —
+> `crates/rosettad/tests/streamed_switch.rs`), `--experiment-cold-lanes 1|2` (`1`: one strict
+> recency lane and one 256 MiB budget, flips and chunks kept) and `--experiment-cold-chunks 0`
+> (every item one transaction). The simulator's MacBook-shape estimates, which are targets and
+> not gates, are first-readable ≤ 4 s, small trees 24h@newest ≤ 10 s, newest-10 trees ≤ 65 s and
+> canonical readiness ≤ 160 s (179 s hard ceiling), with the longest apply transaction near
+> 0.05 s; giants still serialize in the one big lane. Deferred, each with its trigger: streamed
+> pieces from big-lane heads and a second big lane, which never ships without them (R1.5: a
+> piece frees only a giant's immediate and asset share, while its relational share stays in RAM
+> until the terminal, and pieces need new store holding paths); sliced flip tails (if any run
+> shows `longestFlipTxMs` > 250 ms); asset materialization off the writer (if writer busy reaches
+> 85% of capture); per-tree flips and the cut on resume; and further root-tree adapters, one at a
+> time on their own closure evidence. Two product decisions bound the contract. **U-1:** a fork
+> copy's per-row usage badge may empty once, when its older origin imports after the copy's tree
+> flipped; it is counted (`usage_displaced_visible`, with rows), the session is resynced, and there
+> is no wire flag — revisit if more than 1% of 24h-horizon sessions are displaced-visible on the
+> MacBook run. **U-2:** a root-tree runtime's physical ledger frame order and message rowids may
+> vary between runs, and on any walk so may which runtime's block of cursor ids comes first (it
+> follows which runtime checkpoints first, as it did at 3ca7410); the logical projection,
+> `sourceSetDigest`, cursor ids in path rank within each runtime, ledger file ids, ranked search
+> and the publish-or-refuse outcome may not. One consequence is open: `rosettad
+> rebuild` of a lane-merged ledger projects the same logical rows, but numbers cursors as the
+> ledger first frames each source, so its cursor and message rowids can differ from the fresh
+> build's path ranks; a strict id comparison of a rebuild holds only for path-walk ledgers.
+> Hermetic tests generate every corpus in the test (`crates/rosettad/tests/streamed_*.rs`,
+> `support/`, and in-crate tests on the real `serve` and writer; §9) and pin the invariants: logical equality and `sourceSetDigest` over path,
+> recency, reversed and 20 seeded tree orders, serial and on a chaos pool, chunked; a per-commit
+> audit, through the `#[doc(hidden)]` `Store::set_commit_observer`, that no session ever leaves
+> `Pending` before its rows, tails and renumber; readers served between slices with the next tree
+> still hidden; eight hammering readers through capture, flips, finalization and the disk switch
+> with no 5xx, lock retry or refusal and no session hidden again; resume after a kill at named
+> sequencer states; a refused build whose earlier flips stay readable; and one identical refusal
+> of a cross-lane reference on every seed. The frozen before/after pairs on the M4 Mac mini
+> corpus gate canonical readiness and peak footprint within 1.03× of the binary before the lanes,
+> first-readable within 2 s of metadata readiness, the 24h@newest, newest-10, newest-giant and
+> small-lane recency fractions, apply and flip transactions within 250 ms, lane-`S` service delay
+> p99 within 100 ms, a stress pair against `--experiment-cold-lanes 1`, and reader-load prologue
+> p99 within 500 ms. Measured on 2026-11-02 (campaign `r1-newest-trees-cold-20261102b`, the second,
+> after the memory and drift fixes: every admitted Claude Code and Codex source, 639 files,
+> 1.78 GB, 303 sessions, 31 root trees; interleaved, 11 runs a side for the timed pairs;
+> [retained evidence](../tools/r1-bench/results-2026-11-02-r1.json)), 63 of the 72 gated rows pass
+> and 9 fail. A milestone's fraction is f = (t − T_meta) / (CR_ref − T_meta), where T_meta is
+> metadata readiness and CR_ref the canonical readiness of commit R1-E's path walk (3.87 s), or of
+> `--experiment-cold-lanes 1` under stress flags (3.78 s). Held: the logical projection and
+> `sourceSetDigest` are identical in every run of every pair, from 3ca7410 through R1 (logical
+> TOTAL `3c4c389b…5428`), and so are counts, ranked search, the asset files and R1's walk digest
+> (serial or pooled) wherever measured. Medians that pass: canonical readiness 3.27 s against
+> 3.86 s for the binary before the lanes (commit R1-U, order-free usage; 0.85×); peak footprint
+> 808 against 977 MB (0.83×); first-readable at metadata readiness (0.07 s); 24h@newest and
+> newest-10 at 0.92 s (f 0.22); 7d@newest at 2.71 s (f 0.70, before publication in every run);
+> longest apply and flip transactions 63.6 and 26.6 ms; lane-`S` service delay p99 3.2 ms; tree
+> admission 2.1% of writer wall; no SQLITE_LOCKED, crossing or budget residual. Under stress flags
+> (`--capture-lookahead 240m --capture-workers 9`), canonical readiness is 0.88×
+> `--experiment-cold-lanes 1` and 0.85× the path walk, peak footprint 0.97× and 0.72×, and
+> small-lane 7d@newest 0.49× the one-lane mode. Under reader load canonical readiness is 1.02×,
+> with no 5xx in 595 requests, prologue wait p99 51 ms and closure wall p99 59 ms. The kill
+> switch's ledger source digest equals the path walk's. R1-E is neutral against 3ca7410 (canonical
+> readiness 1.01×, peak 0.98×, the same ledger source digest), and R1-U against R1-E (1.00×,
+> peak 0.99×; it changes no logical row on this corpus). The first campaign
+> (`r1-newest-trees-cold-20261102`) failed peak footprint (1.20× R1-U; 1.15× the path walk under
+> stress flags) and R1-U's canonical readiness (1.05× R1-E, from the drift sample's point reads);
+> the look-ahead reservation, the large-block allocator and the drift cache (§3.4) fixed them. On
+> one binary, root-tree admission still peaks above runtime admission (826 against 701 MB for
+> `--experiment-cold-admission runtime`, three runs each). Failed: newest giant f is 0.63, against
+> ≤ 0.25 (0.64 against ≤ 0.20 under stress flags). This corpus's newest giant is 114 h older than
+> the newest tree and holds one 452 MB transcript. One worker reads it in about 2.45 s, a floor
+> that only splitting a source across workers (R1.5) lifts. Small-lane 24h@newest f is 0.22
+> against ≤ 0.20, and 7d@newest f 0.40 against ≤ 0.30: lane `S` is writer-bound, with writer queue
+> wait p50 about 83 ms against a 3 ms service delay. Under stress flags small-lane 24h@newest is
+> 1.01× the one-lane mode, against ≤ 1.00×: here the 24h set is small trees only, which the
+> one-lane walk also takes first, and the medians differ by one 10 ms step, not significantly
+> (Mann-Whitney p 0.16). Strict cursor-id equality fails in the neutrality, lanes and kill-switch
+> pairs: which runtime's cursor block takes the first rowids follows which runtime checkpoints
+> first (U-2), and the ids stay path rank within each runtime. In the lanes pair, Codex's block
+> came first in 11 of 11 R1 runs and 0 of 11 R1-U runs. A rebuild's strict comparison without
+> surrogate ids fails in 3 of 3: rebuild leaves each checkpoint's file evidence (JSONL tail,
+> SQLite snapshot stamp and revision) null, as it does at 3ca7410. The rebuild's logical rows,
+> counts and every other strict component are equal.
 >
 > Cold JSONL capture transfers owned normalized batches into the RAM planner instead of
 > deep-copying them. Both owned and borrowed entry points enforce the same metadata boundary
@@ -283,7 +886,8 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > plain ledger also made capture wait about 30 s for the ledger queue.
 >
 > After every runtime closes, set-based indexes/rollups, `ANALYZE`, quick/FK checks, and projection
-> validation run against that RAM generation. The named `<ledger>.staged` raw generation is then drained and fsynced;
+> validation run against that RAM generation (the refold and the indexes in two transactions while
+> readers are attached, §6). The named `<ledger>.staged` raw generation is then drained and fsynced;
 > the canonical database is backed up to a same-filesystem private file, synced, installed by
 > atomic rename, and the read router switches RAM → disk before the RAM keeper is released.
 > The backup writes that private file without a rollback journal or SQLite syncs of its own
@@ -296,9 +900,18 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > Watchers were armed before metadata, so source suffixes written during the build feed the live
 > runner after handoff. RAM is a temporary location for the one canonical projection, not a third
 > representation or a recovery source. The app keeps one HTTP/WS contract across the switch.
-> Canonical payload visibility is runtime-granular; exposing a partially reconciled multi-file runtime
-> for cosmetically finer progress is forbidden. A future session-partitioned plan must first prove
-> that every correlation and replacement boundary is closed inside the partition.
+> Canonical payload visibility is never finer than a partition whose every correlation and
+> replacement boundary is proven closed inside it; exposing a partially reconciled multi-file
+> runtime for cosmetically finer progress is forbidden. A runtime-admission adapter's partition is
+> its whole runtime. A root-tree adapter's is the root tree, and R1 (2026-11-02) supplies the proof:
+> closure is declared per adapter (`AgentAdapter::cold_admission`) and checked op by op on the
+> producer through an exhaustive `IngestOp::named_session` match; a cross-tree reference binds
+> both trees within a lane and fails the build closed across lanes or into a closed tree, so the
+> outcome does not depend on the schedule; the only cross-tree state, usage ownership and the
+> drift sample, converges in any order (§4.1.3, §3.4); an abandoned source taints its tree; and
+> replacements cannot cross a tree, because sibling heals stay inside a session. A flip commits
+> after every source of its tree and flips readiness last, so no session leaves `Pending` before
+> its rows, tails and renumber have committed, and none is ever `Pending` again.
 >
 > **Cold progress (2026-09-07, protocol v16).** Observation is independent of publication.
 > Metadata's atomic session count advances with each admitted identity, before ownership settlement
@@ -306,12 +919,26 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > at bounded record-batch boundaries; `PayloadBytes` excludes audit, anchor, and prefix rereads.
 > Fresh and resumed serve populate a shared RAM `ProgressBoard` from metadata's settled ownership.
 > `/api/status` snapshots that board while the writer is busy, and a project's `sessions_done`
-> advances only after the complete runtime becomes public. Metadata-only parent placeholders do
+> advances only as sessions become public: per flipped tree for a root-tree runtime (2026-11-02),
+> at its admission for any other runtime, and for a resumed build, whose runtimes are not
+> admitted one by one, at publication. Metadata-only parent placeholders do
 > not overcount the source plan. Database/document payloads and resumed suffixes have an unknown
 > byte denominator (`bytes_total: 0`); serialized records must never be divided by SQLite file size.
 > JSONL byte totals remain source-size estimates, with UI clamping for delimiters and growing files.
 > Recovery explicitly reports `restoring`; runtimes distinguish `preparing` and `applying` after
 > input reading, and the final canonical phases distinguish `finalizing` from `publishing`.
+> Each runtime row also says what its `Pending` sessions wait for on the current cold attempt,
+> `RuntimeBackfill.admission_course` (2026-11-03; additive with a serde default, so
+> `PROTOCOL_VERSION` stays 29): `per_tree` for a fresh build's runtime admitted per root tree
+> and walked by recency (most trees open as they close, a bound or tainted one at the runtime's
+> close), `at_runtime_close` for one admitted whole (a runtime-admission adapter, a truncated
+> walk's fallback, the path walk, the `--experiment-cold-admission runtime` kill switch), and
+> `at_publication` for every runtime of a resumed attempt, across a launch or in process after a
+> pause, since it opens nothing new before it publishes. A fresh build states the requested
+> course as it starts and the granted one as each runtime's setup opens (`cold_stream.rs`); a
+> resumed attempt states its course before it replays. The row keeps it after the import goes
+> live. It names no order, position or time; null means an older daemon or a serve path without
+> a cold attempt (warm, disk-progressive).
 >
 > **First metadata pass** (2026-10-29): `daemon.ingest.metadata_ready_at` is the Unix-millisecond
 > stamp when this process has published every active runtime's bounded metadata, including its
@@ -356,14 +983,25 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 >
 > A pause acknowledgment is not a quiescence claim. Fresh RAM workers observe a cold
 > cancellation signal separate from process shutdown, join, close their ledger writers,
-> and sync retained evidence before state becomes paused. The listener, metadata mirror,
-> and existing RAM reader remain available. In-process resume rebuilds disposable state
+> and sync retained evidence before state becomes paused. While paused, the listener, metadata
+> mirror, and existing RAM reader remain available. That reader keeps what the attempt it was attached to
+> left: a fresh build's flipped trees and admitted runtimes stay readable, while a cross-launch
+> resume — the first
+> attempt of its process, writing into the reader's RAM — leaves every session `Pending`, since its
+> readiness commits only past the publication fence. In-process resume rebuilds disposable state
 > behind that retained reader, rechecks current inventory, and switches at publication;
 > a process restart cannot retain RAM and restores it after resume. Disk-progressive
 > work pauses between committed source/slice passes after flushing its ledgers, retains
 > its scheduler/cursors in-process, and rechecks admission after resume. Neither path
 > captures while paused. Native bytes removed by their producer during a pause cannot
 > be recovered unless they were already archived.
+>
+> A stop (the app's SIGINT on quit, a terminal's ctrl-c) runs the same physical barrier over the
+> staged ledger once those workers have joined, before the daemon exits: at most 5 s of fsyncs
+> inside the app's 10 s SIGKILL window, reported on stderr as
+> `stop barrier: staged raw ledger synced elapsed_ms=…` (or why it did not finish, which never
+> replaces the stop's own outcome). Staged bytes already survive a plain process exit or a
+> SIGKILL; the barrier makes them survive power loss or an OS crash too (R0, 2026-11-01).
 >
 > Pause admission and the publication fence share one coordinator lock. A pause that
 > wins prevents publication; after the fence, controls return 409
@@ -389,7 +1027,10 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > nothing and never change either canonical or search readiness.
 >
 > The renderer polls status every 500 ms until canonical **and** search readiness are satisfied,
-> then returns to 30-second polling (intentional consent/audit pauses use 2.5 seconds). Requests
+> then returns to 30-second polling (intentional consent/audit pauses use 2.5 seconds; once the
+> app's roll call has its grant it asks the room, through `HistoryRoomHandle.refreshStatus`, to
+> ask again at once, and an answer that still awaits consent, the grant not yet visible, is
+> re-asked every 100 ms, so the import's first face does not wait out that pause). Requests
 > are serial, abort after five seconds, retain the last observed progress on failure, and retry
 > after one second. A compact panel above the project list describes four user-facing steps:
 > discovery, reading, preparation/saving, and search. Step-local meters use real denominators;
@@ -401,6 +1042,65 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > `statsReady` gate, and completion briefly confirms success before the panel closes. Stage-only
 > polite announcements, native disclosure controls, tabular figures, and reduced-motion styles
 > keep frequent updates readable without repeatedly announcing changing counts.
+>
+> During a fresh import the reading step is titled “Importing your newest conversations first”,
+> with “· k of N conversations readable” after it (2026-11-03): conversations are root sessions
+> from the pushed catalog, N every one but metadata-only placeholders and k those no longer
+> `Pending`, folded once per metadata delivery from the rows the lists draw
+> (`clients/room/src/lib/conversation-readiness.ts`), so the count moves in the rows' frame, never
+> with the status poll; each project card says “k of n conversations readable” (“Not reached yet”
+> before any of its bytes are read). The count is drawn, never announced: the card's live regions
+> say the step and each recency span reached. Under the meter a fresh build adds “Last 24 hours:
+> r of t readable”, then “Last 7 days …”, over roots whose `updated_at` lies within the span of the
+> reader's clock (so a frozen corpus older than a week shows none, and benches cannot see it). Past
+> reading the card counts on (“Opening conversations as each agent finishes”, then “Finishing your
+> archive”, or “All N conversations readable”); a root no source rosters stays Pending past every
+> close, so the copy never promises that every one left opens there. A resumed build (a runtime's
+> `admission_course` is `at_publication`; from a daemon that names no course, the room saw its
+> `restoring` phase) reads “Finishing the import” with the catalog's count, which is 0 across
+> a launch and what stayed open after a pause in-process, since it opens nothing new before it
+> publishes (`clients/room/src/lib/ingest-activity.ts`). Canonical readiness can arrive while the
+> phase still says publishing; the archive is installed by then, so the card moves on to search
+> rather than “Saving your archive”, and an open artifact library loads its list again. The
+> portfolio panel heads the projects column as soon as any project's figures land, whatever search
+> is doing, with the card under its head; at the end the card collapses in place to one line,
+> “Search ready ✓”, for five seconds, then its height eases to zero (it jumps under reduced
+> motion), so no head swaps and the rows glide rather than jump. A Pending session's transcript says
+> “Not imported yet” with the promise its runtime's `admission_course` can keep (2026-11-03),
+> never a count, order, position or time: `per_tree`, “Newer conversations import first. This one
+> opens here once it is imported.” (a bound tree of that runtime waits for its close, so no time
+> is promised); `at_runtime_close`, “This one opens when <agent> finishes importing.”;
+> `at_publication`, “The import picked up where it stopped. This one opens when the import
+> finishes.”; a paused or failed run, “The import stopped before it reached this one. It opens
+> once the import continues.”, with no sweeping meter. A daemon that names no course gets the
+> per-tree copy, or the publication one once the room saw `restoring`. Its head band drops the
+> message count and reads “Not imported yet” for the activity range. A flip under the reader
+> keeps the hold and reveal below, and the transcript's polite live region then says
+> “Conversation imported” once. A metadata-only placeholder reads “Transcript not available” (above its
+> children: “only the conversations it started”); a real session with children whose skim
+> yielded nothing looks the same and reads so until its tree flips. An open transcript during the
+> import carries
+> “Live updates resume when the import finishes”, since the live watcher starts after publication
+> (`components/transcript/ImportState.tsx`). The catalog and the session socket announce a flip
+> separately, so until rows delivered after the flip replace the empty Pending ones the
+> transcript keeps its not-imported face, never “Nothing readable yet”, and asks again after 3 s if
+> no resync came. A full command's disclosure maps `not_ready` by the server's message — one naming
+> the import gives “available when imported · retry”, one saying saving or naming publication
+> gives “still saving · retry”, any other “couldn’t load · retry” — so the daemon's two messages
+> (“this conversation is still importing”, “still saving · retry”) are a contract.
+>
+> **DOM readiness contract (2026-11-03).** So that a probe or a scripted reader never reads copy,
+> the room and the app's roll call carry inert data attributes for what is on screen: the face
+> before the columns (`data-face`), each session row's import standing and stream state
+> (`data-standing`, `data-stream-state`), the open session and its loader (`data-session-key`,
+> `data-loading-label`), the not-imported face and its course (`data-import-face`,
+> `data-import-course`), the transcript's import announcement (`data-import-announce`), the
+> import card's readable conversations and their total (`data-ready-count`, `data-ready-total`),
+> a search row's kind
+> (`data-hit-kind`), and the roll call's state, toggles and Begin button. Each is derived from
+> props and state the component already has. The full list, with every value, is the header of
+> `clients/app/test/dom-contract.test.mjs`, which asserts it; copy may change, these may not
+> without changing that list.
 >
 > **Progress validation.** Campaign `/private/tmp/rosetta-ingest-progress-20260907` retains three
 > before/after fresh-serve pairs on the same read-only 200-file, 316,975,655-byte Claude/Codex
@@ -419,12 +1119,17 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 >
 > The progressive read contract is intentionally asymmetric. Project and top-level-session lists,
 > bounded session lookups, and timelines may read the canonical shared-memory generation. Global
-> heatmap, usage, and contribution endpoints return HTTP 503 with protocol-v7 `not_ready` until the
-> reader switches to the published file; search stays explicitly Building. This is a correctness
+> heatmap, usage, contribution, and pricing endpoints return HTTP 503 with protocol-v7 `not_ready`
+> until the reader switches to the published file; search stays explicitly Building. (Pricing joined
+> the gate on 2026-11-01: its coverage report reads `usage_bucket` and `pricing_version`, which a
+> Bulk build leaves empty until finalization, so it used to report an empty unpriced list.) This is a correctness
 > and scheduling boundary, not a loading effect: an earlier renderer launched two aggregate queries
 > for each of 135 projects every five seconds, and those shared-cache readers starved the sole cold
 > writer. After publication the renderer hydrates project figures with four workers and a quiet
-> refresh cadence. Contribution SQL constrains the project session tree before aggregating instead
+> refresh cadence: the selected project first, then the project cards on screen, then the rest of
+> the list as drawn. A project whose figures fail is asked again on its own (8 s, doubling, at most
+> 2 min); it no longer holds the portfolio's veil up, which instead says how many failed and that
+> they are being retried. Contribution SQL constrains the project session tree before aggregating instead
 > of re-grouping the whole corpus for every project.
 >
 > The app also owns first-run recovery and binary selection. `pnpm dev` builds release `rosettad`
@@ -433,7 +1138,26 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > enrollment, and runtime roots. An exit discards only canonical RAM. The next launch reconstructs
 > it from sealed staged-ledger generations, treats a raw-only tail as unfinished, reserves that
 > generation in RAM, and rereads the source strictly above it; its catch-up passes are private
-> build passes like the fresh walk's, and it publishes past the same per-file imperfections. A
+> build passes like the fresh walk's, and it publishes past the same per-file imperfections.
+> That resumed build writes into the canonical RAM generation the read router already targets,
+> but unlike a fresh build it is not admitted tree by tree or runtime by runtime, and its catch-up
+> reads to each source's end with no cut ceiling: it replays in ledger order with
+> its reconciliation deferred, catches up serially, reconciles cross-file tool lifecycle, usage
+> and file edits once after every runtime, and leaves provisional ordinals for finalization to
+> renumber. So no resumed session is public before it is final (2026-11-01): replay
+> (`RebuildOptions::withhold_session_health`) and catch-up (`stream_backfill_withholding_health`)
+> return the readiness they compute instead of committing it, and every session stays `Pending` —
+> listed, with no payload on any read route — until `finish_bulk_load` has finalized the
+> projection and the publication fence has passed. A readiness state journaled in a replayed
+> metadata batch (an older binary's resume journaled the states it had committed) is withheld the
+> same way rather than applied. One transaction then commits each session's last decision
+> (catch-up's over replay's; a vanished interrupted source's session `Streaming`) just before the
+> backup that becomes the installed file (finalization neither reads nor writes readiness, so the
+> installed projection equals one whose states were set earlier). A cross-launch resume therefore
+> shows nothing readable until it publishes: a deliberate correctness fix, replacing an exposure
+> of replayed sessions without their tool rows, usage or file edits. (An in-process resume builds
+> in its own RAM behind the reader the paused attempt left, as described under pause.) The plain
+> `rebuild` command, the fresh path, and the disk-progressive path commit readiness as before. A
 > crash after ledger
 > promotion but before SQLite installation remains resumable because the marker moves with the
 > ledger; successful
@@ -481,7 +1205,11 @@ focus, scroll, themes, and reduced motion against synthetic data in Electron.
 > the boundary — indistinguishable from the file ending there and then growing — so every session
 > opens readable early while paused remainders requeue as ordinary append growth; app boosts run
 > unbudgeted and jump both lanes, preempted by at most one slice, and a session badges Indexed
-> only when its last queued task is gone. Two bounds are explicit: snapshot-driver sources
+> only when its last queued task is gone. This loop is the only boost drainer: serve attaches the
+> boost queue on this path alone and the loop closes it when it ends, so `POST /api/ingest/boost`
+> answers `queued: false` (same shape) on the fresh RAM build, a warm start, a metadata-only audit
+> and every live phase, where nothing would ever read it (2026-11-01; the room ignores the answer).
+> Two bounds are explicit: snapshot-driver sources
 > (SQLite/document) always stream whole because their revision identity is a whole-content hash,
 > and a source that turns unclean inside a pass falls back to whole-file handling. Dirty content
 > follows live-growth semantics on every cold path (decided 2026-08-31): a dirty FIRST generation
@@ -713,7 +1441,16 @@ version release":
 A subcommand that scans the live agent directories and reports, without ingesting:
 unmatched files, unknown fields per stream (with counts and sample paths), parse
 failures, and newly observed agent versions. The same detection runs continuously during
-normal ingestion, landing in a `drift_events` table. This is the standing answer to
+normal ingestion, landing aggregated in `drift_agg` (`drift_seen` dedupes events), never one row
+per bad record: each key (runtime, agent version, stream, record kind, error code, shape) keeps a
+count, first and last seen, and one sample location. The sample is the least (cursor path,
+offset) any event offered, an absent path or offset sorting last, compared by path rather than
+cursor id, so
+fresh, interleaved, rebuilt and resumed projections keep the same sample whatever order sources
+land in (`store/src/apply/drift.rs`, R1 2026-11-02). The writer keeps each cursor's path and
+each key's current sample in process RAM, dropped whenever a writer transaction rolls back, so
+only an event that may sort first (or a key's first event) reads its stored sample back from
+SQLite. This is the standing answer to
 "keep up with each agent's updates": run probe after an agent updates, refresh fixtures,
 extend the raw types.
 
@@ -861,7 +1598,15 @@ capture contract explicit.
   which also ignores segment boundaries, file ids and raw-batch packing. Metadata entries
   carry run-dependent values (a runtime row's `discovered_at`), so the entry digest is also
   reported split: a source digest over the raw and seal entries — what two builds of the
-  same read-only inputs must share — and a meta digest.
+  same read-only inputs must share when they walk in the same order — and a meta digest. It
+  also prints a *source set digest* (2026-11-02; `capture/src/ledger/verify.rs`): each source's
+  raw, document (without `captured_at`) and seal entries hashed separately in entry order, the
+  per-source digests folded in path order as (length, path, digest). It is equal for any
+  interleaving of whole sources and still catches a dropped, duplicated, altered or reordered
+  entry within a source, so it is the equality measure for root-tree runtimes, whose lanes merge
+  sources in a run-dependent order. The text output adds `<runtime> source set digest <hex>` per
+  runtime and `source set digest <hex>` over all of them (folded like the other root digests);
+  JSON carries `sourceSetDigest`.
   Each closed segment also appends one line to `<agent>/.segments` naming the sources and
   generation ranges it holds, so a read scoped to one source generation (the transcript's
   exact-command fetch) opens the owning segments instead of walking the ledger; the index is
@@ -1101,8 +1846,11 @@ file/URL locator, not bytes and not a promise that today's resource matches hist
 an asset cannot be nested inside that variant. `Unavailable` needs no invented URL,
 file path, or asset digest. Its reason describes source evidence, never a transient
 HTTP failure. Existing kind/metadata validation still applies; all new strings and
-collections receive the core's corresponding scalar/id/collection bounds. This
-contract uses WebP bundles for display; original encodings remain in the raw ledger.
+collections receive the core's corresponding scalar/id/collection bounds. A recorded
+image is stored once, as its verified original bytes (2026-11-01); WebP display
+renditions are a disposable cache derived from it after ingestion, and the raw ledger
+keeps the native encoding. Rows normalized earlier name legacy WebP bundles, which stay
+valid (see mixed representations below).
 
 Attachment identity is derived from a stable native part identity, or a deterministic
 source-block position when none exists. It is not a content digest: two uses of the
@@ -1126,23 +1874,44 @@ code spans. A link to an unavailable slot focuses its explanation instead of ope
 another image. This has a named consumer: both the transcript and full-message viewer
 must open the same attachment from the same mention, including after a search landing.
 
-**Normalization and storage (WebP pipeline, 2026-10-01).** Each native adapter
-recognizes its own content blocks, transport delimiters, inline data encodings, and
-exact asset joins. The shared adapter-support helper validates Base64/data URLs and
-MIME signatures, then calls the vendor-neutral, filesystem-free `rosetta-media` crate.
-Images are fully decoded, EXIF-oriented and, for RGB ICC profiles, converted to sRGB
-before resizing. Invalid data preserves an unavailable attachment slot. Copilot's
-exact asset joins validate the *native* MIME, byte count and digest before conversion;
-compressed-byte metadata never replaces that source proof.
+**Normalization and storage (WebP pipeline 2026-10-01; recorded originals and deferred
+renditions 2026-11-01).** Each native adapter recognizes its own content blocks,
+transport delimiters, inline data encodings, and exact asset joins. The shared
+adapter-support helper validates Base64/data URLs and MIME signatures, classifies the
+image with the vendor-neutral, filesystem-free `rosetta-media` crate's header-only
+`probe`, and keeps the recorded bytes as the member. Ingestion (cold, live, replay and
+rebuild) never decodes pixels, resizes, encodes or enters the codec pool: a sampling
+profile had put 86% of cold-import CPU in that work, with every capture worker queued on
+its two codec slots. The probe runs `prepare`'s own header stage, in one shared function
+and order (format allowlist, header decode, the 32-megapixel frame check, EXIF
+orientation, ICC profile, the animation decoder and its limits), then counts frames from
+container data alone: GIF frame descriptors, APNG `acTL` plus a chunk-header walk of its
+`fcTL` frames, and WebP `ANMF` chunks. It applies `prepare`'s 32 MiB, 32 MP, 256-frame and
+64 MP limits, its per-frame decoder allocation checks and its 16-bit loop-count check in
+`prepare`'s order. Dimensions are the canvas after EXIF orientation, fitted to the
+16383-pixel Full edge: exactly what the WebP pipeline recorded. The probed type must equal
+the signature-checked MIME; the attachment's `media_type` and `byte_len` are the recorded
+ones. Invalid data and oversized or unsupported inputs keep an unavailable slot
+(`InvalidData` / `UnsupportedMedia`). Only what decoding or encoding alone can find
+diverges: broken pixel data (a corrupt IDAT, LZW or VP8 stream, an ICO entry that disagrees
+with its directory, an animation frame outside its canvas), APNG `fcTL`/`fdAT` chunks the
+png reader rejects (CRC, sequence number, dispose/blend op), and an encoded rendition over
+32 MiB. Such an image is now an `Asset` whose renditions answer 400, where the WebP
+pipeline made it `Unavailable { InvalidData }`; with broken pixels the probe may report a
+frame limit `prepare` would have reached only after the broken frame. Copilot's exact
+asset joins validate the *native* MIME, byte count and digest; display metadata never
+replaces that source proof.
 
-One recipe serves photos and screenshots: the Rust `webp` binding to bundled libwebp,
-lossy quality 80, method 2, alpha quality 100, sharp YUV off, encoder threading off.
-The raw ledger keeps the original native Base64. The image projection stores only
-compressed WebP, including the full image: no duplicate original PNG/JPEG is kept.
-The full image preserves the complete frame and dimensions up to WebP's 16383-pixel
-edge limit; larger edges fit within that limit. No rendition is upscaled. SIMD
-Lanczos3 resizing with premultiplied alpha produces these display resources directly
-from the same decoded source pixels:
+Display renditions use one recipe for photos and screenshots: the Rust `webp` binding to
+bundled libwebp, lossy quality 80, method 2, alpha quality 100, sharp YUV off, encoder
+threading off. The raw ledger keeps the original native Base64; the projection keeps each
+recorded image once as `<blake3(original)>.<png|jpg|gif|webp|bmp|ico>` (APNG is `png`).
+Every display resource is a WebP derived from its pixels, so the renderer never decodes a
+recorded original. Images are fully decoded, EXIF-oriented and, for RGB ICC profiles,
+converted to sRGB before resizing. The full rendition preserves the complete frame and
+dimensions up to WebP's 16383-pixel edge limit; larger edges fit within that limit. No
+rendition is upscaled. SIMD Lanczos3 resizing with premultiplied alpha produces these
+display resources directly from the same decoded source pixels:
 
 | Resource | Maximum pixels | Geometry | Consumer |
 | --- | ---: | --- | --- |
@@ -1152,27 +1921,106 @@ from the same decoded source pixels:
 | Preview | 1600 on the longest edge | contain | viewer Fit mode |
 | Full | 16383 on the longest edge | contain only when required | viewer 1:1 |
 
-Full and preview preserve GIF/APNG/animated WebP frame timing and loop count; tile
-resources are static first-frame posters. Limits are 32 MiB encoded input, 32 megapixels
-per frame, 64 megapixels across an animation and 256 frames. Oversized/unsupported
-inputs retain an unavailable slot; source data stays in the ledger. Two process-wide
-jobs bound decode/resize/encode concurrency; identical input bytes coalesce, with a
-32 MiB compressed-result LRU and no retained decoded pixel buffers.
+Full and preview preserve GIF/APNG/animated WebP frame timing and loop count; rail and
+tile resources are static first-frame posters. Limits are 32 MiB encoded input (and per
+encoded rendition), 32 megapixels per frame, 64 megapixels across an animation and 256
+frames; ingestion's probe enforces every one a header can show, and source data stays in
+the ledger. Two process-wide codec jobs bound decode/resize/encode concurrency, in two
+lanes: a foreground request (a viewer, the live-file cache) is admitted whenever a slot is
+free; a background job only into an idle pool, with no job running and no foreground
+request waiting. So at most one background job runs, beside at most one foreground job,
+and never takes the second slot from a viewer. Ingestion never enters the pool. Live-file
+`prepare()` jobs coalesce identical input bytes, with a 32 MiB compressed-result LRU; no
+decoded pixel buffer is retained.
 
-Each encoded member has its own BLAKE3 filename and truthful MIME/byte count. The full
-`AssetRef.image_variants` map contains four independently content-addressed leaf
-references. This avoids key collisions when different originals compress to the same
-full image but produce different thumbnails. The store materializes and syncs every
-member before publishing its references; identical member bytes deduplicate. No image
-table, original-byte cache, Base64 column or normalization journal is added.
+A new row names only the recorded original: one `<blake3>.<ext>` member per unique image,
+with its recorded MIME and byte count and no `image_variants` map. The store materializes
+and syncs every member before publishing its references; identical member bytes
+deduplicate. It refuses a projection op that carries `image_variants` (renditions are never
+ops), admits `image/bmp` (`BM`) and `image/x-icon` (`00 00 01 00`) beside PNG, JPEG, GIF and
+WebP, and remembers the members it wrote or hash-verified, so a repeated occurrence costs
+one stat instead of a re-read and re-hash. A member pruned since is written again and one
+whose type or length changed is re-verified; only a same-length overwrite of a file this
+store already verified goes unnoticed until a later process verifies it. The set lives
+with one open store, and publication reopens the store, so it never outlives an image GC
+pass. No image table, Base64 column, rendition queue or normalization journal is added.
 
-The helper never reads paths or fetches URLs. Source-only references remain
-references; recovering historical bytes requires separately ledgered capture.
+**Deferred renditions (2026-11-01).** Display renditions are
+`<base-digest>.image-v<recipe>-<variant>.webp` files beside their base member
+(`ImageVariant::file_name`; recipe 1, unchanged because the bytes are). A base is a
+recorded original or the Full WebP of a legacy bundle. SQLite never references a
+rendition and none is fsynced: a read accepts only a regular file whose RIFF size plus 8
+equals its length (a torn or short file is a miss), and a write goes through an `.image-`
+tempfile and a rename, so losing one loses nothing. Rail, tile2x and tile come from one
+decode and are written as a set, tile last. When the oriented long edge is at most 1600
+pixels (`rosetta_media::preview_is_full`), preview needs no downscale and is Full's
+encoding: one file, hard-linked under both names (a copy where links fail). Full of a
+larger image is encoded on its first 1:1 request. A rendition is byte-identical to the
+same variant of the 2026-10-01 bundle for the same input, Full's 16383-pixel fit and the
+reuse of Full's encoding for a variant that needs no resize included. A one-off
+old-versus-new kernel comparison proved that; libwebp output is not guaranteed stable
+across CPU backends, so no digest is pinned, and the comparison is re-run whenever
+`image`, `webp` or `fast_image_resize` is upgraded. Committed tests
+(`crates/media/src/tests/parity.rs`) pin probe/`prepare()` class and dimension agreement
+and rendition/`prepare()` byte equality over an in-process synthetic corpus: GIF, APNG,
+animated WebP, BMP, ICO, EXIF 1/3/6/8, ICC, an edge over 16383, alpha, an image under
+160 px and a corrupt IDAT. One process-wide lock per base serializes its encodes: a
+viewer takes the lock and then a codec slot; the sweep holds a slot first and skips a
+locked base, so neither waits for the other.
+
+On demand, `/api/assets/<digest>.<ext>?image=<variant>&v=1` (any of the six image member
+types) answers a cached rendition on the blocking pool without a worker permit, so cached
+tiles never queue behind encodes. Only a miss takes one of the four `Semaphore(4)`
+permits, then the base's lock and a foreground codec slot: it reads and BLAKE3-verifies
+the base, encodes the requested set (the three thumbs together, preview, or full), and
+serves the bytes even when the cache write fails. `?retry=N` with N > 0 re-encodes and
+replaces the cached files. Every rendition response is `image/webp` with a BLAKE3 ETag,
+`nosniff`, immutable caching and 304 for a matching `If-None-Match`. `?image=full` is
+encoded from pixels on every base, a `.webp` original or legacy bundle base included, so
+no recorded bytes reach the renderer through a rendition URL. A missing base answers 404
+(recover with a rebuild), a hash mismatch 500 with the bytes never decoded, and a base
+the kernel refuses (invalid, unsupported or over a limit) 400. The plain URL is
+unchanged: the verified recorded bytes with their own Content-Type, `nosniff` and
+immutable caching, for opening, saving and downloading only.
+`crates/server/tests/http/image_renditions.rs` holds the codec pool's background slot and
+its other slot, and shows eight cached tiles return while the cold bases wait.
+
+The background sweep (`rosettad::image_renditions`) starts in every serve mode after
+publication and the initial live catch-up, beside ledger compression, and works only
+while search is Ready, as compression does; finite `ingest` and `rebuild` never run it.
+The hidden `--image-renditions on|off` flag (default on) turns it off for tests and
+measurement; first views still render. One `rosetta-image-renditions` thread at macOS
+utility QoS is paced to 50% of one core by its own thread CPU time, on the pacer
+`rosettad::maintenance_pace` shares with ledger compression, which keeps its 10%. It
+removes `.image-` tempfiles older than 10 minutes, then reads its work list on a
+read-only connection that it closes before any encode: the distinct bases without a
+rendition map that `message.detail` `$.attachments` and `$.event.attachments` and
+`message.tool_detail` `$.attachments` name, newest session first. It reads in pages of
+4,096 message ids, each one short statement with an `instr(…, '/api/assets/')` prefilter
+before `json_each`, so no long read transaction holds back WAL checkpoints. Workflow-run
+and canonical-document image resources, and legacy bundles, are left to their first
+view. A stat-only pass drops complete bases, so a warm start with nothing to do reads no
+image bytes. Each remaining base gets one decode (`RenditionSet::All`: the thumbs and the
+preview, plus the full link when preview is Full); Full of an image over 1600 pixels
+waits for its first 1:1 view. The sweep never waits on the pool: `try_admit(Background)`
+admits only into an idle pool, and otherwise the thread parks for 50 ms, checks stop and
+retries. A base a viewer is making is counted `busy` and left to that viewer or the next
+start. Stop is checked before each work-list page, before each base of the stat pass,
+between bases, between encodes and between animation frames, so shutdown never waits for
+a whole scan, and an encode in flight ends at its next frame or encode. Nothing is queued or persisted; images that arrive
+later are made on first view and by the next start. A media error or hash mismatch is
+`failed` and retried by the next start, a missing base is `missing`, and an IO error such
+as a full disk ends the run `deferred`. Stderr receives
+`{"event":"image-renditions","state":"started|finished|stopped|deferred","bases","complete","made","busy","failed","missing","files","bytes","cpuSeconds","wallSeconds","cpuBudgetPercent":50,"error"}`;
+a stop before `started` emits nothing.
+
+The adapter-support helper never reads paths or fetches URLs. Source-only references
+remain references; recovering historical bytes requires separately ledgered capture.
 
 **Recorded tool images (2026-10-02).** `ToolInteraction.attachments` owns images
 returned by a tool, including an opaque orchestration tool. Adapters classify only
-their declared media fields and emit the same optimized `ProjectionAsset` bundles
-as authored messages. Tool lifecycle updates and media patches have distinct
+their declared media fields and emit the same recorded-original `ProjectionAsset`
+members as authored messages. Tool lifecycle updates and media patches have distinct
 mutation indices; attachments merge by occurrence identity and evidence order.
 Repeated bytes retain separate slots. A delayed binary asset corrects its existing
 slot, including after a checkpoint resume. Merge evidence stays in RAM; SQLite's
@@ -1191,6 +2039,35 @@ and references inside externalized canonical documents, and is deferred if those
 cannot be verified. A failed rebuild leaves the installed projection and its
 referenced images intact.
 
+**Mixed representations (2026-11-01).** Recorded originals landed with no
+`SCHEMA_VERSION` bump, no `normalizer_version()` bump and protocol still 29, by design: a
+normalizer bump makes every warm start re-stream all of that adapter's sources (for one
+user a 21 GB background re-ingest), and a schema bump would fail every installed
+projection closed, with no rebuild path in the app. So both forms are valid side by side,
+in one projection and in one transcript. Rows normalized before the switch keep their
+legacy WebP bundle refs (a WebP member plus four WebP leaf members), whose files stay
+valid, readable and displayed. Anything the new binary normalizes (a fresh import, a
+rewritten or replaced source, affected-scope replay, a rebuild) names recorded originals.
+Copilot, Grok and OpenCode checkpoint states that persisted an `AssetRef` keep their
+shape; a join resumed from an older checkpoint re-emits its legacy bundle ref. Core
+validation, the store's rows, the server, image GC, the SDK and the room accept both forms,
+through the same routes; only a new bundle *op* is refused. `rosettad rebuild --db PATH`
+converts everything to originals and then prunes the old bundle members. The seven
+image-producing adapters' version comments record why each version stays.
+
+Image GC (`prune_unreferenced_images`) runs after a rebuild's atomic install and, since
+2026-11-01, right after a fresh RAM or resumed publication, before any live runner writes
+and before the sweep starts; that covers a user who deleted only the `.sqlite`. A failure
+defers it in both places, and warm starts never prune. It removes an image member
+`<64hex>.{png,jpg,gif,webp,bmp,ico}` that no row, rendition map or canonical document
+names (a legacy bundle member a row still names is a reference like any other), and a
+rendition cache whose base no row names or whose recipe or variant this build does not
+make. Text, document and HTML members, `.live-images-v1/` and tempfiles are never
+touched. Its reference walk is paged by 4,096 message ids with an `instr` prefilter before
+`json_tree`, and caches that are all stale need no scan. It runs on the serve thread and
+cannot be interrupted: a SIGINT during it waits for the scan, and that scan's cost on a
+large corpus is unmeasured.
+
 The generic file viewer still supports the admitted current-file read route and its
 bounded mutable WebP cache. It is separate from transcript image presentation.
 
@@ -1201,14 +2078,20 @@ presents images in a horizontal strip below the prompt’s text bubble. Agent re
 and full-message views use the same strip beneath their prose. That is an intentional
 gallery layout, not a claim to reproduce arbitrary text/image interleaving. The raw
 ledger remains available if a future consumer needs an ordered rich-content model.
-Activity images come from recorded tool attachments and optimized assets in
+Activity images come from recorded tool attachments and recorded image members in
 canonical artifact/workflow/structured/external resources. One strip sits outside
 both activity fold levels and keeps its DOM identity as the folds open. Transcript
-thumbnails, inline image mentions and the full-message gallery accept only immutable
-WebP assets with all four content-addressed rendition references. A path, filename,
-media-kind hint, remote URL, raw PNG, or incomplete bundle cannot trigger an image
+thumbnails, inline image mentions and the full-message gallery accept a
+content-addressed recorded original (PNG, JPEG, GIF, WebP, BMP or ICO, URL
+`/api/assets/<digest>.<ext>` matching its type, no rendition map) or a complete legacy
+WebP bundle; one transcript may hold both (2026-11-01). Both are drawn only through
+daemon-encoded WebP: every variant of an original, 1:1 included, is
+`?image=<variant>&v=1`, and a bundle keeps its own members. The renderer never decodes a
+recorded original; its plain URL is for opening or saving. A path, filename, media-kind
+hint, remote URL, mismatched member, or incomplete bundle cannot trigger an image
 request or open the image viewer. Source-only/unavailable recorded occurrences keep
-a placeholder. Current-file reads and on-demand fallback encoders cannot stand in
+a placeholder. An asset-backed timeline-meta artifact that is a recorded image opens
+through the same renditions and reads no bytes. Current-file reads cannot stand in
 for a recorded transcript image; deleting the original temporary file has no effect
 on an image whose bytes were captured. No arbitrary tool output or Markdown URL is
 parsed into an image request.
@@ -1223,7 +2106,9 @@ Closing restores the original opener without moving the transcript. Exact image
 mentions use their owning row, including the outer activity row for folded team/peer
 messages; a full-message popup opens its own image row in a nested viewer.
 Transcript and gallery images use direct HTTP URLs: 320/640-pixel row tiles,
-160-pixel gallery thumbnails, the 1600-pixel Fit preview, and full pixels only on 1:1.
+160-pixel gallery thumbnails, the 1600-pixel Fit preview, and the full-size WebP only on
+1:1 (encoded on that first request for a recorded original over 1600 pixels). A tile is
+`aria-busy`, in its loading style, until its rendition draws.
 Content-addressed renditions use immutable browser caching. Nearby image elements
 mount through continuous intersection observation and unmount offscreen; fixed tile
 geometry and attachment occurrence identity remain stable. The renderer holds no
@@ -1263,6 +2148,13 @@ output arriving after restart, equality with cold ingest, image GC retention, an
 ledger-only reconstruction. `recorded_tool_images.rs` exercises every established
 tool-image encoding. `crates/pipeline/tests/authored_images.rs` exercises durability before publication and
 rebuild into fresh assets after deleting the captured native files and original assets.
+For recorded originals (2026-11-01), `adapter-support`'s `recorded_originals` tests show
+normalization runs no codec job, `crates/store/tests/mixed_images.rs` and
+`crates/server/tests/http/image_renditions.rs` cover a projection holding legacy bundles
+beside originals, `crates/pipeline/tests/legacy_image_checkpoints.rs` resumes Copilot,
+Grok and OpenCode checkpoints that hold bundle refs, `crates/rosettad/tests/image_cleanup.rs`
+covers the post-publication prune, and `clients/app/test/recorded-images.test.mjs` shows
+the room draws only renditions.
 Adapter conformance tests cover occurrence identity, invalid/missing inputs, exact
 bindings, checkpointed joins and replacement snapshots. These synthetic inputs are
 tests of the pinned grammar, not substitutes for native fixture captures.
@@ -1369,11 +2261,38 @@ its request count, when the agent reports one: Grok's `modelCalls`, Copilot's in
    Code forks, OpenCode fork copies). Across files the adapter stamps every usage op of a
    response with the response's native identity (Claude Code: `message.id:requestId`) and
    the store keeps one owner per identity — the earliest-started session, then the lower
-   session id — dropping later copies on arrival and retracting an earlier-applied copy's
-   usage when its origin lands (`apply::UsageOwners`). The index is process-local like the
-   RAM reconciliation buffer: a rebuild replays the raw ledger through it, and a daemon that
+   session id (`apply::UsageOwners`) — dropping later copies on arrival. The verdict is
+   order-free (R1, 2026-11-02; `apply/usage_owners.rs`, `apply/usage_claims.rs`): each owner keeps
+   a touched set of every row and `session_usage` sample its records wrote, and when an
+   earlier-started session's copy lands, a *Displace* undoes all of them. A row gets NULL usage
+   columns, and its prior model and time come back only while it still holds what the usage wrote
+   (compare-and-restore; a later message upsert's values are what a dropped copy shows, so they
+   stay); a sample row is deleted. Every non-owner copy then equals a dropped copy and the owner is
+   the earliest-started session whatever order the sources land in, which is what lets trees land
+   in any interleaving (one source applied across Stage, resolved-row and terminal transactions
+   converges the same way, since no provenance sweep ever follows a slice). Three residuals
+   remain: `session.updated_at` only rises, so a displaced copy keeps a usage time that exceeds
+   every other time its session reports; a message re-upsert that writes back exactly the stamp
+   the usage wrote cannot be told apart and is undone too; and a row that two identities' usage
+   both targeted loses its usage when either owner is displaced. The index is process-local like
+   the RAM reconciliation buffer: a rebuild replays the raw ledger through it, and a daemon that
    opens a complete projection starts empty, so a copy whose origin was projected in an
    earlier run is caught at the next rebuild. Copies never persist anything (iron rule 5).
+   `ApplyStats` counts every claim's outcome: `usage_identities_owned` (an identity's first
+   record, or its owner's correction), `usage_copies_dropped` and `usage_copies_displaced` (a
+   displacement can lower a visible session's usage later). Of the displacements that actually
+   undid a row or sample, `usage_displaced_sessions` names the sessions, and
+   `usage_displaced_visible` (with `usage_displaced_visible_rows`) counts those in a session that
+   had already left `Pending`; a displaced owner whose records never matched anything is left out.
+   A fresh build resyncs such a session when it is readable (decision U-1; status checkpoint,
+   "Newest trees first"). `usage_owner_bytes` gauges the owner index's resident bytes (merging
+   keeps the larger). It also counts
+   `usage_identities_unclaimed`: identity-bearing usage records the cold fold merges straight
+   onto their dated tool row (`FoldState::finish`), so they never reach the owner index. A cold
+   build neither registers nor drops such a copy, while live ingest claims it. The count is of
+   records, not rows: each of a row's successive snapshots counts. It only sizes that known
+   cold/live gap and changes nothing. All four, plus `usage_displaced_visible` and
+   `usage_owner_bytes`, reach the profiler and the `usage-copies:` line at canonical readiness.
 3. *Extra attempts are separate records.* A fallback, compaction or advisor call inside one
    response (Claude `usage.iterations`) becomes its own `session_usage` sample with its own
    model.
@@ -1511,7 +2430,10 @@ every price change is a reviewable diff.
   usage — id, tokens, first and last hour, and whether the id is unknown to the catalog — so
   a model launched yesterday shows up the day it is first used, before anyone notices a low
   figure. Re-vendor genai-prices weekly and on any unknown id; the vendored copy went stale
-  by one day when Opus 5.5 launched (3.49B tokens, $1,061, unpriced for a day).
+  by one day when Opus 5.5 launched (3.49B tokens, $1,061, unpriced for a day). Like the
+  other aggregates it answers 503 `not_ready` while a fresh RAM build is unpublished: the
+  rollup it reads does not exist before finalization, and an empty list would read as
+  complete coverage.
 
 **Re-pricing never replays the ledger.** `projection_state.pricing_version` records the
 pricing version the rollup costs were computed with. A writer opening a complete projection
@@ -1567,8 +2489,10 @@ and cleanup sit outside the canonical SQL timer, inside the enclosing apply time
 source batches now release incrementally inside closed source application rather than in a
 separate post-reconciliation destruction phase.
 `serve --json --profile` emits discovery timing and a `serve-cold` profile at canonical
-readiness, before live catch-up changes the counters. Detached search readiness is a later
-boundary and must be measured separately; `--ticks 0` does not guarantee it completes.
+readiness, before live catch-up changes the counters, and per-runtime `census` and 1 s
+`memory-sample` events (see "Cold-build measurement" in the status checkpoint at the top).
+Detached search readiness is a later boundary and must be measured separately; `--ticks 0`
+does not guarantee it completes.
 The `live-catch-up` stage exposes the handoff; the search worker was woken at publication and
 builds beside it. Its
 `live poll time` contains filesystem walking and committed-evidence lookups, with separate
@@ -1766,9 +2690,11 @@ than merged row bounds: a tool row's bounds are its request and its completion, 
 inside it is a gap, never presumed work. Sessions come from the mirror's activity bounds; turns
 from one read per tree over `message`'s existing activity indexes, so the route adds no
 schema and reads no payload. A monitor (VibeField's Godview timeline) draws a day of lanes
-from one ask instead of paging every timeline. A Pending session's turns are withheld before
-publication (`turns_withheld`), as its timeline is. The route spans sessions, so a grant never
-opens it.
+from one ask instead of paging every timeline. Before publication a Pending session is behind
+the admission barrier here too (2026-11-02): the mirror withholds its activity bounds, so it is
+not selected, and an admitted root's turns skip its Pending members; a Pending root that is
+selected anyway still answers with `turns_withheld` and no turns. The route spans sessions, so a
+grant never opens it.
 
 The expanded project activity calendar (2026-09-30) selects a recorded day, then
 reads `GET /api/projects/{id}/usage/day?day=YYYY-MM-DD&offset_minutes=N` for its
@@ -1951,7 +2877,9 @@ now does too, through a start-time **enrollment file**:
   archive whose excluded first capture was interrupted: only those proven excluded
   unsealed sources may remain unfinished. Their raw prefix is never sealed as complete;
   a payload-free checkpoint reserves its generation so re-admission allocates a newer
-  one, including after a rebuild. Other incomplete sources still refuse publication.
+  one, including after a rebuild. Other incomplete sources still refuse publication (a resumed
+  build seals the staged prefix of an interrupted source whose file is gone, so its archive never
+  carries one).
   A legacy disk cold load may already have a staged cursor when the rule is added.
   Its rows and generation watermark remain intact; a process-local set of explicitly
   retired cursor ids removes only that work from the publication gate. Capturing the
@@ -2052,12 +2980,46 @@ now does too, through a start-time **enrollment file**:
   identity is captured during meta ingest and written into the ledger before it becomes canonical.
   The store rejects `SessionMeta` in every source-scoped stream batch, making this a write-boundary
   invariant rather than an adapter convention.
+- **The shared-cache RAM generation has one lock order** (R1, 2026-11-02;
+  `store/src/lock_order.rs`, `server/src/http/shared_reads.rs`). A fresh `serve` builds the
+  canonical projection in a named shared-cache memory database while HTTP/WS readers attach to
+  it. Shared cache holds table locks until a transaction ends, and `unlock_notify` answers a
+  waits-for cycle with an immediate `SQLITE_LOCKED`: source transactions lock `ingest_cursor` →
+  `message` → `session` and readers `session` → `message`, and `projection_state`, which
+  artifact-list and watermark reads open with and the finalize refold writes, would close
+  another. Retrying the writer is not an option, since usage ownership, assets and reconciliation
+  mutate RAM inside its transaction. On the shared generation only, therefore: **W1** — every
+  writer transaction opens through `Store::writer_tx` (`lock_order::writer_tx` inside the store),
+  whose first statement is a zero-row `session` UPDATE bound to `''`, taking the `session` write
+  lock; Stage-slice, resolved-row, terminal, flip and remainder transactions all do. **W2** — a
+  DDL transaction opens through `ddl_tx`, runs DDL first and never takes W1 or writes `session`,
+  because DDL waits out every open read, including one parked at its prologue behind W1; so
+  `finish_bulk_load` runs tx A (the refold, under W1) and then tx B (indexes, `ANALYZE`,
+  canonical readiness), and readers between them see refolded rows without indexes, while private
+  and disk rebuilds keep one transaction. **R1** — every reader runs `SELECT 1 FROM session WHERE
+  id = ''` right after `BEGIN DEFERRED`, so its first table lock is `session`. A reader can then
+  wait on the writer but never close a cycle; SQLite takes a statement's table locks in its
+  prologue, before any row matches (`store/tests/shared_cache_lock_order.rs` pins it). A pending
+  W1 stops new read transactions, so a stream of readers cannot starve the writer, and a read
+  that starts mid-transaction waits for at most one apply transaction (≤ 16 MiB), one flip batch
+  or one finalize transaction. A single autocommit statement holds no lock while it waits, so the
+  single-row readiness, consent and audit writes need no W1. The discipline rules
+  `SQLITE_LOCKED` out, so a refusal is a counted bug: one at the prologue retries once on a
+  fresh connection and then answers 503 `not_ready`, and one inside the read — which cannot be
+  retried — answers a counted 503 too. A session socket's first snapshot keeps that
+  `not_ready` code in its closing error frame (any other failure stays an opaque internal
+  “snapshot read failed”), so the SDK reconnects quietly and the room keeps its “Preparing
+  messages…” cover (2026-11-03). A durable file target is a WAL reader and runs no
+  prologue. `--json --profile` reports the waits (Cold-build measurement, `shared-cache-locks`).
 - **Content-addressed image members** are part of the one canonical projection, not a third
-  representation. An adapter may recognize and decode a verified native inline image, but only
-  the store writes it to `<projection>.assets/<blake3>.<ext>`. Live ingestion makes the immutable
+  representation. An adapter may recognize a verified native inline image and decode its
+  Base64, but only the store writes the recorded bytes to `<projection>.assets/<blake3>.<ext>`.
+  Live ingestion makes the immutable
   file durable before committing its `/api/assets/<blake3>.<ext>` URL. Private builds sync all new
   members before database publication; monotonic content-addressed additions let the final
   SQLite file remain the only atomic swap. The raw ledger keeps the original inline form.
+  Display renditions beside members (`<digest>.image-v1-<variant>.webp`) are a disposable
+  cache, not members: never referenced, never synced, recreated on demand (2026-11-01).
 - **A generation this daemon cannot use is no generation.** A well-formed `CURRENT` manifest
   whose search schema or format differs reads as absent (2026-09-09): the worker rebuilds, status
   reports `building` with the rebuild's progress, and a query answers unavailable — a schema
@@ -2218,6 +3180,43 @@ This makes the optimization boundary explicit:
   [Retained evidence and reproduction commands](../tools/image-bench/results-2026-10-01.json)
   include source/query/binary checksums, every run, machine/configuration, and
   the local raw artifact directory. The scripts live beside that evidence.
+- Deferred image renditions (`image-defer-cold-20261101`, §4.1.2) use a
+  permission-read-only, SHA-256-checked snapshot of the 12 largest admitted Claude Code
+  JSON-lines sources (4 transcripts and 8 subagent transcripts, 1,022,216,033 bytes,
+  manifest SHA-256 `a3227cd8ab2216f7be809d8a48356a8e102511f33d7f4ae00f1acfe89d400d84`) on
+  one Apple M4 Mac mini (16 GB, 4P+6E) with macOS 26.7.2: release builds, the default 9
+  capture workers, zstd-frames level 1, fresh projections, `serve --ticks 0` and finite
+  `ingest`. Before (`be2fe71`, binary `58c7126f…`) → after (binary `1ef19a10…`): serve
+  wall **39.1 / 39.6 s → 2.43 / 2.47 s**; `ingest` wall **57.2 s → 4.75 s**; an
+  interleaved control pair on the same snapshot gave serve **41.8 → 2.46 s** and `ingest`
+  **59.2 → 4.17 s**; serve user CPU **58.5 → 3.9 s**; serve normalize summed over workers
+  **152 s → 0.90 s**; first-readable **38.9 s → 2.2 s**; peak footprint **1,199 → 936
+  MiB**; `.assets/` at publication **4,459 files / 138,211,388 B → 1,084 files /
+  238,557,045 B** (recorded originals), after the sweep 5,951 names / 5,248 inodes /
+  341,973,413 B (the 703 Full names for ≤1600-pixel images are hard links to their
+  previews), and a rebuild of the after projection prunes 0 (a rebuild of a before
+  projection with the after binary prunes the 4,416 legacy WebP members and lands on the
+  after census exactly). The sweep made all 1,041 bases (0 failed, 0 missing) in 68.5 CPU-s
+  over 240.5 s wall — about 28% of one core against its 50% budget, because utility-QoS
+  timer coalescing makes the pacer oversleep — and a second warm start made 0 in 0.08 s.
+  Search-ready was 0.229 s with the sweep and 0.231 s with it off. First views of an
+  unswept image (50 bases, sequential): tile p50/p95 17.7 / 27.1 ms, preview 20.9 /
+  40.1 ms, an on-demand Full over 1600 px 38.7 / 64.6 ms; cached 0.13–0.23 ms; before-side
+  bundle reads 0.32–0.54 ms.
+  Required equalities: the logical TOTAL
+  `7bfbcb752c7d16c3b673c270650753203247f5b394c455255cfbe0ade6e88438` over 80,956 rows and
+  the separate attachment identity, dimensions and source-type digests; every count; per-mode
+  ledger-verify source digests; the pipeline counters; ordered ranked-result digests for
+  the 10-case `product-diagnostic-v3` suite (SHA-256
+  `12e38e5ecc9a0e3d89bdd15b4c9fcc429defd07325f685cb108e91a97465aee7`); and byte equality
+  of every swept rail, tile, tile2x and over-1600-pixel preview with the before side's
+  bundle members. Result: every equality held in every run (ordered hits
+  `a0d0e470…3b152` on both sides; rail, tile, tile2x, preview and Full byte-equal for
+  1,076/1,076 attachments). Real-data parity covers stills only; animations, BMP, ICO and
+  EXIF orientations are pinned by the synthesized media corpus. The intended differences
+  are attachment media types, byte lengths and digests (now in original space) and the
+  absence of rendition maps. [Retained evidence](../tools/image-bench/results-2026-11-01-defer.json)
+  records the binary, manifest and suite checksums, every run, the machine and its load.
 - Inline-image recognition is adapter-specific; content-addressing, durability, and serving
   are shared projection facilities. The retained `image-assets-2026-08-29` pair used the same
   checksummed, permission-read-only 88,498,056-byte Claude transcript on one macOS/aarch64
@@ -2309,10 +3308,13 @@ still require a driver-specific frozen pair or a declared production-weighted ag
 - Batched writes; prepared-statement caches; mmap reads for big transcripts.
 - Private cold loads capture adapters into independent RAM planners, precompute presentation
   order, and feed closed runtimes to one canonical writer. A normal fresh `serve` streams instead:
-  each source enters the canonical writer as a closed source while capture continues, and each
-  runtime is admitted (fold, final tool rows, Pending flip) when its capture closes. Fresh serve
+  each source enters the canonical writer as a closed source while capture continues; a root-tree
+  runtime (Claude Code, Codex) walks newest trees first and admits each closure-proven tree (fold,
+  final tool rows, Pending flip) once its sources have committed, and everything else is admitted
+  when its runtime's capture closes. Fresh serve
   places that canonical schema in named shared memory: metadata is immediately public and each
-  completed runtime becomes transactionally readable before the global set-based gate. It then
+  flipped tree or completed runtime becomes transactionally readable before the global set-based
+  gate. It then
   installs one validated disk copy and atomically retargets readers. Cross-session aggregates are
   unavailable until that retarget, and the app bounds their post-publication fan-out. Existing
   complete projections enter live maintenance immediately and run only bounded metadata plus forced
@@ -2378,7 +3380,9 @@ still require a driver-specific frozen pair or a declared production-weighted ag
   syncs its parent, and only then installs the validated SQLite file. A missing projection
   beside an unmarked existing ledger normally fails closed to `rebuild`, preventing generation
   collisions. A marked staged/public cold generation instead replays sealed evidence into RAM and
-  finishes raw-only sources at a strictly newer generation. `--restart-incomplete` archives only
+  finishes raw-only sources at a strictly newer generation (sealing the staged prefix of one whose
+  file is gone, as a fresh build seals a source cut short), holding every session Pending until it
+  publishes. `--restart-incomplete` archives only
   explicit legacy artifact sets under the projection lock.
   Existing/live projections retain ledger-sync-before-visible-SQLite ordering. The frozen
   pair measured segment syncs at 7,435 → 66 and ledger time at 96.64 s → 18.02 s; twelve
@@ -2510,6 +3514,18 @@ Production crates never import development tooling or intermediate evidence.
 4. **Contract goldens**: recorded observe/metrics WS sessions per protocol version.
 5. **Probe in anger**: run `rosetta probe` against the live home dirs after every agent
    update; drift report drives fixture refresh.
+6. **Streamed cold-build harness** (R1, 2026-11-02): `crates/rosettad/tests/streamed_*.rs` over
+   shared `tests/support/` (fixtures and the cross-tree reference adapter generated in each test's
+   own temp home; the path-walk harness; a logical projection dump that maps cursors to paths and
+   message ids to timeline ids; a copy of the round-robin writer loop for in-process builds).
+   Every fixture corpus is built under path, recency, reversed and seeded tree orders, serial and
+   on a chaos pool, and must equal the path walk logically and in `sourceSetDigest`; a commit
+   observer audits visibility after every writer commit; grep tests list every `ORDER BY` over
+   message rowids and every store `transaction()`, failing on a new one. What needs a hidden knob
+   of the real daemon — the walk probe, the writer's counters, scaled budget classes — runs in
+   the crate against the real `serve` and writer (`rosettad/src/serve/resume_kill_tests.rs`,
+   `command_stage_tests.rs`, `cold_stream/writer_e2e_tests.rs`), reusing `tests/support/`. A
+   test's comment names the mutation it must catch, so a reviewer can repeat it.
 
 ## 10. Roadmap — layer by layer, breadth-first
 
@@ -2546,7 +3562,7 @@ layer's design is frozen.
 | FTS5 vs Tantivy | detached FTS5 sidecar today; Tantivy prototype remains benchmark-only | revisit with judged relevance + declared/observed query mix + accepted storage margin; FTS5 coherence/crash gates are already implemented |
 | WS vs SSE for streams | WS (bidirectional subscribe/ack) | if consumers end up read-only-simple |
 | Ledger retention | keep forever; segments zstd-compressed since 2026-09-04 (`ledger compact` for older ones); no segment GC yet | compressed ledger > tens of GB |
-| Image-member retention | keep immutable content-addressed members (no GC yet) | `.assets/` growth justifies a ledger-derived mark/sweep under the projection lock |
+| Image-member retention | keep immutable content-addressed members; image GC prunes unreferenced image members and stale or orphan rendition caches after a rebuild and right after a fresh RAM or resumed publication (2026-11-01); warm starts never prune | `.assets/` growth between those points justifies a ledger-derived mark/sweep under the projection lock, or the post-publication reference scan shows in large-corpus startup time |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |
 | Daemon access control | DECIDED 2026-09-30: open on its listener by default (unchanged); `--token-file` bearer on every route and upgrade; per-session HMAC-SHA256 grants over RFC 8785 JSON with `--grant-key-file`; the Origin rule is the browser guard and never a credential (`docs/AUTH.md`) | a supervisor needs revocation, one grant for a session tree, or UDS lands |
@@ -2555,6 +3571,8 @@ layer's design is frozen.
 | Aggregate samples on tiered models | a counted aggregate is estimated as equal requests at its average prompt (2026-09-23); an uncounted one prices only when its prompt tokens cannot have crossed a tier start, otherwise it is unpriced (2026-09-22) | a producer starts reporting per-request usage, or an uncounted producer exposes a count |
 | Residency and regional premiums | a `route` qualifier prices only through a cited overlay premium; otherwise the record is unpriced (2026-09-22) | such routes appear in real data |
 | Rediscover without restart | roll-call discovery runs once at start; a kind installed later is seen on the next start (2026-09-12) | the app wants a "rescan" affordance, or the supervisor needs to enroll into a running daemon |
+| Visible usage displacement (U-1) | DECIDED 2026-11-02: a fork copy's per-row usage badge may empty once, when its older origin imports after the copy's tree flipped; counted as `usage_displaced_visible` (with rows), the session resynced, no wire flag | more than 1% of 24h-horizon sessions are displaced-visible on the MacBook organic run |
+| Root-tree determinism (U-2) | DECIDED 2026-11-02: a root-tree runtime's ledger frame order and message rowids may vary between runs, and on any walk so may which runtime's block of cursor ids comes first (as at 3ca7410); per-source ledger content (`sourceSetDigest`), cursor ids in path rank within each runtime, ledger file ids, the logical projection, ranked search, the walk digest and the publish-or-refuse outcome may not; runtime-admission adapters and `--experiment-cold-admission runtime` stay byte-identical | a consumer needs physical-order or rowid stability across runs |
 
 ## HTML review artifacts (2026-10-30)
 

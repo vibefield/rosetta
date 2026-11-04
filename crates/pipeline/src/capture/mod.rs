@@ -11,11 +11,16 @@
 //! Snapshot and document groups, sibling heals and any non-fresh cursor stay
 //! on the sequencer at their path position.
 
+mod clock;
 mod pool;
 mod sequence;
 
+pub use clock::CaptureClock;
 pub use pool::{CapturePool, PoolBudgets, PoolStats};
-pub(crate) use sequence::{Pooled, consume, register};
+pub(crate) use pool::{Event, LaneClass, WAIT_SLICE};
+#[cfg(test)]
+pub(crate) use sequence::tests_switch;
+pub(crate) use sequence::{Consumed, Pooled, UnitReport, consume, consume_event, register};
 
 #[cfg(test)]
 mod tests;

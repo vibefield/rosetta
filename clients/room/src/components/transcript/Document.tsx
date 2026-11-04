@@ -43,7 +43,7 @@ import { useRoom } from "../../room-context";
 import { lastActive } from "../../lib/format";
 import { sessionLastActive } from "../../lib/session-activity";
 import { withinHistoryWindow } from "../../lib/transcript/history-window";
-import { EmptyState } from "../ui";
+import { EmptyState, Meter } from "../ui";
 import { Anchor } from "./Anchor";
 import { DayPill, Sitting } from "./DayPill";
 import { transcriptModel } from "./document-model";
@@ -68,6 +68,11 @@ import { messageDomId, sessionContains } from "./thread-index";
 import { ThoughtLine } from "./Thinking";
 import type { TeamReportWorkPresentation } from "./Team";
 import { KnownTeamRoster, TeamEvent, TeamWorkthread } from "./Team";
+import {
+  ImportAnnouncement, ImportBanner, ImportEmptyState, TranscriptUnavailableMark, useImportHold, useImportedAnnouncement,
+} from "./ImportState";
+import { importStanding } from "../../lib/import-state";
+import type { ImportCourse } from "../../lib/import-state";
 
 /** Mounted only by an open work disclosure; ordinary team traffic carries no private work. */
 function LazyReportWork({ report, ...props }: {
@@ -106,6 +111,10 @@ export interface TranscriptDocumentProps {
   /** The cold backfill is running: a streaming session is being INDEXED by the
    * daemon, not run by an agent — the watermark must not claim life. */
   readonly duringBackfill: boolean;
+  /** When the running import opens a session it has not reached. */
+  readonly importCourse?: ImportCourse | undefined;
+  /** The session's agent, as a `runtime-close` promise names it. */
+  readonly importAgent?: string | undefined;
   readonly index: ThreadIndex;
   readonly focus: ThreadFocus | null;
   readonly highlightedTimelineId: string | null;
@@ -236,6 +245,8 @@ export function TranscriptDocument({
   model: baseModel,
   feed,
   duringBackfill,
+  importCourse,
+  importAgent,
   index,
   focus,
   highlightedTimelineId: parentHighlightedTimelineId,
@@ -259,6 +270,9 @@ export function TranscriptDocument({
   const recentActivity = !duringBackfill &&
     lastActive(sessionLastActive(session), Date.now()) === "now";
   const directChildren = index.childrenByParent.get(session.id) ?? [];
+  // What the root transcript says while the import has not reached it.
+  const standing = nested ? null : importStanding(session, duringBackfill, directChildren.length > 0);
+  const importHold = useImportHold(session, feed, !nested && duringBackfill);
   const teamIds = useMemo(
     () => teamSessionIds(session.id, directChildren, feed.rows),
     [session.id, directChildren, feed.rows],
@@ -881,14 +895,22 @@ export function TranscriptDocument({
   const hasSafeRosterLine = [...teamMembers.values()].some(
     (member) => member.operation === "known",
   );
-  const showKnownTeam =
+  // A session the import has not reached (or whose rows are still the empty
+  // Pending ones) shows that alone: its children wait with it.
+  const importFace = !nested && feed.snapshotReady && model.plan.length === 0 &&
+    (standing === "not-imported" || importHold);
+  const showKnownTeam = !importFace &&
     knownTeamSessions.length > 0 &&
     (teamMembers.size === 0 || (partialParentHistory && !hasSafeRosterLine));
-  const empty = model.plan.length === 0 && floating.length === 0 && !showKnownTeam;
+  const empty = importFace || (model.plan.length === 0 && floating.length === 0 && !showKnownTeam);
+  const imported = useImportedAnnouncement(importFace, !importFace && model.plan.length > 0);
   return (
     <ThreadNavigationContext.Provider value={childNavigation}>
     <DisclosureState key={session.id}>
       {head}
+      {!nested && <ImportAnnouncement opened={imported} />}
+      {!nested && duringBackfill && standing === null && !importHold && <ImportBanner />}
+      {standing === "unavailable" && !empty && <TranscriptUnavailableMark />}
       {showKnownTeam && (
         <KnownTeamRoster
           sessions={knownTeamSessions}
@@ -910,7 +932,7 @@ export function TranscriptDocument({
           {blocks.map(block => <Fragment key={block.key}>{drainFloating(block.at)}{renderBlock(block)}</Fragment>)}
         </Sitting>
       ))}
-      {drainFloating(null)}
+      {!importFace && drainFloating(null)}
       {empty &&
         feed.snapshotReady &&
         (nested ? (
@@ -919,16 +941,20 @@ export function TranscriptDocument({
               ? "No readable messages in this subthread."
               : "This subthread has not been indexed yet."}
           </p>
+        ) : importFace || standing === "unavailable" ? (
+          <ImportEmptyState standing={importFace ? "not-imported" : "unavailable"} duringBackfill={duringBackfill}
+            course={importCourse} agent={importAgent} />
         ) : session.stream_state !== "indexed" ? (
           <EmptyState
             title={
               duringBackfill ? "Indexing history" : "History not yet available"
             }
-            description="No readable messages have been indexed for this session yet."
+            description={duringBackfill
+              ? "This session's messages appear here once they are indexed."
+              : "No readable messages have been indexed for this session yet."}
           >
-            {duringBackfill && <div className="ah-meter">
-              <i style={{ width: "8%" }} />
-            </div>}
+            {/* No amount is known for one session: the meter sweeps. */}
+            {duringBackfill && <Meter fraction={null} />}
           </EmptyState>
         ) : (
           <EmptyState

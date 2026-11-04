@@ -21,6 +21,26 @@ import "@vibefield/rosetta-room/styles/room.css"; // after the host's --vf-* tok
 `@vibefield/rosetta-room/fixtures` renders the room with no daemon at all:
 `<HistoryRoom {...createDemoPorts()} />` (six projects, eleven sessions, a year
 of figures, two transcripts with images and web lines, all relative to now).
+`createColdImport({ now })` returns `{ ports, consent, daemon, controller }`
+for a first import instead, over a seeded synthetic archive (by default the
+MacBook trace's shape: 8,612 sessions in 1,139 trees over 119 projects;
+`scale` shrinks it). It owns no timer: nothing happens until the controller
+steps simulated time, and each step delivers the flips, resyncs and status
+rosettad would have by then.
+
+```tsx
+const sim = createColdImport({ now: Date.now(), consent: "granted" });
+<HistoryRoom {...sim.ports} />;
+sim.controller.advanceToPhase("metadata"); // or advanceTo(ms)
+```
+
+A fresh import waits for consent unless told it was `granted`: pass
+`sim.consent` (the roll call's `discoveries` and `enableRuntimes`) to a
+consent screen, or call `sim.consent.enableRuntimes([...])`. `course:
+"resumed"` replays a cross-launch resume instead, which opens nothing until it
+publishes. `sim.daemon.fetch` answers the daemon's REST routes for a host that
+builds its ports over a `RosettaClient` (`fetchFn`); `/ws/meta` and the session
+sockets stay the simulator's.
 
 ## The ports (`src/ports.ts`)
 
@@ -43,6 +63,21 @@ of figures, two transcripts with images and web lines, all relative to now).
   on every mount and every retry, so an evicted URL is asked for again, never
   reused, and a source must not keep a failure. A null answer draws the
   image's "could not load" face with Retry.
+- **A transcript image is drawn only through `imageAssetUrl`.** It is a
+  recorded original (one member, PNG, JPEG, GIF, WebP, BMP or ICO, with no
+  `image_variants`) or, in a projection built before deferred renditions, a
+  complete legacy WebP bundle. One transcript may hold both; anything else
+  keeps its placeholder. Every rendition, `full` (1:1) included, is a WebP the
+  daemon encoded: rosetta's SDK answers an original with
+  `?image=<variant>&v=1` and a bundle with its own members. A host that
+  fetches the bytes fetches that address, never the member's plain URL, which
+  returns the recorded bytes for opening or saving only. An asset-backed
+  timeline artifact that is a recorded image opens the same way. A tile is
+  `aria-busy`, in its loading style, until its rendition draws. Rooms
+  published up to 0.1.2 accept bundles only, and show a newer daemon's
+  originals as placeholders. The SDK published as 0.1.2 answers an
+  original's `full` with its plain URL, so a host pairs this room with the
+  SDK released beside it.
 - **`boost` is optional** because a grant never opens a write: only a host
   holding the daemon's bearer offers it. Without it the index keeps its order.
 - **`browsers()`** returns installed browser ids, names and icon URLs. HTML
@@ -71,7 +106,9 @@ folder and the host's key when it gave one, on mount and on every change) · `st
 `emptyPrompt` (the empty transcript's sentence in the host's words; absent,
 the room's own, below) · `search` (the room's own strip and
 sheet, with the host owning the open state; absent, neither is drawn). The ref
-handle offers `openAt({ sessionId, timelineId? })` and `stepMatch(delta)`.
+handle offers `openAt({ sessionId, timelineId? })`, `stepMatch(delta)` and
+`refreshStatus()` (ask the index's status now, for a host that just moved its
+state itself — rosetta's roll call calls it once consent is granted).
 
 **The search keys are the host's (RO-14).** The room binds no key of its own.
 The host's window opens the sheet and walks the matches: rosetta's app binds
@@ -92,9 +129,30 @@ key there. A host that passes `search` binds ⌘G and ⌘⇧G (Ctrl G and Ctrl S
 G off a Mac) to the handle's `stepMatch(1)` and `stepMatch(-1)`, because the
 match stepper the sheet leaves in the transcript's head names those keys.
 
+**While full text cannot answer, the sheet searches titles.** Until the
+catalog's status says search can answer (`canonicalReady` false, or search
+readiness `building` or `failed`, as through a first import and the index
+build after it), the sheet matches the query against the session titles the
+room already holds, under "Titles that match", and the launcher counts those
+titles ("Search 1,174 conversation titles"). The line under the matches says
+what full text waits on: "Full-text search arrives when the import finishes."
+before publication, "…when its index is built." after it, or "Full-text
+search is unavailable." The foot reads "Titles only until the import
+finishes", then "Full-text search is being built · 37% · showing title
+matches" (the % only from the index's own document count), or "Full-text
+search unavailable · showing title matches". A title row the running import
+has not reached reads "Not imported yet". Opening one opens its thread as a
+hit does, with no message to land on. When full text starts answering, the
+room asks the query again, and the titles stay until that answer arrives. A
+catching-up, stale or ready index keeps the ordinary sheet. The foot's meter
+fills only from the index's document count, sweeps for work with no count,
+and is absent while the import is paused or the index has failed.
+
 **The disconnected face can be all the host's words.** While the catalog has
-delivered no rows, the room draws one face: a title, a sentence under it, and
-a meter. Every part a host leaves out stays the room's own, so rosetta's app
+delivered no rows, the room draws one face: a title, a sentence under it, and,
+while it is still reaching the index, a sweeping meter (reaching has no amount,
+so none is drawn; once the index has stopped answering there is no meter at
+all). Every part a host leaves out stays the room's own, so rosetta's app
 reads as it always has; a host that never names its daemon to a person gives
 both titles and its sentence.
 

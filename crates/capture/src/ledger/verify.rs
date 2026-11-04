@@ -16,7 +16,16 @@
 //! over the raw, document and seal entries — the captured content, which two
 //! builds of read-only inputs must reproduce — and a meta digest over the
 //! metadata entries alone.
+//!
+//! The source digest still depends on the order sources interleave in, which
+//! only a path walk fixes. A root-tree walk captures trees newest first and
+//! interleaves its lanes, so the same inputs may frame their sources in
+//! another order on every run (R1 decision U-2). The source set digest is the
+//! order-free measure: each source's own entries, in their order, hashed
+//! apart and folded in path order. Reordering whole sources keeps it; a
+//! dropped, duplicated or reordered entry of one source changes it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::segment::SegmentReader;
@@ -72,6 +81,9 @@ pub struct LedgerVerify {
     /// Source content (raw records, document observations, seals). Document
     /// observation timestamps are excluded so stable inputs compare across captures.
     pub source_digest: blake3::Hash,
+    /// The same content per source, folded in path order: equal for any
+    /// interleaving of whole sources ([`EntryDigest::source_set_digest`]).
+    pub source_set_digest: blake3::Hash,
     /// The entry encoding of the metadata entries alone.
     pub meta_digest: blake3::Hash,
     /// blake3 over the `.segments` index file's bytes, when there is one.
@@ -103,12 +115,16 @@ impl LedgerVerify {
 /// A canonical encoding of decoded entries: one tag per entry kind,
 /// fixed-width big-endian integers and length-prefixed byte strings, so two
 /// different entry streams never encode alike. Each entry also feeds either
-/// the source or the meta digest.
+/// the source or the meta digest, and a source entry also feeds its own
+/// source's digest.
 #[derive(Debug, Clone, Default)]
 pub struct EntryDigest {
     all: blake3::Hasher,
     sources: blake3::Hasher,
     metas: blake3::Hasher,
+    /// Per source `relative_path`: exactly the bytes its entries feed
+    /// `sources`, in their order.
+    per_source: BTreeMap<String, blake3::Hasher>,
     tally: EntryTally,
 }
 
@@ -118,7 +134,14 @@ impl EntryDigest {
     }
 
     pub fn update(&mut self, entry: &LedgerEntry) {
-        self.tally.entries += 1;
+        let Self {
+            all,
+            sources,
+            metas,
+            per_source,
+            tally,
+        } = self;
+        tally.entries += 1;
         match entry {
             LedgerEntry::Raw {
                 source,
@@ -126,13 +149,14 @@ impl EntryDigest {
                 start_offset,
                 payload,
             } => {
-                self.tally.raw_records += 1;
-                self.tally.raw_payload_bytes += payload.len() as u64;
-                self.put(false, &[ENTRY_RAW]);
-                self.source(source);
-                self.put(false, &generation.to_be_bytes());
-                self.put(false, &start_offset.to_be_bytes());
-                self.bytes(false, payload);
+                tally.raw_records += 1;
+                tally.raw_payload_bytes += payload.len() as u64;
+                let mut out = Encoder::for_source(all, sources, per_source, source);
+                out.put(&[ENTRY_RAW]);
+                out.source(source);
+                out.put(&generation.to_be_bytes());
+                out.put(&start_offset.to_be_bytes());
+                out.bytes(payload);
             }
             LedgerEntry::Document {
                 source,
@@ -140,21 +164,22 @@ impl EntryDigest {
                 start_offset,
                 document,
             } => {
-                self.tally.documents += 1;
-                self.tally.document_bytes += document.bytes.len() as u64;
-                self.put(false, &[ENTRY_DOCUMENT]);
-                self.source(source);
-                self.put(false, &generation.to_be_bytes());
-                self.put(false, &start_offset.to_be_bytes());
-                self.bytes(false, document.path.as_bytes());
-                self.all.update(&document.captured_at.to_be_bytes());
-                self.bytes(
-                    false,
+                tally.documents += 1;
+                tally.document_bytes += document.bytes.len() as u64;
+                let mut out = Encoder::for_source(all, sources, per_source, source);
+                out.put(&[ENTRY_DOCUMENT]);
+                out.source(source);
+                out.put(&generation.to_be_bytes());
+                out.put(&start_offset.to_be_bytes());
+                out.bytes(document.path.as_bytes());
+                // Observation time is run-dependent: the entry digest alone sees it.
+                out.entry_only(&document.captured_at.to_be_bytes());
+                out.bytes(
                     serde_json::to_string(&document.status)
                         .expect("enum")
                         .as_bytes(),
                 );
-                self.bytes(false, &document.bytes);
+                out.bytes(&document.bytes);
             }
             LedgerEntry::GenerationComplete {
                 source,
@@ -162,21 +187,27 @@ impl EntryDigest {
                 normalizer_version,
                 normalized_clean,
             } => {
-                self.tally.seals += 1;
-                self.put(false, &[ENTRY_SEAL]);
-                self.source(source);
-                self.put(false, &generation.to_be_bytes());
-                self.put(false, &normalizer_version.to_be_bytes());
-                self.put(false, &[u8::from(*normalized_clean)]);
+                tally.seals += 1;
+                let mut out = Encoder::for_source(all, sources, per_source, source);
+                out.put(&[ENTRY_SEAL]);
+                out.source(source);
+                out.put(&generation.to_be_bytes());
+                out.put(&normalizer_version.to_be_bytes());
+                out.put(&[u8::from(*normalized_clean)]);
             }
             LedgerEntry::Meta {
                 schema_version,
                 payload,
             } => {
-                self.tally.metas += 1;
-                self.put(true, &[ENTRY_META]);
-                self.put(true, &schema_version.to_be_bytes());
-                self.bytes(true, payload.as_bytes());
+                tally.metas += 1;
+                let mut out = Encoder {
+                    all,
+                    side: metas,
+                    source: None,
+                };
+                out.put(&[ENTRY_META]);
+                out.put(&schema_version.to_be_bytes());
+                out.bytes(payload.as_bytes());
             }
         }
     }
@@ -190,43 +221,87 @@ impl EntryDigest {
         self.all.finalize()
     }
 
-    /// The raw and seal entries alone.
+    /// The raw, document and seal entries alone, in visit order.
     pub fn source_digest(&self) -> blake3::Hash {
         self.sources.finalize()
+    }
+
+    /// The raw, document and seal entries per source, folded in path order:
+    /// blake3 over `(path length, path, the source's digest)` for every
+    /// source. Equal for any interleaving of whole sources; each source's
+    /// own entries still count in their order and multiplicity.
+    pub fn source_set_digest(&self) -> blake3::Hash {
+        let mut folded = blake3::Hasher::new();
+        for (path, digest) in &self.per_source {
+            folded.update(&(path.len() as u64).to_be_bytes());
+            folded.update(path.as_bytes());
+            folded.update(digest.finalize().as_bytes());
+        }
+        folded.finalize()
     }
 
     /// The metadata entries alone.
     pub fn meta_digest(&self) -> blake3::Hash {
         self.metas.finalize()
     }
+}
 
-    fn put(&mut self, meta: bool, bytes: &[u8]) {
-        self.all.update(bytes);
-        if meta {
-            self.metas.update(bytes);
-        } else {
-            self.sources.update(bytes);
+/// Where one entry's encoding goes: the entry digest, the source or meta
+/// digest, and for a source entry its own source's digest.
+struct Encoder<'a> {
+    all: &'a mut blake3::Hasher,
+    side: &'a mut blake3::Hasher,
+    source: Option<&'a mut blake3::Hasher>,
+}
+
+impl<'a> Encoder<'a> {
+    fn for_source(
+        all: &'a mut blake3::Hasher,
+        sources: &'a mut blake3::Hasher,
+        per_source: &'a mut BTreeMap<String, blake3::Hasher>,
+        source: &SourceDef,
+    ) -> Self {
+        let path = source.relative_path.as_str();
+        if !per_source.contains_key(path) {
+            per_source.insert(path.to_owned(), blake3::Hasher::new());
         }
+        Self {
+            all,
+            side: sources,
+            source: per_source.get_mut(path),
+        }
+    }
+
+    fn put(&mut self, bytes: &[u8]) {
+        self.all.update(bytes);
+        self.side.update(bytes);
+        if let Some(source) = self.source.as_deref_mut() {
+            source.update(bytes);
+        }
+    }
+
+    fn entry_only(&mut self, bytes: &[u8]) {
+        self.all.update(bytes);
+    }
+
+    fn bytes(&mut self, bytes: &[u8]) {
+        self.put(&(bytes.len() as u64).to_be_bytes());
+        self.put(bytes);
     }
 
     fn source(&mut self, source: &SourceDef) {
-        self.put(false, &[u8::from(source.ledger_only)]);
-        self.bytes(false, source.relative_path.as_bytes());
-        self.bytes(false, source.stream_id.as_bytes());
-        self.bytes(false, source.session_id.as_bytes());
-        self.bytes(false, source.native_session_id.as_bytes());
+        self.put(&[u8::from(source.ledger_only)]);
+        self.bytes(source.relative_path.as_bytes());
+        self.bytes(source.stream_id.as_bytes());
+        self.bytes(source.session_id.as_bytes());
+        self.bytes(source.native_session_id.as_bytes());
         match &source.agent_version {
-            None => self.put(false, &[0]),
+            None => self.put(&[0]),
             Some(version) => {
-                self.put(false, &[1]);
-                self.bytes(false, version.as_bytes());
+                self.put(&[1]);
+                self.bytes(version.as_bytes());
             }
         }
-    }
-
-    fn bytes(&mut self, meta: bool, bytes: &[u8]) {
-        self.put(meta, &(bytes.len() as u64).to_be_bytes());
-        self.put(meta, bytes);
     }
 }
 
@@ -288,6 +363,7 @@ pub fn verify(dir: &Path) -> Result<LedgerVerify, CaptureError> {
         tally: digest.tally(),
         entry_digest: digest.finish(),
         source_digest: digest.source_digest(),
+        source_set_digest: digest.source_set_digest(),
         meta_digest: digest.meta_digest(),
         index_digest,
     })

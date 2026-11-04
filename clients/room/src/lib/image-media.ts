@@ -15,11 +15,48 @@ export function imageMediaTypeFromBytes(bytes: Uint8Array): string | null {
   if (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(new TextDecoder().decode(bytes.subarray(0, 512)))) return "image/svg+xml";
   return null;
 }
-/** Transcript images must be committed WebP bundles produced by ingestion. */
-export function isOptimizedImageAsset(asset: AssetRef): boolean {
-  const member = (value: AssetRef | undefined) => value?.media_type === "image/webp"
-    && value.byte_len > 0 && /^[a-f0-9]{64}$/.test(value.digest)
-    && value.url === `/api/assets/${value.digest}.webp`;
-  return member(asset) && ["rail", "tile", "tile2x", "preview"].every(variant =>
-    member(asset.image_variants?.[variant as "rail" | "tile" | "tile2x" | "preview"]));
+
+/** The six recorded image formats ingestion keeps as verified originals, each
+ * with the one extension its content-addressed member name carries. */
+const RECORDED_IMAGE_EXTENSION: ReadonlyMap<string, string> = new Map([
+  ["image/png", "png"],
+  ["image/jpeg", "jpg"],
+  ["image/gif", "gif"],
+  ["image/webp", "webp"],
+  ["image/bmp", "bmp"],
+  ["image/x-icon", "ico"],
+]);
+
+const BUNDLE_VARIANTS = ["rail", "tile", "tile2x", "preview"] as const;
+
+/** The member extension of a recorded image format, or undefined for any
+ * other media type. */
+export function recordedImageExtension(mediaType: string): string | undefined {
+  return RECORDED_IMAGE_EXTENSION.get(mediaType);
+}
+
+/** One content-addressed projection member: `/api/assets/<digest>.<extension>`. */
+function isMember(value: AssetRef | undefined, mediaType: string, extension: string): boolean {
+  return value?.media_type === mediaType && value.byte_len > 0 && /^[a-f0-9]{64}$/.test(value.digest)
+    && value.url === `/api/assets/${value.digest}.${extension}`;
+}
+
+/** A complete WebP bundle: the member and its four renditions, all encoded
+ * by ingestion before deferred renditions (projections built earlier). */
+export function isLegacyImageBundle(asset: AssetRef): boolean {
+  const member = (value: AssetRef | undefined) => isMember(value, "image/webp", "webp");
+  return member(asset) && BUNDLE_VARIANTS.every(variant => member(asset.image_variants?.[variant]));
+}
+
+/** A transcript image the room may show: a recorded original (a member in one
+ * of the six formats with no rendition map) or a complete legacy WebP bundle.
+ * One transcript may hold both. Either is drawn only through the daemon's
+ * WebP renditions (`AssetSource.imageAssetUrl`); the room never draws the
+ * recorded bytes themselves. */
+export function isRecordedImageAsset(asset: AssetRef): boolean {
+  // A malformed row's missing asset is refused, never a render-time throw.
+  if (asset == null) return false;
+  if (asset.image_variants != null) return isLegacyImageBundle(asset);
+  const extension = recordedImageExtension(asset.media_type);
+  return extension !== undefined && isMember(asset, asset.media_type, extension);
 }

@@ -1,12 +1,13 @@
 // Image occurrences from canonical activity, independent of either fold level.
-// Every displayed image comes from recorded, optimized canonical members.
+// Every displayed image is a recorded canonical member: an original or a
+// complete legacy WebP bundle, drawn only through the daemon's renditions.
 import type { ResourceRef, TimelineEntry } from "@vibefield/rosetta-protocol";
 import { projectAction } from "./families";
 import type { PathFact } from "./families";
 import type { AttachmentFact, LedgerMember } from "./turns";
 import { readAttachments } from "./turns";
 import { resourceLabel, splitPath } from "./vocabulary";
-import { isOptimizedImageAsset } from "../image-media";
+import { isRecordedImageAsset } from "../image-media";
 
 function resourcePath(resource: ResourceRef): PathFact {
   const label = resourceLabel(resource);
@@ -26,7 +27,7 @@ function rowImages(row: TimelineEntry): AttachmentFact[] {
     : [];
   return [...recorded, ...paths.flatMap((path, index) => {
     const resource = path.resource;
-    if (resource.type !== "asset" || !isOptimizedImageAsset(resource.asset)) return [];
+    if (resource.type !== "asset" || !isRecordedImageAsset(resource.asset)) return [];
     const asset = resource.asset;
     const key = `${row.session_id}:${row.timeline_id}:resource:${index}`;
     const ref = {

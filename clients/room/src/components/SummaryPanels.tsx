@@ -26,6 +26,7 @@ import type { RoomAct } from "../host-inputs";
 import { useHostInputs } from "../host-inputs";
 import { HostAct } from "./HostAct";
 import { RenameHeading } from "./RenameHeading";
+import { failedFiguresLine } from "../lib/figure-order";
 
 type TintStyle = CSSProperties & { "--tint": string };
 const MAX_TREEMAP_PROJECT_COUNT = 10;
@@ -65,6 +66,12 @@ export interface ProjectSummaryPanelProps {
   /** R5: the host's acts, after the head's own (New agent, the primary, last). */
   readonly hostActs?: readonly RoomAct[] | null | undefined;
 }
+
+/** The veil's words while an import runs. Every figure waits on one global
+ * gate — the daemon publishes aggregates only once the whole import has
+ * finished (http.rs `is_published`) — so it names that gate, never work on
+ * this project. */
+export const CHARTS_AFTER_IMPORT = "Charts appear when the whole import finishes";
 
 export function ProjectSummaryPanel({
   project,
@@ -195,7 +202,8 @@ export function ProjectSummaryPanel({
           {isVeiled && (
             <Veil
               label={ingestActive
-                ? censusRunning ? "Discovering conversations…" : "Preparing activity summaries…"
+                ? censusRunning ? "Discovering conversations…" : CHARTS_AFTER_IMPORT
+                : project.statsFailed === true ? "Figures for this project failed · retrying"
                 : "Loading activity summaries…"}
               progress={null}
             />
@@ -312,7 +320,11 @@ export function PortfolioSummaryPanel({
   onProjectSelect,
 }: PortfolioSummaryPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
-  const summariesPending = ingestActive || projects.some((project) => !project.statsReady);
+  // A project whose figures failed no longer holds the veil up: the rest
+  // show, and a line says how many are missing while they are retried.
+  const failedCount = ingestActive ? 0 : projects.filter((project) => project.statsFailed === true).length;
+  const summariesPending = ingestActive ||
+    projects.some((project) => !project.statsReady && project.statsFailed !== true);
   const summary = useMemo(() => {
     // Match the project list's lifetime spend ranking, tokens breaking ties.
     const treemapProjects = [...projects]
@@ -390,7 +402,7 @@ export function PortfolioSummaryPanel({
           {summariesPending && (
             <Veil
               label={ingestActive
-                ? censusRunning ? "Discovering conversations…" : "Preparing activity summaries…"
+                ? censusRunning ? "Discovering conversations…" : CHARTS_AFTER_IMPORT
                 : "Loading activity summaries…"}
               progress={null}
             />
@@ -398,6 +410,11 @@ export function PortfolioSummaryPanel({
           <SummaryMetrics sessionCount={summary.sessionCount} messageCount={summary.messageCount}
             tokenCount={summary.tokenCount} spend={summary.spend}
             pending={summariesPending} period="all time" />
+          {!summariesPending && failedCount > 0 && (
+            <p className="ah-meta__facts" role="status" data-figures-failed={failedCount}>
+              {failedFiguresLine(failedCount)}
+            </p>
+          )}
           <div className="ah-chartcard">
             <Treemap
               data={summary.treemapData}

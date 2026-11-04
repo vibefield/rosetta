@@ -1,6 +1,10 @@
 //! Image URLs expose only committed assets or exact canonical file targets.
-//! Work stays on a bounded blocking lane; the browser never buffers originals
-//! merely to draw a thumbnail. Live-file cache entries contain WebP bytes only.
+//! Every display rendition is a WebP that Rosetta encoded from decoded
+//! pixels, so the renderer never decodes a recorded original; the plain asset
+//! URL (open, save) is the only way to the original bytes. A cached rendition
+//! is served without a worker permit; only a miss, which may encode, takes one
+//! of the four permits and then a codec slot. Live-file cache entries contain
+//! WebP bytes only.
 use super::Failure;
 use axum::{
     body::Body,
@@ -9,6 +13,7 @@ use axum::{
 };
 use rosetta_core::assets::{IMAGE_RECIPE_VERSION, ImageVariant};
 use rosetta_media::{MAX_INPUT_BYTES, PreparedImage};
+use rosetta_store::assets::renditions::{self, RenditionError};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -32,6 +37,39 @@ impl ImageQuery {
         }
         Ok(self.image.unwrap_or_default())
     }
+}
+
+/// `/api/assets/<name>?image=<variant>`: a cache hit is read on the blocking
+/// pool without a worker permit, so cached tiles never queue behind encodes;
+/// only a miss takes one of the four permits.
+pub(super) async fn asset_rendition(
+    cache: Arc<ImageCache>,
+    name: String,
+    variant: ImageVariant,
+    retry: bool,
+) -> Result<Response, Failure> {
+    let worker_failed = |_| Failure::internal("image worker failed");
+    if !retry {
+        let (hits, hit_name) = (cache.clone(), name.clone());
+        let hit = tokio::task::spawn_blocking(move || hits.cached_asset(&hit_name, variant))
+            .await
+            .map_err(worker_failed)?;
+        if let Some(response) = hit {
+            return Ok(response);
+        }
+    }
+    let permit = cache
+        .workers
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| Failure::internal("image worker closed"))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        cache.asset(&name, variant, retry)
+    })
+    .await
+    .map_err(worker_failed)?
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -93,48 +131,32 @@ impl ImageCache {
         lock
     }
 
-    pub(super) fn asset(
-        &self,
-        name: &str,
-        variant: ImageVariant,
-        retry: bool,
-    ) -> Result<Response, Failure> {
-        let path = self.root.join(name);
-        let lock = self.lock(&path);
-        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
-        check_regular(
-            &fs::symlink_metadata(&path)
-                .map_err(|_| Failure::not_found("image base is unavailable"))?,
-        )?;
-        let digest = &name[..64]; // the caller checked the closed asset name grammar
-        let variant_path = self.root.join(variant.file_name(digest));
-        if !retry
-            && variant != ImageVariant::Full
-            && let Ok(bytes) = read_webp(&variant_path)
-        {
-            return Ok(response(bytes, true));
-        }
-        let bytes = read_regular(&path)?;
-        if blake3::hash(&bytes).to_hex().as_str() != digest {
-            return Err(Failure::internal(
-                "projection image failed its content hash",
-            ));
-        }
-        if variant == ImageVariant::Full && name.ends_with(".webp") {
-            return Ok(response(bytes, true));
-        }
-        // Legacy image URLs and an evicted rendition are repaired from the base
-        // member. Normal ingestion creates all renditions from original pixels;
-        // ledger replay recreates those exact originals if a full rebuild is needed.
-        let prepared = rosetta_media::prepare(&bytes).map_err(media_error)?;
-        for member in &prepared.asset.image_variants {
-            write_cache(
-                &self.root.join(member.variant.file_name(digest)),
-                &member.bytes,
+    /// A cached projection rendition, or `None` for a miss.
+    fn cached_asset(&self, name: &str, variant: ImageVariant) -> Option<Response> {
+        let (digest, _) = renditions::image_base(name)?;
+        renditions::cached(&self.root, digest, variant).map(|bytes| response(bytes, true))
+    }
+
+    fn asset(&self, name: &str, variant: ImageVariant, retry: bool) -> Result<Response, Failure> {
+        // Every variant, Full included, is a WebP encoding of the base's
+        // pixels: a recorded original reaches the browser only through the
+        // plain asset URL. Missing and evicted renditions are made here from
+        // the base member; the background sweep makes the rest.
+        let made =
+            renditions::rendition(&self.root, name, variant, retry).map_err(
+                |error| match error {
+                    RenditionError::BaseMissing => Failure::not_found("image base is unavailable"),
+                    RenditionError::BaseCorrupt => {
+                        Failure::internal("projection image failed its content hash")
+                    }
+                    RenditionError::Media(error) => media_error(error),
+                    RenditionError::Io(error) => io_error(error),
+                },
             )?;
+        if let Some(error) = made.cache_error {
+            eprintln!("image rendition served uncached: {error}");
         }
-        let selected = selected(&prepared, variant);
-        Ok(response(selected, true))
+        Ok(response(made.bytes, true))
     }
 
     pub(super) fn file(
@@ -164,7 +186,7 @@ impl ImageCache {
                 .live
                 .join(&digest)
                 .join(format!("{}.webp", variant.name()));
-            if let Ok(bytes) = read_webp(&cached) {
+            if let Ok(bytes) = renditions::read_webp(&cached) {
                 return Ok(response(bytes, false));
             }
         }
@@ -188,7 +210,7 @@ impl ImageCache {
         let digest = blake3::hash(&bytes).to_hex().to_string();
         let directory = self.live.join(&digest);
         let selected_path = directory.join(format!("{}.webp", variant.name()));
-        let selected_bytes = if !retry && let Ok(cached) = read_webp(&selected_path) {
+        let selected_bytes = if !retry && let Ok(cached) = renditions::read_webp(&selected_path) {
             cached
         } else {
             let prepared = match rosetta_media::prepare(&bytes) {
@@ -197,12 +219,14 @@ impl ImageCache {
                 Err(error) => return Err(media_error(error)),
             };
             let _disk = self.disk.lock().unwrap_or_else(|p| p.into_inner());
-            write_cache(&directory.join("full.webp"), &prepared.asset.bytes)?;
+            renditions::write_cache(&directory.join("full.webp"), &prepared.asset.bytes)
+                .map_err(io_error)?;
             for member in &prepared.asset.image_variants {
-                write_cache(
+                renditions::write_cache(
                     &directory.join(format!("{}.webp", member.variant.name())),
                     &member.bytes,
-                )?;
+                )
+                .map_err(io_error)?;
             }
             self.prune_live(&directory)?;
             selected(&prepared, variant)
@@ -272,47 +296,6 @@ fn check_regular(metadata: &fs::Metadata) -> Result<(), Failure> {
     if metadata.len() > MAX_INPUT_BYTES as u64 {
         return Err(Failure::bad_request("the image is too large to open here"));
     }
-    Ok(())
-}
-fn read_regular(path: &Path) -> Result<Vec<u8>, Failure> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|_| Failure::not_found("image cache member is unavailable"))?;
-    if !metadata.file_type().is_file() {
-        return Err(Failure::not_found(
-            "image cache member is not a regular file",
-        ));
-    }
-    check_regular(&metadata)?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    fs::File::open(path)
-        .map_err(io_error)?
-        .take(MAX_INPUT_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io_error)?;
-    if bytes.len() > MAX_INPUT_BYTES {
-        return Err(Failure::bad_request("image is too large"));
-    }
-    Ok(bytes)
-}
-fn read_webp(path: &Path) -> Result<Vec<u8>, Failure> {
-    let bytes = read_regular(path)?;
-    if !bytes.starts_with(b"RIFF") || bytes.get(8..12) != Some(b"WEBP") {
-        return Err(Failure::internal("image cache member is invalid"));
-    }
-    Ok(bytes)
-}
-fn write_cache(path: &Path, bytes: &[u8]) -> Result<(), Failure> {
-    use std::io::Write;
-    let parent = path
-        .parent()
-        .ok_or_else(|| Failure::internal("invalid cache path"))?;
-    fs::create_dir_all(parent).map_err(io_error)?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".image-")
-        .tempfile_in(parent)
-        .map_err(io_error)?;
-    temporary.write_all(bytes).map_err(io_error)?;
-    temporary.persist(path).map_err(|e| io_error(e.error))?;
     Ok(())
 }
 fn response(bytes: Vec<u8>, immutable: bool) -> Response {

@@ -26,7 +26,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 
 [workspace.dependencies]
@@ -55,6 +55,11 @@ pulldown-cmark = { version = "0.13.6", default-features = false }
 percent-encoding = "2"
 
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+# The codecs `image` already resolves (Cargo.lock), named directly only for
+# header-only frame counts. Keep them at image's versions: one copy each.
+gif = "0.14.2"
+png = "0.18.1"
+image-webp = "0.2.4"
 webp = { version = "0.3.1", default-features = false }
 fast_image_resize = { version = "6.1.0", default-features = false, features = ["std"] }
 moxcms = "0.8.1"

@@ -18,6 +18,11 @@ export interface ActivityOrder {
   readonly sessions: ReadonlyMap<string, SessionPosition>;
   readonly projects: ReadonlyMap<string | null, ActivityPosition>;
   readonly bootstrapping: boolean;
+  /** While bootstrapping only: each project's newest root `updated_at`, the
+   * order among projects no recorded activity ranks yet (see
+   * `compareProjectOrder`). Empty once activity alone orders. Optional, so
+   * an order built without it keeps the id fallback. */
+  readonly sourceAt?: ReadonlyMap<string | null, number>;
 }
 
 export interface ActivityOrderOptions {
@@ -51,6 +56,7 @@ export function advanceActivityOrder(
   const live = options.live && !seed;
   const sessions = new Map<string, SessionPosition>();
   const projectActivity = new Map<string | null, number | null>();
+  const sourceAt = new Map<string | null, number>();
   const advances = new Map<string | null, number[]>();
 
   for (const row of rows) {
@@ -70,6 +76,9 @@ export function advanceActivityOrder(
     });
     if (row.parent_session_id !== null) continue;
     projectActivity.set(row.project_id, latest(projectActivity.get(row.project_id) ?? null, at));
+    if (options.bootstrapping && Number.isFinite(row.updated_at)) {
+      sourceAt.set(row.project_id, latest(sourceAt.get(row.project_id) ?? null, row.updated_at)!);
+    }
     if (live && sameOwner && advanced) {
       const events = advances.get(row.project_id) ?? [];
       events.push(at);
@@ -90,7 +99,7 @@ export function advanceActivityOrder(
     }
     projects.set(id, { seenAt: latest(seenAt, at), rankAt });
   }
-  return { sessions, projects, bootstrapping: options.bootstrapping };
+  return { sessions, projects, bootstrapping: options.bootstrapping, sourceAt };
 }
 
 /** Known timestamps precede unknowns; identity deterministically breaks ties. */
@@ -102,12 +111,35 @@ export function compareActivityRanks(
   return (a !== null && b !== null ? b - a : 0) || aId.localeCompare(bId);
 }
 
+/** The project list's `recent` order. Activity-ranked projects come first,
+ * by rank. While the room bootstraps (decision D1, 2026-11-03), the
+ * projects no recorded activity can rank yet follow by their newest root's
+ * `updated_at` (source freshness), then id, where they would otherwise
+ * fall back to id alone; it never outranks recorded activity, and once the
+ * import publishes, activity and id alone order again. */
+export function compareProjectOrder(
+  order: ActivityOrder, left: string | null, right: string | null, leftId: string, rightId: string,
+): number {
+  const a = order.projects.get(left)?.rankAt ?? null;
+  const b = order.projects.get(right)?.rankAt ?? null;
+  if (a === null && b === null && order.bootstrapping && order.sourceAt !== undefined) {
+    return compareActivityRanks(order.sourceAt.get(left) ?? null, order.sourceAt.get(right) ?? null, leftId, rightId);
+  }
+  return compareActivityRanks(a, b, leftId, rightId);
+}
+
 /** Local calendar day, rather than a 24-hour duration (including across DST). */
 export function activityDay(at: number | null): number | null {
   if (at === null) return null;
   const date = new Date(at);
   date.setHours(0, 0, 0, 0);
   return Number.isFinite(date.getTime()) ? date.getTime() : null;
+}
+
+/** The import's "Not imported yet" group has no recorded activity to
+ * rank by: its newest source first (`updated_at`), then identity. */
+export function compareNotImported(left: SessionRow, right: SessionRow): number {
+  return right.updated_at - left.updated_at || left.id.localeCompare(right.id);
 }
 
 export function compareOrderedSessions(

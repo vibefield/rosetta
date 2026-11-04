@@ -91,8 +91,8 @@ CI runs on pull requests and `main`, and can be started manually. It checks work
 syntax, the committed ground-truth artifacts, Python tests, Rust formatting, Clippy
 with warnings denied, and workspace tests on Linux and Apple Silicon macOS. The npm
 job builds both libraries and the app, runs the SDK and complete app unit suites,
-checks documentation, tests the packed libraries in a clean consumer, and exercises
-the room host in Electron.
+checks documentation, tests the packed libraries in a clean consumer, exercises
+the room host in Electron, and characterizes a cold import (scale 0.25) in Electron.
 Rust comes from `rust-toolchain.toml`; builds use the committed `Cargo.lock` with
 `--locked`. The evidence tools require Python 3.12 or newer; CI uses Python 3.13.
 External actions are pinned to commit SHAs. Workflow tokens default to read-only;

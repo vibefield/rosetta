@@ -59,7 +59,7 @@ export const endpoints = [
     id: 'boost', group: 'Daemon', method: 'POST', path: '/api/ingest/boost', title: 'Prioritize a session',
     description: 'Record an advisory request to bring a queued session forward in the backfill scheduler.',
     request: 'BoostRequest', body: { session_id: 'SESSION_ID' }, response: 'BoostResponse', sdk: 'await client.boost(sessionId)',
-    notes: ['queued acknowledges the request, not completed ingestion. Without a backfill queue, queued is false.', 'A nonempty id that the queue never encounters simply expires. It is safe to request a boost when a reader selects a pending session.'],
+    notes: ['queued acknowledges the request, not completed ingestion. It is true only while a backfill queue is still running; a fresh in-memory import, a returning start and live service have none, so they answer false.', 'A nonempty id that the queue never encounters simply expires. It is safe to request a boost when a reader selects a pending session.'],
   },
   {
     id: 'runtimes', group: 'Daemon', method: 'GET', path: '/api/runtimes', title: 'List runtimes',
@@ -101,7 +101,7 @@ export const endpoints = [
   {
     id: 'pricing', group: 'Projects', method: 'GET', path: '/api/pricing', title: 'Inspect pricing coverage',
     description: 'Inspect the compiled pricing catalog, the projection’s pricing version, source provenance, and unpriced model usage.',
-    response: 'PricingResponse', sdk: 'await client.pricing()',
+    response: 'PricingResponse', sdk: 'await client.pricing()', canonical: true,
     notes: ['basis is list_price_equivalent: the model creator’s API list-price equivalent for recorded usage. Provider-reported cost is a separate fact.', 'unpriced reports unknown models and usage the catalog could not price. Missing coverage must not be presented as a zero-cost result.'],
   },
   {
@@ -111,7 +111,7 @@ export const endpoints = [
     query: [p('since_ms', 'integer', 'Inclusive window start in Unix milliseconds.', true), p('until_ms', 'integer', 'Inclusive window end in Unix milliseconds. Defaults to the current time; must follow since_ms by at most seven days.'), p('sessions', 'string', 'Up to 256 comma-separated canonical top-level session ids. Values are trimmed and deduplicated; blank entries are rejected. Child ids do not select a root.'), p('gap_ms', 'integer', 'Report silences strictly longer than this threshold. Defaults to 900,000 (15 minutes); minimum 60,000 (one minute).'), p('limit', 'integer', 'Maximum sessions. Defaults to 200; clamped to 1–1,000.')],
     exampleQuery: '?since_ms=1791158400000&until_ms=1791244800000', response: 'ActivityResponse',
     sdk: 'await client.activity({\n  sinceMs: 1791158400000,\n  untilMs: 1791244800000,\n})',
-    notes: ['Sessions are ordered by newest recorded activity. Each session includes its descendant tree’s turns, oldest first. Activity bounds select sessions, so a selected session can have no turns touching the window.', 'Turn bounds come from rows overlapping the window and are not clipped to it. Gaps measure the absence of recorded activity, including long waits inside a tool call; they are not proof that an agent stopped running.', 'truncated means additional matching sessions were omitted by limit. This is a bounded response without a pagination cursor.', 'During cold admission, a pending session can have turns_withheld: true and an empty turns array. This does not mean the session has no history.', 'In authenticated mode this cross-session endpoint requires the bearer; a session grant cannot open it. Invalid window bounds, gap thresholds, or session selectors return 400.'],
+    notes: ['Sessions are ordered by newest recorded activity. Each session includes its descendant tree’s turns, oldest first. Activity bounds select sessions, so a selected session can have no turns touching the window.', 'Turn bounds come from rows overlapping the window and are not clipped to it. Gaps measure the absence of recorded activity, including long waits inside a tool call; they are not proof that an agent stopped running.', 'truncated means additional matching sessions were omitted by limit. This is a bounded response without a pagination cursor.', 'Before canonical publication, pending sessions are not selected, and an admitted session’s turns skip its pending descendants. A pending session that is still returned has turns_withheld: true and an empty turns array; this does not mean it has no history.', 'In authenticated mode this cross-session endpoint requires the bearer; a session grant cannot open it. Invalid window bounds, gap thresholds, or session selectors return 400.'],
     related: ['reference/sessions', 'readiness', 'types/TurnSpan'],
   },
   {
@@ -132,7 +132,7 @@ export const endpoints = [
     description: 'Read a backward page of the canonical conversation. Entries within each page are ordered oldest first.',
     query: [p('limit', 'integer', 'Page size. Defaults to 100; clamped to 1–1,000.'), p('cursor', 'string', 'Opaque continuation from the previous response. Omit to read the latest page.')],
     response: 'TimelinePage', sdk: 'await client.timeline(sessionId, { limit: 100 })', grant: 'read',
-    notes: ['The first page binds a session watermark. Continue using cursor until it is null; never construct a cursor yourself.', 'A rewritten projection or invalid cursor returns 410 cursor_expired. Discard cached pages and refetch from the head.', 'While a cold runtime is pending admission, a known session can return an empty page. That is not proof that the conversation is empty.'], related: ['pagination', 'subscriptions'],
+    notes: ['The first page binds a session watermark. Continue using cursor until it is null; never construct a cursor yourself.', 'A rewritten projection or invalid cursor returns 410 cursor_expired. Discard cached pages and refetch from the head.', 'While a session is pending admission during a cold import, it can return an empty page. That is not proof that the conversation is empty.'], related: ['pagination', 'subscriptions'],
   },
   {
     id: 'timeline-entry', group: 'Sessions', method: 'GET', path: rowPath, title: 'Get a timeline entry',
@@ -160,7 +160,7 @@ export const endpoints = [
     id: 'command', group: 'Content & assets', method: 'GET', path: `${rowPath}/command`, title: 'Read a command body',
     description: 'Recover the exact shell or code source deliberately omitted from a timeline row, lazily from the raw ledger.',
     response: 'CommandResponse', sdk: 'await client.command(sessionId, timelineId)', grant: 'read',
-    notes: ['Fetch on explicit disclosure. Timeline pages intentionally do not carry these potentially large command bodies.'],
+    notes: ['Fetch on explicit disclosure. Timeline pages intentionally do not carry these potentially large command bodies.', 'Before canonical publication this route answers 503 not_ready while the session is still importing (“this conversation is still importing”), or while an admitted row’s raw record is still being saved (“still saving · retry”). Both are retryable; after publication a missing record is 404.'],
   },
   {
     id: 'work', group: 'Content & assets', method: 'GET', path: `${rowPath}/work`, title: 'Read reported work',
@@ -198,7 +198,7 @@ export const endpoints = [
     id: 'asset', group: 'Content & assets', method: 'GET', path: '/api/assets/{name}', title: 'Read a projection asset',
     description: 'Read immutable, content-addressed media or oversized canonical text referenced by a transcript.',
     query: imageQuery, response: 'binary', sdk: 'await client.readAsset(asset)', grant: 'read',
-    notes: ['name is a 64-character lowercase BLAKE3 digest plus .png, .jpg, .gif, .webp, .pdf, .json, or .txt. Follow the stored AssetRef.url instead of constructing a name.', 'Captured HTML uses the session-scoped artifact content endpoint; this generic route does not serve .html members.', 'Original members are checked against their digest and returned with private, max-age=31536000, immutable caching. Image renditions support conditional requests.', 'A valid read grant can open a known asset digest without a session comparison. For images use imageAssetUrl(); readTextAsset() is for canonical oversized text.'],
+    notes: ['name is a 64-character lowercase BLAKE3 digest plus .png, .jpg, .gif, .webp, .bmp, .ico, .pdf, .json, or .txt. Follow the stored AssetRef.url instead of constructing a name.', 'Captured HTML uses the session-scoped artifact content endpoint; this generic route does not serve .html members.', 'Without image, the member is checked against its digest and returned with its own content type, X-Content-Type-Options: nosniff, and private, max-age=31536000, immutable caching. For a recorded image that is its original bytes: use it to open or save the file, not to display it.', 'With image on an image member, every variant, full included, is a WebP that the daemon encoded from the image\'s pixels, never the recorded bytes. A cached rendition returns at once; an uncached one is encoded on this request, then cached. Responses are image/webp with a BLAKE3 ETag, nosniff, and immutable caching, and answer 304 to a matching If-None-Match. A non-image member returns 400, as do an image the decoder rejects and an unsupported v. A missing image member returns 404.', 'A valid read grant can open a known asset digest without a session comparison. For images use imageAssetUrl(): a legacy WebP bundle names its own rendition members, and a recorded original (an image member without a WebP bundle) gets ?image=<variant>&v=1 for every variant, full included. readTextAsset() is for canonical oversized text.'],
   },
   {
     id: 'search', group: 'Search', method: 'GET', path: '/api/search', title: 'Search agent history',

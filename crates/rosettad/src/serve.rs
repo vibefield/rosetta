@@ -21,7 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -29,18 +29,24 @@ use std::time::{Duration, Instant};
 use crate::ingestion_control::ColdControl;
 use rosetta_capture::{NotifyEvents, SourceWake};
 
+#[cfg(test)]
+mod command_stage_tests;
+mod commands;
 pub(crate) mod control;
+#[cfg(test)]
+mod inprocess;
+mod resume;
+#[cfg(test)]
+mod resume_kill_tests;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric,
-    RawCommandLocator, RebuildOptions, SessionFile, SliceBudget, StreamReport,
-    meta_ingest_inventory_into, read_raw_command, rebuild_runtime_with_options,
-    reserve_unsealed_generation, stream_backfill_into,
+    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, RebuildOptions,
+    SessionFile, SliceBudget, StreamReport, meta_ingest_inventory_into,
+    rebuild_runtime_with_options, stream_backfill_withholding_health,
 };
 use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
     AppState, BoostLedger, ConsentGate, DaemonHealth, EnrolledRuntimes, Hub, HubConfig,
-    IngestCounterSource, IngestCounters, ProjectionReader, RawCommandReader, RuntimeIdentity,
-    RuntimeTick, router,
+    IngestCounterSource, IngestCounters, ProjectionReader, RuntimeIdentity, RuntimeTick, router,
 };
 use rosetta_store::{Store, queries};
 
@@ -50,7 +56,7 @@ use crate::engine::{
 };
 use crate::enroll::{Enrollment, RuntimeTarget, discovered_by_kind, resolve_targets, runtime_name};
 use crate::recovery::restart_incomplete_projection;
-use crate::runtime_ledger::{is_layout_root, ledger_dir, ledger_dir_for, open_runtime_ledger};
+use crate::runtime_ledger::{is_layout_root, ledger_dir, open_runtime_ledger};
 use crate::{
     AppliedColdRuntime, ColdCaptureRequest, Flags, identity_name, install_rebuilt_projection,
     ledger_root, load_enrollment, make_single_file, open_progressive_backfill, parse_flags,
@@ -63,37 +69,6 @@ const CONSENT_POLL: Duration = Duration::from_millis(200);
 #[cfg(test)]
 #[path = "serve_tests.rs"]
 mod tests;
-
-struct LedgerCommandReader {
-    root: PathBuf,
-    adapters: Vec<&'static dyn rosetta_adapter_support::AgentAdapter>,
-}
-
-impl RawCommandReader for LedgerCommandReader {
-    fn read_command(&self, source: &queries::CommandSource) -> Result<Option<String>, String> {
-        let adapter = self
-            .adapters
-            .iter()
-            .copied()
-            .find(|adapter| adapter.kind() == source.agent_kind)
-            .ok_or_else(|| format!("no adapter for {}", source.agent_kind))?;
-        let locator = RawCommandLocator {
-            runtime_id: source.runtime_id.clone(),
-            session_id: source.session_id.clone(),
-            cursor_id: source.cursor_id,
-            relative_path: source.relative_path.clone(),
-            generation: source.generation,
-            offset: source.offset,
-            timeline_id: source.timeline_id.clone(),
-            correlation_key: source.correlation_key.clone(),
-        };
-        // The runtime's ledger directory follows its identity root: the
-        // per-kind directory for a discovered runtime, `<kind>~<digest>` for
-        // a supervisor-enrolled one.
-        let dir = ledger_dir_for(&self.root, &source.agent_kind, &source.data_root);
-        read_raw_command(adapter, &dir, &locator).map_err(|error| error.to_string())
-    }
-}
 
 /// The consented targets a serve mode iterates, in target order.
 fn consented_targets<'a>(
@@ -247,9 +222,17 @@ fn await_initial_search(
 
 pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     // Milestone base for the sweep harness: every `milestone:` line below
-    // reports seconds since this instant.
-    let started = Instant::now();
+    // reports seconds since this instant, and `clock: wall_ms=` anchors it
+    // to the wall clock (measurement only).
+    let clock = crate::ingest_metrics::ServeClock::now();
     let flags = parse_flags(args)?;
+    clock.announce(flags.json);
+    serve(flags, clock.started())
+}
+
+/// [`cmd_serve`] with its flags parsed. In-crate tests call it directly to
+/// set the hidden knobs no flag spells (a walk probe, the chunk bound).
+pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
     let db = flags.db.clone().ok_or("serve needs --db PATH")?;
     // The starter-slice budget is the tunable under sweep: unset = the
     // blessed default, `--slice-budget 0` = whole files, anything else = a
@@ -361,6 +344,13 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
     };
     let progressive = store.is_progressive();
     let warm_live = !fresh_fast && !progressive && !flags.stop_after_meta;
+    // 1 s memory samples while a cold build runs (every sample under
+    // --json --profile); the guard stops the thread on every return.
+    let _memory = crate::ingest_metrics::MemorySampler::start(
+        started,
+        !warm_live,
+        flags.json && flags.profile,
+    );
 
     // The transport comes up before any ingest work. A returning user's
     // mirror warms from the standing projection so the room is instantly
@@ -383,8 +373,11 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         health.ingest_live();
     }
     let hub = Arc::new(Hub::new(HubConfig::default(), now_ms() as u64));
+    hub.set_hide_pending(fresh_fast);
     let consent = Arc::new(ConsentGate::new());
-    let boost = Arc::new(BoostLedger::new());
+    // Only the disk ColdEngine drains boosts (and closes the ledger when its
+    // loop ends). Every other mode attaches none, so the route says queued:false.
+    let boost = (progressive && !flags.stop_after_meta).then(|| Arc::new(BoostLedger::new()));
     let warmed = hub.warm(store.conn()).map_err(|error| error.to_string())?;
     let search = Fts5SidecarSearch::new(db.clone());
     let search_worker = if fresh_fast {
@@ -423,17 +416,20 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             }
         });
     }
-    let state = AppState::with_search(hub.clone(), db.clone(), Arc::new(search.clone()))
+    let commands = Arc::new(commands::LedgerCommandReader::new(
+        public_ledgers.clone(),
+        crate::registry(),
+    ));
+    let mut state = AppState::with_search(hub.clone(), db.clone(), Arc::new(search.clone()))
         .with_projection(projection_reader.clone())
         .with_daemon_health(health.clone())
         .with_consent(consent.clone())
-        .with_boost(boost.clone())
         .with_enrolled(enrolled_presentation)
         .with_auth(auth.clone())
-        .with_raw_commands(Arc::new(LedgerCommandReader {
-            root: public_ledgers.clone(),
-            adapters: crate::registry(),
-        }));
+        .with_raw_commands(commands.clone());
+    if let Some(boost) = &boost {
+        state = state.with_boost(boost.clone());
+    }
     let server = tokio_runtime.spawn({
         let mut shutdown_rx = shutdown_rx.clone();
         let router = router(state);
@@ -660,6 +656,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         let granted = consent.arm();
         health.ingest_await_consent();
         println!("no enrolled agents — choose in the app (or pass --all-agents)");
+        let mut grant_arrived = false;
         loop {
             if stop.load(Ordering::SeqCst) {
                 break;
@@ -677,6 +674,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
                     // The grant names kinds; each maps to that kind's
                     // discovered target, exactly as the app has always meant.
                     consented.extend(kinds.iter().filter_map(|kind| installed_ids(kind)));
+                    grant_arrived = true;
                     break;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -687,6 +685,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         // an earlier start retired has to be re-enabled here too.
         if enrollment.is_some() {
             apply_file_consent(&mut store, &hub, &persisted_rows, &consented)?;
+        }
+        if grant_arrived {
+            crate::ingest_metrics::consent_granted(started, flags.json);
         }
     }
     for target in consented_targets(&targets, &consented) {
@@ -727,6 +728,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             &stop,
             started,
             control.as_ref().expect("cold serve owns a controller"),
+            &commands,
         );
         let (mut store, absorbed) = match outcome {
             Ok(done) => done,
@@ -953,7 +955,9 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
         health: &health,
         search_worker: &search_worker,
         instrument: &instrument,
-        boost: &boost,
+        boost: boost
+            .as_deref()
+            .expect("the disk cold engine owns the boost ledger"),
         stop: &stop,
         opts: &opts,
         sliced: &sliced,
@@ -993,6 +997,7 @@ pub(crate) fn cmd_serve(args: &[String]) -> Result<(), String> {
             "milestone: canonical-ready elapsed_s={:.2}",
             started.elapsed().as_secs_f64(),
         );
+        crate::ingest_metrics::after_canonical_ready(started, &instrument);
 
         // Canonical reads are public now. Let the initial detached generation
         // finish without competing source scans or live SQLite writes; the
@@ -1154,9 +1159,18 @@ fn run_resumed_fresh_serve(
     let mut applied = Vec::new();
     let mut failures = Vec::new();
     let mut handled = BTreeSet::new();
+    // This build writes into the RAM generation readers target, but its rows
+    // are final only after the global reconciliation and finalization below.
+    let mut withheld = resume::WithheldReadiness::default();
+    let mut done = Vec::new();
     let board = Arc::new(rosetta_server::ProgressBoard::new());
     let status_board = board.clone();
     health.ingest_project_source(Arc::new(move || status_board.snapshot()));
+    // Every session this attempt has not opened before waits for its
+    // publication, across a launch or in process after a pause alike.
+    for target in consented_targets(targets, consented) {
+        health.ingest_admission_course(target.id(), rosetta_server::AdmissionCourse::AtPublication);
+    }
 
     let mut remaining = consented_targets(targets, consented).peekable();
     while let Some(target) = remaining.next() {
@@ -1194,10 +1208,12 @@ fn run_resumed_fresh_serve(
                     flush_reconciliation: false,
                     allow_unsealed_sources: true,
                     cancel: Some(cold_cancel.clone()),
+                    withhold_session_health: true,
                     ..RebuildOptions::default()
                 },
             )
             .map_err(|error| format!("replaying {name} staged ledger: {error}"))?;
+            withheld.replayed(report.session_health);
             if report.hard_errors != 0 {
                 // Recovery is the same private build as fresh capture. Replay
                 // retains the raw evidence and holds affected sessions
@@ -1226,9 +1242,8 @@ fn run_resumed_fresh_serve(
             BTreeMap::new()
         };
 
-        // Current bounded metadata settles the roster after replay. A raw-only
-        // source must still be present: otherwise there is no complete evidence
-        // from which this generation can ever be published.
+        // Current bounded metadata settles the roster after replay; each
+        // raw-only source is then fenced against it, or closed if it is gone.
         let mut ledger = open_runtime_ledger(&stage_root, &runtime)?
             .with_codec(flags.cold_ledger_codec)
             .defer_sync_until_flush()
@@ -1249,51 +1264,20 @@ fn run_resumed_fresh_serve(
             Some(&mut ledger),
         )
         .map_err(|error| format!("{name} resume metadata: {error}"))?;
-        for (path, (generation, source)) in &unsealed {
-            if meta.excluded_sessions.contains(&source.session_id)
-                || cold_opts
-                    .exclude_cwds
-                    .excludes_session(&store, &source.session_id)
-                    .map_err(|error| error.to_string())?
-            {
-                // Retire unfinished capture as well as ordinary roster work.
-                // Its raw prefix stays unsealed: never certify a complete
-                // generation or reread a source the user has excluded.
-                rosetta_pipeline::reserve_retired_generation(
-                    adapter,
-                    &runtime,
-                    &mut store,
-                    source,
-                    *generation,
-                    instrument,
-                )
-                .map_err(|error| format!("retiring {path} generation: {error}"))?;
-                continue;
-            }
-            let file = roster
-                .iter()
-                .find(|file| file.relative_path == *path)
-                .ok_or_else(|| {
-                    format!("cannot finish {name}: interrupted source {path} is no longer present")
-                })?;
-            if file.stream_id != source.stream_id
-                || file.session_id != source.session_id
-                || file.native_session_id != source.native_session_id
-            {
-                return Err(format!(
-                    "cannot finish {name}: interrupted source {path} changed identity"
-                ));
-            }
-            reserve_unsealed_generation(
-                adapter,
-                &runtime,
-                &mut store,
-                file,
-                *generation,
-                instrument,
-            )
-            .map_err(|error| format!("reserving {path} generation: {error}"))?;
-        }
+        let missing = resume::settle_interrupted_sources(
+            &name,
+            adapter,
+            &runtime,
+            &ledger_dir,
+            &mut store,
+            &mut ledger,
+            &unsealed,
+            &roster,
+            &meta,
+            &cold_opts,
+            instrument,
+            &mut withheld,
+        )?;
 
         // Replayed and current metadata must reach the public mirror before
         // the first-pass stamp; payload catch-up may still take a long time.
@@ -1320,7 +1304,7 @@ fn run_resumed_fresh_serve(
             &runtime.id,
             counter_source(instrument, instrument.snapshot()),
         );
-        let stream = stream_backfill_into(
+        let mut stream = stream_backfill_withholding_health(
             adapter,
             &runtime,
             &target.root,
@@ -1329,8 +1313,10 @@ fn run_resumed_fresh_serve(
             &observed_opts,
             instrument,
             Some(&mut ledger),
+            withheld.caught_up(),
         )
         .map_err(|error| format!("{name} resume source catch-up: {error}"))?;
+        stream.files_missing += missing;
         let refused = failures.len();
         let tolerated = record_fresh_failures(
             &name,
@@ -1353,12 +1339,12 @@ fn run_resumed_fresh_serve(
             .map(|session| session.id)
             .collect::<Vec<_>>();
         hub.invalidate_sessions(session_ids.iter().map(String::as_str), now_ms());
-        for session_id in &session_ids {
-            board.session_done(
-                ownership.get(session_id).and_then(Option::as_deref),
-                session_id,
-            );
-        }
+        // Done on the board only once public, which is at publication here.
+        done.extend(
+            session_ids
+                .into_iter()
+                .map(|id| (ownership.get(&id).cloned().flatten(), id)),
+        );
         health.ingest_done(&runtime.id, stream.payload_bytes, stream.records);
         events.insert(runtime.id.clone(), watcher);
         applied.push(AppliedColdRuntime {
@@ -1411,8 +1397,13 @@ fn run_resumed_fresh_serve(
         instrument,
         health,
         control,
+        Some(withheld),
     )?;
+    for (project, session_id) in &done {
+        board.session_done(project.as_deref(), session_id);
+    }
     let hub = public_hub;
+    hub.set_hide_pending(false);
     hub.rewarm(store.conn())
         .map_err(|error| error.to_string())?;
     health.ingest_metadata_ready(now_ms());
@@ -1424,6 +1415,12 @@ fn run_resumed_fresh_serve(
         "milestone: canonical-ready elapsed_s={:.2}",
         started.elapsed().as_secs_f64()
     );
+    crate::ingest_metrics::after_canonical_ready(started, instrument);
+    // The detached build's first outcome prints without anything waiting.
+    crate::ingest_metrics::observe_first_search(started, search_worker.first_sync());
+    // Before any runner writes: old members and caches nothing names go.
+    search_worker.wake();
+    crate::image_renditions::prune_after_publication(store.conn(), db);
 
     let public_ledgers = ledger_root(flags, db);
     let mut runners = Vec::with_capacity(applied.len());
@@ -1536,6 +1533,7 @@ fn run_fresh_fast_serve(
                 root: target.root.clone(),
                 inventory: target.census.inventory.clone(),
                 discovery_truncated: target.census.walk_truncated,
+                admission: flags.cold_admission(target.adapter),
                 ledger_root: ledger_stage.path().to_path_buf(),
                 opts: cold_opts.clone(),
                 write_raw_ledger: true,
@@ -1607,15 +1605,25 @@ fn run_fresh_fast_serve(
         instrument,
         health,
         control,
+        None,
     )?;
+    hub.reveal_pending(store.conn())
+        .map_err(|error| error.to_string())?;
     control.succeeded()?;
     println!(
         "milestone: canonical-ready elapsed_s={:.2}",
         started.elapsed().as_secs_f64()
     );
+    crate::ingest_metrics::after_canonical_ready(started, instrument);
+    // The detached build's first outcome prints without anything waiting.
+    crate::ingest_metrics::observe_first_search(started, search_worker.first_sync());
+    // Before any runner writes: old members and caches nothing names go.
+    search_worker.wake();
+    crate::image_renditions::prune_after_publication(store.conn(), db);
 
     if flags.json && flags.profile {
         crate::bench::emit_profile("serve-cold", instrument);
+        crate::cold_stream::emit_shared_cache_locks(projection_reader);
     }
 
     // Reattach live ledger handles at their public paths. Watchers and
@@ -1842,6 +1850,12 @@ fn drive_live_runners(
             }
         }
     };
+    let _renditions = crate::image_renditions::start_after_catch_up(
+        flags.image_renditions,
+        store.conn(),
+        search,
+        stop,
+    );
 
     let mut remaining = flags.ticks;
     let mut more_hints = false;
@@ -1910,12 +1924,19 @@ fn publish_fresh_ram_projection(
     instrument: &Instrument,
     health: &DaemonHealth,
     control: &ColdControl,
+    withheld: Option<resume::WithheldReadiness>,
 ) -> Result<Store, String> {
     health.ingest_phase(rosetta_server::IngestPhase::Finalizing);
     instrument
         .finish_bulk_load(&mut store)
         .map_err(|error| format!("finalizing canonical RAM projection: {error}"))?;
     control.publishing()?;
+    // A resumed build's rows are final only now (finalization neither reads
+    // nor writes readiness). Past the publication fence no pause can keep
+    // this view, and the backup below carries the states it commits.
+    if let Some(withheld) = withheld {
+        withheld.commit(&mut store)?;
+    }
     health.ingest_phase(rosetta_server::IngestPhase::Publishing);
     instrument.time(Metric::PublishNanos, || {
         crate::publication::stage_ram_projection(store.conn(), &temp)

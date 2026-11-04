@@ -28,6 +28,8 @@ pub mod clock;
 pub mod codex;
 pub mod prng;
 pub mod report;
+pub mod shape;
+pub mod snapshot;
 pub mod synth;
 
 use std::io;

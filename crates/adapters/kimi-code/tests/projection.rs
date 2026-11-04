@@ -698,7 +698,7 @@ fn undeclared_content_parts_are_soft_drift() {
 }
 
 #[test]
-fn authored_and_tool_image_data_urls_share_the_optimizer() {
+fn authored_and_tool_image_data_urls_share_one_recorded_member() {
     let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
     let mut ctx = synthetic_context();
     let record = json!({"type":"context.append_message","message":{"role":"user","origin":{"kind":"user"},"id":"image","toolCalls":[],"content":[{"type":"image_url","imageUrl":{"url":png}}]},"time":1});
@@ -721,15 +721,17 @@ fn authored_and_tool_image_data_urls_share_the_optimizer() {
     };
     assert!(text.is_none());
     assert_eq!(attachments.len(), 1);
-    assert!(matches!(
-        attachments[0].source,
-        rosetta_core::timeline::AttachmentSource::Asset { .. }
-    ));
+    let rosetta_core::timeline::AttachmentSource::Asset { asset: authored } =
+        &attachments[0].source
+    else {
+        panic!("recorded member")
+    };
+    assert_eq!(authored.media_type, "image/png");
+    assert!(authored.image_variants.is_none());
     assert!(!serde_json::to_string(row).unwrap().contains("base64"));
     let record = json!({"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool","result":{"output":[{"type":"image_url","imageUrl":{"url":png}}]}},"time":2});
     let tool = KimiCodeAdapter.ingest_line(&mut ctx, "wire", record.to_string().as_bytes());
     assert!(!tool.ops.iter().any(|op| matches!(op, IngestOp::Message(_))));
-    assert!(tool.ops.iter().any(
-        |op| matches!(op, IngestOp::ProjectionAsset { asset } if asset.media_type == "image/webp")
-    ));
+    assert!(tool.ops.iter().any(|op| matches!(op, IngestOp::ProjectionAsset { asset }
+        if asset.media_type == "image/png" && asset.image_variants.is_empty() && asset.reference() == *authored)));
 }

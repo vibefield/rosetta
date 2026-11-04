@@ -382,6 +382,15 @@
   color: var(--vf-text-faint); font-size: 9.5px; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.08em;
 }
+/* The import's date-free groups: a head that is a count, not a calendar day.
+   It keeps the day head's place and voice, so only the dashed rule above it
+   tells it apart from a date. */
+.ah-day[data-not-imported] {
+  margin-top: 10px;
+  background: linear-gradient(90deg, var(--vf-hairline) 50%, transparent 0) top left / 6px 1px repeat-x,
+    linear-gradient(var(--ah-plate) 72%, transparent);
+}
+.ah-session-list > .ah-day[data-not-imported]:first-child { margin-top: 0; }
 /* The session row answers the same four questions the ledger row does, in the
    same corners: state and title on the first line, the agent top-right, the
    facts in the middle, the branch bottom-left and the time bottom-right. */
@@ -410,6 +419,12 @@
 .ah-session-list-item__status[data-tone="red"] { background: var(--vf-red); }
 /* live is the one state that is still happening, so it also breathes */
 .ah-session-list-item__status[data-live] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--vf-green) 22%, transparent); }
+/* Not imported yet is no §2.5 state: a hollow, colourless ring, and its time
+   slot speaks in the same faint voice instead of claiming a time. */
+.ah-session-list-item[data-standing="not-imported"] .ah-session-list-item__status {
+  background: transparent; box-shadow: inset 0 0 0 1.5px var(--vf-text-faint);
+}
+.ah-session-list-item[data-standing="not-imported"] .ah-last { color: var(--vf-text-faint); font-style: italic; }
 
 .ah-session-list-item__header { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; min-height: 16px; }
 .ah-session-list-item__footer { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; min-width: 0; }
