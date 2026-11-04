@@ -375,3 +375,26 @@ export function demoProjectViewModels(demo: RoomDemo = createRoomDemo()): Projec
 export function demoActivityOrder(demo: RoomDemo = createRoomDemo()): ActivityOrder {
   return advanceActivityOrder(null, demo.meta.sessions, { now: demo.now, live: false, bootstrapping: false });
 }
+
+/* ── a cold import, simulated ───────────────────────────────────────────── */
+
+// The same room through a first import: ports over a seeded synthetic
+// archive and a controller a harness steps through simulated time
+// (`cold-import.ts`). clients/app's cold-import characterization drives it.
+export { createColdImport } from "./cold-import";
+export type {
+  ColdCorpus,
+  ColdCorpusOptions,
+  ColdImport,
+  ColdImportController,
+  ColdImportLog,
+  ColdImportOptions,
+  ColdPhase,
+  ColdTrailEntry,
+  ColdTree,
+  FlipBatch,
+  FlipKind,
+  ResyncMode,
+  RuntimeTimes,
+  SessionKind,
+} from "./cold-import";

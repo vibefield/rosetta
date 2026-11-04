@@ -55,6 +55,14 @@ count-free sentence (“Newly imported conversations are available in sessions.�
 so only the button carries the count. The activity-order and subscription recovery
 unit tests run in CI; `pnpm test:list-order` exercises production hooks, lists,
 focus, scroll, themes, and reduced motion against synthetic data in Electron.
+`test:cold-import` (2026-11-03, CI at scale 0.25) steps the app, its RosettaClient
+and the whole room through a seeded, step-driven cold import of the MacBook trace's
+shape, fresh and resumed (`clients/room/src/fixtures/cold-import.ts`), and pins what
+the room does today — project order, the foot group, holds and pills, faces by
+course, counts, search and chart copy, the end transition — each assertion naming
+the UX item that flips it, an I1 honesty rule that holds forever, or `unplanned`; a
+UX commit flips its own assertions in the same commit, and the test asserts no
+timing.
 
 > **Implementation checkpoint (2026-08-31).** Nine ground-truth/runtime-adapter packs are
 > registered. The generic runtime handles adapter-selected JSONL, bounded document snapshots,

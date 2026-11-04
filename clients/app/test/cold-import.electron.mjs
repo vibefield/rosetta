@@ -1,0 +1,751 @@
+// A cold import, characterized (ux:M5): rosetta's app over the simulator in
+// room/src/fixtures/cold-import.ts, stepped through simulated time while the
+// room keeps its own timers. Every assertion pins what the room does TODAY
+// and names what may change it:
+// - `ux:X1` … `ux:X9`: the UX item expected to flip it; that item's commit
+//   flips the assertion in the same commit.
+// - `forever`: an honesty rule (the metrics catalog's I1) that must hold.
+// - `unplanned`: today's behaviour that no planned item changes; a change
+//   here must be meant, and its commit updates the line.
+//
+// This is a LOGIC gate. It asserts no timing threshold: waits only bound how
+// long the room may take to show a state. The flip→paint, long-task and px
+// numbers it prints are indicative, never gates (tools/ui-bench measures).
+//
+//   npm run test:cold-import -w @vibefield/rosetta-agent-history [-- --scale=0.25]
+//
+// `--scale` (or COLD_IMPORT_SCALE) sizes the archive: 1, the default, is the
+// MacBook shape (8,612 sessions, 1,139 trees, 119 projects); CI runs 0.25.
+// Any scale from 0.1 up keeps every behaviour this test needs (smaller ones
+// fail a stated fixture precondition). Fixture data only: no daemon, archive
+// or app profile is read.
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { app, BrowserWindow } from 'electron';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const temporary = mkdtempSync(path.join(os.tmpdir(), 'rosetta-cold-import-'));
+const headlessCi = process.platform === 'linux' && Boolean(process.env.CI);
+if (headlessCi) app.disableHardwareAcceleration();
+app.setPath('userData', path.join(temporary, 'profile'));
+app.on('window-all-closed', () => {});
+const scale = Number(process.argv.find((arg) => arg.startsWith('--scale='))?.slice(8) ?? process.env.COLD_IMPORT_SCALE ?? 1);
+const pulse = setInterval(() => {}, 100);
+const deadline = setTimeout(() => { console.error('Cold import characterization timed out'); app.exit(1); }, 240_000);
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let win, server;
+const errors = [];
+const started = Date.now();
+
+/* ── driving the page ─────────────────────────────────────────────────── */
+
+const check = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`);
+async function until(fn, message, ...args) {
+  const truthy = `(...a) => Boolean((${fn.toString()})(...a))`;
+  for (let i = 0; i < 600; i++) {
+    if (await win.webContents.executeJavaScript(`(${truthy})(...${JSON.stringify(args)})`)) return;
+    await pause(25);
+  }
+  throw Error(`Timed out waiting for ${message}`);
+}
+/** Poll a page function returning { actual, expected } until they agree or
+ * the room had its chance; the caller then asserts on what it last saw. */
+async function agreed(fn, ...args) {
+  let last;
+  for (let i = 0; i < 160; i++) {
+    last = await check(fn, ...args);
+    try { assert.deepEqual(last.actual, last.expected); return last; } catch { await pause(25); }
+  }
+  return last;
+}
+const frames = (n = 3) => check((n) => new Promise((resolve) => {
+  const step = (left) => (left === 0 ? resolve(true) : requestAnimationFrame(() => step(left - 1)));
+  step(n);
+}), n);
+/** Let the room ask status after the last step and draw its answer. */
+async function settle() {
+  const asked = await check(() => window.coldImport.c.log.status.length);
+  await until((n) => window.coldImport.c.log.status.length > n, 'a status ask after the step', asked);
+  await frames(3);
+}
+/** Wait until the project rows stop moving (list motion has finished). */
+async function rowsAtRest() {
+  let last = null;
+  for (let i = 0; i < 200; i++) {
+    const now = JSON.stringify(await check(tops));
+    if (now === last) return;
+    last = now;
+    await frames(2);
+  }
+  throw Error('Timed out waiting for the project rows to come to rest');
+}
+const advanceTo = (ms) => check((ms) => { window.coldImport.advanceTo(ms); return true; }, ms);
+const advanceToPhase = (phase) => check((phase) => { window.coldImport.advanceTo(window.coldImport.c.phaseAt(phase)); return window.coldImport.c.clock; }, phase);
+/** A scripted click: the one input that may change the selection (probe c3). */
+const click = (selector) => check((selector) => {
+  const element = document.querySelector(selector);
+  if (!element) throw Error(`no ${selector}`);
+  window.coldImport.select();
+  element.click();
+  return true;
+}, selector);
+const hover = (list, inside) => check((list, inside) => {
+  const host = list === 'sessions'
+    ? document.querySelector('.ah-list-view:has(> .ah-session-list)')
+    : document.querySelector('.ah-list-view:has(.ah-project-list-item)');
+  host.dispatchEvent(new PointerEvent(inside ? 'pointerover' : 'pointerout', {
+    bubbles: true, pointerType: 'mouse', relatedTarget: inside ? null : document.body,
+  }));
+  return true;
+}, list, inside);
+async function type(query) {
+  await check((query) => {
+    const input = document.querySelector('.ah-sheet__field input');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, query);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }, query);
+}
+const sheet = (open) => check((open) => { window.coldImport.sheet(open); return true; }, open);
+/** The trail's last entry, to read what follows it. */
+const lastSeq = () => check(() => window.coldImport.c.log.trail.at(-1)?.seq ?? 0);
+/** What the room's first status ask after `since` answered to: a connection
+ * change that reached it (`connection`), its poll's cadence after the parked
+ * ask was answered (`cadence`), or a re-ask while that ask still waited
+ * (`refresh`); null while it has not asked. */
+const firstAskAfter = (since) => check((since) => {
+  const after = window.coldImport.c.log.trail.filter((entry) => entry.seq > since);
+  const ask = after.find((entry) => entry.what === 'status-ask');
+  if (ask === undefined) return null;
+  const before = after.filter((entry) => entry.seq < ask.seq).map((entry) => entry.what);
+  return before.includes('connection-change') ? 'connection' : before.includes('status-answer') ? 'cadence' : 'refresh';
+}, since);
+
+/* ── the characterization ledger ──────────────────────────────────────── */
+
+const ledger = [];
+const why = (item) => item === 'forever'
+  ? 'This is an honesty rule (metrics I1): it must hold forever.'
+  : item === 'unplanned'
+    ? 'No planned UX item changes this: if the change was meant, update this line in the same commit; otherwise the room changed under it.'
+    : `If ${item} landed, flip this assertion in the same commit; otherwise the room changed under it.`;
+/** Today's truth for one behaviour, named by what may change it. */
+function today(item, label, actual, expected) {
+  try {
+    assert.deepEqual(actual, expected);
+  } catch {
+    throw new assert.AssertionError({
+      message: `[${item}] ${label}\n  characterized (today): ${JSON.stringify(expected)}\n  observed now:          ${JSON.stringify(actual)}\n  ${why(item)}`,
+      actual, expected, operator: 'deepStrictEqual',
+    });
+  }
+  ledger.push({ item, label, observed: actual });
+}
+
+/** A wait that is itself a characterization: the room shows this state
+ * today, and a timeout names the item rather than a bare wait. */
+async function shows(item, label, fn, ...args) {
+  try {
+    await until(fn, label, ...args);
+  } catch {
+    throw new assert.AssertionError({
+      message: `[${item}] ${label}: the room never showed it\n  ${why(item)}`,
+      actual: false, expected: true, operator: 'strictEqual',
+    });
+  }
+  ledger.push({ item, label, observed: true });
+}
+
+/* ── page-side readings (each runs in the page) ───────────────────────── */
+
+/** The two list columns, found by what they hold, never by position. */
+const column = (name) => [...document.querySelectorAll('.ah-col')].find((col) => (name === 'projects'
+  ? col.querySelector(':scope > .ah-veilhost .ah-project-list-item') !== null
+  : col.querySelector('.ah-session-list') !== null)) ?? null;
+const projectOrder = () => [...document.querySelectorAll('.ah-project-list-item')].map((row) => row.dataset.motionKey);
+const tops = () => Object.fromEntries([...document.querySelectorAll('.ah-project-list-item')]
+  .map((row) => [row.dataset.motionKey, Math.round(row.getBoundingClientRect().top)]));
+/** The room's project rule as it stands: activity-ranked projects first
+ * (newest recorded root activity), then every unranked one by id. */
+const projectsByToday = () => {
+  const meta = window.coldImport.c.meta();
+  const rank = new Map(meta.projects.map((project) => [project.id, null]));
+  for (const session of meta.sessions) {
+    const key = session.project_id ?? '__rosetta_unassigned__';
+    if (!rank.has(key)) rank.set(key, null);
+    const at = session.parent_session_id === null ? session.activity?.last_at ?? null : null;
+    if (at !== null) rank.set(key, Math.max(rank.get(key) ?? -Infinity, at));
+  }
+  const actual = [...document.querySelectorAll('.ah-project-list-item')].map((row) => row.dataset.motionKey);
+  const expected = [...rank.keys()].sort((a, b) => {
+    const x = rank.get(a), y = rank.get(b);
+    if (x === null && y !== null) return 1;
+    if (y === null && x !== null) return -1;
+    return (x !== null && y !== null ? y - x : 0) || a.localeCompare(b);
+  });
+  return { actual, expected, ranked: [...rank.values()].filter((at) => at !== null).length };
+};
+const rowLook = (element) => ({
+  id: element.dataset.motionKey, standing: element.dataset.standing, stream: element.dataset.streamState,
+  tone: element.querySelector('.ah-session-list-item__status')?.dataset.tone ?? null,
+  last: element.querySelector('.ah-last')?.textContent ?? null,
+  // The metadata line's last slot is the activity span while no figures landed.
+  span: element.querySelector('.ah-session-list-item__metadata')?.lastElementChild?.textContent ?? null,
+  cooking: element.hasAttribute('data-cooking'),
+});
+const sessionGroups = (look) => {
+  const groups = [];
+  for (const element of document.querySelector('.ah-session-list')?.children ?? []) {
+    if (element.classList.contains('ah-day')) {
+      groups.push({ head: element.textContent, notImported: element.hasAttribute('data-not-imported'), rows: [] });
+    } else if (element.matches('.ah-session-list-item')) {
+      groups.at(-1)?.rows.push(look(element));
+    }
+  }
+  return groups;
+};
+const groups = () => win.webContents.executeJavaScript(`(${sessionGroups.toString()})((${rowLook.toString()}))`);
+const card = () => {
+  const section = document.querySelector('.ah-ingest-status');
+  return section === null ? null : {
+    state: section.dataset.state, ready: Number(section.dataset.readyCount),
+    title: section.querySelector('h3')?.textContent ?? null,
+    detail: section.querySelector('.ah-ingest-status__detail')?.textContent ?? null,
+  };
+};
+const transcript = () => {
+  const column = document.querySelector('.ah-col--measure');
+  const face = column?.querySelector('.ah-empty[data-import-face]');
+  return {
+    session: column?.querySelector('.tr-stage')?.dataset.sessionKey ?? null,
+    face: face?.dataset.importFace ?? null, course: face?.dataset.importCourse ?? null,
+    title: face?.querySelector('strong')?.textContent ?? null, why: face?.querySelector('p')?.textContent ?? null,
+    meter: face?.querySelector('.ah-meter') !== null && face !== null && face !== undefined,
+    sittings: column?.querySelectorAll('.tr-sitting').length ?? 0,
+    banner: column?.querySelector('[data-import-banner]')?.textContent ?? null,
+    bubble: column?.querySelector('header .ah-bubble')?.textContent ?? null,
+    range: column?.querySelector('header .ah-caption')?.textContent ?? null,
+  };
+};
+/** Root ids of a project, newest source first, with what the import does with them. */
+const rootsOf = (projectKey) => window.coldImport.c.meta().sessions
+  .filter((s) => s.parent_session_id === null && (s.project_id ?? '__rosetta_unassigned__') === projectKey)
+  .map((s) => ({ id: s.id, updated: s.updated_at, kind: window.coldImport.c.kindOf(s.id), flip: window.coldImport.c.flipAt(s.id),
+    bound: window.coldImport.c.treeOf(s.id)?.bound ?? false, dirty: window.coldImport.c.treeOf(s.id)?.dirty ?? false, stream: s.stream_state }));
+/** A page function handed `column` as its first argument. */
+const inColumn = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})((${column.toString()}), ...${JSON.stringify(args)})`);
+
+/* ── the run ──────────────────────────────────────────────────────────── */
+
+async function freshImport() {
+  console.log(`Fresh import at scale ${scale}`);
+  const mounted = await check((scale) => {
+    const facts = window.coldImport.mount({ scale });
+    window.coldImport.advanceTo(300); // the daemon's first walk has found the agents
+    return facts;
+  }, scale);
+  console.log(`  ${mounted.sessions.toLocaleString()} metadata sessions in the simulated archive`);
+
+  // ── The roll call → the import (ux:X7) ─────────────────────────────────
+  // The roll call, the SDK and catalogOver run their real code (the fixture
+  // mounts App on a RosettaClient), so a re-ask after the grant, wherever it
+  // is wired, reaches the trail as a status ask.
+  await until(() => document.querySelector('[data-roll-call="ready"]'), 'the roll call');
+  await check(() => { window.coldImport.c.holdStatus(); return true; });
+  await until(() => window.coldImport.c.heldStatus() > 0, 'the room to park a status ask while consent waits');
+  const beforeBegin = await lastSeq();
+  await click('button[data-action="begin-ingest"]');
+  await until((since) => window.coldImport.c.log.trail.some((e) => e.seq > since && e.what === 'grant'), 'the grant', beforeBegin);
+  const grant = await check((since) => window.coldImport.c.log.trail.find((e) => e.seq > since && e.what === 'grant').seq, beforeBegin);
+  // Its chance to react: a re-ask "at once" lands within these frames.
+  await frames(3);
+  today('ux:X7', 'once the grant resolves the room hears no connection change and asks no status: its poll stays parked',
+    await check((since) => {
+      const after = window.coldImport.c.log.trail.filter((e) => e.seq > since).map((e) => e.what);
+      return { asks: after.filter((what) => what === 'status-ask').length, changes: after.filter((what) => what === 'connection-change').length };
+    }, grant), { asks: 0, changes: 0 });
+  today('ux:X7', 'the roll call waits, "starting", until a status answer moves the phase on',
+    await check(() => document.querySelector('[data-roll-call]')?.dataset.rollCall ?? null), 'starting');
+  await check(() => { window.coldImport.advanceTo(window.coldImport.c.phaseAt('consent') + 200); window.coldImport.c.releaseStatus(); return true; });
+  await shows('ux:X7', 'the face that follows consent arrives with the parked ask\'s answer, none earlier',
+    () => document.querySelector('.ah-empty[data-face="cold-start"]'));
+  await until((since) => window.coldImport.c.log.trail.some((e) => e.seq > since && e.what === 'status-ask'), 'the next status ask', grant);
+  today('ux:X7', 'the first status ask after the grant is the poll\'s cadence, after the parked answer, not a connection change',
+    await firstAskAfter(grant), 'cadence');
+  // The instrument sees what X7 would change: a host route change reaching
+  // the room re-asks at once, and reads as a connection change.
+  await check(() => { window.coldImport.c.holdStatus(); return true; });
+  await until(() => window.coldImport.c.heldStatus() > 0, 'a parked ask');
+  const beforeRoute = await lastSeq();
+  assert.ok(await check(() => window.coldImport.routeChange()) > 0, 'the host has route listeners (catalogOver\'s words)');
+  await frames(3);
+  assert.equal(await firstAskAfter(beforeRoute), 'connection', 'a route change re-asks at once and the trail calls it a connection change (the X7 seam is observable)');
+  await check(() => { window.coldImport.c.releaseStatus(); return true; });
+
+  // ── Metadata public ────────────────────────────────────────────────────
+  await advanceToPhase('metadata');
+  const projectCount = await check(() => new Set(window.coldImport.c.meta().sessions.map((s) => s.project_id ?? '__rosetta_unassigned__')).size);
+  await until((n) => document.querySelectorAll('.ah-project-list-item').length === n, 'every project row', projectCount);
+  await settle();
+  const metaDelivery = await check(() => window.coldImport.c.log.meta.filter((m) => m.why === 'metadata').map((m) => m.source));
+  console.log(`  metadata reached the room as: ${metaDelivery.join(', ')} (a burst over the hub's 1,024 queue is a resync + snapshot)`);
+  const atMetadata = await agreed(projectsByToday);
+  today('ux:X1', 'project order at metadata: every project unranked, so ordered by id alone',
+    { order: atMetadata.actual, ranked: atMetadata.ranked }, { order: [...atMetadata.actual].sort((a, b) => a.localeCompare(b)), ranked: 0 });
+  const newest = await check(() => {
+    const roots = window.coldImport.c.meta().sessions.filter((s) => s.parent_session_id === null && window.coldImport.c.kindOf(s.id) === 'root');
+    const giant = roots.sort((a, b) => b.updated_at - a.updated_at)[0];
+    const key = giant.project_id ?? '__rosetta_unassigned__';
+    return { id: giant.id, project: key, at: [...document.querySelectorAll('.ah-project-list-item')].findIndex((row) => row.dataset.motionKey === key) };
+  });
+  console.log(`  the project holding the newest conversation is drawn at position ${newest.at + 1} of ${projectCount}`);
+
+  // The import card at metadata (ux:X3).
+  const cardAtMetadata = await check(card);
+  today('ux:X3', 'the card while nothing is readable: the import step, no "· N ready", the count 0',
+    { state: cardAtMetadata.state, ready: cardAtMetadata.ready, title: cardAtMetadata.title },
+    { state: 'reading', ready: 0, title: 'Importing your newest conversations first' });
+  today('unplanned', 'the reading card\'s detail sentence', cardAtMetadata.detail,
+    'Older history fills in while you browse. Conversations you start now appear when the import finishes.');
+  today('ux:X3', 'an unreached project card reads "Reading conversations · N%" (bytes, not readiness)',
+    await check((key) => /^Reading conversations · \d+%$/.test(document.querySelector(`.ah-project-list-item[data-motion-key="${key}"] .ah-project-list-item__progress`)?.textContent ?? ''), newest.project), true);
+  today('ux:X6', 'while the card is up the projects head is the bare count, never the portfolio panel',
+    await inColumn((column) => ({ portfolio: column('projects')?.querySelector('.ah-meta__body') !== null,
+      head: column('projects')?.querySelector('.ah-meta__head .ah-eyebrow')?.textContent ?? null })), { portfolio: false, head: 'Projects' });
+  today('ux:X6', 'the launcher counts every top-level row, the not-imported ones and placeholders included',
+    await check(() => document.querySelector('.ah-launcher__text')?.textContent), await check(() => {
+      const meta = window.coldImport.c.meta();
+      return `Search ${meta.sessions.filter((s) => s.parent_session_id === null).length.toLocaleString('en-US')} sessions across ${meta.runtimes.length} agents`;
+    }));
+
+  // The newest project's list at metadata (ux:X2).
+  await click(`.ah-project-list-item[data-motion-key="${newest.project}"]`);
+  await until(() => document.querySelector('.ah-session-list-item'), 'the newest project\'s sessions');
+  const groupsAtMetadata = await groups();
+  const expectedFoot = await check((key) => window.coldImport.c.meta().sessions
+    .filter((s) => s.parent_session_id === null && (s.project_id ?? '__rosetta_unassigned__') === key && window.coldImport.c.kindOf(s.id) !== 'placeholder')
+    .sort((a, b) => b.updated_at - a.updated_at || a.id.localeCompare(b.id)).map((s) => s.id), newest.project);
+  today('ux:X2', 'at metadata every row sits in one "Not imported yet" foot group: no date head, no count',
+    groupsAtMetadata.map((group) => ({ head: group.head, notImported: group.notImported })), [{ head: 'Not imported yet', notImported: true }]);
+  today('ux:X2', 'the foot group orders by updated_at descending, then id',
+    groupsAtMetadata[0].rows.map((row) => row.id), expectedFoot);
+  const pendingLook = { standing: 'not-imported', stream: 'pending', tone: 'orange', last: 'unknown', span: '—', cooking: true };
+  today('ux:X2', 'a not-imported row: orange dot, shimmering figures, "unknown" last active, "—" span',
+    [...new Set(groupsAtMetadata[0].rows.map(({ id: _id, ...look }) => JSON.stringify(look)))].map((look) => JSON.parse(look)), [pendingLook]);
+  today('ux:X6', 'the project panel veils its figures with "Preparing activity summaries…" during the import',
+    await inColumn((column) => column('sessions')?.querySelector('.ah-meta__body .ah-veil')?.getAttribute('aria-label') ?? null), 'Preparing activity summaries…');
+
+  // Opening the newest (a giant tree, so it waits in the big lane) (ux:X5).
+  await click(`.ah-session-list-item[data-motion-key="${newest.id}"]`);
+  await until(() => document.querySelector('.ah-col--measure .ah-empty[data-import-face]') && document.querySelector('.tr-stage[data-ready]'), 'the not-imported face, revealed');
+  today('ux:X5', 'a not-imported session opens on one promise, whatever its tree or course',
+    await check(transcript), {
+      session: newest.id, face: 'not-imported', course: 'newest-first', title: 'Not imported yet',
+      why: 'Your newest conversations import first. This one opens as soon as the import reaches it.',
+      meter: true, sittings: 0, banner: null, bubble: '0', range: 'Activity time unknown',
+    });
+  console.log(`  opening it asked boost ${await check((id) => window.coldImport.c.log.boosts.filter((b) => b.sessionId === id).length, newest.id)} time(s); the fresh RAM build attaches no boost queue`);
+
+  // Titles stand in for full text before publication (ux:X6).
+  const newestTitle = await check((id) => window.coldImport.c.meta().sessions.find((s) => s.id === id).title, newest.id);
+  const topic = newestTitle.split(':')[0];
+  await sheet(true);
+  await until(() => document.querySelector('.ah-sheet__field input'), 'the search sheet');
+  await type(newestTitle);
+  await until(() => document.querySelector('.ah-sheet__row[data-hit-kind="title"]') && window.coldImport.c.log.search.length > 0 &&
+    document.querySelector('.ah-sheet__count')?.textContent !== 'searching…', 'title matches and the answered search');
+  today('ux:X6', 'before publication a not-imported title row says "Activity unknown"; the foot names the import',
+    await check((id) => ({
+      when: document.getElementById(`ah-sheet-title-${id}`)?.querySelector('.ah-sheet__when')?.textContent ?? null,
+      pending: document.querySelector('.ah-sheet__pending')?.textContent ?? null,
+      foot: document.querySelector('.ah-sheet__count')?.textContent ?? null,
+      fulltext: document.querySelectorAll('.ah-sheet__row[data-hit-kind="fulltext"]').length,
+    }), newest.id), { when: 'Activity unknown', pending: 'Full-text search arrives when the import finishes.', foot: 'history is being imported', fulltext: 0 });
+  await sheet(false);
+  await until(() => !document.querySelector('.ah-sheet__field'), 'the sheet to close');
+
+  // ── Flips, mixed order, the inversion ─────────────────────────────────
+  const roots = await check(rootsOf, newest.project);
+  const giantFlip = roots.find((root) => root.id === newest.id).flip;
+  const earlier = roots.filter((root) => root.kind === 'root' && root.flip !== null && root.flip < giantFlip && !root.bound);
+  assert.ok(earlier.length > 0, 'fixture precondition: the newest project has an older tree that flips before its giant');
+  const dirty = earlier.find((root) => root.dirty);
+  assert.ok(dirty !== undefined, 'fixture precondition: one of them is a dirty tree, whose root flips Streaming');
+  const inversionAt = Math.max(...earlier.map((root) => root.flip));
+  await advanceTo(inversionAt);
+  await until(() => [...document.querySelectorAll('.ah-session-list-item')].every((row) =>
+    (window.coldImport.c.streamState(row.dataset.motionKey) !== 'pending') === (row.dataset.standing === 'ready')), 'rows to match the catalog');
+  await settle();
+  const inverted = await groups();
+  const foot = inverted.at(-1);
+  today('ux:X2', 'the newest conversation still sits in the foot group, below older readable rows (the inversion)',
+    { lastHead: foot.head, newestInFoot: foot.rows.some((row) => row.id === newest.id),
+      readableAbove: inverted.slice(0, -1).some((group) => group.rows.some((row) => row.standing === 'ready')) },
+    { lastHead: 'Not imported yet', newestInFoot: true, readableAbove: true });
+  today('forever', 'unheld, no readable row is drawn under the "Not imported yet" head',
+    inverted.filter((group) => group.notImported).flatMap((group) => group.rows).filter((row) => row.standing === 'ready').length, 0);
+  const streamingRow = inverted.flatMap((group) => group.rows).find((row) => row.id === dirty.id);
+  today('ux:X2', 'a Streaming root (its source was unclean) reads ready, with the not-imported row\'s orange dot and shimmer',
+    { standing: streamingRow?.standing, stream: streamingRow?.stream, tone: streamingRow?.tone, cooking: streamingRow?.cooking },
+    { standing: 'ready', stream: 'streaming', tone: pendingLook.tone, cooking: pendingLook.cooking });
+  const mixed = await agreed(projectsByToday);
+  today('ux:X1', 'while ranked and unranked mix: activity-ranked projects first, the unranked after them by id',
+    mixed.actual, mixed.expected);
+  console.log(`  mixed order: ${mixed.ranked} of ${projectCount} projects ranked at ${(inversionAt / 1000).toFixed(1)} s`);
+
+  // The count's unit (ux:X3).
+  const unit = await check(() => {
+    const status = window.coldImport.c.status();
+    const sessionsDone = status.ingest.projects.reduce((sum, row) => sum + row.sessions_done, 0);
+    const readableRoots = window.coldImport.c.meta().sessions.filter((s) => s.parent_session_id === null && s.stream_state !== 'pending').length;
+    const shown = Number(document.querySelector('.ah-ingest-status')?.dataset.readyCount);
+    const title = document.querySelector('.ah-ingest-status h3')?.textContent;
+    return { shown, sessionsDone, readableRoots, title };
+  });
+  const countUnit = unit.shown === unit.sessionsDone ? 'sessions' : unit.shown === unit.readableRoots ? 'roots' : 'other';
+  today('ux:X3', '"· N ready" counts sessions, children included, not the readable roots the lists show',
+    { unit: countUnit, title: unit.title, moreThanRoots: unit.shown > unit.readableRoots },
+    { unit: 'sessions', title: `Importing your newest conversations first · ${unit.sessionsDone.toLocaleString()} ready`, moreThanRoots: true });
+  console.log(`  "· ${unit.shown} ready" with ${unit.readableRoots} readable roots in the catalog`);
+  const board = await check((key) => window.coldImport.c.status().ingest.projects.find((row) => (row.project_id ?? '__rosetta_unassigned__') === key), newest.project);
+  today('ux:X3', 'a started project card counts its sessions, children included: "k of T ready"',
+    await check((key) => document.querySelector(`.ah-project-list-item[data-motion-key="${key}"] .ah-project-list-item__progress`)?.textContent, newest.project),
+    `Reading conversations · ${board.sessions_done.toLocaleString()} of ${board.sessions_total.toLocaleString()} ready`);
+
+  // ── A held list while the giant flips under an open transcript ────────
+  await hover('sessions', true);
+  const heldIds = await check(() => [...document.querySelectorAll('.ah-day[data-not-imported] ~ .ah-session-list-item')].map((row) => row.dataset.motionKey));
+  await check(() => { window.coldImport.c.resyncMode = 'manual'; return true; });
+  await advanceTo(giantFlip);
+  await until((id) => document.querySelector(`.ah-session-list-item[data-motion-key="${id}"]`)?.dataset.standing === 'ready', 'the giant\'s row to read ready', newest.id);
+  const arrivals = await check((ids) => ids.filter((id) => window.coldImport.c.streamState(id) !== 'pending').length, heldIds);
+  await frames(3);
+  const held = await groups();
+  today('ux:X4', 'held by the pointer: the foot head reads "Activity updated" and the pill counts the arrivals',
+    { foot: held.at(-1).head, newestStillInFoot: held.at(-1).rows.some((row) => row.id === newest.id),
+      pill: await check(() => { const pill = document.querySelector('.ah-list-view:has(> .ah-session-list) > .ah-list-updates'); return pill.hidden ? null : pill.textContent; }) },
+    { foot: 'Activity updated', newestStillInFoot: true, pill: `${arrivals} ${arrivals === 1 ? 'conversation' : 'conversations'} imported — show` });
+  today('forever', 'the catalog flipped the open session first: the face holds "Not imported yet" until rows arrive',
+    await check(() => document.querySelector('.ah-col--measure .ah-empty[data-import-face]')?.dataset.importFace ?? null), 'not-imported');
+  await check(() => window.coldImport.c.deliverResyncs());
+  await shows('forever', 'its resync then reveals the rows, never "Nothing readable yet" in between',
+    () => document.querySelector('.ah-col--measure .tr-sitting'));
+  today('ux:X8', 'an open readable transcript during the import carries the generic live-updates banner',
+    await check(() => document.querySelector('.ah-col--measure [data-import-banner]')?.textContent ?? null), 'Live updates resume when the import finishes');
+  await hover('sessions', false);
+  await until((id) => document.querySelector('.ah-session-list-item')?.dataset.motionKey === id, 'the applied order to put the newest first', newest.id);
+
+  // The projects pill is activity copy, even for an import reorder (ux:X4).
+  // Step to the first flip that changes the rank rule's project order; the
+  // schedule is deterministic, so that flip always comes.
+  await agreed(projectsByToday);
+  await hover('projects', true);
+  const projectsHeld = await check(projectOrder);
+  const flipTimes = await check(() => {
+    const c = window.coldImport.c;
+    const until = c.phaseAt('reading-done');
+    return [...new Set(c.batches().filter((batch) => batch.kind === 'tree' && batch.at > c.clock && batch.at < until).map((batch) => batch.at))];
+  });
+  let reorderedAt = null;
+  for (const at of flipTimes) {
+    await advanceTo(at);
+    const wanted = await check(projectsByToday);
+    if (JSON.stringify(wanted.expected) !== JSON.stringify(projectsHeld)) { reorderedAt = at; break; }
+  }
+  today('ux:X4', 'an import flip reorders the held projects (by the rank rule) before reading ends', reorderedAt !== null, true);
+  await shows('ux:X4', 'the reorder raises the projects pill while they are held',
+    () => document.querySelector('.ah-list-view:has(.ah-project-list-item) > .ah-list-updates')?.hidden === false);
+  today('ux:X4', 'held projects say "Show recent activity" when the import reorders them, and hold their rows',
+    { pill: await check(() => document.querySelector('.ah-list-view:has(.ah-project-list-item) > .ah-list-updates').textContent),
+      held: JSON.stringify(await check(projectOrder)) === JSON.stringify(projectsHeld) },
+    { pill: 'Show recent activity', held: true });
+  await hover('projects', false);
+
+  // ── More flips under an open transcript, by how the resync lands ──────
+  await check(() => { window.coldImport.c.resyncMode = 'immediate'; return true; });
+  const nextPending = async (exclude) => check((exclude) => {
+    const c = window.coldImport.c;
+    const roots = c.meta().sessions.filter((s) => s.parent_session_id === null && c.kindOf(s.id) === 'root' &&
+      s.stream_state === 'pending' && !c.treeOf(s.id).bound && !exclude.includes(s.id) && c.flipAt(s.id) > c.clock);
+    roots.sort((a, b) => c.flipAt(a.id) - c.flipAt(b.id) || a.id.localeCompare(b.id));
+    const pick = roots[0];
+    return pick === undefined ? null : { id: pick.id, project: pick.project_id ?? '__rosetta_unassigned__', flip: c.flipAt(pick.id) };
+  }, exclude);
+  const openPending = async (target) => {
+    await click(`.ah-project-list-item[data-motion-key="${target.project}"]`);
+    await until((id) => document.querySelector(`.ah-session-list-item[data-motion-key="${id}"]`), 'the target\'s row', target.id);
+    await click(`.ah-session-list-item[data-motion-key="${target.id}"]`);
+    await until((id) => document.querySelector(`.tr-stage[data-session-key="${id}"][data-ready]`) && document.querySelector('.ah-col--measure .ah-empty[data-import-face="not-imported"]'), 'its not-imported face', target.id);
+  };
+  // The socket resyncs before the catalog lands (the daemon's own order).
+  const second = await nextPending([newest.id]);
+  await openPending(second);
+  await advanceTo(second.flip);
+  await shows('forever', 'a flip while open reveals the transcript when its socket resyncs first',
+    () => document.querySelector('.ah-col--measure .tr-sitting') && !document.querySelector('.ah-col--measure .ah-empty[data-import-face]'));
+  // The resync never arrives: the face holds, then asks again (3 s grace).
+  const third = await nextPending([newest.id, second.id]);
+  await openPending(third);
+  await check(() => { window.coldImport.c.resyncMode = 'drop'; return true; });
+  await advanceTo(third.flip);
+  await check(() => { window.coldImport.c.resyncMode = 'immediate'; return true; });
+  await frames(3);
+  today('forever', 'a flip whose resync is lost keeps the not-imported face, on its one subscription, through the grace',
+    await check((id) => ({
+      face: document.querySelector('.ah-col--measure .ah-empty[data-import-face]')?.dataset.importFace ?? null,
+      subscriptions: window.coldImport.c.log.subscribed.filter((s) => s.sessionId === id).length,
+    }), third.id), { face: 'not-imported', subscriptions: 1 });
+  await shows('forever', 'then the room subscribes again and shows the rows',
+    (id) => document.querySelector('.ah-col--measure .tr-sitting') && window.coldImport.c.log.subscribed.filter((s) => s.sessionId === id).length >= 2, third.id);
+
+  // A bound tree's root opens on the same promise and waits for the close (ux:X5).
+  const bound = await check(() => {
+    const c = window.coldImport.c;
+    const row = c.meta().sessions.find((s) => s.parent_session_id === null && c.kindOf(s.id) === 'root' && c.treeOf(s.id).bound && s.stream_state === 'pending');
+    return row === undefined ? null : { id: row.id, project: row.project_id ?? '__rosetta_unassigned__', flip: c.flipAt(row.id) };
+  });
+  await openPending(bound);
+  today('ux:X5', 'a bound tree (opens only at its runtime\'s close) gets the same newest-first promise',
+    await check(transcript).then((t) => ({ course: t.course, why: t.why })),
+    { course: 'newest-first', why: 'Your newest conversations import first. This one opens as soon as the import reaches it.' });
+
+  // ── Reading ends ──────────────────────────────────────────────────────
+  await advanceToPhase('reading-done');
+  await settle();
+  today('ux:X3', 'when reading ends with trees already readable, the card says they are not available yet',
+    await check(card).then((c) => ({ state: c.state, title: c.title, detail: c.detail })),
+    { state: 'organizing', title: 'Organizing conversations', detail: 'Putting messages and tool activity in order before they become available.' });
+  await advanceToPhase('runtime-close');
+  await shows('forever', 'the bound tree opens at its runtime\'s close, rows and all',
+    () => document.querySelector('.ah-col--measure .tr-sitting') && !document.querySelector('.ah-col--measure .ah-empty[data-import-face]'));
+  await advanceToPhase('finalizing');
+  await settle();
+  today('ux:X3', 'finalizing: step 3, "Finishing your archive"', await check(card).then((c) => ({ state: c.state, title: c.title })),
+    { state: 'finalizing', title: 'Finishing your archive' });
+  await advanceToPhase('publishing');
+  await settle();
+  today('unplanned', 'publishing, before canonical readiness: "Saving your archive"', await check(card).then((c) => c.title), 'Saving your archive');
+  today('forever', 'no cross-session figure is asked for before canonical publication',
+    await check(() => ({ stats: window.coldImport.c.log.projectStats.length, usage: window.coldImport.c.log.usage.length, day: window.coldImport.c.log.dayUsage.length })),
+    { stats: 0, usage: 0, day: 0 });
+  // Publication, measured from just before it to just after it settles.
+  await rowsAtRest();
+  const beforePublication = { rule: await agreed(projectsByToday), tops: await check(tops) };
+
+  // ── Canonical readiness, still publishing ─────────────────────────────
+  await advanceToPhase('canonical');
+  await settle();
+  await until(() => window.coldImport.c.log.projectStats.length > 0, 'the first figures ask');
+  today('ux:X9', 'canonical readiness during "publishing": figures load while the card still says "Saving your archive"',
+    await check(card).then((c) => ({ state: c.state, title: c.title })), { state: 'publishing', title: 'Saving your archive' });
+  today('ux:X6', 'published but still "publishing": the panel veil keeps "Preparing activity summaries…"',
+    await inColumn((column) => column('sessions')?.querySelector('.ah-meta__body .ah-veil')?.getAttribute('aria-label') ?? null), 'Preparing activity summaries…');
+  await until(() => new Set(window.coldImport.c.log.projectStats.map((s) => s.projectId)).size >= document.querySelectorAll('.ah-project-list-item').length, 'every project\'s figures');
+  // reveal_pending: the still-Pending rows' rollups, the end's one metadata change.
+  await advanceToPhase('reveal');
+  console.log(`  publication revealed ${await check(() => window.coldImport.c.log.meta.filter((m) => m.why === 'reveal').reduce((n, m) => n + m.rows, 0))} rows' activity (metadata-only placeholders and their ancestors)`);
+  await advanceToPhase('live');
+  await settle();
+  await rowsAtRest();
+  const afterPublication = { rule: await agreed(projectsByToday), tops: await check(tops) };
+  const reranked = beforePublication.rule.actual.filter((id, i) => afterPublication.rule.actual[i] !== id).length;
+  const ruleReranked = beforePublication.rule.expected.filter((id, i) => afterPublication.rule.expected[i] !== id).length;
+  assert.ok(ruleReranked > 0, 'fixture precondition: publication\'s reveal moves a project (the archive guarantees it from scale 0.1 up)');
+  today('unplanned', 'publication\'s reveal re-ranks projects by the activity it shows: the drawn order follows the rank rule',
+    { order: afterPublication.rule.actual, reranked }, { order: afterPublication.rule.expected, reranked: ruleReranked });
+  const kept = beforePublication.rule.actual.filter((id, i) => afterPublication.rule.actual[i] === id);
+  const keptShifts = kept.map((id) => afterPublication.tops[id] - beforePublication.tops[id]);
+  console.log(`  publication: ${reranked} of ${beforePublication.rule.actual.length} project rows changed position; the ${kept.length} that kept theirs moved ${[...new Set(keptShifts)].slice(0, 6).join(', ')} px`);
+  today('unplanned', 'live, search not started: the card says "Preparing search" (the simulator counts documents after going live)',
+    await check(card).then((c) => ({ state: c.state, title: c.title })), { state: 'search_waiting', title: 'Preparing search' });
+  today('ux:X6', 'live, search not started: the portfolio panel stays hidden while the card is up',
+    await inColumn((column) => column('projects')?.querySelector('.ah-meta__body') !== null), false);
+  const hydration = await check(() => {
+    const asked = window.coldImport.c.log.projectStats.map((s) => s.projectId);
+    const listed = [...document.querySelectorAll('.ah-project-list-item')].map((row) => row.dataset.motionKey);
+    const selected = document.querySelector('.ah-project-list-item[aria-current="true"]')?.dataset.motionKey;
+    return { asked: asked.slice(0, listed.length), sorted: [...listed].sort(), selectedAt: asked.indexOf(selected), selectedSortedAt: [...listed].sort().indexOf(selected) };
+  });
+  today('ux:X6', 'figures hydrate in sorted-id order, the selected project wherever its id falls',
+    { order: hydration.asked, selectedAt: hydration.selectedAt }, { order: hydration.sorted, selectedAt: hydration.selectedSortedAt });
+
+  // Search right after publication, the index still building (ux:X6).
+  await advanceToPhase('search-indexing');
+  await settle();
+  await sheet(true);
+  await until(() => document.querySelector('.ah-sheet__field input'), 'the search sheet after publication');
+  await type(`${topic} `);
+  await until(() => document.querySelector('.ah-sheet__row[data-hit-kind="title"]') && /indexing/.test(document.querySelector('.ah-sheet__count')?.textContent ?? ''), 'title rows with the indexing foot');
+  const sheetAfter = await check(() => ({
+    pending: document.querySelector('.ah-sheet__pending')?.textContent ?? null,
+    foot: document.querySelector('.ah-sheet__count')?.textContent ?? '',
+  }));
+  today('ux:X6', 'after publication, building: titles stand in, "arrives when the import finishes", "results are partial"',
+    { pending: sheetAfter.pending, foot: /^indexing · \d+% · [\d,]+ of [\d,]+ messages · results are partial$/.test(sheetAfter.foot) },
+    { pending: 'Full-text search arrives when the import finishes.', foot: true });
+  await sheet(false);
+  await until(() => !document.querySelector('.ah-sheet__field'), 'the sheet to close');
+  today('ux:X6', 'the portfolio panel stays hidden while search builds (the card is up)',
+    await inColumn((column) => column('projects')?.querySelector('.ah-meta__body') !== null), false);
+  // Every stage of the index build, as the card draws it.
+  for (const stage of ['optimizing', 'validating', 'publishing']) {
+    await advanceToPhase(`search-${stage}`);
+    await settle();
+  }
+
+  // ── The end: ALL SET, then the card goes ─────────────────────────────
+  await advanceToPhase('search-ready');
+  await shows('ux:X9', 'search ready: the card reads ALL SET',
+    () => document.querySelector('.ah-ingest-status')?.dataset.state === 'complete' && document.querySelector('.ah-ingest-status__eyebrow')?.textContent === 'ALL SET✓');
+  // I1's end state, as far as a fixture sees it: the board completed, the
+  // count reached everything readable in the unit it counts (whichever that
+  // is), and the open project draws every root the catalog has.
+  const end = await check(() => {
+    const c = window.coldImport.c;
+    const status = c.status();
+    const selected = document.querySelector('.ah-project-list-item[aria-current="true"]')?.dataset.motionKey;
+    return {
+      done: status.ingest.projects.reduce((n, row) => n + row.sessions_done, 0),
+      total: status.ingest.projects.reduce((n, row) => n + row.sessions_total, 0),
+      shown: Number(document.querySelector('.ah-ingest-status')?.dataset.readyCount),
+      readableRoots: c.meta().sessions.filter((s) => s.parent_session_id === null && s.stream_state !== 'pending').length,
+      drawn: document.querySelectorAll('.ah-session-list-item').length,
+      roots: c.meta().sessions.filter((s) => s.parent_session_id === null && (s.project_id ?? '__rosetta_unassigned__') === selected).length,
+    };
+  });
+  today('forever', 'I1 end state: the board counts every planned session done, the card\'s count reached all that is readable in its own unit, the open project draws all its roots',
+    { boardComplete: end.done === end.total, countComplete: end.shown === (countUnit === 'roots' ? end.readableRoots : end.done), rows: end.drawn === end.roots },
+    { boardComplete: true, countComplete: true, rows: true });
+  today('ux:X3', 'the end count is in sessions: data-ready-count equals Σ sessions_done', end.shown === end.done, true);
+  // The card's exit, frame by frame: the head swap and the card's unmount.
+  await frames(4);
+  await check(() => { window.coldImport.startSampling(); return true; });
+  await shows('ux:X9', 'five seconds after ALL SET the card unmounts and the head swaps to the portfolio panel',
+    () => !document.querySelector('.ah-ingest-status') && [...document.querySelectorAll('.ah-col')].some((col) => col.querySelector(':scope > .ah-veilhost .ah-project-list-item') && col.querySelector('.ah-meta__body')));
+  await frames(8);
+  const exit = await check(() => {
+    const samples = window.coldImport.stopSampling();
+    const first = samples[0];
+    const last = samples.at(-1);
+    const ids = Object.keys(first).filter((id) => id in last);
+    const shifts = ids.map((id) => Math.round(last[id] - first[id]));
+    const steps = [];
+    for (let i = 1; i < samples.length; i++) {
+      const step = Math.max(0, ...ids.filter((id) => id in samples[i] && id in samples[i - 1]).map((id) => Math.abs(samples[i][id] - samples[i - 1][id])));
+      if (step > 0.5) steps.push(Math.round(step));
+    }
+    const order = (sample) => Object.keys(sample).sort((a, b) => sample[a] - sample[b]).join();
+    return { sameOrder: order(first) === order(last), uniform: Math.max(...shifts) - Math.min(...shifts) <= 1, shift: shifts[0] ?? 0,
+      movingFrames: steps.length, maxStep: Math.max(0, ...steps), frames: samples.length };
+  });
+  today('ux:X9', 'the card\'s exit moves every project row by one common shift, all of it in a single frame (no animation)',
+    { sameOrder: exit.sameOrder, uniform: exit.uniform, moved: Math.abs(exit.shift) > 1, inOneFrame: exit.movingFrames === 1 },
+    { sameOrder: true, uniform: true, moved: true, inOneFrame: true });
+  console.log(`  card exit: every row moved ${exit.shift} px; the largest one-frame step ${exit.maxStep} px over ${exit.movingFrames} moving frame(s) of ${exit.frames}`);
+  const cards = (await check(() => window.coldImport.report())).cards;
+  const tail = cards.map((c) => c.state).filter((state, i, all) => i === 0 || all[i - 1] !== state);
+  today('unplanned', 'the card\'s end sequence, stepping through every phase and search stage',
+    tail.slice(tail.indexOf('finalizing')),
+    ['finalizing', 'publishing', 'search_waiting', 'search_indexing', 'search_optimizing', 'search_validating', 'search_publishing', 'complete', null]);
+
+  // ── The honesty rules held throughout (metrics I1) ────────────────────
+  const report = await check(() => window.coldImport.report());
+  today('forever', 'I1: no row read ready before the catalog said so, none reverted, no selection moved without a click, no "Nothing readable yet"',
+    report.violations, []);
+  console.log(`  probe: ${report.everReady} rows seen ready, ${report.selections} scripted clicks, faces seen ${JSON.stringify(report.faces)}`);
+  const paint = report.flipPaint.sort((a, b) => a - b);
+  console.log(`  indicative only: flip→paint over ${paint.length} deliveries p50 ${Math.round(paint[Math.floor(paint.length / 2)] ?? 0)} ms, max ${Math.round(paint.at(-1) ?? 0)} ms; long tasks ${report.longTasks.count}, longest ${Math.round(report.longTasks.maxMs)} ms`);
+  writeFileSync(path.join(temporary, 'fresh.png'), (await win.webContents.capturePage()).toPNG());
+}
+
+async function resumedImport() {
+  console.log('Resumed import at scale 0.05');
+  await check(() => { window.coldImport.mount({ scale: 0.05, course: 'resumed' }); return true; });
+  const claude = await check(() => window.coldImport.c.runtimeAt(window.coldImport.c.corpus.runtimes[0].id));
+  await advanceToPhase('restoring');
+  await until(() => document.querySelector('.ah-ingest-status')?.dataset.state === 'restoring', 'the restoring card');
+  // claude-code's metadata is public at its skim; its catch-up streams.
+  await advanceTo(claude.metaPublic + 1_000);
+  await until(() => document.querySelector('.ah-project-list-item'), 'projects of a resumed build');
+  await settle();
+  today('ux:X3', 'a resumed build, seen restoring: "Finishing the import" and no count',
+    await check(card).then((c) => ({ state: c.state, title: c.title, ready: c.ready })), { state: 'reading', title: 'Finishing the import', ready: 0 });
+  const target = await check(() => {
+    const c = window.coldImport.c;
+    const row = c.meta().sessions.filter((s) => s.parent_session_id === null && c.kindOf(s.id) === 'root').sort((a, b) => b.updated_at - a.updated_at)[0];
+    return { id: row.id, project: row.project_id ?? '__rosetta_unassigned__' };
+  });
+  await click(`.ah-project-list-item[data-motion-key="${target.project}"]`);
+  await until((id) => document.querySelector(`.ah-session-list-item[data-motion-key="${id}"]`), 'the resumed newest row', target.id);
+  await click(`.ah-session-list-item[data-motion-key="${target.id}"]`);
+  await until(() => document.querySelector('.ah-col--measure .ah-empty[data-import-face]') && document.querySelector('.tr-stage[data-ready]'), 'the resumed face');
+  today('ux:X5', 'resumed (caught restoring): the face promises the end of the import',
+    await check(transcript).then((t) => ({ course: t.course, why: t.why, meter: t.meter })),
+    { course: 'resumed', why: 'The import picked up where it stopped. This one opens when the import finishes.', meter: true });
+  await check(() => { window.coldImport.c.setRunState('paused'); return true; });
+  await settle();
+  today('unplanned', 'stopped: the face says the import stopped, and no meter sweeps',
+    await check(transcript).then((t) => ({ course: t.course, why: t.why, meter: t.meter })),
+    { course: 'stopped', why: 'The import stopped before it reached this one. It opens once the import continues.', meter: false });
+  await check(() => { window.coldImport.c.setRunState('running'); return true; });
+  // Its runtime's end resyncs the open session, which still reads empty.
+  await advanceTo(claude.close);
+  await until((id) => window.coldImport.c.log.resyncs.some((r) => r.sessionId === id && r.delivered), 'the runtime\'s resync', target.id);
+  await frames(3);
+  today('forever', 'a resumed runtime\'s end resyncs the open session, still empty: the face stays, never "Nothing readable yet"',
+    await check(() => document.querySelector('.ah-col--measure .ah-empty[data-import-face]')?.dataset.importFace ?? null), 'not-imported');
+  // Nothing opens before publication: canonical readiness alone changes nothing.
+  await advanceToPhase('canonical');
+  await settle();
+  today('forever', 'a resume opens nothing before its publication: at canonical readiness the catalog is all Pending and the face stays',
+    await check(() => ({
+      canonical: window.coldImport.c.status().canonicalReady,
+      readable: window.coldImport.c.meta().sessions.filter((s) => s.stream_state !== 'pending').length,
+      face: document.querySelector('.ah-col--measure .ah-empty[data-import-face]')?.dataset.importFace ?? null,
+    })), { canonical: true, readable: 0, face: 'not-imported' });
+  await advanceToPhase('reveal');
+  await shows('forever', 'the resume\'s publication (one metadata diff, then the resync) opens the waiting transcript',
+    () => document.querySelector('.ah-col--measure .tr-sitting') && !document.querySelector('.ah-col--measure .ah-empty[data-import-face]'));
+  const report = await check(() => window.coldImport.report());
+  today('forever', 'the waiting transcript first drew rows after canonical readiness',
+    report.opened[target.id] >= await check(() => window.coldImport.c.phaseAt('canonical')), true);
+  today('forever', 'I1 in the resumed build', report.violations, []);
+}
+
+async function run() {
+  try {
+    await app.whenReady(); clearInterval(pulse);
+    const { createServer } = await import('vite');
+    server = await createServer({ configFile: path.join(root, 'vite.config.ts'), root, logLevel: 'error',
+      server: { host: '127.0.0.1', port: 0, strictPort: false, open: false, hmr: false, watch: null } });
+    await server.listen();
+    // The production window (electron/main.mjs: 1500×940).
+    win = new BrowserWindow({ width: 1500, height: 940, show: headlessCi,
+      webPreferences: { backgroundThrottling: false, contextIsolation: true, nodeIntegration: false } });
+    win.webContents.on('console-message', (event) => { if (event.level === 'error') errors.push(event.message); });
+    win.webContents.on('render-process-gone', (_event, details) => errors.push(JSON.stringify(details)));
+    await win.loadURL(`http://127.0.0.1:${server.httpServer.address().port}/test/cold-import.html`);
+    await until(() => window.coldImport, 'the fixture');
+    await freshImport();
+    await resumedImport();
+    assert.deepEqual(errors, []);
+    console.log('\nCharacterized today (each flips with the item named, holds forever, or changes only on purpose):');
+    // Ids are synthetic but long: a list of them prints as its length.
+    const brief = (value) => JSON.stringify(value, (_key, v) =>
+      Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x)) ? `${v.length} ids`
+        : typeof v === 'string' && /^[0-9a-f]{64}$/.test(v) ? 'id' : v).slice(0, 160);
+    for (const entry of ledger) console.log(`  [${entry.item}] ${entry.label} — ${brief(entry.observed)}`);
+    console.log(`\nPASS: ${ledger.length} characterizations at scale ${scale} in ${((Date.now() - started) / 1000).toFixed(1)} s. Screenshot: ${temporary}/fresh.png`);
+  } catch (error) {
+    console.error(error, ...errors);
+    process.exitCode = 1;
+  } finally {
+    clearTimeout(deadline);
+    await server?.close();
+    app.exit(process.exitCode ?? 0);
+  }
+}
+run();

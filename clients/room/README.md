@@ -21,6 +21,26 @@ import "@vibefield/rosetta-room/styles/room.css"; // after the host's --vf-* tok
 `@vibefield/rosetta-room/fixtures` renders the room with no daemon at all:
 `<HistoryRoom {...createDemoPorts()} />` (six projects, eleven sessions, a year
 of figures, two transcripts with images and web lines, all relative to now).
+`createColdImport({ now })` returns `{ ports, consent, daemon, controller }`
+for a first import instead, over a seeded synthetic archive (by default the
+MacBook trace's shape: 8,612 sessions in 1,139 trees over 119 projects;
+`scale` shrinks it). It owns no timer: nothing happens until the controller
+steps simulated time, and each step delivers the flips, resyncs and status
+rosettad would have by then.
+
+```tsx
+const sim = createColdImport({ now: Date.now(), consent: "granted" });
+<HistoryRoom {...sim.ports} />;
+sim.controller.advanceToPhase("metadata"); // or advanceTo(ms)
+```
+
+A fresh import waits for consent unless told it was `granted`: pass
+`sim.consent` (the roll call's `discoveries` and `enableRuntimes`) to a
+consent screen, or call `sim.consent.enableRuntimes([...])`. `course:
+"resumed"` replays a cross-launch resume instead, which opens nothing until it
+publishes. `sim.daemon.fetch` answers the daemon's REST routes for a host that
+builds its ports over a `RosettaClient` (`fetchFn`); `/ws/meta` and the session
+sockets stay the simulator's.
 
 ## The ports (`src/ports.ts`)
 
