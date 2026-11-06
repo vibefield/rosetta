@@ -198,6 +198,8 @@ async fn html_library_reads_exact_captured_bytes_only_through_the_owning_session
                     version: None,
                     published_at: Some(5),
                     source_offset: 20,
+                    description: Some("The checkout redesign".into()),
+                    dropped_files: Some(2),
                 }),
                 IngestOp::HtmlArtifactContent(HtmlArtifactContent {
                     session_id: "s1".into(),
@@ -219,6 +221,12 @@ async fn html_library_reads_exact_captured_bytes_only_through_the_owning_session
         library["entries"][0]["publication"]["timeline_id"],
         "html-review"
     );
+    // RO-33 and RO-34a ride the publication onto the list entry.
+    assert_eq!(
+        library["entries"][0]["publication"]["description"],
+        "The checkout redesign"
+    );
+    assert_eq!(library["entries"][0]["publication"]["dropped_files"], 2);
     let response = h
         .app
         .clone()
@@ -296,6 +304,459 @@ async fn html_library_reads_exact_captured_bytes_only_through_the_owning_session
             .await
             .0,
         StatusCode::NOT_FOUND
+    );
+}
+
+/// One captured publication in `s1`, applied live: its id and its capture.
+fn capture_publication(
+    h: &mut Harness,
+    name: &str,
+    html: &str,
+    published_at: i64,
+) -> (String, rosetta_core::timeline::AssetRef) {
+    use rosetta_core::html_artifacts::{
+        HTML_MEDIA_TYPE, HtmlArtifactAvailability, HtmlArtifactContent, HtmlArtifactPublication,
+        identity,
+    };
+    let asset = ProjectionAsset::new(HTML_MEDIA_TYPE, html.as_bytes().to_vec()).unwrap();
+    let reference = asset.reference();
+    let id = identity(&["publication", name]);
+    let path = format!("/gone/{name}.html");
+    let offset = 100 + published_at as u64;
+    h.store
+        .apply(&Batch {
+            ops: vec![
+                IngestOp::ProjectionAsset { asset },
+                IngestOp::HtmlArtifact(HtmlArtifactPublication {
+                    id: id.clone(),
+                    artifact_id: identity(&["artifact", name]),
+                    session_id: "s1".into(),
+                    timeline_id: "html-review".into(),
+                    title: name.into(),
+                    filename: format!("{name}.html"),
+                    path: Some(path.clone()),
+                    url: None,
+                    native_id: None,
+                    version: None,
+                    published_at: Some(published_at),
+                    source_offset: offset,
+                    description: None,
+                    dropped_files: Some(0),
+                }),
+                IngestOp::HtmlArtifactContent(HtmlArtifactContent {
+                    session_id: "s1".into(),
+                    source_offset: offset,
+                    path: Some(path),
+                    availability: HtmlArtifactAvailability::Captured,
+                    captured_at: Some(50),
+                    recovered_from: None,
+                    asset: Some(reference.clone()),
+                }),
+            ],
+            ..Default::default()
+        })
+        .unwrap();
+    (id, reference)
+}
+
+async fn post_json(
+    app: &Router,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn the_library_cursor_outlives_unrelated_ingest_and_expires_when_the_library_moves() {
+    let mut h = harness();
+    h.append(vec![message("html-review", MessageKind::Agent, "Designs")]);
+    assert_eq!(h.get("/api/status").await.1["artifacts_revision"], 0);
+    capture_publication(&mut h, "first", "<h1>First</h1>", 5);
+    capture_publication(&mut h, "second", "<h1>Second</h1>", 6);
+    // RO-35: one step per live transaction that moved the library.
+    assert_eq!(h.get("/api/status").await.1["artifacts_revision"], 2);
+    let (status, page) = h.get("/api/artifacts?limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let cursor = page["next_cursor"].as_str().unwrap().to_owned();
+    let next = format!("/api/artifacts?limit=1&cursor={}", urlencode(&cursor));
+
+    // New messages step the search revision, never the library's.
+    h.append(vec![message("later", MessageKind::User, "unrelated")]);
+    assert_eq!(h.get("/api/status").await.1["artifacts_revision"], 2);
+    let (status, rest) = h.get(&next).await;
+    assert_eq!(status, StatusCode::OK, "{rest}");
+    assert_eq!(rest["entries"][0]["publication"]["title"], "first");
+
+    // A new publication moves the library: the walk restarts from the head.
+    capture_publication(&mut h, "third", "<h1>Third</h1>", 7);
+    assert_eq!(h.get("/api/status").await.1["artifacts_revision"], 3);
+    let (status, expired) = h.get(&next).await;
+    assert_eq!(status, StatusCode::GONE, "{expired}");
+    assert_eq!(expired["error"]["code"], "cursor_expired");
+}
+
+/// A router whose export door opens below `root`.
+fn export_app(h: &Harness, root: &std::path::Path) -> Router {
+    let root = rosetta_server::ExportRoot::new(root).unwrap();
+    let state = AppState::with_search(h.hub.clone(), h.db.clone(), Arc::new(h.search.clone()));
+    router(state.with_export_root(root))
+}
+
+/// The export body that names `path` as the directory.
+fn export_to(path: &std::path::Path) -> serde_json::Value {
+    serde_json::json!({ "into": path.to_str().unwrap() })
+}
+
+#[tokio::test]
+async fn the_export_door_links_a_capture_by_digest_and_answers_it() {
+    use rosetta_core::html_artifacts::SHELL_HOSTS;
+    use rosetta_protocol::ExportEnvironment;
+    let mut h = harness();
+    h.append(vec![message("html-review", MessageKind::Agent, "Designs")]);
+    let html = "<h1>Review π</h1><script src=\"app.js\"></script>";
+    let (id, reference) = capture_publication(&mut h, "review", html, 5);
+    let exports = TempDir::new().unwrap();
+    let app = export_app(&h, exports.path());
+    let uri = format!("/api/sessions/s1/artifacts/{id}/export");
+
+    // The page lands as itself, linked from the asset store, and its
+    // directory is made on the way.
+    let into = exports.path().join("made-src/review");
+    let (status, body) = post_json(&app, &uri, export_to(&into)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["method"], "link");
+    assert_eq!(
+        body["page"],
+        serde_json::json!({
+            "path": "index.html",
+            "blake3": reference.digest,
+            "bytes": reference.byte_len,
+        })
+    );
+    assert_eq!(body["members"], serde_json::json!([]));
+    assert_eq!(body["captured_at"], 50);
+    assert!(body.get("shell").is_none(), "no shell unasked: {body}");
+    let page = into.join("index.html");
+    assert_eq!(
+        std::fs::read(&page).unwrap(),
+        html.as_bytes(),
+        "the page's own bytes, never a shell"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let member = rosetta_store::assets::html_member_path(&h.db, &reference.digest);
+        assert_eq!(
+            std::fs::metadata(&page).unwrap().ino(),
+            std::fs::metadata(member).unwrap().ino(),
+            "one inode, linked from the asset store"
+        );
+        for dir in [exports.path().join("made-src"), into.clone()] {
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{}", dir.display());
+        }
+    }
+
+    // The environment rides every answer: the room's hosts by directive and
+    // its theme variables, read from rosetta's own tables.
+    assert_eq!(
+        body["environment"],
+        serde_json::to_value(ExportEnvironment::room()).unwrap()
+    );
+    assert_eq!(
+        body["environment"]["hosts"]["script-src"],
+        serde_json::json!(SHELL_HOSTS.script)
+    );
+    assert_eq!(
+        body["environment"]["variables"]["--color-background-primary"],
+        "#fff"
+    );
+
+    // The same digest at the same path answers the same and writes nothing.
+    let (status, again) = post_json(&app, &uri, export_to(&into)).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again, body);
+    let names: Vec<String> = std::fs::read_dir(&into)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names, ["index.html"], "the page and nothing else");
+
+    // The capture's own bytes already there as a file of their own count as
+    // placed: the answer is a copy of the capture's digest, and the file is
+    // left as it stands, never swapped for a link.
+    let copied = exports.path().join("copied");
+    std::fs::create_dir(&copied).unwrap();
+    let standing = copied.join("index.html");
+    std::fs::write(&standing, html).unwrap();
+    let (status, body) = post_json(&app, &uri, export_to(&copied)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["method"], "copy");
+    assert_eq!(body["page"]["blake3"], reference.digest);
+    assert_eq!(std::fs::read(&standing).unwrap(), html.as_bytes());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let member = rosetta_store::assets::html_member_path(&h.db, &reference.digest);
+        assert_ne!(
+            std::fs::metadata(&standing).unwrap().ino(),
+            std::fs::metadata(member).unwrap().ino(),
+            "a file of its own"
+        );
+    }
+}
+
+/// A real cross-volume export, opt-in: `ROSETTA_TEST_OTHER_VOLUME` names a
+/// directory on another device than the temporary directory that holds the
+/// asset store. The link is refused there, so the page is a verified copy.
+#[tokio::test]
+async fn an_export_to_another_volume_is_a_verified_copy() {
+    let Some(other_volume) = std::env::var_os("ROSETTA_TEST_OTHER_VOLUME") else {
+        return;
+    };
+    let mut h = harness();
+    h.append(vec![message("html-review", MessageKind::Agent, "Designs")]);
+    let html = "<h1>Review π</h1>";
+    let (id, reference) = capture_publication(&mut h, "review", html, 5);
+    let exports = TempDir::new_in(other_volume).unwrap();
+    let app = export_app(&h, exports.path());
+    let uri = format!("/api/sessions/s1/artifacts/{id}/export");
+
+    let into = exports.path().join("review");
+    let (status, body) = post_json(&app, &uri, export_to(&into)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["method"], "copy");
+    assert_eq!(body["page"]["blake3"], reference.digest);
+    assert_eq!(
+        std::fs::read(into.join("index.html")).unwrap(),
+        html.as_bytes()
+    );
+}
+
+#[tokio::test]
+async fn the_export_door_refuses_what_it_may_not_write() {
+    let mut h = harness();
+    h.append(vec![message("html-review", MessageKind::Agent, "Designs")]);
+    let (id, _) = capture_publication(&mut h, "review", "<h1>Review</h1>", 5);
+    let uri = format!("/api/sessions/s1/artifacts/{id}/export");
+
+    // No root: the door is closed, honestly.
+    let (status, body) = post_json(&h.app, &uri, serde_json::json!({"into": "/tmp/x"})).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"]["code"], "not_ready");
+
+    let exports = TempDir::new().unwrap();
+    let app = export_app(&h, exports.path());
+
+    // Outside the root, relative, `..`, the root itself, empty, past the
+    // 4,096-byte bound, or holding a NUL: refused.
+    for refused in [
+        serde_json::json!({"into": "/elsewhere/review"}),
+        serde_json::json!({"into": "relative/review"}),
+        export_to(&exports.path().join("a/../review")),
+        export_to(exports.path()),
+        serde_json::json!({"into": ""}),
+        serde_json::json!({ "into": format!("/{}", "a".repeat(4096)) }),
+        serde_json::json!({"into": "/tmp/a\u{0}b"}),
+    ] {
+        let (status, body) = post_json(&app, &uri, refused.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused} {body}");
+        assert_eq!(body["error"]["code"], "bad_request");
+    }
+
+    // A body that is not JSON {into, shell?} answers the error envelope,
+    // never the extractor's plain-text rejection: bad JSON, no `into`, a
+    // shell rosetta does not write, no content type.
+    for (content_type, raw) in [
+        (Some("application/json"), "{"),
+        (Some("application/json"), "{}"),
+        (
+            Some("application/json"),
+            r#"{"into":"/tmp/x","shell":"dark"}"#,
+        ),
+        (None, r#"{"into":"/tmp/x"}"#),
+    ] {
+        let mut request = Request::builder().method("POST").uri(uri.as_str());
+        if let Some(content_type) = content_type {
+            request = request.header("content-type", content_type);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from(raw)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{raw}");
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], "bad_request", "{raw}");
+    }
+
+    // Another page already where this one goes, or a file where its
+    // directory belongs: 409, and neither is touched.
+    let taken = exports.path().join("taken");
+    std::fs::create_dir(&taken).unwrap();
+    std::fs::write(taken.join("index.html"), b"mine").unwrap();
+    let file = exports.path().join("file.html");
+    std::fs::write(&file, b"mine").unwrap();
+    for refused in [&taken, &file] {
+        let (status, body) = post_json(&app, &uri, export_to(refused)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["code"], "export_conflict");
+    }
+    assert_eq!(std::fs::read(taken.join("index.html")).unwrap(), b"mine");
+    assert_eq!(std::fs::read(&file).unwrap(), b"mine");
+
+    // A directory where the page goes is not a page.
+    let odd = exports.path().join("odd");
+    std::fs::create_dir_all(odd.join("index.html")).unwrap();
+    let (status, body) = post_json(&app, &uri, export_to(&odd)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // No component below the root may be a link, and neither may the page.
+    #[cfg(unix)]
+    {
+        let elsewhere = TempDir::new().unwrap();
+        let link = exports.path().join("link");
+        std::os::unix::fs::symlink(elsewhere.path(), &link).unwrap();
+        let planted = exports.path().join("planted");
+        std::fs::create_dir(&planted).unwrap();
+        let target = elsewhere.path().join("index.html");
+        std::os::unix::fs::symlink(target, planted.join("index.html")).unwrap();
+        for refused in [link.join("review"), link.clone(), planted.clone()] {
+            let (status, body) = post_json(&app, &uri, export_to(&refused)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        }
+        assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+    }
+
+    // Scoped to the owning session, like the content read.
+    let other = exports.path().join("other");
+    let foreign = format!("/api/sessions/s2/artifacts/{id}/export");
+    let (status, _) = post_json(&app, &foreign, export_to(&other)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!other.exists(), "a refused export makes no directory");
+}
+
+#[tokio::test]
+async fn a_capture_that_fails_its_hash_or_is_gone_exports_nothing() {
+    let mut h = harness();
+    h.append(vec![message("html-review", MessageKind::Agent, "Designs")]);
+    let (id, reference) = capture_publication(&mut h, "review", "<h1>Review</h1>", 5);
+    let exports = TempDir::new().unwrap();
+    let app = export_app(&h, exports.path());
+    let uri = format!("/api/sessions/s1/artifacts/{id}/export");
+    let member = rosetta_store::assets::html_member_path(&h.db, &reference.digest);
+
+    // Tampered (a new file of the same length): 500, and not even the
+    // directory is made, with the shell or without.
+    let mut tampered = std::fs::read(&member).unwrap();
+    tampered[0] ^= 1;
+    std::fs::remove_file(&member).unwrap();
+    std::fs::write(&member, tampered).unwrap();
+    let untouched = exports.path().join("tampered");
+    for request in [
+        export_to(&untouched),
+        serde_json::json!({ "into": untouched.to_str().unwrap(), "shell": "room" }),
+    ] {
+        let (status, body) = post_json(&app, &uri, request).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert_eq!(body["error"]["code"], "internal");
+        assert!(!untouched.exists());
+    }
+
+    // Gone from the asset store: 404, and still nothing is made.
+    std::fs::remove_file(&member).unwrap();
+    let (status, body) = post_json(&app, &uri, export_to(&untouched)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(!untouched.exists());
+}
+
+#[tokio::test]
+async fn the_room_shell_is_an_option_and_off_by_default() {
+    use rosetta_core::html_artifacts::{SHELL_HOSTS, SHELL_VERSION, runnable_document};
+    let mut h = harness();
+    h.append(vec![message("html-review", MessageKind::Agent, "Designs")]);
+    let html = "<h1>Review π</h1>";
+    let (id, reference) = capture_publication(&mut h, "review", html, 5);
+    let exports = TempDir::new().unwrap();
+    let app = export_app(&h, exports.path());
+    let uri = format!("/api/sessions/s1/artifacts/{id}/export");
+
+    // Asked for, the room's shell is written around the page as a file of
+    // its own, and the answer names it.
+    let shelled = exports.path().join("shelled");
+    let request = serde_json::json!({ "into": shelled.to_str().unwrap(), "shell": "room" });
+    let (status, body) = post_json(&app, &uri, request.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let document = runnable_document(html);
+    assert_eq!(
+        std::fs::read_to_string(shelled.join("index.html")).unwrap(),
+        document
+    );
+    assert_eq!(body["method"], "copy");
+    assert_eq!(
+        body["page"],
+        serde_json::json!({
+            "path": "index.html",
+            "blake3": blake3::hash(document.as_bytes()).to_hex().to_string(),
+            "bytes": document.len(),
+        })
+    );
+    assert_eq!(
+        body["shell"],
+        serde_json::json!({
+            "version": SHELL_VERSION,
+            "source_blake3": reference.digest,
+            "hosts": SHELL_HOSTS.all(),
+        })
+    );
+    assert_eq!(
+        body["environment"]["hosts"]["font-src"],
+        serde_json::json!(SHELL_HOSTS.font)
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let written = std::fs::metadata(shelled.join("index.html")).unwrap();
+        let member = rosetta_store::assets::html_member_path(&h.db, &reference.digest);
+        assert_ne!(written.ino(), std::fs::metadata(member).unwrap().ino());
+        assert_eq!(written.permissions().mode() & 0o777, 0o600);
+    }
+
+    // The same request again answers the same; the capture as itself at
+    // that path is another page, refused.
+    let (status, again) = post_json(&app, &uri, request).await;
+    assert_eq!((status, &again), (StatusCode::OK, &body));
+    let (status, raw) = post_json(&app, &uri, export_to(&shelled)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{raw}");
+    assert_eq!(raw["error"]["code"], "export_conflict");
+
+    // Unasked, the page is its own bytes.
+    let plain = exports.path().join("plain");
+    let (status, body) = post_json(&app, &uri, export_to(&plain)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.get("shell").is_none(), "{body}");
+    assert_eq!(
+        std::fs::read_to_string(plain.join("index.html")).unwrap(),
+        html
     );
 }
 

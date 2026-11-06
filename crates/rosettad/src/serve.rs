@@ -261,6 +261,13 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
     // So are the access policy's secret files (docs/AUTH.md). Read once:
     // the supervisor may delete them after the ready event.
     let auth = Arc::new(crate::auth_files::load_policy(&flags)?);
+    // The export door's root (RO-32), admitted before anything binds: a
+    // missing or non-directory root is a startup refusal, never a 500 later.
+    let export_root = flags
+        .export_root
+        .as_deref()
+        .map(rosetta_server::ExportRoot::new)
+        .transpose()?;
     let enrolled_presentation = Arc::new(EnrolledRuntimes::new(
         enrollment
             .iter()
@@ -429,6 +436,9 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
         .with_raw_commands(commands.clone());
     if let Some(boost) = &boost {
         state = state.with_boost(boost.clone());
+    }
+    if let Some(root) = export_root {
+        state = state.with_export_root(root);
     }
     let server = tokio_runtime.spawn({
         let mut shutdown_rx = shutdown_rx.clone();
@@ -1403,7 +1413,10 @@ fn run_resumed_fresh_serve(
         board.session_done(project.as_deref(), session_id);
     }
     let hub = public_hub;
-    hub.set_hide_pending(false);
+    // Lift the barrier as the fresh path does: re-read what it shaped and
+    // announce a library it withheld (RO-35), then re-read the rest.
+    hub.reveal_pending(store.conn())
+        .map_err(|error| error.to_string())?;
     hub.rewarm(store.conn())
         .map_err(|error| error.to_string())?;
     health.ingest_metadata_ready(now_ms());

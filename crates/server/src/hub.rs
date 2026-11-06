@@ -451,6 +451,13 @@ impl Hub {
         state.mirror.runtimes().cloned().collect()
     }
 
+    /// The artifact library revision the mirror last read (RO-35); `None`
+    /// before its first pass. The meta snapshot carries it.
+    pub fn library_revision(&self) -> Option<u64> {
+        let state = self.state.lock().expect("hub state poisoned");
+        state.mirror.library_revision()
+    }
+
     // @atlas step live.hub
     /// Absorb one drained [`Effects`] batch, strictly after its transactions
     /// committed: refresh the mirror (row diffs → precise meta events), push

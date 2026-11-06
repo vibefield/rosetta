@@ -12,4 +12,12 @@ canonical_ready: boolean, search: SearchState,
  * Live-daemon health; `None` when the projection is served without an
  * ingest loop (tests, static serving).
  */
-daemon: DaemonStatus | null, };
+daemon: DaemonStatus | null, 
+/**
+ * The artifact library's revision (RO-35): the value `GET /api/artifacts`
+ * cursors bind and `/ws/meta`'s `artifacts_changed` announces, so a
+ * client that connects later knows where the library stands. Null while
+ * the projection is unpublished or unreadable; daemons before protocol
+ * 30 omit it.
+ */
+artifacts_revision?: number | null, };

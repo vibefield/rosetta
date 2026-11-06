@@ -260,9 +260,12 @@ fn message_count(store: &Store) -> i64 {
 /// the same normalization as `streamed_cold.rs` — less the bookkeeping of
 /// a write after publication, which a fresh build never makes:
 /// `ingest_cursor.updated_at` (the census mtime a live pass stamps when it
-/// moves a cursor; the cold writer leaves it NULL) and the search repair it
-/// records (`projection_state.search_revision`, `search_dirty`). The
-/// checkpoints, and every projection row, must be equal.
+/// moves a cursor; the cold writer leaves it NULL), the search repair it
+/// records (`projection_state.search_revision`, `search_dirty`), and the
+/// library revision (`projection_state.artifacts_revision`, schema 30), which
+/// counts writer transactions and so differs between a live and a fresh
+/// build of one ledger. The checkpoints, and every projection row, must be
+/// equal.
 fn dump(store: &Store) -> BTreeMap<String, Vec<String>> {
     let conn = store.conn();
     let cursors: BTreeMap<i64, String> = conn
@@ -309,7 +312,9 @@ fn dump(store: &Store) -> BTreeMap<String, Vec<String>> {
             .filter(|column| {
                 !((table == "message" || table == "ingest_cursor") && column == "id")
                     && !(table == "projection_state"
-                        && (column == "projection_epoch" || column == "search_revision"))
+                        && (column == "projection_epoch"
+                            || column == "search_revision"
+                            || column == "artifacts_revision"))
                     && !(table == "agent_runtime" && column == "discovered_at")
                     && !(table == "ingest_cursor" && column == "updated_at")
             })

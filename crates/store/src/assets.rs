@@ -13,8 +13,10 @@
 
 mod image_gc;
 pub mod image_refs;
+mod place;
 pub mod renditions;
 pub use image_gc::prune_unreferenced_images;
+pub use place::{PlaceError, Placed, VerifiedMember, place_bytes};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -43,6 +45,13 @@ pub fn asset_root(projection: &Path) -> PathBuf {
     let mut root: OsString = projection.as_os_str().to_owned();
     root.push(".assets");
     PathBuf::from(root)
+}
+
+/// Where a captured HTML page lives in the asset root: `<digest>.html`, the
+/// member a library entry's `asset` names. The content read and the export
+/// door both read it here and nowhere else.
+pub fn html_member_path(projection: &Path, digest: &str) -> PathBuf {
+    asset_root(projection).join(format!("{digest}.html"))
 }
 
 /// Resolve one already-committed canonical UTF-8 member for detached search.

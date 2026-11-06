@@ -51,6 +51,122 @@
     "truncated": false,
     "until_ms": 1791547200000
   },
+  "artifact_export_request": {
+    "into": "/exports/s1/review"
+  },
+  "artifact_export_request_room": {
+    "into": "/exports/s1/review-room",
+    "shell": "room"
+  },
+  "artifact_export_response": {
+    "captured_at": 3700000,
+    "environment": {
+      "hosts": {
+        "font-src": [
+          "fonts.gstatic.com"
+        ],
+        "script-src": [
+          "cdn.jsdelivr.net",
+          "cdnjs.cloudflare.com",
+          "unpkg.com"
+        ],
+        "style-src": [
+          "fonts.googleapis.com",
+          "cdn.jsdelivr.net"
+        ]
+      },
+      "variables": {
+        "--border-radius-lg": "12px",
+        "--border-radius-md": "8px",
+        "--color-background-danger": "#fdecea",
+        "--color-background-info": "#eaf1ff",
+        "--color-background-primary": "#fff",
+        "--color-background-secondary": "#f5f5f3",
+        "--color-background-success": "#edf6e8",
+        "--color-background-tertiary": "#eeede9",
+        "--color-background-warning": "#fff3d6",
+        "--color-border-primary": "#d5d5ce",
+        "--color-border-secondary": "#e5e5df",
+        "--color-border-tertiary": "#efefea",
+        "--color-text-danger": "#9a3830",
+        "--color-text-info": "#2e5b99",
+        "--color-text-primary": "#252521",
+        "--color-text-secondary": "#62625c",
+        "--color-text-success": "#3c6530",
+        "--color-text-tertiary": "#85857e",
+        "--color-text-warning": "#855c12",
+        "--font-mono": "ui-monospace,monospace",
+        "--font-sans": "system-ui,sans-serif"
+      }
+    },
+    "members": [],
+    "method": "link",
+    "page": {
+      "blake3": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "bytes": 15,
+      "path": "index.html"
+    }
+  },
+  "artifact_export_response_room": {
+    "captured_at": null,
+    "environment": {
+      "hosts": {
+        "font-src": [
+          "fonts.gstatic.com"
+        ],
+        "script-src": [
+          "cdn.jsdelivr.net",
+          "cdnjs.cloudflare.com",
+          "unpkg.com"
+        ],
+        "style-src": [
+          "fonts.googleapis.com",
+          "cdn.jsdelivr.net"
+        ]
+      },
+      "variables": {
+        "--border-radius-lg": "12px",
+        "--border-radius-md": "8px",
+        "--color-background-danger": "#fdecea",
+        "--color-background-info": "#eaf1ff",
+        "--color-background-primary": "#fff",
+        "--color-background-secondary": "#f5f5f3",
+        "--color-background-success": "#edf6e8",
+        "--color-background-tertiary": "#eeede9",
+        "--color-background-warning": "#fff3d6",
+        "--color-border-primary": "#d5d5ce",
+        "--color-border-secondary": "#e5e5df",
+        "--color-border-tertiary": "#efefea",
+        "--color-text-danger": "#9a3830",
+        "--color-text-info": "#2e5b99",
+        "--color-text-primary": "#252521",
+        "--color-text-secondary": "#62625c",
+        "--color-text-success": "#3c6530",
+        "--color-text-tertiary": "#85857e",
+        "--color-text-warning": "#855c12",
+        "--font-mono": "ui-monospace,monospace",
+        "--font-sans": "system-ui,sans-serif"
+      }
+    },
+    "members": [],
+    "method": "copy",
+    "page": {
+      "blake3": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "bytes": 1234,
+      "path": "index.html"
+    },
+    "shell": {
+      "hosts": [
+        "cdn.jsdelivr.net",
+        "cdnjs.cloudflare.com",
+        "unpkg.com",
+        "fonts.googleapis.com",
+        "fonts.gstatic.com"
+      ],
+      "source_blake3": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "version": "1"
+    }
+  },
   "artifact_page": {
     "canonical_ready": true,
     "entries": [
@@ -69,6 +185,8 @@
         "project_name": "Rosetta",
         "publication": {
           "artifact_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "description": "Two checkout flows to compare",
+          "dropped_files": 2,
           "filename": "checkout.html",
           "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "native_id": "review",
@@ -244,12 +362,13 @@
     "bad_request",
     "not_ready",
     "cursor_expired",
+    "export_conflict",
     "internal"
   ],
   "frames": [
     {
       "frame": "hello",
-      "protocol_version": 29,
+      "protocol_version": 30,
       "stamp": {
         "epoch": 9,
         "seq": 3
@@ -791,6 +910,7 @@
       }
     },
     {
+      "artifacts_revision": 7,
       "frame": "meta_snapshot",
       "projects": [
         {
@@ -1301,6 +1421,10 @@
       "versions_seen": [
         "2.1.240"
       ]
+    },
+    {
+      "revision": 7,
+      "type": "artifacts_changed"
     }
   ],
   "pricing": {
@@ -1339,7 +1463,7 @@
       }
     ]
   },
-  "protocol_version": 29,
+  "protocol_version": 30,
   "runtimes": {
     "runtimes": [
       {
@@ -1462,6 +1586,7 @@
     ]
   },
   "status": {
+    "artifacts_revision": 7,
     "canonical_ready": true,
     "daemon": {
       "hub": {
@@ -1567,7 +1692,7 @@
       "started_at": 1000,
       "uptime_ms": 60000
     },
-    "protocol_version": 29,
+    "protocol_version": 30,
     "schema_version": 16,
     "search": {
       "progress": null,

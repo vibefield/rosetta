@@ -487,7 +487,8 @@ fn dump(store: &Store) -> BTreeMap<String, Vec<String>> {
                 let mut fields = Vec::new();
                 for (index, column) in columns.iter().enumerate() {
                     if ((table == "message" || table == "ingest_cursor") && column == "id")
-                        || (table == "projection_state" && column == "projection_epoch")
+                        || (table == "projection_state"
+                            && (column == "projection_epoch" || column == "artifacts_revision"))
                     {
                         continue;
                     }

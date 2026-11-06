@@ -16,6 +16,8 @@ import type { IngestionControlRequest } from "./generated/IngestionControlReques
 import type { ApiError } from "./generated/ApiError";
 import type { ImageVariant } from "./generated/ImageVariant";
 import type { AssetRef } from "./generated/AssetRef";
+import type { ArtifactExportRequest } from "./generated/ArtifactExportRequest";
+import type { ArtifactExportResponse } from "./generated/ArtifactExportResponse";
 import type { ArtifactListRequest } from "./generated/ArtifactListRequest";
 import type { ArtifactPage } from "./generated/ArtifactPage";
 import type { BoostResponse } from "./generated/BoostResponse";
@@ -579,6 +581,32 @@ export class RosettaClient {
       withSignal(signal),
     );
     return new Uint8Array(await response.arrayBuffer());
+  }
+
+  /**
+   * Place one captured page by its digest as `index.html` in the directory
+   * `request.into`, below the daemon's `--export-root` (RO-32): a hard link
+   * from rosetta's asset store when both share a volume, else a verified
+   * copy. `shell: "room"` writes the room's shell around the page instead.
+   * Bearer only. The same page already there answers the same; a different
+   * file there is `export_conflict`. Every answer carries the room's
+   * `environment` (hosts per CSP directive, theme variables).
+   */
+  exportArtifact(
+    sessionId: string,
+    publicationId: string,
+    request: ArtifactExportRequest,
+    signal?: AbortSignal,
+  ): Promise<ArtifactExportResponse> {
+    return this.request(
+      `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(publicationId)}/export`,
+      {
+        method: "POST",
+        ...withSignal(signal),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      },
+    );
   }
 
   // @atlas step search-query.client

@@ -71,7 +71,10 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // renditions made after import (2026-11-01): legacy bundle refs stay
         // valid, so re-streaming every source is not worth it; a rebuild
         // converts them (docs/ARCHITECTURE.md).
-        38
+        // 39 (2026-11-05, schema 30): a native publish keeps its description
+        // and counts the files-map members it did not keep; a files-map string
+        // is a source path resolved against `root`, never inline HTML.
+        39
     }
 
     fn html_artifact_hints(

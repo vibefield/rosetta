@@ -55,7 +55,12 @@ pub use rosetta_store::turns::{TurnGap, TurnSpan};
 /// a time window (ARCHITECTURE §5).
 /// 28 (2026-10-30): captured HTML artifact library and session content reads.
 /// 29 (2026-10-30): HTML recovery provenance and published links in session metadata.
-pub const PROTOCOL_VERSION: u32 = 29;
+/// 30 (2026-11-05): the artifact export door, by digest since 2026-11-06
+/// (`POST /api/sessions/{id}/artifacts/{publication_id}/export`), a publication's
+/// `description` and `dropped_files`, the library revision as the list cursor's
+/// binding, `artifacts_changed` on `/ws/meta`, and `artifacts_revision` on
+/// `/api/status` (RO-32, RO-33, RO-34a, RO-35).
+pub const PROTOCOL_VERSION: u32 = 30;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -69,6 +74,141 @@ pub struct StatusResponse {
     /// Live-daemon health; `None` when the projection is served without an
     /// ingest loop (tests, static serving).
     pub daemon: Option<DaemonStatus>,
+    /// The artifact library's revision (RO-35): the value `GET /api/artifacts`
+    /// cursors bind and `/ws/meta`'s `artifacts_changed` announces, so a
+    /// client that connects later knows where the library stands. Null while
+    /// the projection is unpublished or unreadable; daemons before protocol
+    /// 30 omit it.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional = nullable, type = "number | null"))]
+    pub artifacts_revision: Option<u64>,
+}
+
+/// `POST /api/sessions/{id}/artifacts/{publication_id}/export` (RO-32,
+/// protocol 30, by digest since 2026-11-06): place one captured page, its own
+/// bytes, as `index.html` in a directory a host serves from an origin of its
+/// own. Bearer only; a session grant never reaches it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ArtifactExportRequest {
+    /// The directory, absolute, strictly below the daemon's `--export-root`.
+    /// No component below the root may be a symbolic link. It is created
+    /// (0700) when absent, and the page lands at `<into>/index.html`.
+    pub into: String,
+    /// Absent: the page's own bytes, linked or copied. `room`: the room's
+    /// shell written around the page instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub shell: Option<ExportShell>,
+}
+
+/// A shell an export may write around its page, on request only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum ExportShell {
+    /// `rosetta_core::html_artifacts::runnable_document`: the room's preview
+    /// shell for an origin of its own, at `SHELL_VERSION`.
+    Room,
+}
+
+/// The export door's answer. The same page already at the same path answers
+/// the same and writes nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ArtifactExportResponse {
+    /// The file at `<into>/<page.path>`.
+    pub page: ExportedObject,
+    /// The publication's other files, each beside the page. Empty until
+    /// rosetta keeps a multi-file publish's members (RO-34b).
+    pub members: Vec<ExportedObject>,
+    /// When rosetta observed the captured file (Unix ms); null for a page
+    /// recorded inline in its publication.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub captured_at: Option<i64>,
+    pub method: ExportMethod,
+    /// The room's environment for a captured page, whatever `shell` asked.
+    pub environment: ExportEnvironment,
+    /// The shell written around the page; absent for the page's own bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub shell: Option<ExportedShell>,
+}
+
+/// One file an export placed, named by its path inside `into`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ExportedObject {
+    /// Relative to `into`: `index.html` for the page.
+    pub path: String,
+    /// The BLAKE3 digest of the file's bytes, lowercase hex. A page placed
+    /// as itself carries the capture's own digest, the library's
+    /// `asset.digest`.
+    pub blake3: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub bytes: u64,
+}
+
+/// How the page reached `into`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub enum ExportMethod {
+    /// A hard link to the asset store's own file: one inode under two names,
+    /// so the holder never opens it for writing and replaces it by rename.
+    Link,
+    /// A file of its own: a copy verified against the digest (another
+    /// volume, or a filesystem without hard links), or the shell's document.
+    Copy,
+}
+
+/// The room's environment for a captured page, as data: the public hosts it
+/// admits beside the page's own origin and the theme variables a page's
+/// author wrote against (`rosetta_core::html_artifacts::SHELL_HOSTS` and
+/// `SHELL_VARIABLES`). A serving host builds its own policy and theme from
+/// them without holding a platform's list or wrapping the page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ExportEnvironment {
+    /// Per Content-Security-Policy directive (`script-src`, `style-src`,
+    /// `font-src`), the `https` hosts the room admits.
+    pub hosts: std::collections::BTreeMap<String, Vec<String>>,
+    /// Per CSS custom property (`--color-text-primary`, …), its light value.
+    pub variables: std::collections::BTreeMap<String, String>,
+}
+
+impl ExportEnvironment {
+    /// The room's own environment, read from `rosetta_core::html_artifacts`.
+    pub fn room() -> Self {
+        use rosetta_core::html_artifacts::{SHELL_HOSTS, SHELL_VARIABLES};
+        Self {
+            hosts: SHELL_HOSTS
+                .directives()
+                .into_iter()
+                .map(|(directive, hosts)| (directive.to_owned(), owned(hosts)))
+                .collect(),
+            variables: SHELL_VARIABLES
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect(),
+        }
+    }
+}
+
+fn owned(items: &[&str]) -> Vec<String> {
+    items.iter().map(|item| (*item).to_owned()).collect()
+}
+
+/// The shell an export wrote around its page (`shell: "room"`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ExportedShell {
+    /// `rosetta_core::html_artifacts::SHELL_VERSION`.
+    pub version: String,
+    /// The capture the shell wraps: the library's `asset.digest`.
+    pub source_blake3: String,
+    /// The public hosts the shell's own policy admits, each once.
+    pub hosts: Vec<String>,
 }
 
 /// The serve process's liveness surface — the health panel's one read.
@@ -611,6 +751,9 @@ pub enum ErrorCode {
     PublicationInProgress,
     ControlCapacity,
     ShuttingDown,
+    /// A different file already stands where an export would place its page,
+    /// or where its directory belongs; nothing was written (RO-32, protocol 30).
+    ExportConflict,
     Internal,
 }
 
@@ -670,6 +813,13 @@ pub enum ServerFrame {
         runtimes: Vec<RuntimeRow>,
         projects: Vec<ProjectRow>,
         sessions: Vec<SessionRow>,
+        /// The artifact library revision the mirror last read (RO-35), so a
+        /// subscriber that connects late or is resynced (an overflowed queue
+        /// drops its events, `artifacts_changed` among them) learns where the
+        /// library stands. Null before the mirror's first read; daemons
+        /// before protocol 30 omit it.
+        #[cfg_attr(feature = "ts", ts(optional = nullable, type = "number | null"))]
+        artifacts_revision: Option<u64>,
     },
     /// Live mutations carry a stamp on session streams. Replayed mutations
     /// carry None and commit together at CaughtUp; collaboration/meta are unstamped.

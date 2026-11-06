@@ -117,6 +117,10 @@ pub struct ApplyStats {
     /// Generation transitions that actually removed a prior source
     /// contribution. A source's first generation takes the empty fast path.
     pub source_sweeps: u64,
+    /// `html_artifact` rows written, re-captured or swept with their source
+    /// generation. A replay that restates held facts counts none. A live
+    /// transaction with any steps the library revision once (RO-35).
+    pub library_changes: u64,
     /// Canonical row projection, including generation activation/sweeps and
     /// live bucket repair, but excluding the SQLite transaction commit.
     pub canonical_apply_nanos: u64,
@@ -198,6 +202,7 @@ impl ApplyStats {
         self.drift_recorded += batch.drift_recorded;
         self.bucket_rebuilds += batch.bucket_rebuilds;
         self.source_sweeps += batch.source_sweeps;
+        self.library_changes += batch.library_changes;
         self.canonical_apply_nanos += batch.canonical_apply_nanos;
         self.sqlite_commit_nanos += batch.sqlite_commit_nanos;
         self.profile.merge_from(&batch.profile);
@@ -690,13 +695,14 @@ fn cursor_has_projection(tx: &Transaction, cursor_id: i64) -> Result<bool, Store
 /// `src_cursor` natively; the small tables carry the column added for exactly
 /// this sweep. Buckets are untouched here — they are recomputed from the
 /// surviving rows after re-projection, so a swap can never leave aggregate
-/// residue behind.
+/// residue behind. Returns the `html_artifact` rows it removed, which move
+/// the artifact library (RO-35).
 fn remove_cursor_projection(
     tx: &Transaction,
     cursor_id: i64,
     maintenance: Maintenance,
     dirty_buckets: &mut BTreeSet<BucketKey>,
-) -> Result<(), StoreError> {
+) -> Result<u64, StoreError> {
     // A ledger-only cursor has no session of its own; its samples name
     // other sessions and its sweep owns no title.
     let session_id: Option<String> = tx
@@ -733,7 +739,6 @@ fn remove_cursor_projection(
         "DELETE FROM git_commit WHERE src_cursor = ?1",
         "DELETE FROM task WHERE src_cursor = ?1",
         "DELETE FROM plan WHERE src_cursor = ?1",
-        "DELETE FROM html_artifact WHERE src_cursor = ?1",
         "DELETE FROM session_usage WHERE src_cursor = ?1",
         "DELETE FROM session_usage_total WHERE src_cursor = ?1",
         "DELETE FROM workflow_journal WHERE src_cursor = ?1",
@@ -741,6 +746,10 @@ fn remove_cursor_projection(
     ] {
         tx.prepare_cached(sql)?.execute(params![cursor_id])?;
     }
+    let library_rows = {
+        let mut sweep = tx.prepare_cached("DELETE FROM html_artifact WHERE src_cursor = ?1")?;
+        sweep.execute(params![cursor_id])?
+    };
     // Sibling-owned edits may link to rows this sweep removes; unlink rather
     // than cascade — the sibling heal pass re-links them on its next replay.
     tx.prepare_cached(
@@ -783,7 +792,7 @@ fn remove_cursor_projection(
         )?
         .execute(params![session_id, cursor_id])?;
     }
-    Ok(())
+    Ok(library_rows as u64)
 }
 
 /// Session-wide presentation ordinals, reassigned deterministically: source
@@ -978,7 +987,8 @@ fn activate_cursor(
     effects: Option<&mut Effects>,
 ) -> Result<(), StoreError> {
     if cursor_has_projection(tx, source.cursor_id)? {
-        remove_cursor_projection(tx, source.cursor_id, maintenance, dirty_buckets)?;
+        let removed = remove_cursor_projection(tx, source.cursor_id, maintenance, dirty_buckets)?;
+        stats.library_changes += removed;
         stats.source_sweeps += 1;
     }
 
@@ -1227,10 +1237,10 @@ fn apply_op(
     match op {
         IngestOp::ProjectionAsset { .. } => {}
         IngestOp::HtmlArtifact(row) => {
-            crate::html_artifacts::apply_publication(tx, row, src_cursor)?
+            stats.library_changes += crate::html_artifacts::apply_publication(tx, row, src_cursor)?;
         }
         IngestOp::HtmlArtifactContent(row) => {
-            crate::html_artifacts::apply_content(tx, row, src_cursor)?
+            stats.library_changes += crate::html_artifacts::apply_content(tx, row, src_cursor)?;
         }
         IngestOp::Runtime(row) => profile_other(stats, || apply_runtime(tx, row))?,
         IngestOp::Project(row) => profile_other(stats, || apply_project(tx, row))?,
@@ -1547,12 +1557,13 @@ fn apply_batch_ops(
                         // watched subscriber re-snapshots past the sweep rather
                         // than holding rows the retry just removed.
                         if starts_new_generation && cursor_has_projection(tx, source.cursor_id)? {
-                            remove_cursor_projection(
+                            let removed = remove_cursor_projection(
                                 tx,
                                 source.cursor_id,
                                 maintenance,
                                 &mut dirty_buckets,
                             )?;
+                            stats.library_changes += removed;
                             stats.source_sweeps += 1;
                             if progressive_public && let Some(fx) = effects.as_deref_mut() {
                                 fx.push(Mutation::SessionSwept {
@@ -1624,12 +1635,13 @@ fn apply_batch_ops(
                             }
                         }
                         if cursor_has_projection(tx, source.cursor_id)? {
-                            remove_cursor_projection(
+                            let removed = remove_cursor_projection(
                                 tx,
                                 source.cursor_id,
                                 maintenance,
                                 &mut dirty_buckets,
                             )?;
+                            stats.library_changes += removed;
                             stats.source_sweeps += 1;
                             if progressive_public && let Some(fx) = effects.as_deref_mut() {
                                 fx.push(Mutation::SessionSwept {
@@ -1782,7 +1794,8 @@ fn project_ledger_only_source(
         SourceMode::Abandon => direct_cold_generation,
     };
     if sweep && cursor_has_projection(tx, source.cursor_id)? {
-        remove_cursor_projection(tx, source.cursor_id, maintenance, dirty_buckets)?;
+        let removed = remove_cursor_projection(tx, source.cursor_id, maintenance, dirty_buckets)?;
+        stats.library_changes += removed;
         stats.source_sweeps += 1;
     }
     match source.mode {

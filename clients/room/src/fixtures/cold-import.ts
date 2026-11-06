@@ -82,8 +82,8 @@ import type { ColdPhase, FlipBatch, Lane, RuntimeTimes, Schedule } from "./cold-
 export type { ColdCorpus, ColdCorpusOptions, ColdTree, SessionKind } from "./cold-import-corpus";
 export type { ColdPhase, FlipBatch, FlipKind, RuntimeTimes } from "./cold-import-schedule";
 
-/** The store's schema version, which /api/status reports (crates/store/src/schema.rs:12). */
-const SCHEMA_VERSION = 29;
+/** The store's schema version, which /api/status reports (crates/store/src/schema.rs:17). */
+const SCHEMA_VERSION = 30;
 
 /* ── synthetic transcripts ──────────────────────────────────────────────── */
 

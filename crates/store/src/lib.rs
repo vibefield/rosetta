@@ -604,6 +604,16 @@ impl Store {
         if let Some(search_before) = search_before {
             search_sync::record_batch(&tx, canonical_batch, search_before)?;
         }
+        // RO-35: one library revision step per transaction that moved a
+        // publication or its capture, in every mode. A cold build's library
+        // is readable while it grows (a fresh build's RAM generation, a
+        // resumed progressive file), so it steps too: its readers hear the
+        // growth and a walk across it expires. Unrelated ingest never steps
+        // it. How a build splits its transactions decides the cold value, so
+        // the equality dumps leave it out, as they leave out the epoch.
+        if stats.library_changes > 0 {
+            html_artifacts::step_revision(&tx)?;
+        }
         let started = Instant::now();
         tx.commit()?;
         self.drift = drift;
@@ -827,6 +837,15 @@ impl Store {
         session_id: &str,
         state: StreamState,
     ) -> Result<bool, StoreError> {
+        // RO-35: a flip across Pending of a session that holds publications
+        // changes what the library shows, so it commits with its revision
+        // step through the transactional path. Every other flip stays one
+        // autocommit statement.
+        if html_artifacts::flip_moves(&self.conn, session_id, state)? {
+            let changed =
+                self.set_session_stream_states_changed(&[(session_id.to_owned(), state)])?;
+            return Ok(!changed.is_empty());
+        }
         let changed = self.conn.execute(
             "UPDATE session SET stream_state = ?2
              WHERE id = ?1 AND stream_state != ?2",

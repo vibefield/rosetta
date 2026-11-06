@@ -512,6 +512,7 @@ fn meta_snapshot(hub: &Hub, enrolled: &EnrolledRuntimes) -> ServerFrame {
         runtimes,
         projects,
         sessions,
+        artifacts_revision: hub.library_revision(),
     }
 }
 
@@ -1259,10 +1260,13 @@ mod tests {
                     runtimes,
                     projects,
                     sessions,
+                    artifacts_revision,
                 } => {
                     assert_eq!(runtimes.len(), 1);
                     assert_eq!(projects.len(), 1);
                     assert_eq!(sessions.len(), 1);
+                    // The warmed mirror's library revision (RO-35).
+                    assert_eq!(*artifacts_revision, Some(0));
                 }
                 other => panic!("expected meta snapshot, got {other:?}"),
             }

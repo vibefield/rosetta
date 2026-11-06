@@ -396,6 +396,12 @@ pub(crate) fn guard_no_stored_tool_rows(
 
 /// Set each session's readiness badge inside `tx`; returns the sessions
 /// whose state moved.
+///
+/// A flip into or out of Pending changes what the artifact library shows of
+/// a session that holds publications (the admission barrier hides a Pending
+/// session's, and every list hides them from version counts and links), so
+/// such a flip steps the library revision once for the transaction (RO-35).
+/// Only a session that holds a publication has its prior state read.
 pub(crate) fn set_stream_states_in(
     tx: &Transaction,
     states: &[(String, StreamState)],
@@ -405,10 +411,19 @@ pub(crate) fn set_stream_states_in(
         "UPDATE session SET stream_state = ?2
          WHERE id = ?1 AND stream_state != ?2",
     )?;
+    let publishers = crate::html_artifacts::publishing_sessions(tx)?;
+    let mut library_moved = false;
     for (session_id, state) in states {
+        let moves = !library_moved
+            && publishers.contains(session_id.as_str())
+            && crate::html_artifacts::flip_moves(tx, session_id, *state)?;
         if update.execute(params![session_id, state.as_str()])? != 0 {
             changed.push(session_id.clone());
+            library_moved |= moves;
         }
+    }
+    if library_moved {
+        crate::html_artifacts::step_revision(tx)?;
     }
     Ok(changed)
 }

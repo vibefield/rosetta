@@ -897,3 +897,206 @@ async fn after_publication_every_answer_is_the_never_hidden_daemons() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(error(&body).0, "not_found");
 }
+
+/// One captured page `name` in `session`, at `at`: its publication id and the
+/// ops that write it, its capture and its content member.
+fn captured_page(session: &str, name: &str, at: i64) -> (String, Vec<IngestOp>) {
+    use rosetta_core::ProjectionAsset;
+    use rosetta_core::html_artifacts::{
+        HTML_MEDIA_TYPE, HtmlArtifactAvailability, HtmlArtifactContent, HtmlArtifactPublication,
+        identity,
+    };
+    let asset =
+        ProjectionAsset::new(HTML_MEDIA_TYPE, format!("<h1>{name}</h1>").into_bytes()).unwrap();
+    let id = identity(&["publication", name]);
+    let path = format!("/w/app/{name}.html");
+    let offset = at as u64;
+    let ops = vec![
+        IngestOp::ProjectionAsset {
+            asset: asset.clone(),
+        },
+        IngestOp::HtmlArtifact(HtmlArtifactPublication {
+            id: id.clone(),
+            artifact_id: identity(&["artifact", name]),
+            session_id: session.into(),
+            timeline_id: format!("{name}-page"),
+            title: name.into(),
+            filename: format!("{name}.html"),
+            path: Some(path.clone()),
+            url: None,
+            native_id: None,
+            version: None,
+            published_at: Some(at),
+            source_offset: offset,
+            description: None,
+            dropped_files: Some(0),
+        }),
+        IngestOp::HtmlArtifactContent(HtmlArtifactContent {
+            session_id: session.into(),
+            source_offset: offset,
+            path: Some(path),
+            availability: HtmlArtifactAvailability::Captured,
+            captured_at: Some(at),
+            recovered_from: None,
+            asset: Some(asset.reference()),
+        }),
+    ];
+    (id, ops)
+}
+
+/// The library revisions a meta subscriber was told of since the last call.
+fn announced(meta: &rosetta_server::Subscription) -> Vec<u64> {
+    let mut revisions = Vec::new();
+    while let Some(item) = meta.try_recv() {
+        if let rosetta_server::HubItem::Mutation { mutation, .. } = item
+            && let rosetta_store::hot::Mutation::ArtifactsChanged { revision } = mutation.as_ref()
+        {
+            revisions.push(*revision);
+        }
+    }
+    revisions
+}
+
+fn titles(page: &serde_json::Value) -> Vec<String> {
+    page["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["publication"]["title"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The next page's URI: `next_cursor`, percent-encoded as a query value.
+fn next_page(page: &serde_json::Value) -> String {
+    let cursor: String = page["next_cursor"]
+        .as_str()
+        .expect("a next cursor")
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect();
+    format!("/api/artifacts?limit=1&cursor={cursor}")
+}
+
+async fn post_json(
+    app: &Router,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_library_cursor_signal_and_export_follow_admission_and_the_barriers_lift() {
+    let mut b = build("library").await;
+    let meta = b.hub.subscribe_meta();
+    // Two pages in the admitted `open`, one in Pending `held`, one in the
+    // Pending child `open-child`, which publication leaves Pending.
+    let mut ops = Vec::new();
+    for (session, name, at) in [
+        ("open", "open-a", HOUR),
+        ("open", "open-b", HOUR + 1_000),
+        ("held", "held-a", 2 * HOUR),
+        ("open-child", "child-a", 3 * HOUR),
+    ] {
+        ops.extend(captured_page(session, name, at).1);
+    }
+    let held_id = captured_page("held", "held-a", 2 * HOUR).0;
+    b.store
+        .apply(&Batch {
+            ops,
+            ..Batch::default()
+        })
+        .unwrap();
+    let effects = b.store.drain_meta_effects();
+    b.hub.absorb_meta(b.store.conn(), effects).unwrap();
+    // A cold write moves the library, and the mirror says so (RO-35).
+    assert_eq!(announced(&meta), [1]);
+
+    // Behind the barrier only the admitted session's pages are listed.
+    let (status, first) = get_json(&b.app, "/api/artifacts?limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(titles(&first), ["open-b"]);
+    let walk = next_page(&first);
+    let (status, rest) = get_json(&b.app, &walk).await;
+    assert_eq!(status, StatusCode::OK, "{rest}");
+    assert_eq!(titles(&rest), ["open-a"]);
+
+    // The export door answers a held session as the content read does: not
+    // found, and nothing is written.
+    let exports = TempDir::new().unwrap();
+    let door = router(
+        AppState::new(b.hub.clone(), b.db.clone())
+            .with_projection(b.projection.clone())
+            .with_export_root(rosetta_server::ExportRoot::new(exports.path()).unwrap()),
+    );
+    let export = format!("/api/sessions/held/artifacts/{held_id}/export");
+    let target = exports.path().join("held");
+    let into = serde_json::json!({ "into": target.to_str().unwrap() });
+    let (status, body) = post_json(&door, &export, into.clone()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(!target.exists(), "a held session's export writes nothing");
+
+    // Admitting `held` shows its page: the flip steps the library, the
+    // mirror announces it, and the walk begun before it expires.
+    admit(&mut b, &["held"]);
+    assert_eq!(announced(&meta), [2]);
+    let (status, expired) = get_json(&b.app, &walk).await;
+    assert_eq!(status, StatusCode::GONE, "{expired}");
+    assert_eq!(error(&expired).0, "cursor_expired");
+    let (_, library) = get_json(&b.app, "/api/artifacts").await;
+    assert_eq!(titles(&library), ["held-a", "open-b", "open-a"]);
+    let (status, body) = post_json(&door, &export, into).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let digest = blake3::hash(b"<h1>held-a</h1>").to_hex().to_string();
+    assert_eq!(body["page"]["blake3"], digest.as_str());
+    assert_eq!(body["method"], "link");
+    assert_eq!(
+        std::fs::read(target.join("index.html")).unwrap(),
+        b"<h1>held-a</h1>"
+    );
+    // A late meta subscriber learns where the library stands.
+    let mut socket = ws(b.addr, "/ws/meta").await;
+    assert_eq!(frame(&mut socket).await["frame"], "hello");
+    let snapshot = frame(&mut socket).await;
+    assert_eq!(snapshot["frame"], "meta_snapshot");
+    assert_eq!(snapshot["artifacts_revision"], 2);
+
+    // Publication lifts the barrier: `open-child` is still Pending, so its
+    // page appears with no revision step. The lift announces the library once
+    // at the same revision, and a cursor read behind the barrier expires.
+    let (_, hidden) = get_json(&b.app, "/api/artifacts?limit=1").await;
+    let behind = next_page(&hidden);
+    publish(&mut b);
+    assert_eq!(announced(&meta), [2]);
+    let (status, expired) = get_json(&b.app, &behind).await;
+    assert_eq!(status, StatusCode::GONE, "{expired}");
+    assert_eq!(error(&expired).0, "cursor_expired");
+    let (_, library) = get_json(&b.app, "/api/artifacts").await;
+    assert_eq!(titles(&library), ["child-a", "held-a", "open-b", "open-a"]);
+    // A cursor read after publication walks on.
+    let (_, head) = get_json(&b.app, "/api/artifacts?limit=1").await;
+    assert_eq!(titles(&head), ["child-a"]);
+    let (status, rest) = get_json(&b.app, &next_page(&head)).await;
+    assert_eq!(status, StatusCode::OK, "{rest}");
+    assert_eq!(titles(&rest), ["held-a"]);
+}
