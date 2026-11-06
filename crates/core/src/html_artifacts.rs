@@ -147,14 +147,17 @@ impl HtmlArtifactPublication {
 }
 
 /// The served shell's version (RO-32, 2026-11-05). It changes whenever
-/// [`runnable_document`]'s output for the same captured page would change, so
-/// an export marker that names an older shell is rewritten.
+/// [`runnable_document`]'s output for the same captured page would change. An
+/// export that asks for the shell (`shell: "room"`) answers it as
+/// `shell.version`; the export never writes the shell unasked (2026-11-06:
+/// it places a page's own bytes by digest).
 pub const SHELL_VERSION: &str = "1";
 
-/// The public hosts the served shell admits, per directive, as data. A host
-/// that serves an exported page (a supervisor's request guard, a phone's
-/// content rules) admits exactly these beside the page's own origin, and never
-/// re-derives the list.
+/// The public hosts the room admits for a captured page, per directive, as
+/// data. Every export answers them as its `environment.hosts`, with or
+/// without the shell, so a host that serves an exported page (a supervisor's
+/// request guard and policy headers, a phone's content rules) admits exactly
+/// these beside the page's own origin, and never re-derives the list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShellHosts {
     pub script: &'static [&'static str],
@@ -163,8 +166,19 @@ pub struct ShellHosts {
 }
 
 impl ShellHosts {
+    /// The hosts per Content-Security-Policy directive, in the shell
+    /// policy's order: an export's `environment.hosts`, keyed by the
+    /// directive [`shell_policy`] names them under.
+    pub fn directives(&self) -> [(&'static str, &'static [&'static str]); 3] {
+        [
+            ("script-src", self.script),
+            ("style-src", self.style),
+            ("font-src", self.font),
+        ]
+    }
+
     /// Every host once, in directive order (script, style, font): the
-    /// export answer's `hosts`.
+    /// `shell.hosts` of an export that wrote the shell.
     pub fn all(&self) -> Vec<&'static str> {
         let mut hosts: Vec<&'static str> = Vec::new();
         for &host in self.script.iter().chain(self.style).chain(self.font) {
@@ -186,8 +200,10 @@ pub const SHELL_HOSTS: ShellHosts = ShellHosts {
 };
 
 /// The host variables the room defines for a captured page (the names the
-/// page's author wrote against), with their light values. The served shell
-/// is light only: it sets `color-scheme: light` and defines no dark values.
+/// page's author wrote against), with their light values. Every export
+/// answers them as its `environment.variables`, so a serving host can theme
+/// a page without wrapping it. The served shell is light only: it sets
+/// `color-scheme: light` and defines no dark values.
 pub const SHELL_VARIABLES: &[(&str, &str)] = &[
     ("--color-background-primary", "#fff"),
     ("--color-background-secondary", "#f5f5f3"),
@@ -252,8 +268,10 @@ pub fn shell_policy() -> Vec<String> {
     ]
 }
 
-/// One captured page as a runnable document for its own origin (RO-32): the
-/// room's preview shell rebuilt as data, with no `<base>`, the policy of
+/// One captured page as a runnable document for its own origin, written by
+/// RO-32's `shell: "room"` export option (the export's default places the
+/// page's own bytes by digest): the room's preview shell rebuilt as data,
+/// with no `<base>`, the policy of
 /// [`shell_policy`], a viewport meta (a phone lays the page out at its own
 /// width), the room's variables and base rules, light only. The captured
 /// markup goes inside `<body>` exactly as the room places it, so a full

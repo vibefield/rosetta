@@ -1,13 +1,14 @@
 //! The library needs catalog access; captured content is scoped to its source
 //! session. HTML is delivered as inert bytes, never active daemon-origin HTML.
-//! The export door (RO-32) writes one capture, wrapped in the served shell,
-//! as a directory another host serves from an origin of its own; the daemon
-//! itself never serves it.
+//! The export door (RO-32) places one capture by its digest, its own bytes, as
+//! `index.html` in a directory another host serves from an origin of its own:
+//! a hard link from the asset store when both share a volume, else a verified
+//! copy. It writes the room's shell around the page only when asked
+//! (`shell: "room"`). The daemon itself never serves an export.
 
 use std::ffi::OsString;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind, Read};
 use std::path::Component;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::extract::rejection::JsonRejection;
 
@@ -18,9 +19,10 @@ use rosetta_core::html_artifacts::{
 use rosetta_core::timeline::AssetRef;
 use rosetta_protocol::{
     ArtifactExportRequest, ArtifactExportResponse, ArtifactListRequest, ArtifactPage,
+    ExportEnvironment, ExportMethod, ExportShell, ExportedObject, ExportedShell,
 };
-use rosetta_store::html_artifacts::{self, ListError};
-use serde::{Deserialize, Serialize};
+use rosetta_store::assets::{PlaceError, Placed, VerifiedMember};
+use rosetta_store::html_artifacts::{self, ArtifactEntry, ListError};
 
 pub(super) async fn list(
     State(state): State<AppState>,
@@ -38,39 +40,49 @@ pub(super) async fn list(
     Ok(Json(page))
 }
 
+/// One publication's capture, and when rosetta observed it.
+struct Captured {
+    asset: AssetRef,
+    captured_at: Option<i64>,
+}
+
 /// The capture of one publication, admitted and checked against its media
 /// type and bound before any file is opened. The content read and the export
 /// door share it, so both refuse exactly the same rows.
-async fn captured_asset(
+async fn captured(
     state: &AppState,
     session_id: String,
     publication_id: String,
-) -> Result<AssetRef, Failure> {
+) -> Result<Captured, Failure> {
     let hide_pending = !state.projection.is_published();
-    let asset = with_read(state.projection.clone(), move |conn| {
+    let captured = with_read(state.projection.clone(), move |conn| {
         if behind_admission(conn, &session_id, hide_pending)? {
             return Err(Failure::not_found("artifact is not available"));
         }
-        html_artifacts::get(conn, &session_id, &publication_id)
-            .map_err(store_err)?
-            .and_then(|entry| entry.asset)
-            .ok_or_else(|| Failure::not_found("this publication has no captured HTML"))
+        match html_artifacts::get(conn, &session_id, &publication_id).map_err(store_err)? {
+            Some(ArtifactEntry {
+                asset: Some(asset),
+                captured_at,
+                ..
+            }) => Ok(Captured { asset, captured_at }),
+            _ => Err(Failure::not_found("this publication has no captured HTML")),
+        }
     })
     .await?;
+    let asset = &captured.asset;
     asset
         .validate()
         .map_err(|e| Failure::internal(format!("invalid artifact content: {e}")))?;
     if asset.media_type != HTML_MEDIA_TYPE || asset.byte_len > HTML_MAX_BYTES as u64 {
         return Err(Failure::internal("invalid artifact media type or size"));
     }
-    Ok(asset)
+    Ok(captured)
 }
 
 /// The capture's bytes from the asset store, held to its recorded length and
 /// content hash. Blocking: the caller runs it on the blocking pool.
-fn read_verified(root: &Path, asset: &AssetRef) -> Result<Vec<u8>, Failure> {
-    let path = root.join(format!("{}.html", asset.digest));
-    let metadata = std::fs::symlink_metadata(&path)
+fn read_verified(path: &Path, asset: &AssetRef) -> Result<Vec<u8>, Failure> {
+    let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| Failure::not_found("captured HTML is unavailable"))?;
     if !metadata.is_file() || metadata.len() != asset.byte_len {
         return Err(Failure::internal("captured HTML has the wrong size"));
@@ -93,9 +105,9 @@ pub(super) async fn content(
     State(state): State<AppState>,
     UrlPath((session_id, publication_id)): UrlPath<(String, String)>,
 ) -> Result<Response, Failure> {
-    let asset = captured_asset(&state, session_id, publication_id).await?;
-    let root = assets::asset_root(&state.db);
-    let bytes = tokio::task::spawn_blocking(move || read_verified(&root, &asset))
+    let Captured { asset, .. } = captured(&state, session_id, publication_id).await?;
+    let member = assets::html_member_path(&state.db, &asset.digest);
+    let bytes = tokio::task::spawn_blocking(move || read_verified(&member, &asset))
         .await
         .map_err(|e| Failure::internal(format!("artifact read failed: {e}")))??;
     let mut response = Response::new(Body::from(bytes));
@@ -183,29 +195,13 @@ impl ExportRoot {
     }
 }
 
-/// The marker every export directory carries. A directory whose marker names
-/// another publication, or that has none and holds anything, is not the
-/// door's to replace.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct ExportMarker {
-    publication_id: String,
-    source_digest: String,
-    shell_version: String,
-}
-
-const MARKER: &str = ".rosetta-export.json";
-const DOCUMENT: &str = "index.html";
-const MARKER_MAX_BYTES: u64 = 4096;
-/// Staging and moved-aside siblings: `.rosetta-export-<pid>-<n>`.
-const SIBLING_PREFIX: &str = ".rosetta-export-";
-/// How old another process's leftover sibling must be before an export sweeps
-/// it: a live export holds one for milliseconds.
-const LEFTOVER_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
+/// The page's name in an export directory, so a host serving the directory
+/// at `/` serves the page.
+const PAGE: &str = "index.html";
 
 /// Exports are rare and write the disk: one at a time per process, so two
-/// requests for one directory never interleave their swaps.
+/// requests never race to create one directory.
 static EXPORTS: Mutex<()> = Mutex::new(());
-static STAGING: AtomicU64 = AtomicU64::new(0);
 
 pub(super) async fn export(
     State(state): State<AppState>,
@@ -217,8 +213,9 @@ pub(super) async fn export(
             "this daemon has no export root; start it with --export-root",
         ));
     };
-    // A missing content type, malformed JSON or a missing `into` answers the
-    // documented envelope, never axum's plain-text rejection.
+    // A missing content type, malformed JSON, a missing `into` or an unknown
+    // `shell` answers the documented envelope, never axum's plain-text
+    // rejection.
     let Json(request) = request.map_err(|_| Failure::bad_request("expected a JSON {into}"))?;
     if request.into.is_empty() || request.into.len() > 4096 || request.into.contains('\0') {
         return Err(Failure::bad_request("invalid export directory"));
@@ -229,34 +226,104 @@ pub(super) async fn export(
             root.path().display()
         )));
     };
-    let asset = captured_asset(&state, session_id, publication_id.clone()).await?;
-    let digest = asset.digest.clone();
-    let assets_root = assets::asset_root(&state.db);
-    let written = tokio::task::spawn_blocking(move || {
-        // Verify first: a capture that fails its hash writes nothing at all.
-        let bytes = read_verified(&assets_root, &asset)?;
-        // Decoded as the room's TextDecoder does: replacement for invalid
-        // UTF-8, and a leading byte-order mark consumed.
-        let text = String::from_utf8_lossy(&bytes);
-        let document = runnable_document(text.strip_prefix('\u{feff}').unwrap_or(&text));
-        let marker = ExportMarker {
-            publication_id,
-            source_digest: asset.digest,
-            shell_version: SHELL_VERSION.to_owned(),
-        };
-        let _one = EXPORTS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        write_export(root.path(), &parts, &document, &marker)
+    let Captured { asset, captured_at } = captured(&state, session_id, publication_id).await?;
+    let member = assets::html_member_path(&state.db, &asset.digest);
+    let shell = request.shell;
+    let placement = tokio::task::spawn_blocking(move || match shell {
+        None => place_page(root.path(), &parts, &member, &asset),
+        Some(ExportShell::Room) => write_room_shell(root.path(), &parts, &member, &asset),
     })
     .await
     .map_err(|e| Failure::internal(format!("artifact export failed: {e}")))??;
     Ok(Json(ArtifactExportResponse {
-        written,
-        digest,
-        shell_version: SHELL_VERSION.to_owned(),
-        hosts: SHELL_HOSTS.all().into_iter().map(str::to_owned).collect(),
+        page: placement.page,
+        members: Vec::new(),
+        captured_at,
+        method: placement.method,
+        environment: ExportEnvironment::room(),
+        shell: placement.shell,
     }))
+}
+
+/// What an export placed at its page's path.
+struct Placement {
+    page: ExportedObject,
+    method: ExportMethod,
+    shell: Option<ExportedShell>,
+}
+
+/// The default: the capture's own bytes, linked or copied
+/// ([`VerifiedMember::place`]). The capture is verified before any directory
+/// is made, so one that fails its size or hash leaves nothing behind.
+/// Blocking.
+fn place_page(
+    root: &Path,
+    parts: &[OsString],
+    member: &Path,
+    asset: &AssetRef,
+) -> Result<Placement, Failure> {
+    let source = VerifiedMember::open(member, asset).map_err(place_failure)?;
+    let _one = EXPORTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let into = prepare_into(root, parts)?;
+    let method = match source.place(&into.join(PAGE)).map_err(place_failure)? {
+        Placed::Link => ExportMethod::Link,
+        Placed::Copy => ExportMethod::Copy,
+    };
+    Ok(Placement {
+        page: ExportedObject {
+            path: PAGE.to_owned(),
+            blake3: asset.digest.clone(),
+            bytes: asset.byte_len,
+        },
+        method,
+        shell: None,
+    })
+}
+
+/// `shell: "room"`: the room's shell written around the capture, a file of
+/// its own and never over another file. The capture is read and verified
+/// first, then decoded as the room's `TextDecoder` decodes it: UTF-8 with
+/// replacement, a leading byte-order mark consumed. Blocking.
+fn write_room_shell(
+    root: &Path,
+    parts: &[OsString],
+    member: &Path,
+    asset: &AssetRef,
+) -> Result<Placement, Failure> {
+    let bytes = read_verified(member, asset)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let document = runnable_document(text.strip_prefix('\u{feff}').unwrap_or(&text));
+    let _one = EXPORTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let into = prepare_into(root, parts)?;
+    assets::place_bytes(document.as_bytes(), &into.join(PAGE)).map_err(place_failure)?;
+    Ok(Placement {
+        page: ExportedObject {
+            path: PAGE.to_owned(),
+            blake3: blake3::hash(document.as_bytes()).to_hex().to_string(),
+            bytes: document.len() as u64,
+        },
+        method: ExportMethod::Copy,
+        shell: Some(ExportedShell {
+            version: SHELL_VERSION.to_owned(),
+            source_blake3: asset.digest.clone(),
+            hosts: SHELL_HOSTS.all().into_iter().map(str::to_owned).collect(),
+        }),
+    })
+}
+
+/// A placement's refusal as the door answers it.
+fn place_failure(error: PlaceError) -> Failure {
+    match error {
+        PlaceError::SourceMissing => Failure::not_found("captured HTML is unavailable"),
+        PlaceError::SourceInvalid(reason) => Failure::internal(format!("captured HTML {reason}")),
+        PlaceError::Conflict => export_conflict("a different file already stands at index.html"),
+        PlaceError::NotAFile => Failure::bad_request("index.html is a link or a directory"),
+        PlaceError::Io(error) => io_failure("placing the page", error),
+    }
 }
 
 fn export_conflict(message: impl Into<String>) -> Failure {
@@ -274,215 +341,38 @@ fn io_failure(what: &str, error: std::io::Error) -> Failure {
     Failure::internal(format!("artifact export, {what}: {error}"))
 }
 
-/// What a target directory already holds.
-enum Held {
-    Empty,
-    Ours(ExportMarker),
-    Foreign,
-}
-
-/// Write `document` and `marker` as the directory `root/parts…`, which ends
-/// as either this export or untouched. Returns false, writing nothing, when
-/// the directory already holds this capture in this shell. Blocking.
-fn write_export(
-    root: &Path,
-    parts: &[OsString],
-    document: &str,
-    marker: &ExportMarker,
-) -> Result<bool, Failure> {
-    let Some((name, ancestors)) = parts.split_last() else {
-        return Err(Failure::bad_request("invalid export directory"));
-    };
-    let mut parent = root.to_path_buf();
-    for part in ancestors {
-        parent.push(part);
-        match std::fs::symlink_metadata(&parent) {
+/// The export directory `root/parts…`, walked one component at a time from
+/// the root. A missing one is created 0700 and its parent synced. A symbolic
+/// link on the way, or as the directory itself, is refused (400), and so is a
+/// file on the way; a file where the directory belongs is a conflict (409).
+/// Called under [`EXPORTS`]. Blocking.
+fn prepare_into(root: &Path, parts: &[OsString]) -> Result<PathBuf, Failure> {
+    let mut path = root.to_path_buf();
+    for (at, part) in parts.iter().enumerate() {
+        let last = at + 1 == parts.len();
+        path.push(part);
+        match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(Failure::bad_request(
                     "the export directory passes through a symbolic link",
                 ));
             }
             Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) if last => return Err(export_conflict("the export directory is a file")),
             Ok(_) => {
-                return Err(Failure::bad_request("the export directory passes through a file"));
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                private_dir(&parent).map_err(|e| io_failure("creating a parent", e))?;
-                sync_dir(parent.parent().unwrap_or(root))
-                    .map_err(|e| io_failure("syncing a parent", e))?;
-            }
-            Err(error) => return Err(io_failure("reading a parent", error)),
-        }
-    }
-    let target = parent.join(name);
-    let existing = match std::fs::symlink_metadata(&target) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(Failure::bad_request("the export directory is a symbolic link"));
-        }
-        Ok(metadata) if metadata.is_dir() => true,
-        Ok(_) => return Err(export_conflict("the export directory is a file")),
-        Err(error) if error.kind() == ErrorKind::NotFound => false,
-        Err(error) => return Err(io_failure("reading the directory", error)),
-    };
-    if existing {
-        match held(&target, &marker.publication_id)? {
-            Held::Empty => {}
-            Held::Ours(held) => {
-                let document_present = std::fs::symlink_metadata(target.join(DOCUMENT))
-                    .is_ok_and(|metadata| metadata.is_file());
-                if held == *marker && document_present {
-                    return Ok(false);
-                }
-            }
-            Held::Foreign => {
-                return Err(export_conflict(
-                    "the export directory holds something that is not this publication's export",
+                return Err(Failure::bad_request(
+                    "the export directory passes through a file",
                 ));
             }
-        }
-    }
-    sweep_leftovers(&parent);
-    let staged = stage(&parent, document, marker)?;
-    if let Err(error) = install(&parent, &target, &staged, existing) {
-        let _ = std::fs::remove_dir_all(&staged);
-        return Err(io_failure("installing", error));
-    }
-    Ok(true)
-}
-
-/// Read a target directory's marker. Only a regular file within the bound
-/// that parses and names this publication makes the directory ours.
-fn held(target: &Path, publication_id: &str) -> Result<Held, Failure> {
-    let mut entries =
-        std::fs::read_dir(target).map_err(|e| io_failure("reading the directory", e))?;
-    if entries.next().is_none() {
-        return Ok(Held::Empty);
-    }
-    let path = target.join(MARKER);
-    let marker = match std::fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.is_file() && metadata.len() <= MARKER_MAX_BYTES => {
-            std::fs::read(&path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<ExportMarker>(&bytes).ok())
-        }
-        _ => None,
-    };
-    Ok(match marker {
-        Some(marker) if marker.publication_id == publication_id => Held::Ours(marker),
-        _ => Held::Foreign,
-    })
-}
-
-/// A fresh sibling name for staging or for the replaced copy. Dot-named, so
-/// a host serving the parent's listing does not show it.
-fn sibling(parent: &Path) -> PathBuf {
-    let n = STAGING.fetch_add(1, Ordering::Relaxed);
-    parent.join(format!("{SIBLING_PREFIX}{}-{n}", std::process::id()))
-}
-
-/// Remove what an export that never finished left beside `parent`'s
-/// children: a staging directory, or an older export moved aside when a
-/// crash came between the two renames of [`install`]. Called under the
-/// process's export lock, so nothing of this process is in flight and its
-/// own leftovers go whatever their age; another process's go once they are
-/// [`LEFTOVER_AGE`] old. Only directories with the sibling prefix, never a
-/// link. Best effort: what cannot be removed waits for the next export.
-fn sweep_leftovers(parent: &Path) {
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return;
-    };
-    let own = format!("{SIBLING_PREFIX}{}-", std::process::id());
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if !name.starts_with(SIBLING_PREFIX) {
-            continue;
-        }
-        let path = entry.path();
-        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if !metadata.is_dir() {
-            continue;
-        }
-        let stale = name.starts_with(&own)
-            || metadata
-                .modified()
-                .ok()
-                .and_then(|at| at.elapsed().ok())
-                .is_some_and(|age| age >= LEFTOVER_AGE);
-        if stale {
-            let _ = std::fs::remove_dir_all(&path);
-        }
-    }
-}
-
-/// The export written whole in a private sibling directory: the document,
-/// then the marker, each synced, then the directory itself.
-fn stage(parent: &Path, document: &str, marker: &ExportMarker) -> Result<PathBuf, Failure> {
-    let mut staged = None;
-    for _ in 0..16 {
-        let candidate = sibling(parent);
-        match private_dir(&candidate) {
-            Ok(()) => {
-                staged = Some(candidate);
-                break;
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                private_dir(&path).map_err(|e| io_failure("creating a directory", e))?;
+                sync_dir(path.parent().unwrap_or(root))
+                    .map_err(|e| io_failure("syncing a directory", e))?;
             }
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(io_failure("staging", error)),
+            Err(error) => return Err(io_failure("reading a directory", error)),
         }
     }
-    let Some(staged) = staged else {
-        return Err(Failure::internal("artifact export, staging: no free staging name"));
-    };
-    if let Err(error) = fill(&staged, document, marker) {
-        let _ = std::fs::remove_dir_all(&staged);
-        return Err(io_failure("writing", error));
-    }
-    Ok(staged)
-}
-
-fn fill(staged: &Path, document: &str, marker: &ExportMarker) -> std::io::Result<()> {
-    write_private(&staged.join(DOCUMENT), document.as_bytes())?;
-    let marker = serde_json::to_vec(marker).map_err(std::io::Error::other)?;
-    write_private(&staged.join(MARKER), &marker)?;
-    sync_dir(staged)
-}
-
-/// Rename the staged directory into place. A directory already there (empty,
-/// or this publication's older export) moves aside first and is removed once
-/// the new one stands, whatever the parent's sync then answers; a failed
-/// second rename puts it back.
-///
-/// The two renames are not one atomic swap (std has no portable exchange):
-/// a reader between them finds no directory, and a crash between them leaves
-/// the old export in a dot-named sibling, which the next export under this
-/// parent sweeps ([`sweep_leftovers`]).
-fn install(parent: &Path, target: &Path, staged: &Path, existing: bool) -> std::io::Result<()> {
-    if !existing {
-        std::fs::rename(staged, target)?;
-        return sync_dir(parent);
-    }
-    let aside = sibling(parent);
-    std::fs::rename(target, &aside)?;
-    if let Err(error) = std::fs::rename(staged, target) {
-        if let Err(restore) = std::fs::rename(&aside, target) {
-            return Err(std::io::Error::new(
-                error.kind(),
-                format!(
-                    "{error}; restoring the previous export failed ({restore}), it is at {}",
-                    aside.display()
-                ),
-            ));
-        }
-        return Err(error);
-    }
-    let swapped = sync_dir(parent);
-    let _ = std::fs::remove_dir_all(&aside);
-    swapped?;
-    sync_dir(parent)
+    Ok(path)
 }
 
 /// A directory only its owner may enter (0700 on unix).
@@ -495,20 +385,6 @@ fn private_dir(path: &Path) -> std::io::Result<()> {
         builder.mode(0o700);
     }
     builder.create(path)
-}
-
-/// A new file only its owner may read (0600 on unix), synced before it closes.
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()
 }
 
 /// Make a directory's entries durable (unix; elsewhere a rename is what the
@@ -549,5 +425,54 @@ mod tests {
         assert!(ExportRoot::new(&temp.path().join("absent")).is_err());
         std::fs::write(temp.path().join("file"), b"").unwrap();
         assert!(ExportRoot::new(&temp.path().join("file")).is_err());
+    }
+
+    #[test]
+    fn the_walk_creates_private_directories_and_refuses_files_and_links() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = ExportRoot::new(temp.path()).unwrap();
+        let walk = |names: &[&str]| {
+            let parts: Vec<OsString> = names.iter().map(OsString::from).collect();
+            prepare_into(root.path(), &parts).map_err(|failure| failure.0)
+        };
+
+        let made = walk(&["a", "b"]).unwrap();
+        assert_eq!(made, root.path().join("a").join("b"));
+        assert!(made.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for dir in [root.path().join("a"), made.clone()] {
+                let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o700, "{}", dir.display());
+            }
+        }
+        assert_eq!(
+            walk(&["a", "b"]),
+            Ok(made),
+            "a second walk finds it standing"
+        );
+
+        std::fs::write(root.path().join("file"), b"mine").unwrap();
+        assert_eq!(
+            walk(&["file"]),
+            Err(StatusCode::CONFLICT),
+            "a file where the directory belongs"
+        );
+        assert_eq!(
+            walk(&["file", "x"]),
+            Err(StatusCode::BAD_REQUEST),
+            "a file on the way"
+        );
+        #[cfg(unix)]
+        {
+            let elsewhere = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(elsewhere.path(), root.path().join("link")).unwrap();
+            let cases: [&[&str]; 2] = [&["link"], &["link", "x"]];
+            for names in cases {
+                assert_eq!(walk(names), Err(StatusCode::BAD_REQUEST), "{names:?}");
+            }
+            assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+        }
     }
 }

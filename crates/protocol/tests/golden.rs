@@ -33,7 +33,8 @@ use rosetta_protocol::{
     TimelineMetaWorkflow, TimelinePage, TokenSnapshot, UsageResponse,
 };
 use rosetta_protocol::{
-    ArtifactEntry, ArtifactExportRequest, ArtifactExportResponse, ArtifactListRequest, ArtifactPage,
+    ArtifactEntry, ArtifactExportRequest, ArtifactExportResponse, ArtifactListRequest,
+    ArtifactPage, ExportEnvironment, ExportMethod, ExportShell, ExportedObject, ExportedShell,
 };
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
@@ -668,12 +669,30 @@ fn exemplars() -> serde_json::Value {
             artifact_id: None, cursor: None, limit: Some(50),
         },
         "artifact_page": ArtifactPage { entries: vec![html_artifact()], next_cursor: Some("opaque".into()), canonical_ready: true },
-        "artifact_export_request": ArtifactExportRequest { into: "/exports/s1/review".into() },
+        "artifact_export_request": ArtifactExportRequest { into: "/exports/s1/review".into(), shell: None },
+        "artifact_export_request_room": ArtifactExportRequest {
+            into: "/exports/s1/review-room".into(),
+            shell: Some(ExportShell::Room),
+        },
         "artifact_export_response": ArtifactExportResponse {
-            written: true,
-            digest: "c".repeat(64),
-            shell_version: rosetta_core::html_artifacts::SHELL_VERSION.into(),
-            hosts: rosetta_core::html_artifacts::SHELL_HOSTS.all().into_iter().map(str::to_owned).collect(),
+            page: ExportedObject { path: "index.html".into(), blake3: "c".repeat(64), bytes: 15 },
+            members: Vec::new(),
+            captured_at: Some(3_700_000),
+            method: ExportMethod::Link,
+            environment: ExportEnvironment::room(),
+            shell: None,
+        },
+        "artifact_export_response_room": ArtifactExportResponse {
+            page: ExportedObject { path: "index.html".into(), blake3: "d".repeat(64), bytes: 1_234 },
+            members: Vec::new(),
+            captured_at: None,
+            method: ExportMethod::Copy,
+            environment: ExportEnvironment::room(),
+            shell: Some(ExportedShell {
+                version: rosetta_core::html_artifacts::SHELL_VERSION.into(),
+                source_blake3: "c".repeat(64),
+                hosts: rosetta_core::html_artifacts::SHELL_HOSTS.all().into_iter().map(str::to_owned).collect(),
+            }),
         },
         "timeline_page": TimelinePage {
             watermark: "1.2.3".into(),
@@ -964,10 +983,30 @@ fn the_library_fields_of_protocol_30_are_additive_and_unknown_from_an_older_daem
     publication.remove("dropped_files");
     let entry: ArtifactEntry = serde_json::from_value(legacy_entry).unwrap();
     assert_eq!(
-        (entry.publication.description, entry.publication.dropped_files),
+        (
+            entry.publication.description,
+            entry.publication.dropped_files
+        ),
         (None, None),
         "a schema 29 publication's request words are unknown, never empty"
     );
+}
+
+/// An export asks for a shell only to get one: absent is the page's own
+/// bytes, and a shell rosetta does not write is refused, never ignored.
+#[test]
+fn an_export_request_names_its_shell_only_to_ask_for_one() {
+    let raw: ArtifactExportRequest = serde_json::from_str(r#"{"into":"/exports/a"}"#).unwrap();
+    assert_eq!(raw.shell, None);
+    assert_eq!(
+        serde_json::to_value(&raw).unwrap(),
+        serde_json::json!({"into": "/exports/a"})
+    );
+    let room: ArtifactExportRequest =
+        serde_json::from_str(r#"{"into":"/exports/a","shell":"room"}"#).unwrap();
+    assert_eq!(room.shell, Some(ExportShell::Room));
+    let dark = serde_json::from_str::<ArtifactExportRequest>(r#"{"into":"/a","shell":"dark"}"#);
+    assert!(dark.is_err(), "rosetta writes no other shell");
 }
 
 #[test]

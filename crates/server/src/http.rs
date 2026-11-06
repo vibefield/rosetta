@@ -83,8 +83,8 @@ pub struct AppState {
     /// Who may call (docs/AUTH.md): open by default, as the daemon always
     /// was; a bearer, grants and extra origins when the serve loop sets them.
     pub auth: Arc<crate::auth::AuthPolicy>,
-    /// Where the artifact export door may write (`--export-root`, RO-32).
-    /// Absent, the door answers `not_ready`.
+    /// Where the artifact export door may place a capture (`--export-root`,
+    /// RO-32). Absent, the door answers `not_ready`.
     pub export_root: Option<Arc<ExportRoot>>,
 }
 
@@ -360,8 +360,9 @@ pub fn router(state: AppState) -> Router {
             "/api/sessions/{id}/artifacts/{publication_id}/content",
             get(artifacts::content),
         )
-        // The one write that reaches the disk (RO-32): bearer only, since no
-        // grant opens a POST, and under the origin guard like every write.
+        // The one write that reaches the disk (RO-32): it places one capture
+        // by its digest below --export-root. Bearer only, since no grant
+        // opens a POST, and under the origin guard like every write.
         .route(
             "/api/sessions/{id}/artifacts/{publication_id}/export",
             axum::routing::post(artifacts::export).route_layer(origin_guard()),

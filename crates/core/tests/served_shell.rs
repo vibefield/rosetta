@@ -49,8 +49,8 @@ fn the_served_shell_is_pinned_for_the_rooms_parity_test() {
     assert_eq!(
         golden.trim_end(),
         rendered,
-        "\nTHE SERVED SHELL CHANGED. Bump SHELL_VERSION (exports name it in their\n\
-         marker), check the room's parity test, and refresh this golden with\n\
+        "\nTHE SERVED SHELL CHANGED. Bump SHELL_VERSION (a shell export answers it\n\
+         as shell.version), check the room's parity test, and refresh this golden with\n\
          UPDATE_SHELL_GOLDEN=1 cargo test -p rosetta-core --test served_shell\n"
     );
 }
@@ -124,6 +124,30 @@ fn a_runnable_document_has_no_base_and_reaches_only_its_origin_and_the_named_hos
         ],
         "every host once, in directive order"
     );
+}
+
+/// Every export answers the room's hosts keyed by directive
+/// (`environment.hosts`), shell or not. The keys are the shell policy's own
+/// directive names, and each names exactly the hosts that directive admits.
+#[test]
+fn the_hosts_by_directive_are_the_ones_the_shell_policy_admits() {
+    let policy = shell_policy();
+    let directives = SHELL_HOSTS.directives();
+    assert_eq!(
+        directives.map(|(directive, _)| directive),
+        ["script-src", "style-src", "font-src"]
+    );
+    for (directive, hosts) in directives {
+        let line = policy
+            .iter()
+            .find(|line| line.starts_with(&format!("{directive} ")))
+            .unwrap_or_else(|| panic!("{directive} is in the shell policy"));
+        let named: Vec<&str> = line
+            .split(' ')
+            .filter_map(|source| source.strip_prefix("https://"))
+            .collect();
+        assert_eq!(named, hosts, "{directive}");
+    }
 }
 
 fn publication() -> HtmlArtifactPublication {

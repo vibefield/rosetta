@@ -1067,8 +1067,13 @@ async fn the_library_cursor_signal_and_export_follow_admission_and_the_barriers_
     assert_eq!(titles(&library), ["held-a", "open-b", "open-a"]);
     let (status, body) = post_json(&door, &export, into).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["written"], true);
-    assert!(target.join("index.html").is_file());
+    let digest = blake3::hash(b"<h1>held-a</h1>").to_hex().to_string();
+    assert_eq!(body["page"]["blake3"], digest.as_str());
+    assert_eq!(body["method"], "link");
+    assert_eq!(
+        std::fs::read(target.join("index.html")).unwrap(),
+        b"<h1>held-a</h1>"
+    );
     // A late meta subscriber learns where the library stands.
     let mut socket = ws(b.addr, "/ws/meta").await;
     assert_eq!(frame(&mut socket).await["frame"], "hello");

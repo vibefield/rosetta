@@ -198,7 +198,7 @@ fn main() -> ExitCode {
                 "   (--export-root DIR, an existing absolute directory, opens POST /api/sessions/{{id}}/artifacts/{{publication_id}}/export:"
             );
             eprintln!(
-                "   one captured page written in the served shell to a directory below DIR, bearer only, so it needs --token-file; without it the door answers not_ready)"
+                "   one captured page placed by its digest (linked, or copied and verified) in a directory below DIR, bearer only, so it needs --token-file; without it the door answers not_ready)"
             );
             return ExitCode::from(2);
         }
