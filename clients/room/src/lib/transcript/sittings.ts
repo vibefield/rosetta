@@ -21,19 +21,25 @@ export const PROMPT_CLUSTER_MS = 5 * 60_000;
 
 const MINUTES_TO_MS = 60_000;
 
-/** The viewer's offset, minutes east of UTC. */
-function viewerUtcOffsetMinutes(): number {
-  return -new Date().getTimezoneOffset();
+/**
+ * The viewer's offset AT `timestamp`, minutes east of UTC. A stamp on the other
+ * side of a daylight-saving change from today has its own offset, not today's.
+ */
+function viewerUtcOffsetMinutes(timestamp: number): number {
+  return -new Date(timestamp).getTimezoneOffset();
 }
 
 /**
- * The viewer-local day a timestamp falls in, as `YYYY-MM-DD`. The same form
- * `lib/model.ts`'s `getCalendarDayKey` buckets the heatmap in — copied rather
- * than imported because that module pulls in JSX through the agent marks, and
- * this one must stay importable by a plain node test.
+ * The viewer-local day a timestamp falls in, as `YYYY-MM-DD`, by the offset the
+ * viewer's zone had at that moment. `lib/model.ts`'s `getCalendarDayKey` is a
+ * different key on purpose: it uses today's offset for every day, because the
+ * daemon buckets the heatmap by the one `offset_minutes` it is sent. A
+ * transcript is cut on the client alone, so its days are the stamps' own.
+ * Kept here rather than imported, because that module pulls in JSX through the
+ * agent marks, and this one must stay importable by a plain node test.
  */
 export function calendarDayKey(timestamp: number): string {
-  const date = new Date(timestamp + viewerUtcOffsetMinutes() * MINUTES_TO_MS);
+  const date = new Date(timestamp + viewerUtcOffsetMinutes(timestamp) * MINUTES_TO_MS);
   const month = String(date.getUTCMonth() + 1).padStart(2, "0");
   const day = String(date.getUTCDate()).padStart(2, "0");
   return `${date.getUTCFullYear()}-${month}-${day}`;
