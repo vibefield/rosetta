@@ -3878,11 +3878,17 @@ start until the rebuild is run by hand. The release notes must say so.
   same-user process that swaps a checked directory for a link between the walk and
   the link or rename can redirect the write. The asset member is lstat'ed, opened,
   and its open file held to the lstat's identity, but it is linked by path; the
-  re-stat after the link closes that window for the placed name. The export root
-  is the operator's directory and the daemon's own user writes it, so this is
-  recorded, not closed. On Windows the cross-volume error's mapping is unverified;
-  any refused link copies, so it degrades to a verified copy, and the inode checks
-  are unix-only (there, only the bytes decide).
+  re-stat after the link closes that window for the placed name. On unix the
+  member and a standing page are opened with `O_NOFOLLOW | O_NONBLOCK`, so a name
+  swapped for a link fails the open and one swapped for a FIFO fails the identity
+  check after it, never stalling the door (it judges the page under its one export
+  lock). The export root is the operator's directory and the daemon's own user
+  writes it, so this is recorded, not closed. On Windows the cross-volume error's
+  mapping is unverified; any refused link copies, so it degrades to a verified
+  copy. The inode checks are unix-only. Elsewhere only the bytes decide: a new
+  link's name is re-read and hashed against the digest, and taken back on a
+  mismatch, and a repeat of a link answers `copy`, because nothing there tells a
+  link from a file of the same bytes.
 - *Superseded (2026-11-06):* the 2026-11-05 draft of this door wrapped every page
   in the room's shell, kept a `.rosetta-export.json` marker beside it, and replaced
   a directory by two renames (with a sweep of leftover siblings). VibeField's Drive

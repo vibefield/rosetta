@@ -76,7 +76,7 @@ impl VerifiedMember {
         if !named.file_type().is_file() {
             return Err(PlaceError::SourceInvalid("is not a regular file"));
         }
-        let file = File::open(source).map_err(missing)?;
+        let file = open_named(source).map_err(missing)?;
         let opened = file.metadata()?;
         if !opened.is_file() || identity(&opened) != identity(&named) {
             return Err(PlaceError::SourceInvalid("changed while it was opened"));
@@ -146,10 +146,17 @@ impl VerifiedMember {
 
     /// A link was made: the destination must now be this member's own inode.
     /// A member renamed over between the open and the link leaves other bytes
-    /// there, so the link is taken back and nothing is placed.
+    /// there, so the link is taken back and nothing is placed. Where the
+    /// platform names no file identity, the linked name must hold the
+    /// verified bytes instead.
     fn linked(&self, destination: &Path) -> Result<Placed, PlaceError> {
         let made = fs::symlink_metadata(destination)?;
-        if identity(&made) != self.identity {
+        let verified = if self.identity.is_some() {
+            identity(&made) == self.identity
+        } else {
+            made.is_file() && holds(destination, self.len, &self.digest)
+        };
+        if !verified {
             let _ = fs::remove_file(destination);
             return Err(PlaceError::SourceInvalid("changed while it was placed"));
         }
@@ -233,12 +240,40 @@ fn identity(_metadata: &fs::Metadata) -> Option<(u64, u64)> {
     None
 }
 
+/// Open `path` for reading. On unix the open neither follows a symbolic link
+/// nor waits for a FIFO's writer, so a name swapped since it was lstat'ed
+/// fails here or fails the identity check after it, and never blocks the
+/// caller: an export judges its destination while it holds its lock, and a
+/// same-user process is the adversary.
+#[cfg(unix)]
+fn open_named(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+/// Elsewhere a plain open: the checks after it judge what it opened.
+#[cfg(not(unix))]
+fn open_named(path: &Path) -> io::Result<File> {
+    File::open(path)
+}
+
 /// The length and BLAKE3 digest of what `reader` yields, reading at most
 /// `bound + 1` bytes, so an overlong file is told apart without reading it all.
 fn digest_of(reader: impl Read, bound: u64) -> io::Result<(u64, String)> {
     let mut hasher = blake3::Hasher::new();
     let len = io::copy(&mut reader.take(bound.saturating_add(1)), &mut hasher)?;
     Ok((len, hasher.finalize().to_hex().to_string()))
+}
+
+/// Whether the file named `path` holds exactly `len` bytes of `digest`. A
+/// name that cannot be opened or read holds nothing.
+fn holds(path: &Path, len: u64, digest: &str) -> bool {
+    open_named(path)
+        .and_then(|file| digest_of(&file, len))
+        .is_ok_and(|(read, found)| read == len && found == digest)
 }
 
 /// What stands at `destination`: nothing, the member itself (its inode), a
@@ -258,7 +293,7 @@ fn standing(destination: &Path, expected: &Expected<'_>) -> Result<Option<Placed
     if named.len() != expected.len {
         return Err(PlaceError::Conflict);
     }
-    let file = File::open(destination)?;
+    let file = open_named(destination)?;
     if identity(&file.metadata()?) != identity(&named) {
         return Err(PlaceError::Conflict);
     }
@@ -332,7 +367,7 @@ mod tests {
     use rosetta_core::html_artifacts::HTML_MEDIA_TYPE;
     use rosetta_core::timeline::AssetRef;
 
-    use super::{PlaceError, Placed, VerifiedMember, place_bytes};
+    use super::{PlaceError, Placed, VerifiedMember, open_named, place_bytes};
 
     /// One HTML member in `dir`, named by its digest as the asset root names it.
     fn member(dir: &Path, html: &str) -> (PathBuf, AssetRef) {
@@ -525,6 +560,80 @@ mod tests {
             Err(PlaceError::SourceInvalid("changed while it was placed"))
         ));
         assert!(!page.exists(), "the link is taken back");
+    }
+
+    /// Where the platform names no file identity (off unix), the bytes
+    /// decide: a link that lands on other bytes is taken back, and a repeat
+    /// of a link is judged by its bytes alone, so it answers as a copy.
+    #[test]
+    fn without_an_identity_a_link_is_held_to_the_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let (source, reference) = member(root.path(), "<h1>Review</h1>");
+        let mut verified = VerifiedMember::open(&source, &reference).unwrap();
+        verified.identity = None;
+        let page = root.path().join("index.html");
+
+        // The member's name replaced between the open and the link by other
+        // bytes of the same length.
+        let mut other_bytes = fs::read(&source).unwrap();
+        other_bytes[0] ^= 1;
+        let other = root.path().join("other.html");
+        fs::write(&other, other_bytes).unwrap();
+        let elsewhere = |_: &Path, destination: &Path| fs::hard_link(&other, destination);
+        assert!(matches!(
+            verified.place_with(&page, elsewhere),
+            Err(PlaceError::SourceInvalid("changed while it was placed"))
+        ));
+        assert!(!page.exists(), "the link is taken back");
+
+        assert_eq!(verified.place(&page).unwrap(), Placed::Link);
+        assert_eq!(fs::read(&page).unwrap(), fs::read(&source).unwrap());
+        assert_eq!(
+            verified.place(&page).unwrap(),
+            Placed::Copy,
+            "a repeat is judged by its bytes"
+        );
+    }
+
+    /// A name swapped for a FIFO between its lstat and its open is opened
+    /// without waiting for a writer (an export holds its lock meanwhile), and
+    /// one swapped for a symbolic link is never followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_is_never_waited_on_and_a_link_never_followed() {
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let (source, reference) = member(root.path(), "<h1>Review</h1>");
+        let fifo = root.path().join("index.html");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo {}", fifo.display());
+
+        // No writer ever opens it: a plain open for reading would wait for
+        // one forever.
+        let (sender, receiver) = mpsc::channel();
+        let named = fifo.clone();
+        thread::spawn(move || {
+            let opened = open_named(&named).and_then(|file| file.metadata());
+            let _ = sender.send(opened);
+        });
+        let opened = receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("opening a FIFO never waits for its writer");
+        assert!(!opened.unwrap().is_file());
+
+        // Standing at the destination, it is no page.
+        let verified = VerifiedMember::open(&source, &reference).unwrap();
+        assert!(matches!(verified.place(&fifo), Err(PlaceError::NotAFile)));
+
+        let link = root.path().join("link.html");
+        std::os::unix::fs::symlink(source, &link).unwrap();
+        assert!(open_named(&link).is_err(), "a link is not followed");
     }
 
     #[test]
