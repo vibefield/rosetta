@@ -751,8 +751,8 @@ pub enum ErrorCode {
     PublicationInProgress,
     ControlCapacity,
     ShuttingDown,
-    /// An export's target directory holds something that is not this
-    /// publication's export; nothing was written (RO-32, protocol 30).
+    /// A different file already stands where an export would place its page,
+    /// or where its directory belongs; nothing was written (RO-32, protocol 30).
     ExportConflict,
     Internal,
 }

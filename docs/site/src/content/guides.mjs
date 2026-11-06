@@ -117,7 +117,7 @@ export const guides = [
       ${s('error-shape', 'Service errors share an envelope', `${code('{\n  "error": {\n    "code": "cursor_expired",\n    "message": "the timeline was rewritten; refetch from the head"\n  }\n}', 'JSON')}${table(['Status / code', 'Recovery'], [
         ['400 / <code>bad_request</code>', 'Correct the request. Check query combinations, limits, and required bodies.'],
         ['404 / <code>not_found</code>', 'The requested session, row, or content is not available.'],
-        ['409 / <code>export_conflict</code>', 'The export directory holds something that is not this publication’s export. Choose another directory; nothing was written.'],
+        ['409 / <code>export_conflict</code>', 'A different file already stands where the export would place its page, or where its directory belongs. Choose another directory; nothing was written.'],
         ['410 / <code>cursor_expired</code>', 'Discard the former generation and refetch the latest timeline page.'],
         ['503 / <code>not_ready</code>', 'Wait for canonical publication before reading aggregates.'],
         ['500 / <code>internal</code>', 'Inspect the daemon error and retry only after addressing the underlying failure.'],

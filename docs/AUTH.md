@@ -53,9 +53,9 @@ under the Origin rule are `/api/runtimes/enable`, `/api/ingest/boost`, the
 cold-run controls `/api/ingestions/{id}/pause` and `/resume` (since 2026-10-29),
 and the artifact export door
 `POST /api/sessions/{id}/artifacts/{publication_id}/export` (RO-32, protocol 30).
-The export door is the one write that reaches the disk: it writes one captured
-page, in the served shell, to a directory below `--export-root` and nowhere else
-(§5.4 for who may call it).
+The export door is the one write that reaches the disk: it places one captured
+page by its digest (a hard link from the asset store, or a verified copy) in a
+directory below `--export-root` and nowhere else (§5.4 for who may call it).
 
 ## 3. Credentials and carriers
 
@@ -218,7 +218,7 @@ only that a grant carries it.
 
 | Route | Credential | Why |
 |---|---|---|
-| `POST /api/sessions/{id}/artifacts/{publication_id}/export` (RO-32, 2026-11-05) | bearer only; a grant is `wrong-route`, even for its own `sid` | It writes to the daemon's disk below `--export-root`. A grant reads recorded history; no scope makes it a writer, and `grant_reach` refuses every method but GET and HEAD before the allow-list is read. Without `--export-root` the route answers 503 `not_ready`. `rosettad serve` refuses to start with `--export-root` and no `--token-file`, so the door never opens on an open daemon, where any local process and any loopback page could call it. |
+| `POST /api/sessions/{id}/artifacts/{publication_id}/export` (RO-32, 2026-11-05; by digest 2026-11-06) | bearer only; a grant is `wrong-route`, even for its own `sid` | It places one captured page by digest on the daemon's disk below `--export-root`. A grant reads recorded history; no scope makes it a writer, and `grant_reach` refuses every method but GET and HEAD before the allow-list is read. Without `--export-root` the route answers 503 `not_ready`. `rosettad serve` refuses to start with `--export-root` and no `--token-file`, so the door never opens on an open daemon, where any local process and any loopback page could call it. |
 
 ### 5.5 What v1 does not do
 

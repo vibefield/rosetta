@@ -3814,48 +3814,78 @@ start until the rebuild is run by hand. The release notes must say so.
   `artifacts_revision`, the value the mirror last read: a subscriber resynced after a
   full queue (whose dropped events are never resent) or connecting late learns where
   the library stands.
-- **The export door (RO-32).** `POST /api/sessions/{id}/artifacts/{publication_id}/export`
-  `{into}` writes one capture as a directory another host serves from an origin of
-  its own; the daemon never serves it. It needs `rosettad serve --export-root DIR`
-  (admitted at startup: absolute, existing, a directory; without it the door
-  answers 503 `not_ready`). `into` must be absolute and strictly below the root, by
-  the configured or the resolved spelling, with no `..`; no component below the
-  root may be a symbolic link. Missing parents are created 0700. The capture is
-  read and held to its size and BLAKE3 digest before anything is written; the
-  export is staged in a private sibling (`index.html` and
-  `.rosetta-export.json {publication_id, source_digest, shell_version}`, 0600 each,
-  each fsynced, then the directory), renamed into place, and the parent fsynced. A
-  directory whose marker names this capture and shell, beside a regular
-  `index.html`, answers `written: false`; an
-  empty one, or this publication's older export, is moved aside, replaced and
-  removed; anything else is 409 `export_conflict` and untouched. Exports in one
-  process are serialized. Bearer only (docs/AUTH.md §5.4): `rosettad serve` refuses
-  `--export-root` without `--token-file`, so the door never opens on an open daemon.
-  A body that is not JSON `{into}` answers 400 `bad_request` in the error envelope.
-- **Replacing a directory.** Moving the old directory aside and the staged one in
-  is two renames, not one atomic swap (std offers no portable exchange). A reader
-  between them finds no directory; a failed second rename puts the old one back
-  (when even that fails, the error names where the old one is). Once the new
-  directory stands the old one is removed, whatever the parent's fsync answers. A
-  crash between the renames leaves the old export in a dot-named
-  `.rosetta-export-<pid>-<n>` sibling. Each export sweeps such siblings of its parent
-  before staging: this process's whatever their age (its exports are serialized, so
-  none is in flight), another process's once an hour old.
-- **The served shell.** `rosetta_core::html_artifacts::runnable_document` is the
+- **The export door (RO-32; by digest since 2026-11-06).**
+  `POST /api/sessions/{id}/artifacts/{publication_id}/export` `{into, shell?}` places
+  one capture, its own bytes, as `index.html` in a directory another host serves
+  from an origin of its own; the daemon never serves it. It needs
+  `rosettad serve --export-root DIR` (admitted at startup: absolute, existing, a
+  directory; without it the door answers 503 `not_ready`). `into` must be absolute
+  and strictly below the root, by the configured or the resolved spelling, with no
+  `..`. The capture is opened and held to its size and BLAKE3 digest
+  (`assets::VerifiedMember`) before anything is made, so one that fails writes
+  nothing (500) and a missing one 404s. Then `into` is walked from the root: a
+  missing component is created 0700 and its parent fsynced, a symbolic link
+  anywhere is 400, a file on the way is 400, and a file where `into` belongs is 409
+  `export_conflict`. The answer is `{page: {path, blake3, bytes}, members: [],
+  captured_at, method: "link" | "copy", environment, shell?}`; `members` stays
+  empty until RO-34b keeps a multi-file publish's files. Bearer only
+  (docs/AUTH.md §5.4): `rosettad serve` refuses `--export-root` without
+  `--token-file`, so the door never opens on an open daemon. A body that is not
+  JSON `{into, shell?}`, an unknown shell included, answers 400 `bad_request` in
+  the error envelope.
+- **Link or copy.** `assets::VerifiedMember::place` judges what already stands at
+  `<into>/index.html` first: the member's own inode, or a file of the same bytes,
+  answers as placed (the idempotent repeat); a different file is 409
+  `export_conflict`, and a link or a directory there is 400, each untouched.
+  Otherwise it hard-links `<projection>.assets/<digest>.html` and re-stats the new
+  name: if it is not the inode that was verified (the member renamed over between
+  the open and the link), the link is taken back and the export fails. Any refused
+  link (another volume, a filesystem without hard links, a link count at its
+  limit) falls back to a copy from the open file into a 0600 temporary file beside
+  the page, re-read and hashed against the digest, fsynced and moved in with
+  `persist_noclobber`; the parent is fsynced. `method` says which happened. A
+  linked page is the asset store's own file under a second name: whoever holds it
+  must never open it for writing, and replaces it by rename. Rosetta itself never
+  rewrites an existing member (`verify_existing` only hashes it), so the link is
+  safe from this side; a write through the other name would corrupt the asset
+  (the content read then 500s, and a later batch that names the digest fails with
+  `AssetInvalid`). A different page for the same `into` is a 409, never a replace:
+  a host picks a new directory per page.
+- **The environment.** Every answer carries `environment: {hosts: {<directive>:
+  [host…]}, variables: {<name>: <value>}}`, the room's own tables as data
+  (`SHELL_HOSTS.directives()`: `script-src`, `style-src` and `font-src`; the 21
+  light `SHELL_VARIABLES`), with or without the shell, so a serving host builds
+  its own policy headers and theme for the page without holding a platform's list
+  or rewriting the page.
+- **The room shell, on request.** `shell: "room"` writes
+  `rosetta_core::html_artifacts::runnable_document` instead of the page itself: the
   room's preview shell (`clients/room/src/components/artifacts/preview.ts`)
   rebuilt as data for an origin of its own: no `<base>`; `'self'` beside the
   script, style, font, image and media sources; `connect-src 'self'` (L20: a page
   may fetch its own members, never another host); `base-uri 'self'`; a viewport
   meta; the room's 21 light variables and base rules; `color-scheme: light`. The
-  public hosts are data (`SHELL_HOSTS`), answered as the export's `hosts` so a
-  serving host admits exactly them. A meta policy cannot carry `sandbox`,
-  `frame-ancestors` or reporting, so the serving host adds those. The shell is
-  pinned in `crates/core/tests/golden/served-shell.json` under `SHELL_VERSION`
-  ("1"), and `clients/app/test/artifact-shell-parity.test.mjs` holds the room's
-  shell to it, differing only where the origin does.
+  capture is verified first and decoded as the room's `TextDecoder` decodes it
+  (UTF-8 with replacement, a leading byte-order mark consumed). The document is a
+  file of its own (`assets::place_bytes`: 0600, never over another file, the same
+  bytes idempotent), so `method` is `copy`, `page.blake3` is the document's, and
+  `shell` answers `{version, source_blake3, hosts}`. A meta policy cannot carry
+  `sandbox`, `frame-ancestors` or reporting, so the serving host adds those. The
+  shell is pinned in `crates/core/tests/golden/served-shell.json` under
+  `SHELL_VERSION` ("1"), and `clients/app/test/artifact-shell-parity.test.mjs` holds
+  the room's shell to it, differing only where the origin does. A shell of another
+  version at the same `into` is a 409, like any other page.
 - **Limits.** The symlink check is a walk, not a descriptor-relative open: a
-  same-user process that swaps a checked parent for a link between the walk and
-  the rename can redirect the write. The export root is the operator's directory
-  and the daemon's own user writes it, so this is recorded, not closed. Captured
-  bytes are decoded as the room's `TextDecoder` decodes them: UTF-8 with
-  replacement, a leading byte-order mark consumed.
+  same-user process that swaps a checked directory for a link between the walk and
+  the link or rename can redirect the write. The asset member is lstat'ed, opened,
+  and its open file held to the lstat's identity, but it is linked by path; the
+  re-stat after the link closes that window for the placed name. The export root
+  is the operator's directory and the daemon's own user writes it, so this is
+  recorded, not closed. On Windows the cross-volume error's mapping is unverified;
+  any refused link copies, so it degrades to a verified copy, and the inode checks
+  are unix-only (there, only the bytes decide).
+- *Superseded (2026-11-06):* the 2026-11-05 draft of this door wrapped every page
+  in the room's shell, kept a `.rosetta-export.json` marker beside it, and replaced
+  a directory by two renames (with a sweep of leftover siblings). VibeField's Drive
+  record ruled that confinement is the serving host's policy and a stored page is
+  never rewritten (its DR-D1 (b) and DR-D11 (a)), so the door places the page by
+  digest and the shell became the option above. The draft never shipped.
