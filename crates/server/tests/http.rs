@@ -499,6 +499,56 @@ async fn the_export_door_links_a_capture_by_digest_and_answers_it() {
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
     assert_eq!(names, ["index.html"], "the page and nothing else");
+
+    // The capture's own bytes already there as a file of their own count as
+    // placed: the answer is a copy of the capture's digest, and the file is
+    // left as it stands, never swapped for a link.
+    let copied = exports.path().join("copied");
+    std::fs::create_dir(&copied).unwrap();
+    let standing = copied.join("index.html");
+    std::fs::write(&standing, html).unwrap();
+    let (status, body) = post_json(&app, &uri, export_to(&copied)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["method"], "copy");
+    assert_eq!(body["page"]["blake3"], reference.digest);
+    assert_eq!(std::fs::read(&standing).unwrap(), html.as_bytes());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let member = rosetta_store::assets::html_member_path(&h.db, &reference.digest);
+        assert_ne!(
+            std::fs::metadata(&standing).unwrap().ino(),
+            std::fs::metadata(member).unwrap().ino(),
+            "a file of its own"
+        );
+    }
+}
+
+/// A real cross-volume export, opt-in: `ROSETTA_TEST_OTHER_VOLUME` names a
+/// directory on another device than the temporary directory that holds the
+/// asset store. The link is refused there, so the page is a verified copy.
+#[tokio::test]
+async fn an_export_to_another_volume_is_a_verified_copy() {
+    let Some(other_volume) = std::env::var_os("ROSETTA_TEST_OTHER_VOLUME") else {
+        return;
+    };
+    let mut h = harness();
+    h.append(vec![message("html-review", MessageKind::Agent, "Designs")]);
+    let html = "<h1>Review π</h1>";
+    let (id, reference) = capture_publication(&mut h, "review", html, 5);
+    let exports = TempDir::new_in(other_volume).unwrap();
+    let app = export_app(&h, exports.path());
+    let uri = format!("/api/sessions/s1/artifacts/{id}/export");
+
+    let into = exports.path().join("review");
+    let (status, body) = post_json(&app, &uri, export_to(&into)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["method"], "copy");
+    assert_eq!(body["page"]["blake3"], reference.digest);
+    assert_eq!(
+        std::fs::read(into.join("index.html")).unwrap(),
+        html.as_bytes()
+    );
 }
 
 #[tokio::test]
