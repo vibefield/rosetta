@@ -36,7 +36,7 @@ walkdir = "2"
 blake3 = "1"
 base64 = "0.22.1"
 notify = "8"
-rusqlite = { version = "0.32", features = ["backup", "bundled", "functions", "unlock_notify"] }
+rusqlite = { version = "0.40", features = ["backup", "bundled", "functions", "unlock_notify"] }
 tempfile = "3"
 axum = { version = "0.8", features = ["ws"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
