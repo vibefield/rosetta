@@ -44,6 +44,8 @@ mod images;
 mod ingestions;
 mod shared_reads;
 
+pub use artifacts::ExportRoot;
+
 const DEFAULT_LIST_LIMIT: i64 = 100;
 const DEFAULT_SEARCH_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 1_000;
@@ -81,6 +83,9 @@ pub struct AppState {
     /// Who may call (docs/AUTH.md): open by default, as the daemon always
     /// was; a bearer, grants and extra origins when the serve loop sets them.
     pub auth: Arc<crate::auth::AuthPolicy>,
+    /// Where the artifact export door may write (`--export-root`, RO-32).
+    /// Absent, the door answers `not_ready`.
+    pub export_root: Option<Arc<ExportRoot>>,
 }
 
 pub trait RawCommandReader: Send + Sync {
@@ -105,6 +110,7 @@ impl AppState {
             raw_commands: None,
             enrolled: Arc::default(),
             auth: Arc::default(),
+            export_root: None,
         }
     }
 
@@ -123,6 +129,7 @@ impl AppState {
             raw_commands: None,
             enrolled: Arc::default(),
             auth: Arc::default(),
+            export_root: None,
         }
     }
 
@@ -136,6 +143,13 @@ impl AppState {
     /// Attach the access policy (the serve loop builds it from its flags).
     pub fn with_auth(mut self, auth: Arc<crate::auth::AuthPolicy>) -> Self {
         self.auth = auth;
+        self
+    }
+
+    /// Open the artifact export door under `root` (the serve loop builds it
+    /// from `--export-root` and has already admitted it).
+    pub fn with_export_root(mut self, root: ExportRoot) -> Self {
+        self.export_root = Some(Arc::new(root));
         self
     }
 
@@ -345,6 +359,12 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/sessions/{id}/artifacts/{publication_id}/content",
             get(artifacts::content),
+        )
+        // The one write that reaches the disk (RO-32): bearer only, since no
+        // grant opens a POST, and under the origin guard like every write.
+        .route(
+            "/api/sessions/{id}/artifacts/{publication_id}/export",
+            axum::routing::post(artifacts::export).route_layer(origin_guard()),
         )
         .route("/ws/meta", get(crate::ws::meta).route_layer(origin_guard()))
         .route(
@@ -803,24 +823,27 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
             canonical_ready: false,
             search: SearchState::building(),
             daemon,
+            artifacts_revision: None,
         });
     }
     let projection = with_read(state.projection.clone(), |conn| {
         let schema_version = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| Failure::internal(format!("{error}")))?;
-        let canonical_ready = if schema_version == schema::SCHEMA_VERSION {
-            queries::projection_state(conn)
+        let (canonical_ready, artifacts_revision) = if schema_version == schema::SCHEMA_VERSION {
+            let canonical_ready = queries::projection_state(conn)
                 .map_err(store_err)?
-                .canonical_ready
+                .canonical_ready;
+            let revision = rosetta_store::html_artifacts::revision(conn).map_err(store_err)?;
+            (canonical_ready, Some(revision))
         } else {
-            false
+            (false, None)
         };
-        Ok((schema_version, canonical_ready))
+        Ok((schema_version, canonical_ready, artifacts_revision))
     })
     .await;
     let response = match projection {
-        Ok((schema_version, canonical_ready)) => StatusResponse {
+        Ok((schema_version, canonical_ready, artifacts_revision)) => StatusResponse {
             protocol_version: PROTOCOL_VERSION,
             schema_version,
             canonical_ready: canonical_ready && state.projection.is_published(),
@@ -830,6 +853,7 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
                 SearchState::failed()
             },
             daemon,
+            artifacts_revision,
         },
         // No readable projection — a fresh install still cold-loading its
         // private file. Status is the app's connectivity truth and answers
@@ -840,6 +864,7 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
             canonical_ready: false,
             search: SearchState::failed(),
             daemon,
+            artifacts_revision: None,
         },
     };
     Json(response)

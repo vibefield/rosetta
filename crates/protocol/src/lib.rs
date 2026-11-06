@@ -55,7 +55,12 @@ pub use rosetta_store::turns::{TurnGap, TurnSpan};
 /// a time window (ARCHITECTURE §5).
 /// 28 (2026-10-30): captured HTML artifact library and session content reads.
 /// 29 (2026-10-30): HTML recovery provenance and published links in session metadata.
-pub const PROTOCOL_VERSION: u32 = 29;
+/// 30 (2026-11-05): the artifact export door
+/// (`POST /api/sessions/{id}/artifacts/{publication_id}/export`), a publication's
+/// `description` and `dropped_files`, the library revision as the list cursor's
+/// binding, `artifacts_changed` on `/ws/meta`, and `artifacts_revision` on
+/// `/api/status` (RO-32, RO-33, RO-34a, RO-35).
+pub const PROTOCOL_VERSION: u32 = 30;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -69,6 +74,42 @@ pub struct StatusResponse {
     /// Live-daemon health; `None` when the projection is served without an
     /// ingest loop (tests, static serving).
     pub daemon: Option<DaemonStatus>,
+    /// The artifact library's revision (RO-35): the value `GET /api/artifacts`
+    /// cursors bind and `/ws/meta`'s `artifacts_changed` announces, so a
+    /// client that connects later knows where the library stands. Null while
+    /// the projection is unpublished or unreadable; daemons before protocol
+    /// 30 omit it.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional = nullable, type = "number | null"))]
+    pub artifacts_revision: Option<u64>,
+}
+
+/// `POST /api/sessions/{id}/artifacts/{publication_id}/export` (RO-32,
+/// protocol 30): write one captured page, in the served shell, as a directory
+/// a host can serve from its own origin. Bearer only; a session grant never
+/// reaches it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ArtifactExportRequest {
+    /// The directory to write, absolute, inside the daemon's `--export-root`.
+    /// No component may be a symbolic link. It is created when absent and
+    /// replaced only when its marker names this publication.
+    pub into: String,
+}
+
+/// The export door's answer. `written` is false when the directory already
+/// held this capture in this shell, which is the idempotent repeat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ArtifactExportResponse {
+    pub written: bool,
+    /// The captured page's content digest, as the library names its asset.
+    pub digest: String,
+    /// The served shell the page was wrapped in (`rosetta_core::html_artifacts::SHELL_VERSION`).
+    pub shell_version: String,
+    /// The public hosts the shell admits beside the page's own origin, each
+    /// once: what a serving host must also allow, and nothing more.
+    pub hosts: Vec<String>,
 }
 
 /// The serve process's liveness surface — the health panel's one read.
@@ -611,6 +652,9 @@ pub enum ErrorCode {
     PublicationInProgress,
     ControlCapacity,
     ShuttingDown,
+    /// An export's target directory holds something that is not this
+    /// publication's export; nothing was written (RO-32, protocol 30).
+    ExportConflict,
     Internal,
 }
 
@@ -670,6 +714,13 @@ pub enum ServerFrame {
         runtimes: Vec<RuntimeRow>,
         projects: Vec<ProjectRow>,
         sessions: Vec<SessionRow>,
+        /// The artifact library revision the mirror last read (RO-35), so a
+        /// subscriber that connects late or is resynced (an overflowed queue
+        /// drops its events, `artifacts_changed` among them) learns where the
+        /// library stands. Null before the mirror's first read; daemons
+        /// before protocol 30 omit it.
+        #[cfg_attr(feature = "ts", ts(optional = nullable, type = "number | null"))]
+        artifacts_revision: Option<u64>,
     },
     /// Live mutations carry a stamp on session streams. Replayed mutations
     /// carry None and commit together at CaughtUp; collaboration/meta are unstamped.

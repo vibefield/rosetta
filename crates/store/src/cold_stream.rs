@@ -275,6 +275,11 @@ impl Store {
             }
             deltas.push((delta, path));
         }
+        // RO-35: the closed sources' publications move the library like any
+        // other write; one step for the whole transaction.
+        if totals.library_changes > 0 {
+            crate::html_artifacts::step_revision(&tx)?;
+        }
         let commit_started = Instant::now();
         tx.commit()?;
         totals.profile.session_lock_held_nanos = elapsed_nanos(held_from);

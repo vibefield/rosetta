@@ -23,3 +23,22 @@ test("artifact pagination and captured content preserve filters, credentials, an
   assert.ok(calls[1].url.endsWith("/api/sessions/child%2Fsession/artifacts/publication%2Fa/content"));
   assert.equal(new Headers(calls[1].options.headers).get("authorization"), "Bearer test-token");
 });
+
+test("an artifact export posts its directory with the bearer and answers the door's verdict", async () => {
+  const calls = [];
+  const answer = { written: true, digest: "c".repeat(64), shell_version: "1", hosts: ["cdn.jsdelivr.net"] };
+  const client = new RosettaClient({ baseUrl: "http://127.0.0.1:4640", credential: { kind: "bearer", token: "test-token" }, fetchFn: async (url, options) => {
+    calls.push({ url: String(url), options });
+    return new Response(JSON.stringify(answer), {
+      headers: { "content-type": "application/json", "x-rosetta-protocol-version": String(PROTOCOL_VERSION) },
+    });
+  } });
+  const exported = await client.exportArtifact("child/session", "publication/a", "/exports/s1/review");
+  assert.deepEqual(exported, answer);
+  assert.ok(calls[0].url.endsWith("/api/sessions/child%2Fsession/artifacts/publication%2Fa/export"));
+  assert.equal(calls[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { into: "/exports/s1/review" });
+  const headers = new Headers(calls[0].options.headers);
+  assert.equal(headers.get("authorization"), "Bearer test-token");
+  assert.equal(headers.get("content-type"), "application/json");
+});

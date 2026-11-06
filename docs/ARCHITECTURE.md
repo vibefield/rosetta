@@ -2055,6 +2055,13 @@ through the same routes; only a new bundle *op* is refused. `rosettad rebuild --
 converts everything to originals and then prunes the old bundle members. The seven
 image-producing adapters' version comments record why each version stays.
 
+*Note (2026-11-05, MA-2a):* schema 30 takes the cost this paragraph avoided. Every
+installed schema 29 projection fails closed on the 0.1.4 binary, and the app still has no
+rebuild path: `rosettad serve` exits with `SchemaVersionMismatch`, and
+`clients/app/electron/daemon-service.mjs` checks only the protocol and never runs a
+rebuild. An operator or a supervisor must run `rosettad rebuild` (§ "Export, request
+words and the library revision").
+
 Image GC (`prune_unreferenced_images`) runs after a rebuild's atomic install and, since
 2026-11-01, right after a fresh RAM or resumed publication, before any live runner writes
 and before the sweep starts; that covers a user who deleted only the `.sqlite`. A failure
@@ -3618,7 +3625,17 @@ HTML `from` source are supported. A single inline HTML member is preserved
 directly from the native request after publication succeeds; string values are
 content, never paths to read. Inline content has no invented file-observation
 timestamp and rebuilds from the original transcript records. Multi-page bundles
-are not yet projected. Codex recognizes its exact `visualize` content reference and explicit
+are not yet projected.
+
+*Correction (2026-11-05, MA-2a, normalizer 39):* the files-map paragraph above
+is wrong about strings. The Artifact tool documents the map as
+`{"published/path": "source/path" | {from, contentType} | {artifact, path} | null}`,
+with `root` as the base its relative sources resolve against: a string value is a
+source path on disk, exactly as a typed `from` is, never inline content. The
+recognizer now reads a string as a path (resolved against `root`, then the
+working directory), observes that file like any `file_path`, and no longer
+emits an inline capture. A `{artifact, path}` member names another artifact's
+file and is never read. Normalizer 38's inline rows rebuild as path rows. Codex recognizes its exact `visualize` content reference and explicit
 local HTML Markdown links in final assistant messages (including older records
 without a phase). CommonMark parsing excludes code, quoted examples, images,
 remote URLs and links with source-line anchors. Ordinary file tools do not
@@ -3744,3 +3761,101 @@ filters/cursor expiry, HTTP/session authorization and the generated wire contrac
 The Electron fixture exercises the actual library UI, static thumbnail rendering
 and cache reuse, worker isolation and timeout, interactive detail, history
 navigation, search, automatic page loading, expired-cursor recovery and layouts.
+
+### Export, request words and the library revision (2026-11-05, MA-2a)
+
+Schema 30, normalizer 39, protocol 30, one release (rosetta 0.1.4; RO-32, RO-33,
+RO-34a, RO-35). The schema bump is never migrated: a schema 29 projection fails
+closed, and nothing in rosetta rebuilds it on its own. `rosettad serve` refuses it
+with `SchemaVersionMismatch` and exits. The explicit ledger rebuild contract
+applies, as it did for schema 27: stop the daemon, run `rosettad rebuild --db PATH`
+(with `--ledger DIR` for a custom archive root, and the same `--enroll` file), and
+restart.
+VibeField's supervisor runs that rebuild itself when serve exits on the mismatch.
+rosetta's own app does not (`clients/app/electron/daemon-service.mjs` checks only the
+protocol), so every rosetta-app user who upgrades to 0.1.4 meets a daemon that will not
+start until the rebuild is run by hand. The release notes must say so.
+
+- **The request's words (RO-33).** A native `Artifact` publish keeps its
+  `description` on the publication (`html_artifact.description`), trimmed and
+  clipped at a character boundary to 4,096 bytes; an empty or NUL-bearing one is
+  dropped. A delivery link, `SendUserFile` and Codex's presentations record no
+  publish request, so theirs is null: unknown, never empty.
+- **What a multi-file publish lost (RO-34a).** `dropped_files` counts the non-null
+  members of the request's `files` map that the library did not keep beside the
+  page: every member when `file_path` names the page, every member but the page
+  when the map does. Zero means the request named none; null means the source
+  recorded no request. Keeping those members is RO-34b, not this slice.
+- **The library revision (RO-35).** `projection_state.artifacts_revision` steps
+  once per writer transaction that changed what the library shows: a new or
+  changed publication, a changed capture, a source sweep that removed rows, or a
+  readiness flip across Pending of a session that holds a publication (the
+  admission barrier hides a Pending session's publications, and every list leaves
+  them out of version counts and links). A replay that restates held facts changes
+  no row (the upserts compare before they write) and steps nothing. It steps in
+  every mode, cold builds included: a fresh build's RAM generation and a resumed
+  progressive file are readable while the library grows. The count follows how a
+  build splits its transactions, so two builds of one ledger may hold different
+  values, and the cold equality dumps leave the column out, as they leave out the
+  epoch. The list cursor binds this revision instead of `search_revision`, so a walk
+  outlives unrelated ingest; it also records whether it was read behind the
+  admission barrier, because lifting the barrier reveals rows without a step.
+  `/api/status` reports `artifacts_revision` once the projection is published (a
+  resumed progressive file is published, so its value moves as the import grows).
+- **The event (RO-35).** The hub's metadata mirror reads the revision with every
+  pass it already makes (warm, refresh, meta refresh) and, when the committed value
+  differs from the last one it announced, publishes one `artifacts_changed
+  {revision}` to `/ws/meta` subscribers after the pass's row diffs. A mirror's
+  first read is its baseline and announces nothing. Lifting the admission barrier
+  (`reveal_pending`, at a fresh or resumed publication) announces once more, at the
+  unchanged revision, when a still-Pending session holds a publication, since the
+  lift shows it without a step. `finish_progressive_load` changes nothing the
+  library shows, so it announces nothing. `meta_snapshot` carries
+  `artifacts_revision`, the value the mirror last read: a subscriber resynced after a
+  full queue (whose dropped events are never resent) or connecting late learns where
+  the library stands.
+- **The export door (RO-32).** `POST /api/sessions/{id}/artifacts/{publication_id}/export`
+  `{into}` writes one capture as a directory another host serves from an origin of
+  its own; the daemon never serves it. It needs `rosettad serve --export-root DIR`
+  (admitted at startup: absolute, existing, a directory; without it the door
+  answers 503 `not_ready`). `into` must be absolute and strictly below the root, by
+  the configured or the resolved spelling, with no `..`; no component below the
+  root may be a symbolic link. Missing parents are created 0700. The capture is
+  read and held to its size and BLAKE3 digest before anything is written; the
+  export is staged in a private sibling (`index.html` and
+  `.rosetta-export.json {publication_id, source_digest, shell_version}`, 0600 each,
+  each fsynced, then the directory), renamed into place, and the parent fsynced. A
+  directory whose marker names this capture and shell, beside a regular
+  `index.html`, answers `written: false`; an
+  empty one, or this publication's older export, is moved aside, replaced and
+  removed; anything else is 409 `export_conflict` and untouched. Exports in one
+  process are serialized. Bearer only (docs/AUTH.md §5.4): `rosettad serve` refuses
+  `--export-root` without `--token-file`, so the door never opens on an open daemon.
+  A body that is not JSON `{into}` answers 400 `bad_request` in the error envelope.
+- **Replacing a directory.** Moving the old directory aside and the staged one in
+  is two renames, not one atomic swap (std offers no portable exchange). A reader
+  between them finds no directory; a failed second rename puts the old one back
+  (when even that fails, the error names where the old one is). Once the new
+  directory stands the old one is removed, whatever the parent's fsync answers. A
+  crash between the renames leaves the old export in a dot-named
+  `.rosetta-export-<pid>-<n>` sibling. Each export sweeps such siblings of its parent
+  before staging: this process's whatever their age (its exports are serialized, so
+  none is in flight), another process's once an hour old.
+- **The served shell.** `rosetta_core::html_artifacts::runnable_document` is the
+  room's preview shell (`clients/room/src/components/artifacts/preview.ts`)
+  rebuilt as data for an origin of its own: no `<base>`; `'self'` beside the
+  script, style, font, image and media sources; `connect-src 'self'` (L20: a page
+  may fetch its own members, never another host); `base-uri 'self'`; a viewport
+  meta; the room's 21 light variables and base rules; `color-scheme: light`. The
+  public hosts are data (`SHELL_HOSTS`), answered as the export's `hosts` so a
+  serving host admits exactly them. A meta policy cannot carry `sandbox`,
+  `frame-ancestors` or reporting, so the serving host adds those. The shell is
+  pinned in `crates/core/tests/golden/served-shell.json` under `SHELL_VERSION`
+  ("1"), and `clients/app/test/artifact-shell-parity.test.mjs` holds the room's
+  shell to it, differing only where the origin does.
+- **Limits.** The symlink check is a walk, not a descriptor-relative open: a
+  same-user process that swaps a checked parent for a link between the walk and
+  the rename can redirect the write. The export root is the operator's directory
+  and the daemon's own user writes it, so this is recorded, not closed. Captured
+  bytes are decoded as the room's `TextDecoder` decodes them: UTF-8 with
+  replacement, a leading byte-order mark consumed.

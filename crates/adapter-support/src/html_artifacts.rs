@@ -64,6 +64,11 @@ pub fn publication(
         version: None,
         published_at: at,
         source_offset: ctx.src_offset.and_then(|v| v.try_into().ok()).unwrap_or(0),
+        // A link or a path names no publish request: its words and its
+        // dropped members are unknown, never zero. A native recognizer that
+        // read the request sets both on the row this returns.
+        description: None,
+        dropped_files: None,
     };
     row.validate().ok()?;
     Some(row)

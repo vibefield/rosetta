@@ -48,6 +48,15 @@ present the token like any other client.
 A request with no `Origin` (every non-browser client) passes the Origin rule
 and answers to the credential check alone.
 
+*Correction (2026-11-05, MA-2a):* "the two writes" above is stale. The writes
+under the Origin rule are `/api/runtimes/enable`, `/api/ingest/boost`, the
+cold-run controls `/api/ingestions/{id}/pause` and `/resume` (since 2026-10-29),
+and the artifact export door
+`POST /api/sessions/{id}/artifacts/{publication_id}/export` (RO-32, protocol 30).
+The export door is the one write that reaches the disk: it writes one captured
+page, in the served shell, to a directory below `--export-root` and nowhere else
+(§5.4 for who may call it).
+
 ## 3. Credentials and carriers
 
 | Credential | `Authorization` header | WebSocket subprotocol pair |
@@ -170,6 +179,11 @@ someone decides otherwise. A grant opens, when `{id}` = `sid`:
 /api/sessions/{id}/timeline                       /api/sessions/{id}/plans/revisions/{revision}
 ```
 
+*Correction (2026-11-05, MA-2a):* the block above omits
+`/api/sessions/{id}/artifacts/{publication_id}/content`, the captured-HTML read,
+which `GRANT_SESSION_ROUTES` (`crates/server/src/auth.rs`, read 2026-11-05)
+opens. It is a read of captured bytes, so `"read"` opens it without `"files"`.
+
 It also opens `/api/assets/{name}`, the content-addressed transcript images.
 An asset URL is learned from a timeline, and its digest names bytes, not a
 session. The cost is that a grant holder who already knows an image's digest
@@ -199,8 +213,12 @@ only that a grant carries it.
 
 **A grant never opens** the lists (`/api/runtimes`, `/api/projects`,
 `/api/sessions`), search, `/ws/meta`, `/api/status`, `/api/discoveries`,
-`/api/pricing`, `/api/activity`, the project aggregates or the writes, whatever its scope.
-Those routes need the bearer.
+`/api/pricing`, `/api/activity`, the project aggregates, the artifact library
+(`/api/artifacts`) or the writes, whatever its scope. Those routes need the bearer.
+
+| Route | Credential | Why |
+|---|---|---|
+| `POST /api/sessions/{id}/artifacts/{publication_id}/export` (RO-32, 2026-11-05) | bearer only; a grant is `wrong-route`, even for its own `sid` | It writes to the daemon's disk below `--export-root`. A grant reads recorded history; no scope makes it a writer, and `grant_reach` refuses every method but GET and HEAD before the allow-list is read. Without `--export-root` the route answers 503 `not_ready`. `rosettad serve` refuses to start with `--export-root` and no `--token-file`, so the door never opens on an open daemon, where any local process and any loopback page could call it. |
 
 ### 5.5 What v1 does not do
 

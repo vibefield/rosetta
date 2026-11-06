@@ -37,6 +37,16 @@ pub(crate) fn load_policy(flags: &Flags) -> Result<AuthPolicy, String> {
                 .into(),
         );
     }
+    // The export door (RO-32) is the one write that reaches the disk, so it
+    // never opens on an open daemon, where any local process and any
+    // loopback page could call it.
+    if flags.export_root.is_some() && token.is_none() {
+        return Err(
+            "--export-root needs --token-file: the export door writes to the disk, so it \
+             answers the bearer only and never opens without one"
+                .into(),
+        );
+    }
     // Validated in stages, so each refusal names the flag that caused it.
     let named = |flag: &'static str| move |error: String| format!("{flag}: {error}");
     AuthPolicy::new(token.as_deref(), None, &[]).map_err(named("--token-file"))?;
@@ -205,5 +215,26 @@ mod tests {
             let error = load_policy(&flags).err().unwrap();
             assert!(error.starts_with(prefix), "{prefix}: {error}");
         }
+    }
+
+    #[test]
+    fn the_export_door_never_opens_without_the_bearer() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let token = secret(dir.path(), "token", TOKEN, 0o600);
+        let root = dir.path().display().to_string();
+        let open = crate::parse_flags(&["--export-root".to_string(), root.clone()]).unwrap();
+        let error = load_policy(&open).err().unwrap();
+        assert!(
+            error.starts_with("--export-root needs --token-file"),
+            "{error}"
+        );
+        let guarded = crate::parse_flags(&[
+            "--token-file".to_string(),
+            token.display().to_string(),
+            "--export-root".to_string(),
+            root,
+        ])
+        .unwrap();
+        assert!(load_policy(&guarded).unwrap().bearer_required());
     }
 }

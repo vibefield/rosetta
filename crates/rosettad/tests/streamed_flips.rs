@@ -278,7 +278,8 @@ fn dump(store: &Store) -> BTreeMap<String, Vec<String>> {
             .into_iter()
             .filter(|column| {
                 !((table == "message" || table == "ingest_cursor") && column == "id")
-                    && !(table == "projection_state" && column == "projection_epoch")
+                    && !(table == "projection_state"
+                        && (column == "projection_epoch" || column == "artifacts_revision"))
                     && !(table == "agent_runtime" && column == "discovered_at")
             })
             .collect();

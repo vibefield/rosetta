@@ -16,6 +16,7 @@ import type { IngestionControlRequest } from "./generated/IngestionControlReques
 import type { ApiError } from "./generated/ApiError";
 import type { ImageVariant } from "./generated/ImageVariant";
 import type { AssetRef } from "./generated/AssetRef";
+import type { ArtifactExportResponse } from "./generated/ArtifactExportResponse";
 import type { ArtifactListRequest } from "./generated/ArtifactListRequest";
 import type { ArtifactPage } from "./generated/ArtifactPage";
 import type { BoostResponse } from "./generated/BoostResponse";
@@ -579,6 +580,28 @@ export class RosettaClient {
       withSignal(signal),
     );
     return new Uint8Array(await response.arrayBuffer());
+  }
+
+  /**
+   * Write one captured page, in the served shell, as the directory `into`
+   * below the daemon's `--export-root` (RO-32). Bearer only. `written` is
+   * false when the directory already held this capture in this shell.
+   */
+  exportArtifact(
+    sessionId: string,
+    publicationId: string,
+    into: string,
+    signal?: AbortSignal,
+  ): Promise<ArtifactExportResponse> {
+    return this.request(
+      `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(publicationId)}/export`,
+      {
+        method: "POST",
+        ...withSignal(signal),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ into }),
+      },
+    );
   }
 
   // @atlas step search-query.client

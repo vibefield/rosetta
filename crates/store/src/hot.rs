@@ -87,6 +87,18 @@ pub enum Mutation {
     Session(Box<SessionRow>),
     Project(Box<ProjectRow>),
     Runtime(Box<RuntimeRow>),
+    /// The artifact library moved (RO-35, protocol 30): ingest, live or cold,
+    /// wrote, re-captured or removed a publication, or an admission showed a
+    /// session's publications. It carries only the library revision, the one
+    /// `GET /api/artifacts` cursors bind, so a reader re-reads the library
+    /// from its head. Emitted by the mirror when the committed revision
+    /// differs from the one it last announced, and once when lifting the
+    /// admission barrier shows a Pending session's publications (the
+    /// revision is then unchanged); rides the meta topic.
+    ArtifactsChanged {
+        #[cfg_attr(feature = "ts", ts(type = "number"))]
+        revision: u64,
+    },
 }
 
 impl Mutation {
@@ -99,7 +111,10 @@ impl Mutation {
             | Self::Usage { session_id, .. }
             | Self::SessionSwept { session_id }
             | Self::TimelineMetaChanged { session_id } => Some(session_id),
-            Self::Session(_) | Self::Project(_) | Self::Runtime(_) => None,
+            Self::Session(_)
+            | Self::Project(_)
+            | Self::Runtime(_)
+            | Self::ArtifactsChanged { .. } => None,
         }
     }
 
@@ -149,7 +164,8 @@ impl Mutation {
             Self::Usage { .. }
             | Self::SessionSwept { .. }
             | Self::TimelineMetaChanged { .. }
-            | Self::Runtime(_) => 0,
+            | Self::Runtime(_)
+            | Self::ArtifactsChanged { .. } => 0,
         };
         BASE + strings
     }
@@ -592,12 +608,18 @@ impl TailRings {
 /// the admission barrier ([`Self::set_hide_pending`]): a session's activity
 /// is a rollup of payload rows, so a Pending session carries none and no
 /// rollup counts a Pending member. Identity rows stay whole either way.
+///
+/// The mirror also holds the artifact library's revision (RO-35). Each entry
+/// point re-reads it with its rows, and a value that moved since the last
+/// announced one becomes one [`Mutation::ArtifactsChanged`]. The first value
+/// a mirror reads is its baseline and announces nothing.
 #[derive(Debug, Default)]
 pub struct MetaMirror {
     sessions: HashMap<String, SessionRow>,
     projects: HashMap<String, ProjectRow>,
     runtimes: HashMap<String, RuntimeRow>,
     hide_pending: bool,
+    library_revision: Option<u64>,
 }
 
 impl MetaMirror {
@@ -620,6 +642,11 @@ impl MetaMirror {
     /// were never resident are left alone; the effects that track them are
     /// [`Self::refresh`]'s and [`Self::refresh_meta`]'s. Read-then-absorb: a
     /// failed read keeps the barrier and the mirror untouched.
+    ///
+    /// The barrier also hid every Pending session's publications from the
+    /// artifact library, and lifting it shows them without a revision step.
+    /// When a Pending session holds one, the lift announces the library once
+    /// (RO-35), unless the revision moved and was announced in this pass.
     pub fn reveal_pending(&mut self, conn: &Connection) -> Result<Vec<Mutation>, StoreError> {
         if !self.hide_pending {
             return Ok(Vec::new());
@@ -628,12 +655,17 @@ impl MetaMirror {
         let mut shaped = self.activity_dependents(conn, &pending)?;
         shaped.retain(|id| self.sessions.contains_key(id));
         let sessions = fetch_sessions(conn, &shaped, false)?;
+        let library = crate::html_artifacts::revision(conn)?;
+        let held = crate::html_artifacts::held_by_pending(conn)?;
         self.hide_pending = false;
         let mut events = Vec::new();
         for (_, row) in sessions {
             if let Some(row) = row {
                 self.absorb_session(row, &mut events);
             }
+        }
+        if !self.absorb_library(library, &mut events) && held {
+            events.push(Mutation::ArtifactsChanged { revision: library });
         }
         Ok(events)
     }
@@ -645,6 +677,7 @@ impl MetaMirror {
         let runtimes = queries::all_runtimes(conn)?;
         let projects = queries::all_projects(conn)?;
         let sessions = queries::all_sessions_visible(conn, self.hide_pending)?;
+        let library = crate::html_artifacts::revision(conn)?;
 
         let mut events = Vec::new();
         for row in runtimes {
@@ -656,6 +689,7 @@ impl MetaMirror {
         for row in sessions {
             self.absorb_session(row, &mut events);
         }
+        self.absorb_library(library, &mut events);
         Ok(events)
     }
 
@@ -676,6 +710,7 @@ impl MetaMirror {
         let projects = fetch_named(conn, &effects.touched_projects, queries::project)?;
         let session_ids = self.activity_dependents(conn, &effects.touched_sessions)?;
         let sessions = fetch_sessions(conn, &session_ids, self.hide_pending)?;
+        let library = crate::html_artifacts::revision(conn)?;
 
         let mut events = Vec::new();
         for (_, row) in runtimes {
@@ -693,6 +728,7 @@ impl MetaMirror {
                 self.absorb_session(row, &mut events);
             }
         }
+        self.absorb_library(library, &mut events);
         Ok(events)
     }
 
@@ -719,6 +755,7 @@ impl MetaMirror {
         let projects = fetch_named(conn, &effects.projects, queries::project)?;
         let session_ids = self.activity_dependents(conn, &effects.sessions)?;
         let sessions = fetch_sessions(conn, &session_ids, self.hide_pending)?;
+        let library = crate::html_artifacts::revision(conn)?;
 
         let mut events = Vec::new();
         for (id, row) in runtimes {
@@ -745,6 +782,7 @@ impl MetaMirror {
                 }
             }
         }
+        self.absorb_library(library, &mut events);
         Ok(events)
     }
 
@@ -793,6 +831,26 @@ impl MetaMirror {
             events.push(Mutation::Runtime(Box::new(row.clone())));
             self.runtimes.insert(row.id.clone(), row);
         }
+    }
+
+    /// The first revision read is the baseline; a later one that differs is
+    /// announced once, after the row diffs of the same pass. Returns whether
+    /// it announced.
+    fn absorb_library(&mut self, revision: u64, events: &mut Vec<Mutation>) -> bool {
+        let moved = self
+            .library_revision
+            .replace(revision)
+            .is_some_and(|announced| announced != revision);
+        if moved {
+            events.push(Mutation::ArtifactsChanged { revision });
+        }
+        moved
+    }
+
+    /// The library revision this mirror last read (RO-35); `None` before
+    /// its first pass.
+    pub fn library_revision(&self) -> Option<u64> {
+        self.library_revision
     }
 
     pub fn session(&self, id: &str) -> Option<&SessionRow> {

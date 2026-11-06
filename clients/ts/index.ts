@@ -7,6 +7,8 @@ export type * from "./generated/IngestionConflict";
 export type * from "./generated/ApiError";
 export type * from "./generated/AssetRef";
 export type * from "./generated/ArtifactEntry";
+export type * from "./generated/ArtifactExportRequest";
+export type * from "./generated/ArtifactExportResponse";
 export type * from "./generated/ArtifactListRequest";
 export type * from "./generated/ArtifactPage";
 export type * from "./generated/HtmlArtifactPublication";

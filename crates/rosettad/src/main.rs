@@ -8,6 +8,7 @@
 //!   rosettad watch --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--ticks N]
 //!   rosettad serve --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] ...
 //!                  [--token-file FILE [--grant-key-file FILE]] [--allow-origin ORIGIN ...]
+//!                  [--export-root DIR]
 //!   rosettad rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--enroll FILE]
 //!   rosettad ledger compact --db PATH [--ledger DIR] [--level N] [--long]
 //!   rosettad ledger verify --db PATH | --ledger DIR [--json]
@@ -157,7 +158,7 @@ fn main() -> ExitCode {
                 "  watch --db PATH [--home DIR] [--agent KIND ...] [--enroll FILE] [--ticks N] [--profile]"
             );
             eprintln!(
-                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--capture-workers N|0] [--capture-lookahead BYTES] [--cold-ledger-codec plain|zstd-frames:LEVEL] [--announce [--announce-dir DIR]] [--token-file FILE [--grant-key-file FILE]] [--allow-origin ORIGIN ...] [--debug-auth]"
+                "  serve --db PATH [--addr HOST:PORT] [--home DIR] [--agent KIND ...] [--enroll FILE] [--profile] [--stop-after-meta] [--restart-incomplete] [--slice-budget BYTES|0] [--capture-workers N|0] [--capture-lookahead BYTES] [--cold-ledger-codec plain|zstd-frames:LEVEL] [--announce [--announce-dir DIR]] [--token-file FILE [--grant-key-file FILE]] [--allow-origin ORIGIN ...] [--debug-auth] [--export-root DIR]"
             );
             eprintln!(
                 "  rebuild --db PATH [--ledger DIR] [--agent KIND ...] [--enroll FILE] [--profile]"
@@ -192,6 +193,12 @@ fn main() -> ExitCode {
             );
             eprintln!(
                 "   to the built-in loopback/app ones; --debug-auth logs each grant decision (client id and route) to stderr)"
+            );
+            eprintln!(
+                "   (--export-root DIR, an existing absolute directory, opens POST /api/sessions/{{id}}/artifacts/{{publication_id}}/export:"
+            );
+            eprintln!(
+                "   one captured page written in the served shell to a directory below DIR, bearer only, so it needs --token-file; without it the door answers not_ready)"
             );
             return ExitCode::from(2);
         }
@@ -228,6 +235,9 @@ struct Flags {
     allow_origins: Vec<String>,
     /// serve only: one stderr line per grant decision (client id and route).
     debug_auth: bool,
+    /// serve only: the directory the artifact export door may write under
+    /// (RO-32). Absent, the door answers `not_ready`; needs `token_file`.
+    export_root: Option<PathBuf>,
     ticks: Option<u64>,
     ledger: Option<PathBuf>,
     /// serve only: the localhost listen address.
@@ -370,6 +380,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         grant_key_file: None,
         allow_origins: Vec::new(),
         debug_auth: false,
+        export_root: None,
         ticks: None,
         ledger: None,
         addr: None,
@@ -616,6 +627,9 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--debug-auth" => {
                 flags.debug_auth = true;
                 at += 1;
+            }
+            "--export-root" => {
+                flags.export_root = Some(PathBuf::from(take_value(args, &mut at)?));
             }
             "--ledger" => {
                 flags.ledger = Some(PathBuf::from(take_value(args, &mut at)?));
@@ -2796,6 +2810,21 @@ mod tests {
         assert!(walk.admission_override && !walk.single_lane);
         let error = parse(&["--experiment-cold-lanes", "3"]).err().unwrap();
         assert!(error.contains("needs 1 or 2"), "{error}");
+    }
+
+    #[test]
+    fn the_export_root_flag_names_the_export_doors_directory() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["--db".to_string(), "projection.sqlite".to_string()];
+            args.extend(extra.iter().map(|arg| (*arg).to_string()));
+            parse_flags(&args)
+        };
+        assert_eq!(parse(&[]).unwrap().export_root, None);
+        assert_eq!(
+            parse(&["--export-root", "/exports"]).unwrap().export_root,
+            Some(PathBuf::from("/exports"))
+        );
+        assert!(parse(&["--export-root"]).is_err(), "the flag needs a value");
     }
 
     #[test]

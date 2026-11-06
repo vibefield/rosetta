@@ -458,6 +458,15 @@ async fn the_bearer_guards_every_rest_route_and_websocket() {
         };
         assert_eq!(right.status, expected, "{path}: {right:?}");
     }
+    // The export door (RO-32) answers to the bearer like every write.
+    let export = server
+        .request(
+            "POST",
+            &format!("/api/sessions/s1/artifacts/{}/export", "a".repeat(64)),
+            &[("content-type", "application/json")],
+        )
+        .await;
+    assert_eq!(export.refusal(), (401, Some("missing")));
     let search = server
         .get("/api/search?q=hello", &[("authorization", &bearer())])
         .await;
@@ -593,6 +602,14 @@ async fn an_allowed_origin_is_never_a_credential() {
         )
         .await;
     assert_eq!(write.status, 403);
+    let export = server
+        .request(
+            "POST",
+            &format!("/api/sessions/s1/artifacts/{}/export", "a".repeat(64)),
+            &[("origin", FOREIGN), ("authorization", &bearer())],
+        )
+        .await;
+    assert_eq!(export.status, 403, "the export door is a write");
     let preflight = server
         .request(
             "OPTIONS",
@@ -716,6 +733,19 @@ async fn a_grant_opens_its_own_session_and_nothing_else() {
         )
         .await;
     assert_eq!(write.refusal(), (401, Some("wrong-route")));
+    // The export door writes the disk (RO-32): bearer only, even for the
+    // grant's own session, which is the route's session.
+    let export = server
+        .request(
+            "POST",
+            &format!("/api/sessions/s1/artifacts/{}/export", "a".repeat(64)),
+            &[
+                ("authorization", &header),
+                ("content-type", "application/json"),
+            ],
+        )
+        .await;
+    assert_eq!(export.refusal(), (401, Some("wrong-route")));
     // A foreign page with a stolen grant: the Origin rule still refuses it.
     assert_eq!(
         server
