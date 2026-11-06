@@ -24,21 +24,42 @@ test("artifact pagination and captured content preserve filters, credentials, an
   assert.equal(new Headers(calls[1].options.headers).get("authorization"), "Bearer test-token");
 });
 
-test("an artifact export posts its directory with the bearer and answers the door's verdict", async () => {
+test("an artifact export posts its request with the bearer and returns the by-digest answer", async () => {
   const calls = [];
-  const answer = { written: true, digest: "c".repeat(64), shell_version: "1", hosts: ["cdn.jsdelivr.net"] };
+  const environment = {
+    hosts: { "script-src": ["cdn.jsdelivr.net"], "style-src": [], "font-src": [] },
+    variables: { "--color-text-primary": "#252521" },
+  };
+  const answers = [
+    { page: { path: "index.html", blake3: "c".repeat(64), bytes: 15 }, members: [], captured_at: 50, method: "link", environment },
+    {
+      page: { path: "index.html", blake3: "d".repeat(64), bytes: 1234 },
+      members: [],
+      captured_at: null,
+      method: "copy",
+      environment,
+      shell: { version: "1", source_blake3: "c".repeat(64), hosts: ["cdn.jsdelivr.net"] },
+    },
+  ];
   const client = new RosettaClient({ baseUrl: "http://127.0.0.1:4640", credential: { kind: "bearer", token: "test-token" }, fetchFn: async (url, options) => {
     calls.push({ url: String(url), options });
-    return new Response(JSON.stringify(answer), {
+    return new Response(JSON.stringify(answers[calls.length - 1]), {
       headers: { "content-type": "application/json", "x-rosetta-protocol-version": String(PROTOCOL_VERSION) },
     });
   } });
-  const exported = await client.exportArtifact("child/session", "publication/a", "/exports/s1/review");
-  assert.deepEqual(exported, answer);
+
+  // The page as itself: the request is the body, exactly.
+  const raw = await client.exportArtifact("child/session", "publication/a", { into: "/exports/s1/review" });
+  assert.deepEqual(raw, answers[0]);
   assert.ok(calls[0].url.endsWith("/api/sessions/child%2Fsession/artifacts/publication%2Fa/export"));
   assert.equal(calls[0].options.method, "POST");
   assert.deepEqual(JSON.parse(calls[0].options.body), { into: "/exports/s1/review" });
   const headers = new Headers(calls[0].options.headers);
   assert.equal(headers.get("authorization"), "Bearer test-token");
   assert.equal(headers.get("content-type"), "application/json");
+
+  // The room's shell, asked for.
+  const shelled = await client.exportArtifact("s1", "p1", { into: "/exports/s1/room", shell: "room" });
+  assert.deepEqual(shelled, answers[1]);
+  assert.deepEqual(JSON.parse(calls[1].options.body), { into: "/exports/s1/room", shell: "room" });
 });
