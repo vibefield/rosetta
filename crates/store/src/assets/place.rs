@@ -6,7 +6,7 @@
 //! rename, or it corrupts the asset store's own file.
 
 use std::fs::{self, File};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 use rosetta_core::timeline::AssetRef;
@@ -162,11 +162,11 @@ impl VerifiedMember {
     /// nothing stands there.
     fn copy_to(&self, destination: &Path) -> Result<Placed, PlaceError> {
         let mut temporary = temporary_beside(destination)?;
-        (&self.file).seek(SeekFrom::Start(0))?;
+        (&self.file).rewind()?;
         let copy = temporary.as_file_mut();
         io::copy(&mut (&self.file).take(self.len.saturating_add(1)), copy)?;
         copy.sync_all()?;
-        copy.seek(SeekFrom::Start(0))?;
+        copy.rewind()?;
         let (len, digest) = digest_of(&*copy, self.len)?;
         if len != self.len || digest != self.digest {
             return Err(PlaceError::SourceInvalid("changed while it was copied"));
