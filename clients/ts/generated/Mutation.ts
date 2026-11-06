@@ -17,4 +17,4 @@ export type Mutation = { "type": "message" } & TimelineEntry | { "type": "tool_u
 /**
  * Read-time list-price cost of the replaced usage.
  */
-cost: UsageCost | null, } | { "type": "session_swept", session_id: string, } | { "type": "timeline_meta_changed", session_id: string, } | { "type": "session" } & SessionRow | { "type": "project" } & ProjectRow | { "type": "runtime" } & RuntimeRow;
+cost: UsageCost | null, } | { "type": "session_swept", session_id: string, } | { "type": "timeline_meta_changed", session_id: string, } | { "type": "session" } & SessionRow | { "type": "project" } & ProjectRow | { "type": "runtime" } & RuntimeRow | { "type": "artifacts_changed", revision: number, };

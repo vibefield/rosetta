@@ -17,10 +17,13 @@ use rusqlite::types::Value;
 /// Table name → its rows, each `column=value | …`, sorted.
 pub type Dump = BTreeMap<String, Vec<String>>;
 
-/// Columns no comparison reads: surrogate ids and run-dependent stamps.
+/// Columns no comparison reads: surrogate ids and run-dependent stamps. The
+/// library revision counts writer transactions (RO-35), so it follows how a
+/// build split them, never what it holds.
 fn always_ignored(table: &str, column: &str) -> bool {
     ((table == "message" || table == "ingest_cursor") && column == "id")
-        || (table == "projection_state" && column == "projection_epoch")
+        || (table == "projection_state"
+            && (column == "projection_epoch" || column == "artifacts_revision"))
         || (table == "agent_runtime" && column == "discovered_at")
 }
 

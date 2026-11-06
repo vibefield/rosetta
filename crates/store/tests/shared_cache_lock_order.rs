@@ -837,7 +837,9 @@ fn dump(conn: &Connection) -> Vec<String> {
             .query_map([], |row| {
                 let mut fields = Vec::new();
                 for (index, column) in columns.iter().enumerate() {
-                    if table == "projection_state" && column == "projection_epoch" {
+                    if table == "projection_state"
+                        && (column == "projection_epoch" || column == "artifacts_revision")
+                    {
                         continue;
                     }
                     let value: rusqlite::types::Value = row.get(index)?;

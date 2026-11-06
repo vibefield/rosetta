@@ -32,7 +32,10 @@ use rosetta_protocol::{
     TimelineMetaArtifactSource, TimelineMetaPlan, TimelineMetaPlanSource, TimelineMetaTask,
     TimelineMetaWorkflow, TimelinePage, TokenSnapshot, UsageResponse,
 };
-use rosetta_protocol::{ArtifactEntry, ArtifactListRequest, ArtifactPage};
+use rosetta_protocol::{
+    ArtifactEntry, ArtifactExportRequest, ArtifactExportResponse, ArtifactListRequest,
+    ArtifactPage, ExportEnvironment, ExportMethod, ExportShell, ExportedObject, ExportedShell,
+};
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wire.json");
 
@@ -51,6 +54,8 @@ fn html_artifact() -> ArtifactEntry {
             version: Some("2".into()),
             published_at: Some(3_608_000),
             source_offset: 4096,
+            description: Some("Two checkout flows to compare".into()),
+            dropped_files: Some(2),
         },
         availability: HtmlArtifactAvailability::Captured,
         captured_at: Some(3_700_000),
@@ -565,6 +570,7 @@ fn exemplars() -> serde_json::Value {
                 ],
             },
         }),
+        artifacts_revision: Some(7),
     };
     let mutations = vec![
         Mutation::Message(Box::new(timeline_entry())),
@@ -600,6 +606,7 @@ fn exemplars() -> serde_json::Value {
         Mutation::Session(Box::new(session_row())),
         Mutation::Project(Box::new(project_row())),
         Mutation::Runtime(Box::new(runtime_row())),
+        Mutation::ArtifactsChanged { revision: 7 },
     ];
     let frames = vec![
         ServerFrame::Hello {
@@ -633,6 +640,7 @@ fn exemplars() -> serde_json::Value {
             runtimes: vec![runtime_row()],
             projects: vec![project_row()],
             sessions: vec![session_row()],
+            artifacts_revision: Some(7),
         },
         ServerFrame::Mutation {
             stamp: Some(stamp()),
@@ -661,6 +669,31 @@ fn exemplars() -> serde_json::Value {
             artifact_id: None, cursor: None, limit: Some(50),
         },
         "artifact_page": ArtifactPage { entries: vec![html_artifact()], next_cursor: Some("opaque".into()), canonical_ready: true },
+        "artifact_export_request": ArtifactExportRequest { into: "/exports/s1/review".into(), shell: None },
+        "artifact_export_request_room": ArtifactExportRequest {
+            into: "/exports/s1/review-room".into(),
+            shell: Some(ExportShell::Room),
+        },
+        "artifact_export_response": ArtifactExportResponse {
+            page: ExportedObject { path: "index.html".into(), blake3: "c".repeat(64), bytes: 15 },
+            members: Vec::new(),
+            captured_at: Some(3_700_000),
+            method: ExportMethod::Link,
+            environment: ExportEnvironment::room(),
+            shell: None,
+        },
+        "artifact_export_response_room": ArtifactExportResponse {
+            page: ExportedObject { path: "index.html".into(), blake3: "d".repeat(64), bytes: 1_234 },
+            members: Vec::new(),
+            captured_at: None,
+            method: ExportMethod::Copy,
+            environment: ExportEnvironment::room(),
+            shell: Some(ExportedShell {
+                version: rosetta_core::html_artifacts::SHELL_VERSION.into(),
+                source_blake3: "c".repeat(64),
+                hosts: rosetta_core::html_artifacts::SHELL_HOSTS.all().into_iter().map(str::to_owned).collect(),
+            }),
+        },
         "timeline_page": TimelinePage {
             watermark: "1.2.3".into(),
             entries: vec![timeline_entry(), collaboration_entry()],
@@ -715,6 +748,7 @@ fn exemplars() -> serde_json::Value {
             ErrorCode::BadRequest,
             ErrorCode::NotReady,
             ErrorCode::CursorExpired,
+            ErrorCode::ExportConflict,
             ErrorCode::Internal,
         ],
         "heatmap": HeatmapResponse {
@@ -920,6 +954,59 @@ fn typescript_protocol_version_matches() {
         include_str!("../../../clients/ts/protocol-version.mjs"),
         expected
     );
+}
+
+#[test]
+fn the_library_fields_of_protocol_30_are_additive_and_unknown_from_an_older_daemon() {
+    let mut legacy_status = serde_json::to_value(StatusResponse {
+        protocol_version: 29,
+        schema_version: 29,
+        canonical_ready: true,
+        search: search_state(),
+        daemon: None,
+        artifacts_revision: None,
+    })
+    .unwrap();
+    legacy_status
+        .as_object_mut()
+        .unwrap()
+        .remove("artifacts_revision");
+    let status: StatusResponse = serde_json::from_value(legacy_status).unwrap();
+    assert_eq!(
+        status.artifacts_revision, None,
+        "an older daemon names no revision"
+    );
+
+    let mut legacy_entry = serde_json::to_value(html_artifact()).unwrap();
+    let publication = legacy_entry["publication"].as_object_mut().unwrap();
+    publication.remove("description");
+    publication.remove("dropped_files");
+    let entry: ArtifactEntry = serde_json::from_value(legacy_entry).unwrap();
+    assert_eq!(
+        (
+            entry.publication.description,
+            entry.publication.dropped_files
+        ),
+        (None, None),
+        "a schema 29 publication's request words are unknown, never empty"
+    );
+}
+
+/// An export asks for a shell only to get one: absent is the page's own
+/// bytes, and a shell rosetta does not write is refused, never ignored.
+#[test]
+fn an_export_request_names_its_shell_only_to_ask_for_one() {
+    let raw: ArtifactExportRequest = serde_json::from_str(r#"{"into":"/exports/a"}"#).unwrap();
+    assert_eq!(raw.shell, None);
+    assert_eq!(
+        serde_json::to_value(&raw).unwrap(),
+        serde_json::json!({"into": "/exports/a"})
+    );
+    let room: ArtifactExportRequest =
+        serde_json::from_str(r#"{"into":"/exports/a","shell":"room"}"#).unwrap();
+    assert_eq!(room.shell, Some(ExportShell::Room));
+    let dark = serde_json::from_str::<ArtifactExportRequest>(r#"{"into":"/a","shell":"dark"}"#);
+    assert!(dark.is_err(), "rosetta writes no other shell");
 }
 
 #[test]

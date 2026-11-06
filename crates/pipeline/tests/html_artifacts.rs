@@ -677,42 +677,46 @@ fn legacy_ledger_rebuild_never_substitutes_todays_file_for_missing_capture_evide
 }
 
 #[test]
-fn native_inline_html_rebuilds_from_the_original_transcript_without_file_observations() {
+fn a_files_map_string_names_the_page_file_which_is_captured_and_rebuilds_from_the_ledger() {
+    // The RO-34a probe (2026-11-05): a files-map string is a source path, as
+    // the Artifact tool's schema says, so the page is the file it names and is
+    // observed like any `file_path`. Normalizer 38 stored the string's own
+    // text as the page; this test replaces the one that pinned that reading.
     use rosetta_adapter_claude_code::ClaudeCodeAdapter;
-    let mut f = Fixture::new();
-    fs::remove_dir_all(f.root.join("sessions")).unwrap();
-    f.runtime.kind = "claude-code".into();
-    f.runtime.id = ids::runtime_id("claude-code", f.root.to_str().unwrap());
-    f.transcript = f.root.join("projects/synthetic/native.jsonl");
-    fs::create_dir_all(f.transcript.parent().unwrap()).unwrap();
-    let html = "<h1>Inline review π</h1><button>Compare designs</button>";
-    let opener = json!({"type":"assistant","parentUuid":null,"isSidechain":false,"uuid":"opener","timestamp":"2026-10-01T12:00:00Z","sessionId":"native","version":"2.1.283","cwd":f.temp.path(),"gitBranch":"main","userType":"external",
-        "message":{"id":"response","type":"message","role":"assistant","model":"claude-opus-5","stop_reason":"tool_use","content":[{"type":"tool_use","id":"publish-call","name":"Artifact","input":{"action":"publish","files":{"index.html":html},"title":"Inline review"}}]}});
-    let result = json!({"type":"user","parentUuid":"opener","isSidechain":false,"uuid":"result","timestamp":"2026-10-01T12:00:01Z","sessionId":"native","version":"2.1.283","cwd":f.temp.path(),"gitBranch":"main","userType":"external",
-        "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"publish-call","content":"published","is_error":false}]},
-        "toolUseResult":{"artifact_id":"native-artifact","version":1,"title":"Inline review","url":"https://claude.ai/code/artifact/native-artifact","path":"index.html","updated":false}});
-    fs::write(&f.transcript, format!("{opener}\n{result}\n")).unwrap();
+    let mut f = claude_fixture();
+    let html = "<h1>Review π</h1><button>Compare designs</button>";
+    fs::write(&f.page, html).unwrap();
+    claude_call(
+        &f,
+        "publish",
+        "Artifact",
+        json!({"action":"publish","title":"Review","description":"Two checkout flows, side by side",
+            "files":{"index.html":f.page,"app.js":"app.js","logo.png":{"from":"logo.png"},"old.css":null}}),
+        json!({"artifact_id":NATIVE_ARTIFACT,"version":1,"url":PUBLISHED_URL,"updated":false}),
+        false,
+    );
     f.ingest_with(&ClaudeCodeAdapter);
     let rows = f.list();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].availability, HtmlArtifactAvailability::Captured);
-    assert_eq!(rows[0].publication.filename, "index.html");
-    assert!(rows[0].publication.path.is_none());
-    assert!(
-        rows[0].captured_at.is_none(),
-        "no filesystem observation was made"
-    );
-    assert_eq!(member(&f.db, &rows[0]), html.as_bytes());
+    let row = &rows[0];
+    assert_eq!(row.availability, HtmlArtifactAvailability::Captured);
+    assert_eq!(row.publication.path.as_deref(), f.page.to_str());
+    assert_eq!(row.publication.filename, "review.html");
+    assert!(row.captured_at.is_some(), "the named file was observed");
     assert_eq!(
-        verify_ledger(&f.temp.path().join("ledger"))
-            .unwrap()
-            .tally
-            .documents,
-        0
+        row.publication.description.as_deref(),
+        Some("Two checkout flows, side by side")
     );
+    assert_eq!(
+        row.publication.dropped_files,
+        Some(2),
+        "app.js and logo.png were named and not kept; a null removes and names nothing"
+    );
+    assert_eq!(member(&f.db, row), html.as_bytes());
+    fs::remove_file(&f.page).unwrap();
     fs::remove_dir_all(&f.root).unwrap();
     fs::remove_dir_all(assets::asset_root(&f.db)).unwrap();
-    let db = f.temp.path().join("inline-rebuilt.sqlite");
+    let db = f.temp.path().join("files-map-rebuilt.sqlite");
     let mut rebuilt = Store::open_in_memory_for_rebuild_with_assets(&db).unwrap();
     rebuild_runtime_with_options(
         &ClaudeCodeAdapter,
@@ -726,6 +730,10 @@ fn native_inline_html_rebuilds_from_the_original_transcript_without_file_observa
         },
     )
     .unwrap();
-    assert_eq!(list(&rebuilt), rows);
+    assert_eq!(
+        list(&rebuilt),
+        rows,
+        "description and dropped_files rebuild too"
+    );
     assert_eq!(member(&db, &rows[0]), html.as_bytes());
 }
