@@ -139,12 +139,36 @@ evidence = "fixture"
 notes = "Protobuf-text jetski runtime state. Inventory only; do not parse."
 
 [[streams]]
+id = "conversation-annotations"
+glob = "annotations/*.pbtxt"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Protobuf-text per-conversation annotation (title). First written by the 1.4.12 print-mode farm; absent from 1.1.20. Inventory only; do not parse."
+
+[[streams]]
+id = "jetbox-summaries"
+glob = "jetbox_summaries_proto.pb"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Binary protobuf conversation summaries (id, title, timestamps, workspace URI). First written by the 1.4.12 print-mode farm; absent from 1.1.20. Inventory only; do not parse."
+
+[[streams]]
+id = "step-output"
+glob = "brain/*/.system_generated/steps/*/output.txt"
+file_format = "text"
+discipline = "rewrite_in_place"
+evidence = "fixture"
+notes = "Plain-text command result for a tool step, keyed by step index (the GENERIC transcript step's content without its timestamp lines). First written by the 1.4.12 tool-use farm; absent from 1.1.20. Inventory only."
+
+[[streams]]
 id = "implicit-protobuf"
 glob = "implicit/*.pb"
 file_format = "text"
 discipline = "rewrite_in_place"
 evidence = "research"
-notes = "Unpublished binary protobuf blobs. Inventory only; do not parse. Organic 1.1.12 writes these; print-mode farm does not."
+notes = "Unpublished binary blobs. Inventory only; do not parse. Organic 1.1.12 writes these; the 1.1.20 print-mode farm does not, the 1.4.12 print-mode farm does. The 1.4.12 blobs read as encrypted, so redaction cannot check them: the farm withholds them and keeps only each name and size in the scenario's withheld.json."
 
 [[streams]]
 id = "knowledge"

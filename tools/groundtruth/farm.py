@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import sqlite3
@@ -13,6 +15,7 @@ import tempfile
 import tomllib
 from collections import defaultdict
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -38,6 +41,21 @@ from .render import render_agent
 RUN_TIMEOUT_SECONDS = 240
 GENERATOR = "tools.groundtruth farm 1"
 ISOLATED_RUNNER_ENV = "ROSETTA_FARM_ISOLATED"
+
+# Antigravity's updater honours only the lowercase literal `true`. `1` leaves it
+# running, and it can replace the executable under test mid-farm (upstream
+# antigravity-cli issue 1046; the official troubleshooting guide documents `true`).
+AGY_DISABLE_AUTO_UPDATE = "true"
+
+# macOS Seatbelt policy for `--loopback-only`: the agent may reach the loopback
+# mock and local Unix sockets; the kernel refuses every other outbound
+# connection before it leaves the host.
+LOOPBACK_ONLY_PROFILE = """(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote unix-socket))
+"""
 
 SCENARIOS: dict[str, tuple[dict[str, Any], ...]] = {
     "claude-code": (
@@ -411,8 +429,72 @@ def _agy_release_asset() -> str:
     raise GroundTruthError(f"unsupported antigravity farm platform: {system}/{machine}")
 
 
-def _install_antigravity(prefix: Path, version: str) -> Path:
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+    except OSError as error:
+        raise GroundTruthError(f"could not hash {path}: {error}") from error
+    return digest.hexdigest()
+
+
+class ExecutableGuard:
+    """Pin the executable under test and recheck it around every invocation.
+
+    A self-updating agent can replace its own executable between runs; a
+    fixture is version-bound evidence only while the bytes that ran are the
+    bytes that were pinned.
+    """
+
+    def __init__(self, binary: Path, expected_sha256: str | None = None) -> None:
+        self.path = binary
+        self.sha256 = _sha256(binary)
+        self.bytes = binary.stat().st_size
+        if expected_sha256 is not None and self.sha256 != expected_sha256.lower():
+            raise GroundTruthError(
+                f"{binary}: SHA-256 {self.sha256} does not match the pinned {expected_sha256}"
+            )
+        self.checks = 1
+
+    def verify(self, stage: str) -> None:
+        actual = _sha256(self.path)
+        self.checks += 1
+        if actual != self.sha256:
+            raise GroundTruthError(
+                f"{self.path} changed {stage}: SHA-256 {self.sha256} -> {actual}; "
+                "the run is not version-bound evidence"
+            )
+
+
+def _place_local_binary(source: Path, destination: Path) -> Path:
+    if not source.is_file():
+        raise GroundTruthError(f"--binary {source} is not a file")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+    # Clone on APFS so a ~200 MB executable costs no disk; fall back to a copy.
+    cloned = False
+    if platform.system() == "Darwin":
+        cloned = (
+            subprocess.run(
+                ["cp", "-c", str(source), str(destination)], capture_output=True
+            ).returncode
+            == 0
+        )
+    if not cloned:
+        shutil.copy2(source, destination)
+    destination.chmod(0o755)
+    return destination
+
+
+def _install_antigravity(
+    prefix: Path, version: str, local_binary: Path | None = None
+) -> Path:
     prefix.mkdir(parents=True, exist_ok=True)
+    if local_binary is not None:
+        # An already-acquired official executable; the caller pins its digest.
+        return _place_local_binary(local_binary, prefix / "agy")
     asset = _agy_release_asset()
     url = (
         "https://github.com/google-antigravity/antigravity-cli/releases/download/"
@@ -468,6 +550,45 @@ def _strip_antigravity_harvest(tree: Path) -> None:
     (tree / "last_check.timestamp").unlink(missing_ok=True)
     changelog = tree / "cache" / "CHANGELOG.md"
     changelog.unlink(missing_ok=True)
+
+
+# Scenario-root inventory of the opaque blobs the farm does not publish.
+WITHHELD_INVENTORY = "withheld.json"
+
+
+def _withhold_antigravity_implicit(destination: Path, tree_name: str) -> None:
+    """Keep only the name and size of each `implicit/*.pb` blob.
+
+    The blobs carry no protobuf framing, no known compression and about seven
+    bits of entropy per byte, so they read as encrypted. Neither
+    `_redact_bytes` nor `_assert_redacted` can see an operator path inside
+    them, and their sizes track the length of the scenario paths that redaction
+    replaces elsewhere. The inventory sits at the scenario root, outside the
+    agent data root, so the layout's `implicit/*.pb` stream stays a native claim.
+    """
+
+    implicit = destination / tree_name / "implicit"
+    blobs = sorted(implicit.glob("*.pb")) if implicit.is_dir() else []
+    if not blobs:
+        return
+    files = [
+        {"path": blob.relative_to(destination).as_posix(), "bytes": blob.stat().st_size}
+        for blob in blobs
+    ]
+    for blob in blobs:
+        blob.unlink()
+    if not any(implicit.iterdir()):
+        implicit.rmdir()
+    write_json(
+        destination / WITHHELD_INVENTORY,
+        {
+            "reason": (
+                "opaque, encrypted-looking blobs whose contents redaction cannot "
+                "check for operator paths; only their names and sizes are kept"
+            ),
+            "files": files,
+        },
+    )
 
 
 def _write_grok_config(agent_home: Path, base_url: str) -> None:
@@ -934,14 +1055,26 @@ def _parse_agent_version(output: str) -> str:
     return match.group(1).rstrip(".,;:")
 
 
-def _detect_version(binary: Path) -> str:
+def _detect_version(
+    binary: Path,
+    *,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+    prefix: tuple[str, ...] = (),
+) -> str:
     if not binary.exists():
         raise GroundTruthError(f"binary not found at {binary}")
     try:
         output = subprocess.run(
-            [str(binary), "--version"], check=True, capture_output=True, text=True
+            [*prefix, str(binary), "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=cwd,
+            timeout=120,
         ).stdout
-    except (OSError, subprocess.CalledProcessError) as error:
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         raise GroundTruthError(f"could not run {binary} --version: {error}") from error
     return _parse_agent_version(output)
 
@@ -974,12 +1107,13 @@ def _scenario_step(
     project: Path,
     *,
     allow_failure: bool = False,
+    prefix: tuple[str, ...] = (),
 ) -> None:
     stdout_name = "stdout.jsonl" if step == 0 else f"stdout-{step}.jsonl"
     stderr_name = "stderr.log" if step == 0 else f"stderr-{step}.log"
     try:
         result = subprocess.run(
-            command,
+            [*prefix, *command],
             cwd=project,
             env=env,
             capture_output=True,
@@ -1043,20 +1177,84 @@ def _redact(
                 (f"/home/{username}", "/home/<USER>"),
             ]
         )
+    # The macOS per-user temp directory (DARWIN_USER_TEMP_DIR) is fixed for the
+    # operator's account, so it identifies them even when nothing else does.
+    temp_root = Path(tempfile.gettempdir())
+    for temp in {str(temp_root), str(temp_root.resolve())}:
+        if temp not in {"/", "/tmp", "/private/tmp"}:
+            replacements.append((temp, "<TMPDIR>"))
     replacements.sort(key=lambda pair: len(pair[0]), reverse=True)
-    for path in destination.rglob("*"):
-        if not path.is_file():
-            continue
+    files = [path for path in destination.rglob("*") if path.is_file()]
+    # Databases first: redacting one folds and truncates its WAL, which must
+    # never be byte-edited afterwards (frame checksums would reject the edit).
+    for path in files:
         if _is_sqlite_database(path):
             _redact_sqlite(path, replacements)
+    for path in files:
+        if _is_sqlite_database(path) or path.name.endswith(("-wal", "-shm")):
             continue
         try:
             text = path.read_text()
-        except (OSError, UnicodeDecodeError):
+        except UnicodeDecodeError:
+            # Binary stores (protobuf snapshots and the like) frame strings by
+            # length, so only a same-length rewrite keeps them decodable.
+            data = path.read_bytes()
+            redacted = _redact_bytes(data, replacements)
+            if redacted != data:
+                path.write_bytes(redacted)
+            continue
+        except OSError:
             continue
         for needle, replacement in replacements:
             text = text.replace(needle, replacement)
         path.write_text(text)
+    _assert_redacted(destination, replacements)
+
+
+# Any surviving macOS per-user temp directory, whoever's it is.
+_DARWIN_TEMP_PATTERN = re.compile(rb"/var/folders/[A-Za-z0-9_+-]+/[A-Za-z0-9_+-]+")
+
+
+def _same_length_placeholder(needle: bytes, replacement: str) -> bytes:
+    token = replacement.encode()
+    pad = len(needle) - len(token)
+    if pad >= 0 and token.endswith(b">"):
+        return token[:-1] + b"_" * pad + b">"
+    if pad >= 0:
+        return token + b"_" * pad
+    if len(needle) >= 2:
+        return b"<" + b"_" * (len(needle) - 2) + b">"
+    return b"_" * len(needle)
+
+
+def _redact_bytes(data: bytes, replacements: list[tuple[str, str]]) -> bytes:
+    """Replace each needle with a placeholder of exactly its byte length.
+
+    Protobuf and other length-prefixed encodings stay structurally valid because
+    no field changes size; `replacements` must already be longest-first.
+    """
+
+    for needle, replacement in replacements:
+        encoded = needle.encode()
+        if encoded and encoded in data:
+            data = data.replace(encoded, _same_length_placeholder(encoded, replacement))
+    return data
+
+
+def _assert_redacted(destination: Path, replacements: list[tuple[str, str]]) -> None:
+    needles = [needle.encode() for needle, _ in replacements if needle]
+    for path in sorted(destination.rglob("*")):
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        leaked = [needle.decode() for needle in needles if needle in data]
+        if _DARWIN_TEMP_PATTERN.search(data):
+            leaked.append("a /var/folders per-user temp directory")
+        if leaked:
+            raise GroundTruthError(
+                f"redaction left operator paths in {path.relative_to(destination)}: "
+                + ", ".join(sorted(set(leaked)))
+            )
 
 
 def _manifest(
@@ -1114,6 +1312,116 @@ def _minimal_env(**values: str | Path) -> dict[str, str]:
     environment = {"PATH": os.environ.get("PATH", ""), "NO_COLOR": "1", "TERM": "dumb"}
     environment.update({key: str(value) for key, value in values.items()})
     return environment
+
+
+def _antigravity_environment(
+    binary: Path, home: Path, base_url: str | None = None
+) -> dict[str, str]:
+    """The disposable-home environment for every `agy` invocation.
+
+    The version probe uses it too: `agy --version` starts the updater check
+    like any other run, so it must never see the operator's HOME.
+    """
+
+    values: dict[str, str | Path] = {
+        "PATH": f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}",
+        "HOME": home,
+        "XDG_CONFIG_HOME": home / ".config",
+        "XDG_CACHE_HOME": home / ".cache",
+        "XDG_DATA_HOME": home / ".local" / "share",
+        "AGY_CLI_DISABLE_AUTO_UPDATE": AGY_DISABLE_AUTO_UPDATE,
+        "AGY_CLI_HIDE_ACCOUNT_INFO": "1",
+    }
+    if base_url is not None:
+        values["GEMINI_API_KEY"] = "rosetta-mock-key"
+        values["GOOGLE_GEMINI_BASE_URL"] = base_url
+    return _minimal_env(**values)
+
+
+def _loopback_only_prefix(work: Path) -> tuple[str, ...]:
+    """Wrap agent invocations so only loopback and Unix-socket egress is possible."""
+
+    sandbox = shutil.which("sandbox-exec")
+    if platform.system() != "Darwin" or sandbox is None:
+        raise GroundTruthError(
+            "--loopback-only uses macOS sandbox-exec; on Linux run the farm in a "
+            "container whose network namespace has only loopback"
+        )
+    profile = work / "loopback-only.sb"
+    profile.write_text(LOOPBACK_ONLY_PROFILE)
+    return (sandbox, "-f", str(profile))
+
+
+def _platform_label() -> str:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    arch = {"aarch64": "arm64", "x86_64": "x64", "amd64": "x64"}.get(machine, machine)
+    return f"{system}-{arch}"
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _count_lines(path: Path) -> int:
+    try:
+        return len(path.read_text().splitlines())
+    except (OSError, UnicodeDecodeError):
+        return 0
+
+
+def _write_provenance(
+    destination: Path,
+    *,
+    agent: str,
+    version: str,
+    scenario: str,
+    dialect: str,
+    guard: ExecutableGuard,
+    executable_source: str,
+    loopback_only: bool,
+    mock_requests: int,
+    started_at: str,
+    finished_at: str,
+) -> None:
+    """Record which bytes produced a scenario, under which controls, and when.
+
+    Every value comes from the run itself. The mock API key and base URL are
+    deliberately absent; only non-secret update and account-display switches
+    are recorded.
+    """
+
+    environment = {}
+    if agent == "antigravity":
+        environment = {
+            "AGY_CLI_DISABLE_AUTO_UPDATE": AGY_DISABLE_AUTO_UPDATE,
+            "AGY_CLI_HIDE_ACCOUNT_INFO": "1",
+        }
+    write_json(
+        destination / "provenance.json",
+        {
+            "agent": agent,
+            "agent_version": version,
+            "scenario": scenario,
+            "generator": GENERATOR,
+            "platform": _platform_label(),
+            "executable": {
+                "source": executable_source,
+                "sha256": guard.sha256,
+                "bytes": guard.bytes,
+                "digest_checks": guard.checks,
+                "unchanged": True,
+            },
+            "environment": environment,
+            "home": "disposable",
+            "network": (
+                "loopback-only (macOS sandbox-exec)" if loopback_only else "unrestricted"
+            ),
+            "mock": {"dialect": dialect, "bind": "127.0.0.1", "requests": mock_requests},
+            "started_at": started_at,
+            "finished_at": finished_at,
+        },
+    )
 
 
 def _scenario_invocation(
@@ -1320,17 +1628,7 @@ def _scenario_invocation(
                 *extra_args,
             ]
         )
-        environment = _minimal_env(
-            PATH=f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}",
-            HOME=home,
-            XDG_CONFIG_HOME=home / ".config",
-            XDG_CACHE_HOME=home / ".cache",
-            XDG_DATA_HOME=home / ".local" / "share",
-            GEMINI_API_KEY="rosetta-mock-key",
-            GOOGLE_GEMINI_BASE_URL=base_url,
-            AGY_CLI_DISABLE_AUTO_UPDATE="1",
-            AGY_CLI_HIDE_ACCOUNT_INFO="1",
-        )
+        environment = _antigravity_environment(binary, home, base_url)
         return command, environment, "gemini-generatecontent"
     if agent == "hermes":
         if project is None or scenario_dir is None:
@@ -1469,7 +1767,15 @@ def _generate_fixtures(
     requested: str,
     keep_work: bool,
     scenario_name: str | None = None,
+    *,
+    local_binary: Path | None = None,
+    binary_sha256: str | None = None,
+    loopback_only: bool = False,
 ) -> str:
+    if (local_binary is not None or binary_sha256 is not None) and agent != "antigravity":
+        raise GroundTruthError("--binary and --binary-sha256 are supported for antigravity only")
+    if local_binary is not None and binary_sha256 is None:
+        raise GroundTruthError("--binary needs --binary-sha256 so the executable is pinned")
     watch = _load_watch(agent_dir)
     layout = load_layout(agent_dir)
     work = Path(tempfile.gettempdir()) / f"rosetta-farm-{agent}-{os.getpid()}"
@@ -1477,6 +1783,9 @@ def _generate_fixtures(
         shutil.rmtree(work)
     work.mkdir(parents=True)
     print(f"work dir: {work}")
+    prefix = _loopback_only_prefix(work) if loopback_only else ()
+    guard: ExecutableGuard | None = None
+    executable_source = ""
 
     with _farm_lock():
         install = work / "install"
@@ -1485,8 +1794,25 @@ def _generate_fixtures(
             binary = _install_grok(install, requested)
             actual = _detect_version(binary)
         elif agent == "antigravity":
-            binary = _install_antigravity(install, requested)
-            actual = _detect_version(binary)
+            binary = _install_antigravity(install, requested, local_binary)
+            guard = ExecutableGuard(binary, binary_sha256)
+            executable_source = (
+                "local-binary" if local_binary is not None else f"github-release:{_agy_release_asset()}"
+            )
+            print(f"executable sha256: {guard.sha256}")
+            version_home = work / "version-home"
+            version_home.mkdir(parents=True)
+            actual = _detect_version(
+                binary,
+                env=_antigravity_environment(binary, version_home),
+                cwd=version_home,
+                prefix=prefix,
+            )
+            guard.verify("during the version probe")
+            if actual != requested:
+                raise GroundTruthError(
+                    f"executable reports {actual}, but {requested} was requested"
+                )
         elif agent == "hermes":
             binary = _install_hermes(install, watch, requested)
             actual = _detect_hermes_version(binary)
@@ -1543,6 +1869,8 @@ def _generate_fixtures(
                     )
                 name = scenario["name"]
                 print(f"scenario: {name}")
+                started_at = _utc_now()
+                mock_before = _count_lines(mock_log)
                 scenario_dir = work / "scenarios" / name
                 home = scenario_dir / "home"
                 tree_name = TREE_NAMES[agent]
@@ -1626,6 +1954,8 @@ def _generate_fixtures(
                         project=project,
                         scenario_dir=scenario_dir,
                     )
+                    if guard is not None:
+                        guard.verify(f"before {name} step {step}")
                     _scenario_step(
                         command,
                         scenario_dir,
@@ -1634,7 +1964,10 @@ def _generate_fixtures(
                         environment,
                         project,
                         allow_failure=bool(scenario.get("allow_failure")),
+                        prefix=prefix,
                     )
+                    if guard is not None:
+                        guard.verify(f"during {name} step {step}")
 
                 if scenario.get("expected_record"):
                     stream_id, record_type = scenario["expected_record"]
@@ -1645,9 +1978,25 @@ def _generate_fixtures(
                 destination = fixture_root / name
                 _harvest(agent_home, tree_name, scenario_dir, destination)
                 _strip_harvest(agent, destination / tree_name)
+                if agent == "antigravity":
+                    _withhold_antigravity_implicit(destination, tree_name)
                 if agent == "hermes":
                     _dump_sqlite_jsonl(destination / tree_name / "state.db", destination)
                 _redact(destination, scenario_dir, work, project)
+                if guard is not None:
+                    _write_provenance(
+                        destination,
+                        agent=agent,
+                        version=actual,
+                        scenario=name,
+                        dialect=dialect,
+                        guard=guard,
+                        executable_source=executable_source,
+                        loopback_only=loopback_only,
+                        mock_requests=_count_lines(mock_log) - mock_before,
+                        started_at=started_at,
+                        finished_at=_utc_now(),
+                    )
                 _manifest(destination, agent, actual, name, dialect)
                 print(f"harvested -> {destination}")
         except GroundTruthError:
@@ -1677,6 +2026,9 @@ def _is_sqlite_database(path: Path) -> bool:
 def _redact_sqlite(path: Path, replacements: list[tuple[str, str]]) -> None:
     try:
         connection = sqlite3.connect(path)
+        # Zero the pages and cells that redaction frees, so the replaced bytes
+        # do not survive in free space of the committed file.
+        connection.execute("PRAGMA secure_delete = ON")
         tables = [
             row[0]
             for row in connection.execute(
@@ -1703,8 +2055,28 @@ def _redact_sqlite(path: Path, replacements: list[tuple[str, str]]) -> None:
                 for needle, replacement in replacements:
                     connection.execute(
                         f"UPDATE {quoted_table} SET {quoted} = replace({quoted}, ?, ?) "
-                        f"WHERE {quoted} IS NOT NULL AND instr({quoted}, ?) > 0",
+                        f"WHERE typeof({quoted}) = 'text' AND instr({quoted}, ?) > 0",
                         (needle, replacement, needle),
+                    )
+            # BLOB values (Antigravity keeps every step as protobuf) are
+            # rewritten byte for byte at the same length, whatever the column's
+            # declared type, so their length prefixes stay valid.
+            for _, column, *_ in columns:
+                quoted = _quote_identifier(column)
+                values: set[bytes] = set()
+                for needle, _ in replacements:
+                    values.update(
+                        row[0]
+                        for row in connection.execute(
+                            f"SELECT DISTINCT {quoted} FROM {quoted_table} "
+                            f"WHERE typeof({quoted}) = 'blob' AND instr({quoted}, ?) > 0",
+                            (needle.encode(),),
+                        )
+                    )
+                for value in values:
+                    connection.execute(
+                        f"UPDATE {quoted_table} SET {quoted} = ? WHERE {quoted} = ?",
+                        (_redact_bytes(value, replacements), value),
                     )
         connection.commit()
         # Fold redactions into the main file so the committed DB is complete,
@@ -2071,6 +2443,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="dangerous: install and execute downloaded agent code outside an isolated runner",
     )
+    parser.add_argument(
+        "--binary",
+        type=Path,
+        help="antigravity: farm an already-acquired executable instead of downloading one",
+    )
+    parser.add_argument(
+        "--binary-sha256",
+        help="antigravity: the executable's pinned SHA-256, rechecked around every invocation",
+    )
+    parser.add_argument(
+        "--loopback-only",
+        action="store_true",
+        help="macOS: run the agent under sandbox-exec with only loopback/Unix-socket egress",
+    )
     args = parser.parse_args(argv)
     try:
         if args.schemas_only and args.scenario:
@@ -2092,6 +2478,9 @@ def main(argv: list[str] | None = None) -> int:
                 requested,
                 args.keep_work,
                 args.scenario,
+                local_binary=args.binary,
+                binary_sha256=args.binary_sha256,
+                loopback_only=args.loopback_only,
             )
         )
         emit_groundtruth(agent_dir, version)

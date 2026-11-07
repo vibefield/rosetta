@@ -1,6 +1,8 @@
 //! Conversation-store snapshot records to canonical usage samples.
 //!
-//! Antigravity's JSONL transcripts carry no usage. The request grain lives in
+//! Antigravity's 1.1.20 JSONL transcripts carry no usage; 1.4.12 restates
+//! each request's tokens on its planner step, which stays unprojected so no
+//! request is counted twice. The request grain lives in
 //! `conversations/<id>.db`: every cascade step's `metadata` blob carries the
 //! `ModelUsageStats` of that step's own model request, and each generation's
 //! `gen_metadata` blob names the steps it wrote plus the served model string.
