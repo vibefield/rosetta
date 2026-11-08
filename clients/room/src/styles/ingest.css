@@ -36,6 +36,20 @@
 .ah-ingest-status[data-state="complete"] .ah-ingest-meter i { background: var(--vf-green); }
 .ah-ingest-status[data-state="disconnected"] .ah-ingest-meter i,
 .ah-ingest-status[data-state="search_failed"] .ah-ingest-meter i { background: var(--vf-orange); }
+/* R10 — the card in the host's mark: the mark where IMPORTING HISTORY stood,
+   the step beside it; the step's title, its count under it; a colourless 2px
+   hairline for a fraction the step knows, none for one it does not, and no
+   meter in it sweeps (the mark is the sign of working). The rest is under
+   Agent details. Loading is colourless: no step's colour fills it. */
+.ah-ingest-status[data-marked] .ah-ingest-status__eyebrow { font-size: 10px; font-weight: 500; letter-spacing: 0; color: var(--vf-text-tertiary); }
+.ah-ingest-status__mark { display: flex; align-items: center; min-height: 18px; }
+.ah-ingest-status[data-marked] h3 { margin: 10px 0 0; font-size: 13px; font-weight: 500; line-height: 1.35; letter-spacing: -.01em; }
+.ah-ingest-status__sub { margin: 3px 0 0; color: var(--vf-text-secondary); font-size: 11px; line-height: 1.45; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ah-ingest-status[data-marked] .ah-ingest-meter { height: 2px; margin-top: 11px; background: var(--vf-hairline-strong); }
+.ah-ingest-status[data-marked][data-state] .ah-ingest-meter i { background: var(--vf-text-secondary); }
+.ah-ingest-status[data-marked] .ah-ingest-meter[data-indeterminate] { display: none; }
+.ah-ingest-status[data-marked] .ah-ingest-status__agents { margin-top: 10px; }
+.ah-ingest-status[data-marked] .ah-ingest-status__agents > .ah-ingest-status__detail { margin: 6px 0 8px; }
 .ah-cold-start { flex: 1; }
 .ah-cold-start > .ah-ingest-status { width: min(100%, 340px); box-sizing: border-box; margin: 22px auto 0; padding: 18px 20px 10px; }
 .ah-cold-start .ah-ingest-status h3 { font-size: 15px; }
