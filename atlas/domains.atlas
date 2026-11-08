@@ -104,9 +104,11 @@ domain auth "Access control" {
 domain api "Daemon API (REST + WS + SDK)" {
   intent "The wire surface every consumer dials; the job domains claim their own routes and frames."
   contains pkg:@vibefield/rosetta-protocol
+  contains path:clients/swift/, file:Package.swift
   touches path:docs/site/
   see "docs/ARCHITECTURE.md#5-layer-3--service-provider"
   see "clients/ts/README.md#package-shape"
+  see "clients/swift/README.md#package-shape"
 }
 
 domain host "Room hosting & daemon supervision" {

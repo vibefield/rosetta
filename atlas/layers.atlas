@@ -9,6 +9,7 @@ layers stack "Data flows up; dependencies point down" exhaustive {
     layer host-app "Desktop host" { contains pkg:@vibefield/rosetta-agent-history }
     layer room-lib "History room package" { contains pkg:@vibefield/rosetta-room }
     layer client-sdk "TS client SDK" { contains pkg:@vibefield/rosetta-protocol }
+    layer client-swift "Swift client SDK" { contains path:clients/swift/, file:Package.swift }
   }
   layer services "Services" code L3 {
     layer edge "Runtime edge (axum REST + WS)"
