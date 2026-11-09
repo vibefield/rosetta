@@ -1,11 +1,12 @@
 //! Raw types for the `transcript` stream
 //! (`brain/<id>/.system_generated/logs/transcript.jsonl` and the full/chunk siblings).
 //!
-//! Evidence: THE CANONICAL `groundtruth.json` — fixtures/1.1.20 merged with the
-//! structure census of the organic CLI tree. Fixture types: USER_INPUT,
-//! PLANNER_RESPONSE, RUN_COMMAND, CHECKPOINT, SYSTEM_MESSAGE. Census-only
-//! types also typed below: CONVERSATION_HISTORY, LIST_DIRECTORY, VIEW_FILE,
-//! ERROR_MESSAGE. Field optionality mirrors the canonical file.
+//! Evidence: THE CANONICAL `groundtruth.json` — fixtures/1.1.20 and
+//! fixtures/1.4.12 merged with the structure census of the organic CLI tree.
+//! Fixture types: USER_INPUT, PLANNER_RESPONSE, RUN_COMMAND (1.1.20),
+//! CHECKPOINT (1.1.20), SYSTEM_MESSAGE, GENERIC (1.4.12 command results).
+//! Census-only types also typed below: CONVERSATION_HISTORY, LIST_DIRECTORY,
+//! VIEW_FILE, ERROR_MESSAGE. Field optionality mirrors the canonical file.
 //!
 //! Parsing policy (CLAUDE.md): permissive on fields — flatten-unknown maps
 //! everywhere, non-empty = drift. `tool_calls[].args` stays `Value` (do not
@@ -108,12 +109,24 @@ pub struct UserInputLine {
 }
 
 /// Model planner/assistant turn. `content` is absent when the turn is a tool call.
+///
+/// 1.4.12 writes the request's token counts on the planner step itself
+/// (`input_tokens`, `cache_read_tokens`, `output_tokens`; absent in 1.1.20).
+/// They are typed so they are not drift, but the conversation store remains
+/// the sole usage source (see [`crate::usage`]): projecting them too would
+/// count every request twice.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PlannerResponseLine {
     pub step_index: u64,
     pub source: String,
     pub status: String,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -133,7 +146,10 @@ impl Drift for PlannerResponseLine {
     }
 }
 
-/// One planner-requested tool. `args` is deliberately untyped.
+/// One planner-requested tool. `args` is deliberately untyped: the primary
+/// 1.4.12 transcript stores every argument value as a JSON-encoded string
+/// (`"CommandLine":"\"echo x\""`, `"WaitMsBeforeAsync":"5000"`) while
+/// `transcript_full.jsonl` stores the same values typed.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ToolCall {
     pub name: String,
@@ -289,9 +305,12 @@ pub struct ErrorMessageLine {
     pub unknown: Unknown,
 }
 
-/// Generic model prose emitted by newer organic Antigravity writers. The
-/// structure-only census observes `source=MODEL`; keep the envelope open so a
-/// future source/status addition is drift rather than a parse outage.
+/// Untyped step emitted by newer Antigravity writers. The structure-only
+/// census observes `source=MODEL`; the 1.4.12 farm proves it is also the
+/// result record of `run_command` (no `exit_code`: the outcome is the
+/// writer's `Command exited with code N.` line). Correlation lives in the
+/// normalizer. Keep the envelope open so a future source/status addition is
+/// drift rather than a parse outage.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GenericLine {
     pub step_index: u64,

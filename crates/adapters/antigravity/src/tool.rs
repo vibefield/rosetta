@@ -12,11 +12,18 @@ use serde_json::Value;
 
 pub const AGENT: &str = "antigravity";
 pub const PINNED_WRITER_VERSION: &str = "1.1.20";
+/// Newest writer whose fixtures replay through these projectors
+/// (fixtures/1.4.12). The canonical ground truth stays pinned at
+/// [`PINNED_WRITER_VERSION`]; this bound only widens what the registry accepts.
+pub const LATEST_FIXTURE_WRITER_VERSION: &str = "1.4.12";
 
 const fn registration(name: &'static str, action_kind: ToolActionKind) -> ProjectorRegistration {
     ProjectorRegistration {
         agent: AGENT,
-        writer_versions: VersionRange::exact(PINNED_WRITER_VERSION),
+        writer_versions: VersionRange {
+            min_inclusive: PINNED_WRITER_VERSION,
+            max_inclusive: LATEST_FIXTURE_WRITER_VERSION,
+        },
         accepts_unversioned: true,
         native: NativeToolSelector {
             namespace: None,
@@ -85,10 +92,9 @@ pub fn project_request(
             }
         }
         ToolActionKind::Shell => {
-            let command = first_string(input, &["commandLine", "command"])
-                .ok_or(ProjectionError::MissingField("command"))?;
+            let command = shell_command(input).ok_or(ProjectionError::MissingField("command"))?;
             ToolAction::Shell {
-                command: canonical_text(command)?,
+                command: canonical_text(&command)?,
                 source_truncated: false,
                 cwd: cwd
                     .map(|path| lexical_resource(path, None, true))
@@ -109,6 +115,17 @@ pub fn project_request(
         None,
         action,
     )
+}
+
+/// 1.1.20 writes `commandLine` as the plain command. 1.4.12 writes
+/// `CommandLine`, and its primary transcript JSON-encodes every argument value
+/// (`"\"echo x\""`), while `transcript_full.jsonl` keeps it plain. Decode the
+/// encoded form; a value that is not a JSON string literal is already plain.
+fn shell_command(input: &Value) -> Option<String> {
+    if let Some(value) = input.get("CommandLine").and_then(Value::as_str) {
+        return Some(serde_json::from_str::<String>(value).unwrap_or_else(|_| value.to_owned()));
+    }
+    first_string(input, &["commandLine", "command"]).map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -138,6 +155,31 @@ mod tests {
                 assert_eq!(cwd.unwrap().display_value(), "/project");
             }
             other => panic!("expected shell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn writer_1_4_12_command_line_decodes_from_both_transcript_forms() {
+        // transcript.jsonl (JSON-encoded values) and transcript_full.jsonl
+        // (typed values) of fixtures/1.4.12/tool-use.
+        for args in [
+            json!({"CommandLine": "\"echo rosetta-mock\"", "WaitMsBeforeAsync": "5000", "toolSummary": "\"Echo command check\""}),
+            json!({"CommandLine": "echo rosetta-mock", "WaitMsBeforeAsync": 5000, "toolSummary": "Echo command check"}),
+        ] {
+            let tool = project_request(
+                Some(LATEST_FIXTURE_WRITER_VERSION),
+                "run_command",
+                &args,
+                None,
+                "step#1:tool#0",
+            )
+            .unwrap();
+            match tool.action {
+                ToolAction::Shell { command, .. } => {
+                    assert_eq!(command.as_preview(), "echo rosetta-mock")
+                }
+                other => panic!("expected shell, got {other:?}"),
+            }
         }
     }
 }

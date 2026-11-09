@@ -39,6 +39,24 @@ image referenced by immutable `@sha256:` digest. Containers with `/.dockerenv` o
 only for disposable research machines. Relocating an agent's `$HOME` protects fixture
 purity but is not a security boundary.
 
+Antigravity can farm an already-acquired official executable instead of downloading
+one: `--binary <path> --binary-sha256 <hex>` pins it, and the farm rechecks the digest
+before and after the version probe and every scenario step, failing if the bytes
+change (the updater can replace its own executable). Every `agy` invocation, the
+version probe included, runs in a disposable HOME with
+`AGY_CLI_DISABLE_AUTO_UPDATE=true`; `1` does not disable the updater. On macOS,
+`--loopback-only` runs the agent under `sandbox-exec` so only loopback and Unix-socket
+egress is possible. Each Antigravity scenario records a `provenance.json` with the
+executable digest, the switches, the network policy and the run's own timestamps.
+Its `implicit/*.pb` blobs read as encrypted, so redaction cannot check them for
+operator paths: the farm withholds them and records only each name and size in the
+scenario's `withheld.json`.
+
+```sh
+python3 -m tools.groundtruth farm antigravity --version 1.4.12 \
+  --binary <scratch>/agy --binary-sha256 <sha256> --loopback-only --allow-host-execution
+```
+
 Every successful schema rebuild writes both `groundtruth.json` and its sibling
 `groundtruth.html`. Schema-only rebuilds neither install nor execute an agent and do
 not require runner isolation.

@@ -54,12 +54,13 @@ fn corpus(root: &Path, agent: Agent, sessions: u64) {
 fn antigravity_fixture(root: &Path) {
     let fixtures =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../groundtruth/antigravity/fixtures");
+    // Several writer versions are committed; read_dir order is unspecified,
+    // so take the oldest by name to keep the fixture deterministic.
     let version = std::fs::read_dir(fixtures)
         .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
+        .map(|entry| entry.unwrap().path())
+        .min()
+        .unwrap();
     let scenario = version.join("basic-chat");
     let data = std::fs::read_dir(&scenario)
         .unwrap()
