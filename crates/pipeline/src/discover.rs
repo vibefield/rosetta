@@ -155,16 +155,24 @@ pub fn discover_root(
     let mut newest_modified_ms = 0;
     let session_streams = adapter.census_session_streams();
     let mut session_count = session_streams.map(|_| 0);
+    let mut logical_streams = std::collections::BTreeSet::new();
+    let mut logical_sessions = std::collections::BTreeSet::new();
     for file in &report.files {
         file_count += 1;
         total_bytes += file.size;
         newest_modified_ms = newest_modified_ms.max(file.modified_ms);
         if let Some(stream) = inventory_stream(layout, file) {
-            if adapter.stream_driver(&stream.id).is_some() {
+            let logical = adapter
+                .transcript_location(&file.relative_path)
+                .map_or_else(|| file.relative_path.clone(), |l| l.logical_path);
+            if adapter.stream_driver(&stream.id).is_some()
+                && logical_streams.insert(logical.clone())
+            {
                 streamable_count += 1;
                 streamable_bytes += file.size;
             }
             if session_streams.is_some_and(|streams| streams.contains(&stream.id.as_str()))
+                && logical_sessions.insert(logical)
                 && let Some(count) = &mut session_count
             {
                 *count += 1;

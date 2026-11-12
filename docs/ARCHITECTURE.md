@@ -168,7 +168,7 @@ timing.
 > census size). Each lane holds whole trees by recency key `k` (the newest skim mtime over the
 > tree's own sources) descending, then tree id, each tree's sources in path order; the serial
 > driver walks `P`, then every lane's trees merged by the same key. A plan that cannot hoist a
-> shared member (one with per-session record queries) or cannot place a source in a tree walks
+> shared member (one whose records can emit canonical operations) or cannot place a source in a tree walks
 > paths instead, and a truncated discovery or metadata walk falls back to runtime admission
 > before the producer starts. Only a transcript whose session still has an
 > uncaptured transcript, or a pending sibling heal after a restart, is held; the heal runs as soon
@@ -3895,3 +3895,49 @@ start until the rebuild is run by hand. The release notes must say so.
   record ruled that confinement is the serving host's policy and a stored page is
   never rewritten (its DR-D1 (b) and DR-D11 (a)), so the door places the page by
   digest and the shell became the option above. The draft never shipped.
+
+
+### Decoded transcript inputs and fixed history ranges (2026-11-12)
+
+Adapters can declare a stable logical transcript path and an ordered set of
+physical representations through `transcript_location`. Capture owns plain/zstd
+IO, root-relative path validation, bounded headers, pinned file handles, anonymous
+seekable spools, cancellation and decoded-size limits. The adapter owns native
+filename rules, current-source selection and immutable history references. Metadata
+resolves those references into transient ordered byte ranges; the canonical SQLite
+schema contains neither the graph nor native selection rows.
+
+All cursor offsets and prefix checks apply to decoded bytes. A changed physical
+identity can continue only after verifying the complete committed prefix; legacy
+checkpoints without a content chain replay safely. Ordinary quiet polls compare
+physical stamps without decoding. A compressed source is decoded and checked to
+EOF once per pass, not once per batch. A changed header forces metadata admission;
+a changed body stages a replacement while the previous valid projection remains
+readable. Native files are read without restoration or writer locks. Limits are
+32 MiB for bounded headers and reference-boundary records, 64 GiB per decoded
+source, and 128 lineage segments. Invalid, missing or truncated inputs are not EOF.
+
+The selected header precedes the ancestral ranges and each range retains its
+native header. The raw ledger therefore contains a closed, deterministic selected
+view, even if native files disappear before rebuilding. Original record ownership
+prevents duplicated inherited usage and artifact publications. Codex's SQLite
+selector rows are also captured as raw records and emit no canonical operations.
+This preserves its root-tree closure contract. Existing ordinary rollout cursor
+paths remain stable across compression, archive moves and later reverts.
+
+Metadata journal schema 3 adds bounded required-source identifiers and availability
+beside the ordinary metadata operations. Rebuild uses these obligations to avoid
+marking a metadata-only session Indexed when its selected transcript was never
+captured. Legacy metadata arrays (schemas 0 and 2) remain readable; the disposable
+election cache advances to schema 4. This is an additive ledger change, not a
+canonical database migration.
+
+
+A release-mode frozen comparison on 2026-11-12 used 16 synthetic sessions,
+4,136,966 decoded bytes and 8,000 canonical messages in both representations.
+One paired run took 485.63 ms (plain) and 493.43 ms (zstd), with identical
+projection-content digest `6dd1498dc98c2d5216ddca147574c7d2eb9d95ae7d0d59ef6539ce62b5f34d47`.
+Twenty quiet polls took 9.86/10.32 ms and started zero capture passes. Corpus
+creation/compression was excluded. This small warm-filesystem measurement is
+not an estimate for a full user archive or long shared prefixes. Reproduce with
+`cargo test --release -p rosetta-pipeline --test codex_storage frozen_representation_benchmark -- --ignored --nocapture`.

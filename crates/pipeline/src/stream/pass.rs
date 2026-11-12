@@ -103,6 +103,8 @@ struct Staged {
 
 pub(crate) struct IngestPass {
     path: PathBuf,
+    input_root: PathBuf,
+    input: Option<rosetta_capture::input::OpenedInput>,
     cursor_id: i64,
     /// The planner's exact stored checkpoint: the next batch's CAS expectation.
     prev_blob: String,
@@ -259,6 +261,8 @@ impl IngestPass {
             && source_generation == active_generation;
         Ok(Self {
             path: root.join(&file.relative_path),
+            input_root: root.to_path_buf(),
+            input: None,
             cursor_id,
             prev_blob,
             active_generation,
@@ -289,11 +293,13 @@ impl IngestPass {
     /// a mismatch is real content change hiding under a quiet stat, and THAT
     /// escalates to the full replacement replay. A pre-chain checkpoint has
     /// its chain computed once and persisted, so the next audit verifies.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn audit(
         &mut self,
         runtime: &RuntimeRow,
         file: &SessionFile,
         tailer: &Tailer,
+        opts: &IngestOptions,
         store: &mut Store,
         instrument: &Instrument,
         report: &mut StreamReport,
@@ -304,7 +310,29 @@ impl IngestPass {
         let Some(tail_checkpoint) = self.tail.as_mut() else {
             return Ok(());
         };
-        match tailer.verify_committed(&self.path, tail_checkpoint)? {
+        let verification = if let Some(source) = &file.input {
+            if self.input.is_none() {
+                self.input = match source.open(&self.input_root, || opts.check_cancelled().is_err())
+                {
+                    Ok(input) => input,
+                    Err(error) if error.incomplete_input() => return Ok(()),
+                    Err(_) if opts.check_cancelled().is_err() => {
+                        return Err(PipelineError::Cancelled);
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+            }
+            if let Some(input) = &mut self.input {
+                input.cancel = opts.cancel.clone();
+            }
+            match &mut self.input {
+                Some(input) => tailer.verify_input(input, tail_checkpoint)?,
+                None => CommittedVerification::Missing,
+            }
+        } else {
+            tailer.verify_committed(&self.path, tail_checkpoint)?
+        };
+        match verification {
             CommittedVerification::Verified => {
                 instrument.add(Metric::BytesRead, tail_checkpoint.committed_offset);
             }
@@ -378,13 +406,81 @@ impl IngestPass {
                 _ => tailer,
             };
             let read = instrument.time(Metric::ReadNanos, || {
-                read_tailer.read_cut(
-                    &self.path,
-                    self.tail.as_ref(),
-                    self.force_replay,
-                    self.ceiling,
-                )
-            })?;
+                if let Some(source) = &file.input {
+                    if self.input.is_none() {
+                        self.input =
+                            source.open(&self.input_root, || opts.check_cancelled().is_err())?;
+                        if let Some(input) = &mut self.input {
+                            input.cancel = opts.cancel.clone();
+                        }
+                        if let (Some(input), Some(previous)) = (&mut self.input, &self.tail)
+                            && PipeCheckpoint::decode(&self.prev_blob)
+                                .and_then(|c| c.snapshot_stamp)
+                                .as_deref()
+                                != Some(input.stamp.as_str())
+                            && input
+                                .file
+                                .metadata()
+                                .is_ok_and(|m| m.len() <= previous.observed_len)
+                            && matches!(
+                                read_tailer.verify_input(input, previous)?,
+                                CommittedVerification::Mismatch
+                            )
+                        {
+                            self.force_replay = true;
+                        }
+                    }
+                    if self.input.as_ref().is_some_and(|input| {
+                        input.boundaries.iter().any(|(expected, record)| {
+                            adapter
+                                .transcript_record_index(record)
+                                .and_then(|i| i.checked_add(1))
+                                != Some(*expected)
+                        })
+                    }) {
+                        return Err(rosetta_capture::CaptureError::Io {
+                            operation: "validating transcript range",
+                            path: file.relative_path.clone(),
+                            source: std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "native ordinal and decoded byte boundary disagree",
+                            ),
+                        });
+                    }
+                    match &mut self.input {
+                        Some(input) => read_tailer.read_input(
+                            input,
+                            self.tail.as_ref(),
+                            self.force_replay,
+                            self.ceiling,
+                        ),
+                        None => Ok(TailRead::Missing),
+                    }
+                } else {
+                    read_tailer.read_cut(
+                        &self.path,
+                        self.tail.as_ref(),
+                        self.force_replay,
+                        self.ceiling,
+                    )
+                }
+            });
+            let read = match read {
+                Ok(read) => read,
+                Err(_) if opts.check_cancelled().is_err() => return Err(PipelineError::Cancelled),
+                Err(rosetta_capture::CaptureError::Io { source, .. })
+                    if file.input.is_some()
+                        && matches!(
+                            source.kind(),
+                            std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof
+                        ) =>
+                {
+                    deltas.retries_exhausted += 1;
+                    instrument.add(Metric::RetriesExhausted, 1);
+                    return Ok(self.stop_short(runtime, file, deltas));
+                }
+                Err(error) => return Err(error.into()),
+            };
             match read {
                 TailRead::Missing => {
                     deltas.files_missing += 1;
@@ -598,7 +694,7 @@ impl IngestPass {
             tail: Some(batch.checkpoint.encode_hex()),
             cumulative: (!last_reading.is_empty()).then_some(last_reading),
             adapter_state,
-            snapshot_stamp: None,
+            snapshot_stamp: self.input.as_ref().map(|input| input.stamp.clone()),
             snapshot_revision: None,
         }
         .encode();

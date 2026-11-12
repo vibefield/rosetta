@@ -8,6 +8,7 @@ use super::*;
 /// A transcript of `session` with census size and time, and no cut.
 fn transcript(path: &str, session: &str, size: u64, modified_ms: i64) -> SessionFile {
     SessionFile {
+        input: None,
         ledger_only: false,
         relative_path: path.to_owned(),
         stream_id: "transcript".to_owned(),
@@ -29,6 +30,7 @@ fn transcript(path: &str, session: &str, size: u64, modified_ms: i64) -> Session
 /// A transcript as the skim leaves it: census facts plus the skim's cut.
 fn skimmed(path: &str, session: &str, census: (u64, i64), cut: (u64, i64)) -> SessionFile {
     SessionFile {
+        input: None,
         cut_len: Some(cut.0),
         cut_modified_ms: Some(cut.1),
         ..transcript(path, session, census.0, census.1)
@@ -38,6 +40,7 @@ fn skimmed(path: &str, session: &str, census: (u64, i64), cut: (u64, i64)) -> Se
 /// A ledger-only internal source whose metadata names `parent`.
 fn guardian(path: &str, session: &str, parent: &str) -> SessionFile {
     SessionFile {
+        input: None,
         ledger_only: true,
         tree_parent: Some(parent.to_owned()),
         ..transcript(path, session, 1, 1)
@@ -47,6 +50,7 @@ fn guardian(path: &str, session: &str, parent: &str) -> SessionFile {
 /// A virtual member `<physical>#<session>` of a snapshot database.
 fn member(physical: &str, session: &str, size: u64, modified_ms: i64) -> SessionFile {
     SessionFile {
+        input: None,
         stream_id: "state-db".to_owned(),
         file_format: FileFormat::Sqlite,
         discipline: FileDiscipline::Database,
@@ -58,6 +62,7 @@ fn member(physical: &str, session: &str, size: u64, modified_ms: i64) -> Session
 /// A virtual member `<physical>#<session>` of a sidecar document.
 fn document(physical: &str, session: &str, size: u64, modified_ms: i64) -> SessionFile {
     SessionFile {
+        input: None,
         stream_id: "subagent-metadata".to_owned(),
         file_format: FileFormat::Json,
         discipline: FileDiscipline::RewriteInPlace,

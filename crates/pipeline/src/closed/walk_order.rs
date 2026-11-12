@@ -221,7 +221,7 @@ impl WalkPlan<'_> {
 }
 
 /// [`walk_plan`] for `adapter`'s roster: a snapshot member is hoistable only
-/// when its stream reads no per-session record queries.
+/// when the adapter promises its records emit no canonical operations.
 pub(crate) fn walk_plan_for<'a>(
     adapter: &dyn AgentAdapter,
     files: &'a [SessionFile],
@@ -230,9 +230,7 @@ pub(crate) fn walk_plan_for<'a>(
 ) -> WalkPlan<'a> {
     plan(files, trees, opts, &|file: &SessionFile| {
         file.driver == StreamDriver::SqliteSnapshot
-            && adapter
-                .snapshot_plan(&file.stream_id)
-                .is_some_and(|plan| plan.record_queries.is_empty())
+            && adapter.snapshot_is_metadata_only(&file.stream_id)
     })
 }
 

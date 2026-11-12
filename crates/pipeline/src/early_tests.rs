@@ -11,6 +11,7 @@ use crate::live::PollEvidence;
 
 fn file(path: &str, session_id: &str) -> SessionFile {
     SessionFile {
+        input: None,
         ledger_only: false,
         relative_path: path.into(),
         stream_id: "transcript".into(),
@@ -258,6 +259,7 @@ fn without_early_tools_every_fact_stays_in_its_batch() {
 /// thread never becomes a canonical session.
 fn ledger_only_file(path: &str, session_id: &str) -> SessionFile {
     SessionFile {
+        input: None,
         ledger_only: true,
         ..file(path, session_id)
     }
