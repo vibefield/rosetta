@@ -130,6 +130,8 @@ final class StubHTTP: URLProtocol, @unchecked Sendable {
     var status: Int
     var headers: [String: String]
     var body: Data
+    /// An answer that never comes: the request is recorded and nothing is delivered.
+    var stalls = false
   }
   nonisolated(unsafe) static var answer: @Sendable (URLRequest) -> Answer = { _ in Answer(status: 500, headers: [:], body: Data()) }
   static let requests = Mutex<[URLRequest]>([])
@@ -148,12 +150,20 @@ final class StubHTTP: URLProtocol, @unchecked Sendable {
     return Answer(status: status, headers: all, body: try! JSONEncoder().encode(body))
   }
 
+  /// An answer of bytes with this protocol's version header.
+  static func bytes(_ body: Data, contentType: String, headers: [String: String] = [:]) -> Answer {
+    var all = ["content-type": contentType, Rosetta.protocolVersionHeader: String(Rosetta.protocolVersion)]
+    all.merge(headers) { _, given in given }
+    return Answer(status: 200, headers: all, body: body)
+  }
+
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
   override func startLoading() {
     Self.requests.withLock { $0.append(request) }
     let answer = Self.answer(request)
+    if answer.stalls { return }
     let response = HTTPURLResponse(
       url: request.url!, statusCode: answer.status, httpVersion: "HTTP/1.1", headerFields: answer.headers)!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

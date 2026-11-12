@@ -63,12 +63,15 @@ public enum RosettaError: Error, Sendable, Hashable {
   case unauthorized(reason: AuthRefusal?, message: String)
   /// A read a subscription refused because its session is synchronizing, or changed under the read.
   case synchronizing(message: String)
+  /// A bounded read met more than its bound and held none of it. `byteLen` is the size the member or the answer
+  /// stated, and nil when the answer stated none; `limit` is the bound.
+  case tooLarge(byteLen: Int64?, limit: Int, message: String)
 
   public var code: ErrorCode? {
     switch self {
     case .request(_, let code, _): return code
     case .cursorExpired: return ErrorCode.cursorExpired
-    case .unauthorized, .synchronizing: return nil
+    case .unauthorized, .synchronizing, .tooLarge: return nil
     }
   }
 
@@ -78,6 +81,7 @@ public enum RosettaError: Error, Sendable, Hashable {
     case .cursorExpired(message: let message): return message
     case .unauthorized(reason: _, message: let message): return message
     case .synchronizing(message: let message): return message
+    case .tooLarge(byteLen: _, limit: _, message: let message): return message
     }
   }
 }

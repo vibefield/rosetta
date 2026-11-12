@@ -24,16 +24,20 @@ for (const manifest of manifests) {
 }
 execFileSync("npm", ["run", "build:packages"], { cwd: root, stdio: "inherit" });
 mkdirSync(output, { recursive: true });
+// npm ships a LICENSE only from the package's own folder, so each package keeps a copy of the root's.
+const license = readFileSync(path.join(root, "LICENSE"), "utf8");
 const packed = packages.map((dir) => {
+  assert.equal(readFileSync(path.join(root, dir, "LICENSE"), "utf8"), license, `${dir}/LICENSE must equal the root's`);
   const result = JSON.parse(execFileSync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", output], {
     cwd: path.join(root, dir), encoding: "utf8",
   }));
   // npm 12 keys workspace results by package name; npm 11 returned an array.
   const [pack] = Array.isArray(result) ? result : Object.values(result);
   for (const file of pack.files) {
-    assert.match(file.path, /^(dist\/|package\.json$|README\.md$)/, `Unexpected tarball file: ${file.path}`);
+    assert.match(file.path, /^(dist\/|package\.json$|README\.md$|LICENSE$)/, `Unexpected tarball file: ${file.path}`);
     assert.doesNotMatch(file.path, /(?:^|\/)(?:node_modules|test|\.env)(?:\/|$)/);
   }
+  assert.ok(pack.files.some((file) => file.path === "LICENSE"), `${pack.name} must ship its LICENSE`);
   console.log(`${pack.name}@${pack.version}: ${pack.files.length} files, ${pack.size} bytes`);
   return { name: pack.name, version: pack.version, filename: pack.filename, integrity: pack.integrity };
 });

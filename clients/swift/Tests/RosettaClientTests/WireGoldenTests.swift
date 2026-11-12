@@ -98,6 +98,46 @@ struct WireGoldenTests {
     #expect(reencoded == golden("timeline_entry")["entry"])
   }
 
+  @Test("every stored member the golden pins reads as an AssetRef, a WebP bundle with its sized members")
+  func storedMembers() throws {
+    /// Every `{"type": "asset", "asset": …}` source anywhere in the golden.
+    func members(_ value: JSONValue) -> [JSONValue] {
+      switch value {
+      case .object(let fields):
+        let own = fields["type"] == .string("asset") ? [fields["asset"]].compactMap { $0 } : []
+        return own + fields.values.flatMap(members)
+      case .array(let items): return items.flatMap(members)
+      default: return []
+      }
+    }
+    let pinned = members(wireGolden)
+    let bundles = try pinned.map { json in
+      let asset = try #require(AssetRef(json), "\(text(json))")
+      #expect(try decode(AssetRef.self, json) == asset)
+      #expect(asset.url == json["url"]?.stringValue)
+      return asset
+    }.filter { $0.imageVariants != nil }
+    #expect(!bundles.isEmpty, "the golden pins an image with its renditions")
+    let names = Set(ImageVariant.allCases.map(\.rawValue))
+    #expect(names == ["full", "rail", "tile", "tile2x", "preview"])
+    for bundle in bundles {
+      #expect(bundle.mediaType == "image/webp")
+      for (variant, member) in bundle.imageVariants ?? [:] {
+        #expect(names.contains(variant), "\(variant)")
+        #expect(member.mediaType == "image/webp")
+        #expect(member.url == "/api/assets/\(member.digest).webp")
+        #expect(member.imageVariants == nil, "a sized member holds no renditions of its own")
+      }
+    }
+  }
+
+  @Test("the recovered command decodes")
+  func recoveredCommand() throws {
+    let recovered = try decode(CommandResponse.self, golden("command"))
+    #expect(recovered.command == golden("command")["command"]?.stringValue)
+    #expect(!recovered.command.isEmpty)
+  }
+
   @Test("every error code the golden names is one this client names")
   func errorCodes() throws {
     for value in golden("error_codes").arrayValue! {
