@@ -24,6 +24,7 @@ mkdir -p "$staging/empty-home" "$staging/$bundle" dist
 "$binary" discover --home "$staging/empty-home"
 cp "$binary" "$staging/$bundle/rosettad"
 cp README.md "$staging/$bundle/README.md"
+cp LICENSE "$staging/$bundle/LICENSE"
 python3 - "$version" "$target" "$staging/$bundle/BUILD.json" <<'PY'
 import gzip, json, pathlib, subprocess, sys, tarfile
 version, target, path = sys.argv[1:]
