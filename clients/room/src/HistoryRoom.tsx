@@ -27,7 +27,7 @@ import { MenuLayerProvider } from "./components/HostMenu";
 import type { KeyValueStore } from "./lib/room-storage";
 import { RoomProvider, useRoom, useRoomOverlayOpen } from "./room-context";
 import type { SummaryTab } from "./room-context";
-import { ColdStartPanel } from "./components/ColdStart";
+import { ColdStartPanel, coldStartHold } from "./components/ColdStart";
 import { ProjectsColumn } from "./components/projects";
 import type { ProjectSort } from "./components/projects";
 import { SearchLauncher, SearchSheet, emptyTranscriptPrompt, searchKeyLegend } from "./components/search";
@@ -37,7 +37,8 @@ import { SessionsColumn } from "./components/sessions";
 import type { SessionFacts } from "./components/sessions";
 import { TranscriptColumn } from "./components/Transcript";
 import type { MatchStepperState, ThreadFocus } from "./components/Transcript";
-import { EmptyState, Meter } from "./components/ui";
+import { EmptyState, Hold, Meter } from "./components/ui";
+import type { HoldWords } from "./components/ui";
 import { sessionFilePaths } from "./components/git";
 import { useWorktreeGuest, WorktreeColumn } from "./components/worktree";
 import {
@@ -49,6 +50,7 @@ import {
   useTimeline,
 } from "./lib/hooks";
 import { useIngestActivity } from "./lib/use-ingest-activity";
+import { useStandingHold } from "./lib/use-standing-hold";
 import { ConversationFold } from "./lib/conversation-readiness";
 import { isAwaitingConsent, isIngestActive } from "./lib/ingest";
 import {
@@ -290,6 +292,14 @@ export const HistoryRoom = forwardRef<HistoryRoomHandle, HistoryRoomProps>(funct
   );
 });
 
+/** The view's hold (R10): which face it stands for, its words, and whether its
+ * work is paused. */
+interface ViewHold {
+  readonly face: string;
+  readonly words: HoldWords;
+  readonly resting: boolean;
+}
+
 function RoomBody({
   handle,
   surface,
@@ -322,6 +332,7 @@ function RoomBody({
     projectCard: hostProjectCard,
     sessionActs: hostSessionActs,
     folders: hostFoldersOf,
+    waitMark,
   } = useHostInputs();
   const overlayOpen = useRoomOverlayOpen();
   // The room's root, where a host's menus are drawn over every column.
@@ -783,6 +794,21 @@ function RoomBody({
   // RAM metadata arrives the ordinary room takes over progressively.
   const coldStarting =
     projectRows.length === 0 && ingestActive && ingest !== null && !awaitingConsent;
+  // R10 — with the host's mark, the view's waits are ONE hold: reaching the
+  // index, then the cold start before its first project, in the room's own
+  // words. A failure is no wait (a closed feed works on nothing), so it keeps
+  // the room's face. The hold keeps its floor and its leave, and what comes
+  // next waits for it (`useStandingHold`).
+  const viewHold: ViewHold | null = waitMark === undefined ? null
+    : disconnected && !coldStarting
+      ? metaStatus === "closed" ? null : {
+        face: "connecting",
+        words: { key: "connecting", line: connectingTitle, sub: connectionError ?? unavailable },
+        resting: false,
+      }
+      : coldStarting ? { face: "cold-start", ...coldStartHold(activity) }
+        : null;
+  const standingHold = useStandingHold(viewHold, waitMark?.carried === true);
 
   return (
     <div
@@ -807,7 +833,7 @@ function RoomBody({
             {searchOption.accessory}
           </div>
         )}
-        {disconnected && !coldStarting ? (
+        {standingHold !== null ? null : disconnected && !coldStarting ? (
           <EmptyState
             style={{ flex: 1 }}
             title={metaStatus === "closed" ? unavailableTitle : connectingTitle}
@@ -902,6 +928,11 @@ function RoomBody({
               headActs={session === null ? null : (hostSessionActs?.(session) ?? null)}
             />
           </div>
+        )}
+        {standingHold !== null && (
+          <Hold place="view" face={standingHold.hold.face} words={standingHold.hold.words}
+            resting={standingHold.hold.resting} carried={standingHold.carried}
+            leaving={standingHold.leaving} />
         )}
       </div>
       {searchOption !== null && <SearchSheet

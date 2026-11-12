@@ -127,6 +127,13 @@ export function resumedRun(previous: string | null, feed: ActivityFeed): string 
 const BORN_DURING_IMPORT = "Conversations you start now appear when the import finishes.";
 const ARCHIVE_PAUSE = "Conversations may pause for a few seconds while the archive is saved.";
 
+/** What the card says while the service does not answer: its title, and the
+ * line under it (the hold says the same under a host's mark, R10). */
+export const PAUSED_UPDATES = {
+  title: "Progress updates paused",
+  detail: "Waiting for the background service. Reconnecting automatically…",
+} as const;
+
 /** Percentages describe the named step, never an invented overall ETA. */
 export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
   const ingest = feed.ingest;

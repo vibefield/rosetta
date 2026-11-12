@@ -34,6 +34,8 @@ export type {
   RoomRename,
   RoomSection,
   RoomSessionRow,
+  RoomWaitMark,
+  RoomWaitPlace,
 } from "./host-inputs";
 
 /** The reader (PK3): one session's transcript, read-only, at a line. */
