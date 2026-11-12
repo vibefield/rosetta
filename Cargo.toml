@@ -28,6 +28,7 @@ members = [
 [workspace.package]
 version = "0.1.5"
 edition = "2024"
+license = "MIT"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
