@@ -19,6 +19,11 @@ use std::path::Path;
 
 use crate::{CaptureError, io_error};
 
+mod checkpoint_bytes;
+mod verification;
+use checkpoint_bytes::ByteReader;
+use verification::verify_chain;
+
 const CHECKPOINT_MAGIC: &[u8] = b"RSTC";
 const CHECKPOINT_VERSION: u8 = 2;
 /// Oldest checkpoint version `decode` still accepts. Version 1 predates the
@@ -445,16 +450,84 @@ impl Tailer {
             }
             Err(error) => return Err(io_error("opening", path, error)),
         };
+        let metadata = file
+            .metadata()
+            .map_err(|e| io_error("reading metadata for", path, e))?;
+        let identity = file_identity(path, &metadata);
+        self.read_handle(
+            &mut file,
+            path,
+            identity,
+            previous,
+            force_replay,
+            max_read_bytes,
+            end,
+            false,
+            None,
+        )
+    }
+
+    /// A pinned decoded input. Path replacement cannot invalidate this open
+    /// snapshot. Representation changes verify the entire committed prefix
+    /// before continuing the same generation; older chain-less cursors replay.
+    pub fn read_input(
+        &self,
+        input: &mut crate::input::OpenedInput,
+        previous: Option<&TailCheckpoint>,
+        force_replay: bool,
+        end: Option<u64>,
+    ) -> Result<TailRead, CaptureError> {
+        self.read_handle(
+            &mut input.file,
+            &input.path,
+            input.identity.clone(),
+            previous,
+            force_replay,
+            u64::MAX,
+            end,
+            true,
+            input.cancel.as_deref(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn read_handle(
+        &self,
+        file: &mut File,
+        path: &Path,
+        identity: FileIdentity,
+        previous: Option<&TailCheckpoint>,
+        force_replay: bool,
+        max_read_bytes: u64,
+        end: Option<u64>,
+        pinned: bool,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<TailRead, CaptureError> {
         let mut accounting = ReadAccounting::new(max_read_bytes);
 
         let initial_metadata = file
             .metadata()
             .map_err(|error| io_error("reading metadata for", path, error))?;
         let physical_len = initial_metadata.len();
-        let identity = file_identity(path, &initial_metadata);
 
+        let mut equivalent = None;
+        if pinned
+            && let Some(previous) = previous
+            && previous.identity != identity
+            && previous.committed_chain.is_some()
+            && physical_len >= previous.committed_offset
+            && matches!(
+                verify_chain(file, path, previous, cancel)?,
+                CommittedVerification::Verified
+            )
+        {
+            let mut rebound = previous.clone();
+            rebound.identity = identity.clone();
+            equivalent = Some(rebound);
+        }
+        let previous = equivalent.as_ref().or(previous);
         let (generation, start_offset, transition) = self.resume_point(
-            &mut file,
+            file,
             path,
             physical_len,
             &identity,
@@ -485,7 +558,7 @@ impl Tailer {
         };
 
         let framed = self.frame(
-            &mut file,
+            file,
             path,
             start_offset,
             resume_chain,
@@ -493,8 +566,7 @@ impl Tailer {
             generation,
             &mut accounting,
         )?;
-        let prefix =
-            self.prefix_anchor(&mut file, path, framed.committed_offset, &mut accounting)?;
+        let prefix = self.prefix_anchor(file, path, framed.committed_offset, &mut accounting)?;
 
         // Stability recheck against both the open handle and the path: a
         // shrink or identity change under our feet means the snapshot cannot
@@ -503,19 +575,21 @@ impl Tailer {
         let handle_metadata = file
             .metadata()
             .map_err(|error| io_error("rechecking metadata for", path, error))?;
-        let path_metadata = match std::fs::metadata(path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        if handle_metadata.len() < snapshot_len {
+            return Ok(TailRead::Retry);
+        }
+        if !pinned {
+            let path_metadata = match std::fs::metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(TailRead::Retry);
+                }
+                Err(error) => return Err(io_error("rechecking path for", path, error)),
+            };
+            if file_identity(path, &path_metadata) != identity || path_metadata.len() < snapshot_len
+            {
                 return Ok(TailRead::Retry);
             }
-            Err(error) => return Err(io_error("rechecking path for", path, error)),
-        };
-        if file_identity(path, &handle_metadata) != identity
-            || file_identity(path, &path_metadata) != identity
-            || handle_metadata.len() < snapshot_len
-            || path_metadata.len() < snapshot_len
-        {
-            return Ok(TailRead::Retry);
         }
 
         let checkpoint = TailCheckpoint {
@@ -571,26 +645,23 @@ impl Tailer {
         if metadata.len() < previous.committed_offset {
             return Ok(CommittedVerification::Truncated);
         }
-        let mut remaining = previous.committed_offset;
-        let mut chain = CONTENT_CHAIN_BASIS;
-        let mut buffer = [0_u8; READ_BUFFER_BYTES];
-        while remaining > 0 {
-            let wanted = usize::try_from(remaining.min(READ_BUFFER_BYTES as u64))
-                .expect("bounded read length always fits usize");
-            let count = file
-                .read(&mut buffer[..wanted])
-                .map_err(|error| io_error("verifying", path, error))?;
-            if count == 0 {
-                return Ok(CommittedVerification::Truncated);
-            }
-            chain = chain_bytes(chain, &buffer[..count]);
-            remaining -= count as u64;
+        verify_chain(&mut file, path, previous, None)
+    }
+
+    pub fn verify_input(
+        &self,
+        input: &mut crate::input::OpenedInput,
+        previous: &TailCheckpoint,
+    ) -> Result<CommittedVerification, CaptureError> {
+        if previous.committed_chain.is_none() && previous.identity != input.identity {
+            return Ok(CommittedVerification::IdentityChanged);
         }
-        Ok(match previous.committed_chain {
-            Some(expected) if expected == chain => CommittedVerification::Verified,
-            Some(_) => CommittedVerification::Mismatch,
-            None => CommittedVerification::Established(chain),
-        })
+        verify_chain(
+            &mut input.file,
+            &input.path,
+            previous,
+            input.cancel.as_deref(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -943,77 +1014,6 @@ fn next_generation(current: u64) -> Result<u64, CaptureError> {
     current
         .checked_add(1)
         .ok_or_else(|| CaptureError::InvalidCheckpoint("tail generation overflowed".to_string()))
-}
-
-struct ByteReader<'a> {
-    remaining: &'a [u8],
-}
-
-impl<'a> ByteReader<'a> {
-    /// Accept any version in `versions`, returning the one found so the
-    /// caller can decode the fields that version carries.
-    fn versioned(
-        bytes: &'a [u8],
-        magic: &[u8],
-        versions: std::ops::RangeInclusive<u8>,
-    ) -> Result<(Self, u8), CaptureError> {
-        let Some(rest) = bytes.strip_prefix(magic) else {
-            return Err(CaptureError::InvalidCheckpoint(
-                "checkpoint magic does not match".to_string(),
-            ));
-        };
-        let mut reader = Self { remaining: rest };
-        let version = reader.byte()?;
-        if !versions.contains(&version) {
-            return Err(CaptureError::InvalidCheckpoint(
-                "unsupported checkpoint version".to_string(),
-            ));
-        }
-        Ok((reader, version))
-    }
-
-    fn finish(self) -> Result<(), CaptureError> {
-        if self.remaining.is_empty() {
-            Ok(())
-        } else {
-            Err(CaptureError::InvalidCheckpoint(
-                "checkpoint contains trailing bytes".to_string(),
-            ))
-        }
-    }
-
-    fn byte(&mut self) -> Result<u8, CaptureError> {
-        Ok(self.take(1)?[0])
-    }
-
-    fn u64(&mut self) -> Result<u64, CaptureError> {
-        Ok(u64::from_be_bytes(self.take(8)?.try_into().map_err(
-            |_| CaptureError::InvalidCheckpoint("truncated u64".to_string()),
-        )?))
-    }
-
-    fn len_u64(&mut self) -> Result<usize, CaptureError> {
-        usize::try_from(self.u64()?).map_err(|_| {
-            CaptureError::InvalidCheckpoint("checkpoint length is too large".to_string())
-        })
-    }
-
-    fn hash(&mut self) -> Result<[u8; HASH_BYTES], CaptureError> {
-        self.take(HASH_BYTES)?
-            .try_into()
-            .map_err(|_| CaptureError::InvalidCheckpoint("truncated hash".to_string()))
-    }
-
-    fn take(&mut self, count: usize) -> Result<&'a [u8], CaptureError> {
-        if count > self.remaining.len() {
-            return Err(CaptureError::InvalidCheckpoint(
-                "checkpoint is truncated".to_string(),
-            ));
-        }
-        let (value, rest) = self.remaining.split_at(count);
-        self.remaining = rest;
-        Ok(value)
-    }
 }
 
 #[cfg(test)]

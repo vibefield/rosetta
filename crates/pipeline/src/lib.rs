@@ -30,6 +30,8 @@ pub use html_artifacts::ArtifactRecovery;
 pub mod instrument;
 pub mod live;
 pub mod meta;
+mod meta_journal;
+pub use meta_journal::LedgerMetadata;
 pub mod plan;
 pub mod progress;
 mod project;
@@ -83,9 +85,9 @@ pub use streamed::{
 
 /// Version of the canonical-op envelope stored in ledger meta frames. Replay
 /// routes explicitly by this value instead of assuming today's row JSON.
-/// Meta payload v2 makes the adapter-selected primary cwd explicit on the
-/// session and removes streamed workspace observations from the projection.
-pub const LEDGER_META_SCHEMA_VERSION: u32 = 2;
+/// Metadata v3 journals required-source readiness beside canonical metadata.
+/// Readers retain support for the legacy operation arrays (v0 and v2).
+pub const LEDGER_META_SCHEMA_VERSION: u32 = 3;
 
 /// The largest record the pipeline normalizes. A longer JSONL record is still
 /// captured and ledgered whole, up to what one raw ledger frame holds

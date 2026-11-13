@@ -42,6 +42,7 @@ impl Rng {
 
 fn transcript(path: &str, session: &str, size: u64, modified_ms: i64) -> SessionFile {
     SessionFile {
+        input: None,
         ledger_only: false,
         relative_path: path.to_owned(),
         stream_id: "transcript".to_owned(),
@@ -70,6 +71,7 @@ fn member(physical: &str, session: &str, driver: StreamDriver, modified_ms: i64)
         ),
     };
     SessionFile {
+        input: None,
         stream_id: stream.to_owned(),
         file_format: format,
         discipline,

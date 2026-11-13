@@ -120,24 +120,33 @@ fn a_rollout_still_writing_its_first_record_is_not_yet_a_session() {
 /// fresh gate tolerates both; the strict gate refuses both.)
 #[test]
 fn an_unterminated_opening_record_over_the_projection_limit_is_unidentified() {
-    let home = TempDir::new().unwrap();
-    let root = home.path().join(".codex");
     let mut record = String::from(
         "{\"timestamp\":\"2026-08-25T02:35:03.601Z\",\"type\":\"session_meta\",\
          \"payload\":{\"id\":\"03c258e7-8a3a-7515-ae29-f6652985a62d\",\"base_instructions\":\"",
     );
     record.push_str(&"q".repeat(rosetta_pipeline::MAX_PROJECTED_RECORD_BYTES));
-    std::fs::write(
-        rollout(&root, "rollout-2026-08-24T21-00-00-huge.jsonl"),
-        &record,
-    )
-    .unwrap();
-    let mut store = Store::open_in_memory().unwrap();
-    let (report, files) = meta(&root, &mut store);
-    assert_eq!(
-        (report.files_unfinished, report.files_unidentified),
-        (0, 1),
-        "{report:?}"
-    );
-    assert!(files.is_empty());
+    for compressed in [false, true] {
+        let home = TempDir::new().unwrap();
+        let root = home.path().join(".codex");
+        let (name, bytes) = if compressed {
+            (
+                "rollout-2026-08-24T21-00-00-huge.jsonl.zst",
+                zstd::encode_all(record.as_bytes(), 3).unwrap(),
+            )
+        } else {
+            (
+                "rollout-2026-08-24T21-00-00-huge.jsonl",
+                record.as_bytes().to_vec(),
+            )
+        };
+        std::fs::write(rollout(&root, name), bytes).unwrap();
+        let mut store = Store::open_in_memory().unwrap();
+        let (report, files) = meta(&root, &mut store);
+        assert_eq!(
+            (report.files_unfinished, report.files_unidentified),
+            (0, 1),
+            "{report:?}"
+        );
+        assert!(files.is_empty());
+    }
 }

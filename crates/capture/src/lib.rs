@@ -8,6 +8,7 @@
 
 pub mod discovery;
 pub mod document;
+pub mod input;
 pub mod ledger;
 mod recompress;
 pub mod segment;
@@ -93,5 +94,14 @@ pub(crate) fn io_error(
         operation,
         path: path.to_string_lossy().into_owned(),
         source,
+    }
+}
+
+impl CaptureError {
+    /// A native source exists but cannot yet supply a complete decoded view.
+    /// This is not EOF and must not activate an empty replacement.
+    pub fn incomplete_input(&self) -> bool {
+        matches!(self, Self::LimitExceeded(_))
+            || matches!(self, Self::Io { source, .. } if matches!(source.kind(), std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof))
     }
 }

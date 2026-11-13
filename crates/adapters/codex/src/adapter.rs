@@ -18,6 +18,40 @@ use crate::time::rfc3339_ms;
 pub struct CodexAdapter;
 
 impl AgentAdapter for CodexAdapter {
+    fn transcript_record_index(&self, record: &[u8]) -> Option<u64> {
+        serde_json::from_slice::<Value>(record)
+            .ok()?
+            .get("ordinal")?
+            .as_u64()
+    }
+
+    fn transcript_header(
+        &self,
+        path: &str,
+        first: &[u8],
+    ) -> Result<Option<rosetta_adapter_support::transcripts::TranscriptHeader>, String> {
+        crate::storage::header(path, first)
+    }
+    fn transcript_selection(
+        &self,
+        stream: &str,
+        row: &Value,
+    ) -> Option<rosetta_adapter_support::transcripts::TranscriptSelection> {
+        if stream != spec::STATE_DB {
+            return None;
+        }
+        Some(rosetta_adapter_support::transcripts::TranscriptSelection {
+            path: crate::storage::selection_path(row.get("rollout_path")?.as_str()?),
+        })
+    }
+
+    fn transcript_location(
+        &self,
+        path: &str,
+    ) -> Option<rosetta_adapter_support::adapter::TranscriptLocation> {
+        crate::storage::location(path)
+    }
+
     fn kind(&self) -> &'static str {
         "codex"
     }
@@ -28,21 +62,29 @@ impl AgentAdapter for CodexAdapter {
 
     fn stream_driver(&self, stream_id: &str) -> Option<StreamDriver> {
         match stream_id {
-            spec::ROLLOUT => Some(StreamDriver::JsonLines),
+            spec::ROLLOUT
+            | "rollout-compressed"
+            | "archived-rollout"
+            | "archived-rollout-compressed" => Some(StreamDriver::JsonLines),
             spec::STATE_DB => Some(StreamDriver::SqliteSnapshot),
             _ => None,
         }
     }
 
     fn census_session_streams(&self) -> Option<&'static [&'static str]> {
-        Some(&[spec::ROLLOUT])
+        Some(&[
+            spec::ROLLOUT,
+            "rollout-compressed",
+            "archived-rollout",
+            "archived-rollout-compressed",
+        ])
     }
 
     /// A rollout writes its own session, except a guardian review's usage,
     /// which lands on the parent its header names: metadata links the
     /// guardian to that parent, so both are one tree. The state database is
-    /// shared by every tree but declares no record queries, so its members
-    /// emit no ops (`snapshot_plan`).
+    /// shared by every tree; its native selector records emit no canonical
+    /// ops, preserving closure (`snapshot_plan`, `ingest_line`).
     fn cold_admission(&self) -> rosetta_adapter_support::ColdAdmission {
         rosetta_adapter_support::ColdAdmission::RootTree
     }
@@ -61,7 +103,7 @@ impl AgentAdapter for CodexAdapter {
         // renditions made after import (2026-11-01): legacy bundle refs stay
         // valid, so re-streaming every source is not worth it; a rebuild
         // converts them (docs/ARCHITECTURE.md).
-        21
+        22
     }
 
     fn html_artifact_hints(
@@ -84,6 +126,10 @@ impl AgentAdapter for CodexAdapter {
         }
     }
 
+    fn snapshot_is_metadata_only(&self, stream: &str) -> bool {
+        stream == spec::STATE_DB
+    }
+
     fn snapshot_plan(&self, stream_id: &str) -> Option<SnapshotPlan> {
         (stream_id == spec::STATE_DB).then(|| SnapshotPlan {
             // `SELECT *` is intentional compatibility machinery: the base
@@ -91,7 +137,12 @@ impl AgentAdapter for CodexAdapter {
             // columns. `snapshot_session` inspects whichever optional columns
             // this version exposes without emitting schema-dependent SQL.
             sessions_sql: "SELECT * FROM threads ORDER BY created_at, id".to_owned(),
-            record_queries: Vec::new(),
+            // Preserve the native selection with the archive. It projects no
+            // rows, but keeps the authoritative pointer available offline.
+            record_queries: vec![rosetta_adapter_support::adapter::SnapshotQuery {
+                name: "thread".into(),
+                sql: "SELECT * FROM threads WHERE id = ?1".into(),
+            }],
         })
     }
 
@@ -184,7 +235,7 @@ impl AgentAdapter for CodexAdapter {
     /// opening record, and the file's mtime already gives the pipeline the
     /// session's `updated_at`.
     fn skim(&self, stream_id: &str, stat: &FileStat, head: &[u8], _tail: &[u8]) -> SkimResult {
-        if stream_id != spec::ROLLOUT {
+        if !spec::is_rollout(stream_id) {
             return SkimResult::default();
         }
 
@@ -234,6 +285,9 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn ingest_line(&self, ctx: &mut NormalizeCtx, stream_id: &str, line: &[u8]) -> LineOutcome {
+        if stream_id == spec::STATE_DB {
+            return LineOutcome::parsed(Vec::new());
+        }
         // Owning the state for the call keeps it out of the borrow of `ctx`,
         // which every row needs mutably for its ordinal. One restore point, so
         // no projection path can lose it.

@@ -1441,6 +1441,7 @@ dependencies = [
  "image",
  "percent-encoding",
  "pulldown-cmark",
+ "rosetta-capture",
  "rosetta-core",
  "rosetta-media",
  "serde",
@@ -1529,6 +1530,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "walkdir",
+ "zstd",
 ]
 
 [[package]]

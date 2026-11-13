@@ -54,6 +54,11 @@ pub(crate) fn token_count(
         return;
     };
     let last = RawUsage::parse(&info["last_token_usage"]);
+    if state.shared_history && state.origin_thread != state.thread_id {
+        state.prev_total = Some(total);
+        state.last_record_usage = None;
+        return;
+    }
     if let Some(record) = state.last_record_usage.take()
         && last == Some(record)
     {
@@ -509,6 +514,15 @@ impl ReplayGate {
     /// boundary, a fork source, a parent, or a spawn descriptor. A plain
     /// session written by any CLI is open from its first record (CODEX-8).
     pub(crate) fn for_session(meta: &SessionMeta, ts: Option<Ms>) -> Self {
+        // Shared history retains original timestamps; the old copied-head
+        // heuristic does not apply. Native headers identify each range's owner.
+        if meta
+            .history_base
+            .as_ref()
+            .is_some_and(|base| !base.is_null())
+        {
+            return Self::Open;
+        }
         let copied_history = meta.forked_from_id.is_some()
             || meta.parent_thread_id.is_some()
             || thread_spawn(&meta.source);
