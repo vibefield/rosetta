@@ -149,10 +149,11 @@ pub fn activate_stopped_source(
                     if !document_source.ledger_only
                         && let Some(file) = file.as_mut()
                     {
-                        crate::html_artifacts::project(
+                        crate::presented_media::project_document(
                             &document_source.session_id,
                             start_offset,
                             &document,
+                            &mut file.slots,
                             &mut file.ops,
                         );
                     }
@@ -253,6 +254,7 @@ pub(super) fn project_raw(
                 report.hard_errors += 1;
             }
         }
+        file.slots.note(&outcome.ops);
         file.ops.extend(outcome.ops);
     }
     true

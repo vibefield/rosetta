@@ -8,6 +8,9 @@
 //! cache. All three share one header stage and one encoder path, so a rendition
 //! is byte-identical whichever made it.
 //!
+//! [`probe_video`] classifies recorded MP4 and QuickTime video from its
+//! container header alone; no video is ever decoded.
+//!
 //! @atlas layer kernels · domain media
 
 mod animation;
@@ -16,6 +19,7 @@ mod pixels;
 mod pool;
 mod probe;
 mod render;
+mod video;
 
 use std::fmt;
 use std::io::Cursor;
@@ -28,6 +32,7 @@ use rosetta_core::timeline::Dimensions;
 
 pub use pool::{CodecPermit, Lane, admit, admitted_jobs, try_admit};
 pub use probe::{Probe, probe};
+pub use video::{MP4_BRANDS, VideoProbe, probe_video, video_media_type};
 
 pub const MAX_INPUT_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_PIXELS: u64 = 32 * 1024 * 1024;

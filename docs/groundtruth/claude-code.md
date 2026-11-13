@@ -261,6 +261,50 @@ its minimum identity becomes a bounded `unknown` action. The raw ledger retains 
 value for replay. This separation keeps the production scar intact without making opaque
 native JSON a public presentation contract.
 
+### 3.1 `SendUserFile` sent files (2026-11-12)
+
+`SendUserFile` sends the user files by path. The canonical `tool-result` facet declares
+its result as a bare string or
+`{attachments: [{path, size, media_type?, isImage, pathValidated?, file_uuid?}], caption,
+display?}`. The bytes are not in the transcript.
+
+**Read set.** The adapter reads `attachments[].path` (string), `attachments[].size` (a
+positive integer) and `attachments[].media_type` (string), and nothing else of the result:
+`isImage`, `pathValidated`, `file_uuid`, `caption` and `display` stay ledger-only. An
+attachment of any other shape projects nothing and never fails the record.
+
+**Proof of the result.** A result record carries no tool name, so the opener's id is
+remembered when its native name is `SendUserFile` (checkpointed as an array of ids, oldest
+first, at most 256; past that the oldest is forgotten, and an opener seen again becomes the
+newest). The
+attachments are read only when that id is remembered, the result did not fail, and the
+line holds exactly one `tool_result`: `toolUseResult` belongs to the line, not to a block.
+A record written twice re-arms the id on the repeated opener, so the repeated result is
+read again and names the same slot at its later offset.
+
+**Projection.** The first 32 attachments are examined. A sent image or video (png, jpeg,
+gif, webp, bmp, ico, mp4, quicktime) becomes a path-reference attachment on the tool row
+carrying the file name, the declared type and the recorded size, plus one transient capture
+fact; its slot id uses the attachment's native index. Everything else is skipped: another
+or absent type, a zero size, a repeated path, and a path that is not absolute as recorded.
+A relative path is not resolved against the record's `cwd`: the canonical does not say what
+it would be relative to. A path is presented as written or not at all, because the pipeline
+opens exactly the path the fact names: one that holds a backslash (a legal POSIX file-name
+byte, not a separator) or is not already in normal form (a `.` or `..` segment, an empty
+segment, a trailing slash) is skipped, never rewritten. A path that is `/dev` or `/proc` or
+lies under one is skipped too, in any letter case. An HTML file stays with the publication
+path. The adapter opens no file; the pipeline
+reads the bytes and, when they match the recorded size and the declared type, upgrades the
+slot to a captured asset. The normalizer stays at 39, so a row normalized earlier has no
+attachment until its source is next normalized or the projection is rebuilt.
+
+**Not proven.** This rests on the organic census alone (evidence `observed`). Two readings
+the capture depends on are not in the canonical file: that `size` is the byte length of the
+file at `path` when it was sent, and the vocabulary of `media_type` (the census records it
+as a string and cannot enumerate MIME strings). A fixture needs an isolated runner. The
+conformance tests (`crates/adapters/claude-code/tests/presented_media.rs`) are synthetic and
+include a guard that the canonical still declares the three fields as read.
+
 ## 4. Delegated work — three persisted relationship geometries
 
 The 2026-09-03 structure-only audit covered 562 main transcripts, 4,268 direct

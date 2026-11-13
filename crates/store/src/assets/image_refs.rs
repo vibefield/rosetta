@@ -343,6 +343,61 @@ mod tests {
         assert_eq!(asked.get(), 2);
     }
 
+    fn video_attachment(name: &str, media_type: &str, dimensions: Option<(u32, u32)>) -> Value {
+        let mut value = attachment(name, dimensions);
+        value["kind"] = json!("video");
+        value["media_type"] = json!(media_type);
+        value["source"]["asset"]["media_type"] = json!(media_type);
+        value
+    }
+
+    /// A video member is a reference like any other, and never rendition
+    /// work: the sweep is handed image bases only, so it makes no WebP for a
+    /// video wherever a row attaches one.
+    #[test]
+    fn video_members_are_references_and_never_rendition_work() {
+        let conn = schema();
+        conn.execute_batch("INSERT INTO session VALUES ('s', 1)")
+            .unwrap();
+        let (mp4, mov, image) = (name('a', "mp4"), name('b', "mov"), name('c', "png"));
+        // A tool row (the sent file), an authored row and a collaboration
+        // event, with and without recorded dimensions.
+        insert(
+            &conn,
+            1,
+            "s",
+            Some(json!({"type": "prose", "attachments": [
+                video_attachment(&mov, "video/quicktime", None),
+                attachment(&image, Some((40, 30)))]})),
+            Some(json!({"type": "other", "attachments": [
+                video_attachment(&mp4, "video/mp4", Some((1920, 1080)))]})),
+        );
+        insert(
+            &conn,
+            2,
+            "s",
+            Some(json!({"type": "collaboration", "event": {"attachments": [
+                video_attachment(&mp4, "video/mp4", None),
+                video_attachment(&mov, "video/quicktime", Some((640, 480)))]}})),
+            None,
+        );
+        let work = image_work(&conn, &|| false).unwrap().unwrap();
+        assert_eq!(
+            work,
+            [ImageWork {
+                name: image.clone(),
+                dimensions: Some(Dimensions {
+                    width: 40,
+                    height: 30
+                }),
+            }]
+        );
+        assert_eq!(
+            referenced_names(&conn).unwrap(),
+            [mp4, mov, image].into_iter().collect()
+        );
+    }
+
     #[test]
     fn references_cover_every_url_including_rendition_leaves_and_workflows() {
         let conn = schema();

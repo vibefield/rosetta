@@ -4,6 +4,9 @@ use std::io::Write;
 use tempfile::TempDir;
 
 use super::*;
+use crate::ledger::read::tests::{
+    CLIP_BYTES, HTML_BYTES, RAW_PAYLOAD_BYTES, STATUSES, html, media, write_document_segment,
+};
 use crate::ledger::{
     CHECKSUM_BYTES, CapturedDocument, DocumentCaptureStatus, Ledger, TAG_DEFINE,
     TAG_GENERATION_COMPLETE, TAG_META_VERSIONED, TAG_RAW, serde_encode,
@@ -162,8 +165,7 @@ fn the_entry_digest_ignores_containers_segments_ids_and_packing() {
                 raw_payload_bytes: (0..20).map(|index| record(index).len() as u64).sum::<u64>() * 2,
                 seals: 2,
                 metas: 1,
-                documents: 0,
-                document_bytes: 0,
+                ..EntryTally::default()
             }
         );
         assert_eq!(
@@ -408,6 +410,7 @@ fn pinned_entries() -> Vec<LedgerEntry> {
                 captured_at: 1_790_000_000_000,
                 status: DocumentCaptureStatus::Captured,
                 recovered_from: None,
+                media: None,
                 bytes: b"<p>doc</p>".to_vec(),
             },
         },
@@ -437,10 +440,14 @@ fn digest_of(entries: &[LedgerEntry]) -> EntryDigest {
 
 /// The digests two builds are compared by keep their encoding (R1 I5): the
 /// entry, source and meta values predate the per-source digests, which left
-/// them unchanged.
+/// them unchanged. They predate the media claim too: the pinned stream holds
+/// an HTML document frame, and a ledger with no media frame keeps every one
+/// of these values.
 #[test]
 fn the_entry_source_and_meta_digests_keep_their_encoding() {
     let digest = digest_of(&pinned_entries());
+    assert_eq!(digest.tally().documents, 1);
+    assert_eq!(digest.tally().media_frames(), 0);
     assert_eq!(
         digest.finish().to_hex().as_str(),
         "343b655e37d643f938846ec3606af5054cebcc8d42761e2e5526b7d83cd01e47"
@@ -569,6 +576,7 @@ fn source_set_digest_ignores_document_captured_at() {
             captured_at,
             status: DocumentCaptureStatus::Captured,
             recovered_from: None,
+            media: None,
             bytes: b"<p>review</p>".to_vec(),
         },
     };
@@ -682,4 +690,264 @@ fn source_set_digest_sees_a_dropped_or_duplicated_frame() {
     let swapped = digest("swapped-within-b", &swapped);
     assert_eq!(swapped.tally, base.tally);
     assert_ne!(swapped.source_set_digest, base.source_set_digest);
+}
+
+/// A segment holding document frames used to verify torn at its first one.
+/// Now it verifies clean in every container, with what became of each sent
+/// file counted by status.
+#[test]
+fn a_segment_with_document_frames_verifies_clean() {
+    let temp = TempDir::new().unwrap();
+    let expected = EntryTally {
+        entries: 14,
+        raw_records: 3,
+        raw_payload_bytes: RAW_PAYLOAD_BYTES,
+        documents: 8,
+        document_bytes: HTML_BYTES * 2 + CLIP_BYTES * 2,
+        seals: 2,
+        metas: 1,
+        media_captured: 2,
+        media_captured_bytes: CLIP_BYTES * 2,
+        media_missing: 1,
+        media_too_large: 1,
+        media_unsupported: 1,
+        media_changed_during_read: 1,
+    };
+    let mut digests = Vec::new();
+    for (name, codec) in [
+        ("plain", SegmentCodec::Plain),
+        ("frames", SegmentCodec::default()),
+        ("stream", SegmentCodec::zstd(3)),
+    ] {
+        let dir = temp.path().join(name);
+        let path = write_document_segment(&dir, codec);
+        let report = verify(&dir).unwrap();
+        assert_eq!(report.torn_segments(), 0, "{name}");
+        assert_eq!(report.segments.len(), 1, "{name}");
+        let segment = &report.segments[0];
+        assert!(segment.clean, "{name}");
+        assert_eq!(segment.compressed, Some(codec.is_compressed()), "{name}");
+        assert_eq!(segment.entries, 14, "{name}");
+        assert_eq!(report.tally, expected, "{name}");
+        assert_eq!(report.tally.media_frames(), 6, "{name}");
+        if !codec.is_compressed() {
+            let file = std::fs::metadata(&path).unwrap().len();
+            assert_eq!(segment.decoded_bytes, file - MAGIC_PLAIN.len() as u64);
+        }
+        digests.push((
+            report.entry_digest,
+            report.source_digest,
+            report.source_set_digest,
+        ));
+    }
+    assert_eq!(digests[0], digests[1]);
+    assert_eq!(digests[0], digests[2]);
+
+    // Recompressed, the same evidence: nothing about the entries moved.
+    let dir = temp.path().join("plain");
+    let before = verify(&dir).unwrap();
+    let outcome =
+        recompress_segment(&before.segments[0].path, SegmentCodec::default(), false).unwrap();
+    assert!(
+        matches!(outcome, RecompressOutcome::Rewritten { .. }),
+        "{outcome:?}"
+    );
+    let after = verify(&dir).unwrap();
+    assert_eq!(after.segments[0].compressed, Some(true));
+    assert_eq!(after.torn_segments(), 0);
+    assert_eq!(after.tally, before.tally);
+    assert_eq!(after.entry_digest, before.entry_digest);
+    assert_eq!(after.source_set_digest, before.source_set_digest);
+    assert_eq!(after.frame_digest(), before.frame_digest());
+}
+
+fn document_entry(document: CapturedDocument) -> LedgerEntry {
+    LedgerEntry::Document {
+        source: source("a.jsonl"),
+        generation: 1,
+        start_offset: 6,
+        document,
+    }
+}
+
+#[test]
+fn the_tally_counts_media_frames_by_status() {
+    let base = EntryTally {
+        entries: 1,
+        documents: 1,
+        ..EntryTally::default()
+    };
+    let expected = [
+        EntryTally {
+            document_bytes: 9,
+            media_captured: 1,
+            media_captured_bytes: 9,
+            ..base
+        },
+        EntryTally {
+            media_missing: 1,
+            ..base
+        },
+        EntryTally {
+            media_too_large: 1,
+            ..base
+        },
+        EntryTally {
+            media_unsupported: 1,
+            ..base
+        },
+        EntryTally {
+            media_changed_during_read: 1,
+            ..base
+        },
+    ];
+    let mut all = EntryDigest::new();
+    for (status, expected) in STATUSES.into_iter().zip(expected) {
+        let entry = document_entry(media(status, "video/mp4", 9));
+        let tally = digest_of(std::slice::from_ref(&entry)).tally();
+        assert_eq!(tally, expected, "{status:?}");
+        assert_eq!(tally.media_frames(), 1, "{status:?}");
+        all.update(&entry);
+    }
+    // An HTML document, captured or not, is no media frame.
+    let mut missing = html(None);
+    missing.status = DocumentCaptureStatus::Missing;
+    missing.bytes.clear();
+    for document in [html(None), html(Some("/archive/review.html")), missing] {
+        let entry = document_entry(document);
+        let tally = digest_of(std::slice::from_ref(&entry)).tally();
+        assert_eq!(tally.documents, 1);
+        assert_eq!(tally.media_frames(), 0);
+        assert_eq!(tally.media_captured_bytes, 0);
+        all.update(&entry);
+    }
+    assert_eq!(
+        all.tally(),
+        EntryTally {
+            entries: 8,
+            documents: 8,
+            document_bytes: 9 + HTML_BYTES * 2,
+            media_captured: 1,
+            media_captured_bytes: 9,
+            media_missing: 1,
+            media_too_large: 1,
+            media_unsupported: 1,
+            media_changed_during_read: 1,
+            ..EntryTally::default()
+        }
+    );
+    assert_eq!(all.tally().media_frames(), 5);
+}
+
+/// The media claim is source content. It reaches the digests only through a
+/// frame that carries one, so the HTML-only stream pinned above keeps its
+/// values; a media frame changes its own source's digest and no other's.
+#[test]
+fn the_media_claim_feeds_the_source_digests() {
+    let with = |document: CapturedDocument| {
+        let mut entries = pinned_entries();
+        entries.push(document_entry(document));
+        digest_of(&entries)
+    };
+    let source_digest = |digest: &EntryDigest, path: &str| digest.per_source[path].finalize();
+    let every = |digest: &EntryDigest| {
+        [
+            digest.finish(),
+            digest.source_digest(),
+            digest.source_set_digest(),
+            source_digest(digest, "a.jsonl"),
+        ]
+    };
+    // Every digest that sees source a differs; source b's and the metadata's do not.
+    let differ = |left: &EntryDigest, right: &EntryDigest, what: &str| {
+        for (left, right) in every(left).into_iter().zip(every(right)) {
+            assert_ne!(left, right, "{what}");
+        }
+        assert_eq!(
+            source_digest(left, "b.jsonl"),
+            source_digest(right, "b.jsonl"),
+            "{what}"
+        );
+        assert_eq!(left.meta_digest(), right.meta_digest(), "{what}");
+    };
+
+    let html_only = digest_of(&pinned_entries());
+    let missing = with(media(DocumentCaptureStatus::Missing, "video/mp4", 77));
+    differ(&missing, &html_only, "a media frame");
+
+    // Two streams that differ only in the claim: its size, then its type.
+    let longer = with(media(DocumentCaptureStatus::Missing, "video/mp4", 78));
+    assert_eq!(missing.tally(), longer.tally());
+    differ(&missing, &longer, "expected_len");
+    let quicktime = with(media(DocumentCaptureStatus::Missing, "video/quicktime", 77));
+    assert_eq!(missing.tally(), quicktime.tally());
+    differ(&missing, &quicktime, "media_type");
+    // A neighbouring split of type and size is not the same claim.
+    let unsupported = |media_type: &str, expected_len: u64| {
+        with(media(
+            DocumentCaptureStatus::Unsupported,
+            media_type,
+            expected_len,
+        ))
+    };
+    differ(
+        &unsupported("video/mp4", u64::from_be_bytes(*b"0\0\0\0\0\0\0\x01")),
+        &unsupported("video/mp40", 1),
+        "the boundary between type and size",
+    );
+
+    // The same path, status and bytes with and without a claim.
+    let mut bare = media(DocumentCaptureStatus::Captured, "video/mp4", 9);
+    let claimed = with(bare.clone());
+    bare.media = None;
+    let unclaimed = with(bare);
+    differ(&claimed, &unclaimed, "the claim itself");
+    assert_eq!(claimed.tally().media_frames(), 1);
+    assert_eq!(unclaimed.tally().media_frames(), 0);
+
+    // The observation time stays run-dependent: only the entry digest sees it.
+    let mut observed_later = media(DocumentCaptureStatus::Missing, "video/mp4", 77);
+    observed_later.captured_at += 9_999;
+    let later = with(observed_later);
+    assert_ne!(later.finish(), missing.finish());
+    assert_eq!(later.source_digest(), missing.source_digest());
+    assert_eq!(later.source_set_digest(), missing.source_set_digest());
+
+    // Through real ledgers: only the media frame's `expected_len` differs.
+    let temp = TempDir::new().unwrap();
+    let write = |name: &str, expected_len: Option<u64>| {
+        let dir = temp.path().join(name);
+        let mut ledger = Ledger::open(&dir).unwrap();
+        ledger.append_meta(7, META).unwrap();
+        for path in ["a.jsonl", "b.jsonl"] {
+            let source = source(path);
+            ledger.append_raw(&source, 1, [(0, record(0))]).unwrap();
+            if path == "a.jsonl" {
+                ledger.append_document(&source, 1, 0, html(None)).unwrap();
+                if let Some(expected_len) = expected_len {
+                    let document =
+                        media(DocumentCaptureStatus::TooLarge, "video/mp4", expected_len);
+                    ledger.append_document(&source, 1, 0, document).unwrap();
+                }
+            }
+            ledger.complete_generation(&source, 1, 3, true).unwrap();
+        }
+        ledger.flush().unwrap();
+        drop(ledger);
+        let report = verify(&dir).unwrap();
+        assert_eq!(report.torn_segments(), 0, "{name}");
+        report
+    };
+    let html_ledger = write("html", None);
+    let first = write("first", Some(70 * 1024 * 1024));
+    let second = write("second", Some(70 * 1024 * 1024 + 1));
+    assert_eq!(first.tally, second.tally);
+    assert_eq!(first.tally.media_too_large, 1);
+    assert_eq!(html_ledger.tally.media_frames(), 0);
+    for other in [&second, &html_ledger] {
+        assert_ne!(first.entry_digest, other.entry_digest);
+        assert_ne!(first.source_digest, other.source_digest);
+        assert_ne!(first.source_set_digest, other.source_set_digest);
+        assert_eq!(first.meta_digest, other.meta_digest);
+    }
 }

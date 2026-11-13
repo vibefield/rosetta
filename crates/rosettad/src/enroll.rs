@@ -40,6 +40,18 @@ use serde::Deserialize;
 
 pub(crate) const ENROLLMENT_FORMAT: u32 = 1;
 
+/// The capture switch for files an agent sent the user by path
+/// ([`IngestOptions::observe_presented_media`]).
+const PRESENTED_MEDIA_ENV: &str = "ROSETTA_PRESENTED_MEDIA";
+
+/// Whether capture observes sent files, from the switch's value: `off`, in
+/// any letter case, turns it off, so every such file stays a path reference
+/// and no media frame is written. Absent, or any other value, leaves it on.
+/// The switch exists for frozen before/after pairs.
+fn observes_presented_media(value: Option<&std::ffi::OsStr>) -> bool {
+    !value.is_some_and(|value| value.eq_ignore_ascii_case("off"))
+}
+
 /// One `runtimes[]` entry as written by the supervisor. Unknown fields are
 /// ignored at every level (serde's default), so the file may grow.
 #[derive(Debug, Clone, Deserialize)]
@@ -235,6 +247,9 @@ impl Enrollment {
             exclude_cwds: enrollment
                 .map(|file| file.exclude_cwds.clone())
                 .unwrap_or_default(),
+            observe_presented_media: observes_presented_media(
+                std::env::var_os(PRESENTED_MEDIA_ENV).as_deref(),
+            ),
             ..IngestOptions::default()
         }
     }

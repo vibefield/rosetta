@@ -4,6 +4,7 @@ import { fmtBytes } from "../../lib/format";
 import { useAttachmentReader } from "./attachment-file-source";
 import { useImageUrl, useImageVisibility } from "../file-viewer/image-resource";
 import type { AttachmentOpener } from "./attachment-gallery";
+import { VideoTile, videoStatus } from "./VideoTile";
 import "../../styles/attachments.css";
 
 /** Explicitly shared only by messages whose images are gathered in this run. */
@@ -23,17 +24,28 @@ export function useAttachmentActions(onOpenAttachment: AttachmentOpener, onRecei
   return { open, reveal };
 }
 
+/** Why an attachment has no picture here, in the words of its kind. Every
+ * kind answers something: a kind this rail does not draw is never blank. */
 export function attachmentStatus(fact: AttachmentFact): string {
   const source = fact.ref?.source;
-  if (source?.type === "unavailable") {
-    switch (source.reason) {
-      case "omitted": return "Image omitted from the recording";
-      case "invalid_data": return "Recorded image data is invalid";
-      case "unsupported_media": return "Image format is not supported";
-      case "not_recorded": return "Image data was not recorded";
-    }
+  switch (fact.kind) {
+    case "image":
+      // Sent by path and not captured: the record names a file, not bytes.
+      if (source?.type === "reference") return "Image not captured";
+      if (source?.type === "unavailable") {
+        switch (source.reason) {
+          case "omitted": return "Image omitted from the recording";
+          case "invalid_data": return "Recorded image data is invalid";
+          case "unsupported_media": return "Image format is not supported";
+          case "not_recorded": return "Image data was not recorded";
+        }
+      }
+      return "Image data was not recorded";
+    case "video":
+      return videoStatus(fact);
+    default:
+      return "Attachment preview unavailable";
   }
-  return "Image data was not recorded";
 }
 
 function Tile({ fact, index, onOpen }: {
@@ -73,7 +85,7 @@ function Tile({ fact, index, onOpen }: {
           <rect x="3" y="3" width="18" height="18" rx="4" /><circle cx="8" cy="8" r="1.5" />
           <path d="m3 17 5-5 4 4 3-3 6 6" />
         </svg>
-        <span>{failed ? "Could not load image" : fact.kind === "image" ? attachmentStatus(fact) : "Attachment preview unavailable"}</span>
+        <span>{failed ? "Could not load image" : attachmentStatus(fact)}</span>
         {failed && <button type="button" ref={retryRef} className="tr-att__retry" onClick={() => {
           restoreFocus.current = true; setAttempt(value => value + 1); setFailedUrl(null);
         }}>Retry</button>}
@@ -144,11 +156,14 @@ export function Attachments({ facts, onOpenAttachment, reveal }: {
   if (facts.length === 0) return null;
   const page = (direction: number) => gallery.current?.scrollBy({ left: direction * gallery.current.clientWidth * 0.8,
     behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  const seen = { image: 0, video: 0 };
   return <div className="tr-attachments" role="group" aria-label={`${facts.length} ${facts.length === 1 ? "attachment" : "attachments"}`}>
     <div className="tr-att" id={id} ref={gallery} onFocusCapture={event => {
       const tile = event.target.closest<HTMLElement>(".tr-att__tile");
       if (tile && gallery.current) revealTile(gallery.current, tile);
     }} onKeyDown={event => {
+      // A playing video keeps its own keys: arrows seek, Home and End jump.
+      if (event.target instanceof Element && event.target.closest("video") !== null) return;
       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || !gallery.current) return;
       const tiles = [...gallery.current.querySelectorAll<HTMLElement>(".tr-att__tile")];
       const index = tiles.findIndex(tile => tile.contains(event.target as Node));
@@ -157,8 +172,15 @@ export function Attachments({ facts, onOpenAttachment, reveal }: {
       const next = event.key === "Home" ? 0 : event.key === "End" ? tiles.length - 1 : Math.max(0, Math.min(tiles.length - 1, index + (event.key === "ArrowRight" ? 1 : -1)));
       tiles[next]?.focus({ preventScroll: true });
     }}>
-      {facts.map((fact, index) => <Tile key={`${fact.key}:${attachments.assetUrl(fact) ?? "reference"}`} fact={fact} index={index}
-        onOpen={selected => onOpenAttachment(selected, facts)} />)}
+      {facts.map((fact, index) => {
+        const key = `${fact.key}:${attachments.assetUrl(fact) ?? "reference"}`;
+        // An unlabelled tile is numbered among its own kind, as the gallery
+        // numbers the row's images: "Image 1" names one picture in both.
+        const ordinal = fact.kind === "image" ? seen.image++ : fact.kind === "video" ? seen.video++ : index;
+        // A video plays in place: it has no open action and no image path.
+        return fact.kind === "video" ? <VideoTile key={key} fact={fact} index={ordinal} />
+          : <Tile key={key} fact={fact} index={ordinal} onOpen={selected => onOpenAttachment(selected, facts)} />;
+      })}
     </div>
     {(edges.before || edges.after) && <button className="tr-att__nav tr-att__nav--previous" type="button" aria-label="Previous images" aria-disabled={!edges.before} data-edge={!edges.before || undefined} aria-controls={id} onClick={() => page(-1)}>‹</button>}
     {(edges.before || edges.after) && <button className="tr-att__nav tr-att__nav--next" type="button" aria-label="Next images" aria-disabled={!edges.after} data-edge={!edges.after || undefined} aria-controls={id} onClick={() => page(1)}>›</button>}

@@ -112,6 +112,31 @@ pub fn segment_filter(
     Ok(filter)
 }
 
+/// Read the index for every generation of one source up to and including
+/// `through`: a segment is matched when the index lists the source with a
+/// lowest generation at or below it. Unknown segments are admitted exactly as
+/// by [`segment_filter`].
+pub fn segment_filter_through(
+    dir: &Path,
+    session_id: &str,
+    relative_path: &str,
+    through: u64,
+) -> Result<SegmentFilter, CaptureError> {
+    let mut filter = SegmentFilter::default();
+    for line in read_lines(dir)? {
+        filter.indexed.insert(line.segment);
+        let holds = line.sources.iter().any(|source| {
+            source.session_id == session_id
+                && source.relative_path == relative_path
+                && source.generations[0] <= through
+        });
+        if holds {
+            filter.matched.insert(line.segment);
+        }
+    }
+    Ok(filter)
+}
+
 /// The segments on disk right now that a read scoped to one source
 /// generation must visit. A walk should prefer [`segment_filter`] against its
 /// own listing; this is the same answer for a directory nobody is writing.
@@ -321,6 +346,64 @@ mod tests {
             filter.admits(99),
             "a segment the index never saw is a candidate"
         );
+    }
+
+    #[test]
+    fn a_through_filter_matches_every_generation_at_or_below_it() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = open_ledger(dir.path());
+        // segment 0: A gen 1; segment 1: B gen 1 and 2; segment 2: A gen 3;
+        // segment 3: A gen 4 and 5.
+        ledger
+            .append_raw(&source("A", "a.jsonl"), 1, [(0_u64, b"a1".as_slice())])
+            .unwrap();
+        ledger.flush().unwrap();
+        ledger
+            .append_raw(&source("B", "b.jsonl"), 1, [(0_u64, b"b1".as_slice())])
+            .unwrap();
+        ledger
+            .append_raw(&source("B", "b.jsonl"), 2, [(0_u64, b"b2".as_slice())])
+            .unwrap();
+        ledger.flush().unwrap();
+        ledger
+            .append_raw(&source("A", "a.jsonl"), 3, [(0_u64, b"a3".as_slice())])
+            .unwrap();
+        ledger.flush().unwrap();
+        ledger
+            .append_raw(&source("A", "a.jsonl"), 4, [(0_u64, b"a4".as_slice())])
+            .unwrap();
+        ledger
+            .append_raw(&source("A", "a.jsonl"), 5, [(0_u64, b"a5".as_slice())])
+            .unwrap();
+        drop(ledger);
+
+        let admitted = |session: &str, path: &str, through: u64| {
+            let filter = segment_filter_through(dir.path(), session, path, through).unwrap();
+            (0..4_u64)
+                .filter(|segment| filter.admits(*segment))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(admitted("A", "a.jsonl", 0), Vec::<u64>::new());
+        assert_eq!(admitted("A", "a.jsonl", 1), [0]);
+        assert_eq!(admitted("A", "a.jsonl", 2), [0]);
+        assert_eq!(admitted("A", "a.jsonl", 3), [0, 2]);
+        // A range is matched by its lowest generation, never its highest.
+        assert_eq!(admitted("A", "a.jsonl", 4), [0, 2, 3]);
+        assert_eq!(admitted("A", "a.jsonl", u64::MAX), [0, 2, 3]);
+        // Another source, and another path of the same session, stay out.
+        assert_eq!(admitted("B", "b.jsonl", 1), [1]);
+        assert_eq!(admitted("A", "b.jsonl", 9), Vec::<u64>::new());
+        assert_eq!(admitted("B", "a.jsonl", 9), Vec::<u64>::new());
+
+        // The exact-generation filter still excludes what this one admits.
+        let exact = segment_filter(dir.path(), "A", "a.jsonl", 3).unwrap();
+        assert!(!exact.admits(0) && exact.admits(2) && !exact.admits(3));
+
+        // Unknown segments are admitted, and with no index every one is.
+        let filter = segment_filter_through(dir.path(), "A", "a.jsonl", 1).unwrap();
+        assert!(filter.admits(99));
+        std::fs::remove_file(dir.path().join(INDEX_FILE)).unwrap();
+        assert_eq!(admitted("A", "a.jsonl", 0), [0, 1, 2, 3]);
     }
 
     #[test]

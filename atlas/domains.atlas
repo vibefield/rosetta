@@ -78,6 +78,9 @@ domain media "Images & assets" {
   contains mod:rosetta_store::assets::{renditions, image_refs}, mod:rosettad::image_renditions
   touches mod:rosettad::maintenance_pace
   contains path:crates/adapters/*/src/images.rs, file:crates/adapters/claude-code/src/media.rs
+  contains mod:rosetta_core::presented_media, mod:rosetta_adapter_support::presented_media, mod:rosetta_pipeline::presented_media
+  contains path:crates/adapters/*/src/presented_media.rs
+  touches mod:rosetta_capture::ledger::document
   contains path:clients/room/src/components/file-viewer/, file:clients/room/src/lib/image-media.ts
   see "docs/ARCHITECTURE.md#412-authored-images-2026-09-09"
 }

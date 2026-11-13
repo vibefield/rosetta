@@ -10,6 +10,7 @@ pub mod adapter;
 mod glob;
 pub mod html_artifacts;
 pub mod media;
+pub mod presented_media;
 pub mod time;
 pub mod tool;
 

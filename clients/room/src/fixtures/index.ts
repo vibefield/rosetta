@@ -127,6 +127,26 @@ function original(id: string, seed: string, name: string, width: number, height:
   };
 }
 
+/** A video an agent sent and ingestion captured: one recorded member, played
+ * from its own bytes once the reader asks. No poster, no rendition map. */
+function video(id: string, seed: string, name: string, width: number, height: number, byteLen: number): AttachmentRef {
+  const digest = digestOf(seed);
+  const asset: AssetRef = { url: `/api/assets/${digest}.mp4`, digest, media_type: "video/mp4", byte_len: byteLen };
+  return {
+    id, kind: "video", label: null, name, media_type: asset.media_type, byte_len: asset.byte_len,
+    source: { type: "asset", asset }, dimensions: { width, height }, message_ranges: [],
+  };
+}
+
+/** A video that was sent but not captured: the record keeps its path, its
+ * declared type and its size, and no bytes. */
+function uncapturedVideo(id: string, path: string, mediaType: string, byteLen: number): AttachmentRef {
+  return {
+    id, kind: "video", label: null, name: path.slice(path.lastIndexOf("/") + 1), media_type: mediaType, byte_len: byteLen,
+    source: { type: "reference", reference: { type: "file", path, resolved: true } }, dimensions: null, message_ranges: [],
+  };
+}
+
 function transcript(sessionId: string, startedAt: number) {
   const rows: TimelineEntry[] = [];
   const add = (body: TimelineBody, kind: GroupKind, model: string | null = null): void => {
@@ -145,12 +165,12 @@ function transcript(sessionId: string, startedAt: number) {
       add({ type: "user", text: { type: "inline", text }, attachments }, "human_turn"),
     agent: (text: string) =>
       add({ type: "agent", text: { type: "inline", text }, attachments: [], citations: [] }, "agent_cycle", "claude-opus-5-5"),
-    tool: (name: string, action: ToolAction, status: ToolStatus = "succeeded") =>
+    tool: (name: string, action: ToolAction, status: ToolStatus = "succeeded", attachments: AttachmentRef[] = []) =>
       add({ type: "tool_use", tool: {
         correlation: { key: `${sessionId}-k${rows.length + 1}`, derivation: "native_id" },
         native: { id: null, namespace: null, name, provider: null },
         status: { value: status, basis: "native_state" },
-        action, attachments: [], failure: null, timing: null,
+        action, attachments, failure: null, timing: null,
       } }, "agent_cycle"),
   };
 }
@@ -162,6 +182,11 @@ const read = (path: string): ToolAction => ({
 const shell = (command: string, finished = true): ToolAction => ({
   type: "shell", command: { type: "inline", text: command }, source_truncated: false, cwd: null, timeout_ms: null,
   background: false, outcome: finished ? { exit_code: 0, signal: null, process_id: null } : null,
+});
+
+const send = (paths: readonly string[], caption: string): ToolAction => ({
+  type: "artifact", operation: "send", artifact_kind: "file", name: null, description: { type: "inline", text: caption },
+  resources: paths.map((path) => ({ type: "file", path, resolved: true })), media: null,
 });
 
 /* ── the demo ───────────────────────────────────────────────────────────── */
@@ -241,6 +266,14 @@ export function createRoomDemo(now: number = Date.now()): RoomDemo {
   two.user("Extract the room into a package that dials nothing.");
   two.agent("The room reads four ports now: the catalog, one session's body, the desktop and the asset source.");
   two.agent("rosetta's own app is the first host, over its one client.");
+  // Two recordings the agent sent: one captured, played in place on a press;
+  // one whose file was gone before it could be captured.
+  const recordings = ["/Users/demo/Projects/rosetta/work/room-walkthrough.mp4", "/Users/demo/Projects/rosetta/work/before-the-split.mov"] as const;
+  two.tool("SendUserFile", send(recordings, "The room over the demo ports, and the app before the split"), "succeeded", [
+    video("1", "room-walkthrough", "room-walkthrough.mp4", 1920, 1080, 3_562_144),
+    uncapturedVideo("2", recordings[1], "video/quicktime", 11_482_112),
+  ]);
+  two.agent("Two recordings are attached: the room over the demo ports, and the app before the split.");
   timelines.set("s8", two.rows);
 
   const status: CatalogStatus = {
@@ -264,7 +297,19 @@ function placeholderSvg(digest: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 10"><rect width="16" height="10" fill="hsl(${hue.toFixed(0)} 55% 55%)"/><circle cx="11" cy="3.5" r="1.6" fill="hsl(${hue.toFixed(0)} 60% 85%)"/><path d="M0 10 6 4l4 4 2-2 4 4z" fill="hsl(${hue.toFixed(0)} 45% 35%)"/></svg>`;
 }
 
-/** The demo's addresses: every stored image is a drawn tile, inline. */
+/** What a video member reads as: the demo commits no encoded video, so this
+ * is a header only (an `ftyp` box, then a `free` box of padding). No browser
+ * can play it, and a harness that presses play sees the "could not play" face. */
+function headerOnlyMp4(): Uint8Array {
+  const bytes = new Uint8Array(64);
+  const text = (at: number, value: string) => { for (let i = 0; i < value.length; i += 1) bytes[at + i] = value.charCodeAt(i); };
+  bytes[3] = 24; text(4, "ftyp"); text(8, "isom"); bytes[14] = 2; text(16, "isom"); text(20, "mp41");
+  bytes[27] = 40; text(28, "free");
+  return bytes;
+}
+
+/** The demo's addresses: every stored image is a drawn tile, inline. It
+ * offers no `mediaAssetUrl`: a video's bytes are read through the session. */
 export function demoAssets(): AssetSource {
   return {
     imageAssetUrl: (asset) => `data:image/svg+xml,${encodeURIComponent(placeholderSvg(asset.digest))}`,
@@ -307,7 +352,8 @@ function demoSessionClient(demo: RoomDemo): SessionClient {
     readFileTarget: never,
     readPlan: never,
     readTextAsset: never,
-    readAsset: async (asset) => new TextEncoder().encode(placeholderSvg(asset.digest)),
+    readAsset: async (asset) => asset.media_type.startsWith("video/") ? headerOnlyMp4()
+      : new TextEncoder().encode(placeholderSvg(asset.digest)),
   };
 }
 

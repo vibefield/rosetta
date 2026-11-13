@@ -23,6 +23,7 @@ fn document_observations_round_trip_through_async_and_compressed_ledgers() {
                 captured_at: 99,
                 recovered_from: Some("/archive/review.html".into()),
                 status: DocumentCaptureStatus::Captured,
+                media: None,
                 bytes: b"<h1>Exact review bytes</h1>".to_vec(),
             };
             ledger
@@ -60,7 +61,34 @@ fn document_metadata_reads_legacy_frames_and_rejects_invalid_recovery_provenance
     );
     document.status = DocumentCaptureStatus::Missing;
     document.bytes.clear();
-    assert!(CapturedDocument::decode(&document.encode().unwrap()).is_none());
+    // The writer refuses the frame the reader would reject (the reader's
+    // half is pinned beside the frame contract, in `document.rs`).
+    assert!(matches!(
+        document.encode(),
+        Err(CaptureError::InvalidConfig(_))
+    ));
+}
+
+#[test]
+fn a_ledger_names_the_directory_its_segments_land_in() {
+    let root = TempDir::new().unwrap();
+    let dir = root.path().join("runtime").join("ledger");
+    let mut ledger = Ledger::open(&dir).unwrap();
+    assert_eq!(ledger.dir(), dir);
+    ledger
+        .append_raw(&source("a.jsonl"), 1, [(0, b"one".as_slice())])
+        .unwrap();
+    ledger.flush().unwrap();
+    assert_eq!(scan(ledger.dir()).unwrap().entries.len(), 1);
+    // The asynchronous handle answers the same, before and after its join.
+    let mut ledger = ledger.into_async_bounded(1024);
+    assert_eq!(ledger.dir(), dir);
+    ledger
+        .append_raw(&source("a.jsonl"), 1, [(4, b"two".as_slice())])
+        .unwrap();
+    ledger.flush().unwrap();
+    assert_eq!(ledger.dir(), dir);
+    assert_eq!(scan(ledger.dir()).unwrap().entries.len(), 2);
 }
 
 fn source(path: &str) -> SourceDef {

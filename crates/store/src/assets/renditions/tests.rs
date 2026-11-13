@@ -472,6 +472,89 @@ fn the_sweep_stops_on_request_and_writes_nothing() {
     ));
 }
 
+/// A leading `ftyp` box (size 24: major brand, minor version, two compatible
+/// brands) and padding: what the store accepts as a video member.
+fn video(major: &[u8; 4], padding: &[u8]) -> Vec<u8> {
+    let mut bytes = 24_u32.to_be_bytes().to_vec();
+    bytes.extend_from_slice(b"ftyp");
+    bytes.extend_from_slice(major);
+    bytes.extend_from_slice(&[0, 0, 2, 0]);
+    bytes.extend_from_slice(b"isomiso2");
+    bytes.extend_from_slice(padding);
+    bytes
+}
+
+/// Video members own no renditions. A viewer's request and the sweep both
+/// refuse one by its name, before the member is read or a codec slot is
+/// taken, and nothing is written beside it.
+#[test]
+fn a_video_member_owns_no_rendition_and_the_sweep_leaves_it_alone() {
+    let _codec = codec();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    assert!(!IMAGE_EXTENSIONS.contains(&"mp4") && !IMAGE_EXTENSIONS.contains(&"mov"));
+    let mp4 = video(b"isom", &[7; 4096]);
+    let mov = video(b"qt  ", &[9; 4096]);
+    assert_eq!(rosetta_media::video_media_type(&mp4), Some("video/mp4"));
+    assert_eq!(
+        rosetta_media::video_media_type(&mov),
+        Some("video/quicktime")
+    );
+    let members = [
+        (member(root, &mp4, "mp4"), mp4),
+        (member(root, &mov, "mov"), mov),
+    ];
+    let before = names(root);
+    assert_eq!(before.len(), 2);
+    let dims = Dimensions {
+        width: 1920,
+        height: 1080,
+    };
+    let unsupported = |result: Result<(), RenditionError>, what: &str| {
+        assert!(
+            matches!(result, Err(RenditionError::Media(MediaError::Unsupported))),
+            "{what}: {result:?}"
+        );
+    };
+
+    // A viewer: every variant, with and without a retry.
+    let jobs = rosetta_media::admitted_jobs();
+    for (name, _) in &members {
+        assert_eq!(image_base(name), None);
+        assert!(!is_complete(root, name, None));
+        assert!(!is_complete(root, name, Some(dims)));
+        for variant in VARIANTS {
+            for retry in [false, true] {
+                unsupported(rendition(root, name, variant, retry).map(drop), name);
+            }
+            assert!(cached(root, &name[..64], variant).is_none());
+        }
+    }
+    assert_eq!(
+        rosetta_media::admitted_jobs(),
+        jobs,
+        "a refused video takes no codec slot"
+    );
+
+    // The sweep, were it ever handed one.
+    let permit = background();
+    for (name, _) in &members {
+        for dimensions in [None, Some(dims)] {
+            unsupported(
+                ensure(&permit, root, name, dimensions, &|| false).map(drop),
+                name,
+            );
+        }
+    }
+    drop(permit);
+    assert_eq!(remove_stale_tempfiles(root, Duration::ZERO).unwrap(), 0);
+
+    assert_eq!(names(root), before, "no rendition, no tempfile");
+    for (name, bytes) in &members {
+        assert_eq!(&fs::read(root.join(name)).unwrap(), bytes, "{name}");
+    }
+}
+
 #[test]
 fn cache_names_follow_the_variant_grammar() {
     let digest = "a".repeat(64);

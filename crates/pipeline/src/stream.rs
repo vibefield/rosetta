@@ -520,6 +520,14 @@ pub(crate) fn ingest_file(
 ) -> Result<FilePass, PipelineError> {
     let cursor = cursor_row(adapter, store, runtime, file, instrument)?;
     let mut pass = IngestPass::begin(adapter, runtime, root, file, opts, cursor, mode)?;
+    if let Some(ledger) = ledger.as_deref() {
+        // The serial driver holds the ledger, so a pass that re-reads this
+        // source can carry a captured media frame forward instead of
+        // observing today's filesystem.
+        pass.set_prior_captures(crate::presented_media::prior::PriorCaptures::new(
+            ledger.dir(),
+        ));
+    }
     if mode == PassMode::Audit {
         pass.audit(runtime, file, tailer, store, instrument, report)?;
     }

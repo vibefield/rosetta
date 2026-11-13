@@ -604,3 +604,368 @@ fn a_span_without_pool_units_registers_nothing() {
     assert!(registered.is_none());
     assert_eq!(pool.stats().runtimes, 0);
 }
+
+/// An agent whose every record lists files it sent the user: the fact an
+/// adapter emits, with no tool row, since no store is involved here.
+struct SendsFiles;
+
+impl rosetta_adapter_support::AgentAdapter for SendsFiles {
+    fn kind(&self) -> &'static str {
+        "sends-files"
+    }
+
+    fn layout(&self) -> &rosetta_adapter_support::GroundTruthDoc {
+        ClaudeCodeAdapter.layout()
+    }
+
+    fn stream_driver(&self, _stream_id: &str) -> Option<StreamDriver> {
+        Some(StreamDriver::JsonLines)
+    }
+
+    fn normalizer_version(&self) -> u32 {
+        1
+    }
+
+    fn skim(
+        &self,
+        _stream_id: &str,
+        _stat: &rosetta_adapter_support::FileStat,
+        _head: &[u8],
+        _tail: &[u8],
+    ) -> rosetta_adapter_support::SkimResult {
+        rosetta_adapter_support::SkimResult::default()
+    }
+
+    fn ingest_line(
+        &self,
+        ctx: &mut rosetta_adapter_support::NormalizeCtx,
+        _stream_id: &str,
+        line: &[u8],
+    ) -> rosetta_adapter_support::LineOutcome {
+        use rosetta_adapter_support::presented_media::{PresentedFile, push};
+        let record: serde_json::Value = serde_json::from_slice(line).unwrap_or_default();
+        let listed: Vec<(String, u64)> = record["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|file| {
+                (
+                    file["path"].as_str().unwrap_or_default().to_owned(),
+                    file["size"].as_u64().unwrap_or_default(),
+                )
+            })
+            .collect();
+        let files: Vec<PresentedFile<'_>> = listed
+            .iter()
+            .map(|(path, len)| PresentedFile {
+                path,
+                cwd: None,
+                len: *len,
+                media_type: "video/mp4",
+            })
+            .collect();
+        let occurrence = format!("record-{}", ctx.src_offset.unwrap_or_default());
+        let mut ops = Vec::new();
+        let facts = push(ctx, "call", &occurrence, &files, None, &mut ops);
+        ops.extend(
+            facts
+                .into_iter()
+                .map(rosetta_core::IngestOp::PresentedMedia),
+        );
+        rosetta_adapter_support::LineOutcome::parsed(ops)
+    }
+}
+
+const SENT_BYTES: u64 = 8 * MIB;
+const SENT_FILES: usize = 6;
+
+/// A root with `SENT_FILES` sparse 8 MiB videos and `sources` transcripts,
+/// each sending every one of them from its own record: one tail batch.
+fn sending_home(sources: usize) -> (tempfile::TempDir, Vec<SessionFile>) {
+    let home = tempfile::TempDir::new().unwrap();
+    let mut records = String::new();
+    for index in 0..SENT_FILES {
+        let path = home.path().join(format!("clip-{index}.mp4"));
+        let mut header = 20_u32.to_be_bytes().to_vec();
+        header.extend_from_slice(b"ftypisom");
+        header.extend_from_slice(&[0, 0, 2, 0]);
+        header.extend_from_slice(b"mp41");
+        header.extend_from_slice(&u32::try_from(SENT_BYTES - 20).unwrap().to_be_bytes());
+        header.extend_from_slice(b"free");
+        std::fs::write(&path, header).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(SENT_BYTES)
+            .unwrap();
+        records.push_str(&format!(
+            "{}\n",
+            serde_json::json!({"files":[{"path":path,"size":SENT_BYTES}]})
+        ));
+    }
+    std::fs::create_dir(home.path().join("a")).unwrap();
+    let files = (0..sources)
+        .map(|index| {
+            let relative = format!("a/{index}.jsonl");
+            std::fs::write(home.path().join(&relative), &records).unwrap();
+            file(&relative, records.len() as u64)
+        })
+        .collect();
+    (home, files)
+}
+
+fn fresh_cursor(index: usize, file: &SessionFile) -> CursorState {
+    CursorState {
+        id: index as i64 + 1,
+        checkpoint: String::new(),
+        active_generation: 0,
+        highest_generation: 0,
+        session_id: file.projected_session_id(),
+    }
+}
+
+/// The captures a batch's ops show: its upgrades to an asset.
+fn captures(batch: &Batch) -> usize {
+    batch
+        .ops
+        .iter()
+        .filter(|op| match op {
+            rosetta_core::IngestOp::ToolUpdate { patch, .. } => {
+                patch.attachments.iter().any(|attachment| {
+                    matches!(
+                        attachment.source,
+                        rosetta_core::timeline::AttachmentSource::Asset { .. }
+                    )
+                })
+            }
+            _ => false,
+        })
+        .count()
+}
+
+/// Step one source to its end on this thread, as the serial driver does.
+fn step_serially(
+    root: &Path,
+    index: usize,
+    file: &SessionFile,
+) -> Vec<Vec<rosetta_capture::DocumentCaptureStatus>> {
+    use crate::stream::{PassMode, PassStep};
+    let opts = IngestOptions::default();
+    let tailer = Tailer::new(rosetta_capture::TailConfig::json_lines()).unwrap();
+    let runtime = runtime_row();
+    let instrument = Instrument::new();
+    let mut pass = IngestPass::begin(
+        &SendsFiles,
+        &runtime,
+        root,
+        file,
+        &opts,
+        fresh_cursor(index, file),
+        PassMode::Normal,
+    )
+    .unwrap();
+    let mut batches = Vec::new();
+    loop {
+        let stepped = pass
+            .step(&SendsFiles, &runtime, file, &tailer, &opts, &instrument)
+            .unwrap();
+        let PassStep::Batch(output) = stepped else {
+            return batches;
+        };
+        let statuses: Vec<_> = output
+            .raw
+            .documents
+            .iter()
+            .map(|(_, document)| document.status)
+            .collect();
+        let shown = captures(&output.batch);
+        assert_eq!(
+            shown,
+            statuses
+                .iter()
+                .filter(|status| **status == rosetta_capture::DocumentCaptureStatus::Captured)
+                .count()
+        );
+        batches.push(statuses);
+        if pass.committed().is_some() {
+            return batches;
+        }
+    }
+}
+
+#[test]
+fn several_captures_in_one_tail_batch_complete_serially_and_pooled() {
+    use rosetta_capture::DocumentCaptureStatus::Captured;
+    let (home, files) = sending_home(2);
+
+    // Serially: one batch per source, every file captured in it.
+    for (index, file) in files.iter().enumerate() {
+        assert_eq!(
+            step_serially(home.path(), index, file),
+            [vec![Captured; SENT_FILES]]
+        );
+    }
+
+    // Pooled: the same batches, whatever the look-ahead bounds are. A batch
+    // of captures is far over every tight bound; the head still steps, and
+    // the look-ahead source parks until it is the head.
+    let tight = PoolBudgets {
+        look_ahead_bytes: 1,
+        runtime_floor_bytes: 1,
+        head_bytes: 1,
+    };
+    for (budgets, compress) in [
+        (PoolBudgets::DEFAULT, None),
+        (budgets(MIB), None),
+        (tight, None),
+        (tight, Some(1)),
+    ] {
+        // A pool that parked forever fails here instead of hanging the run.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let watchdog = std::thread::spawn({
+            let (cancel, done) = (Arc::clone(&cancel), Arc::clone(&done));
+            move || {
+                let started = Instant::now();
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    if started.elapsed() > Duration::from_secs(120) {
+                        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        });
+        let opts = IngestOptions {
+            cancel: Some(Arc::clone(&cancel)),
+            ..IngestOptions::default()
+        };
+        let pool = CapturePool::new(2, budgets);
+        let lane = pool.register_lane(
+            Shared {
+                adapter: &SendsFiles,
+                runtime: runtime_row(),
+                root: home.path().to_path_buf(),
+                opts: opts.clone(),
+                tailer: Tailer::new(rosetta_capture::TailConfig::json_lines()).unwrap(),
+                frames: true,
+                compress,
+                units: files
+                    .iter()
+                    .enumerate()
+                    .map(|(index, file)| UnitSpec {
+                        file: file.clone(),
+                        cursor: fresh_cursor(index, file),
+                        key: index as u32,
+                    })
+                    .collect(),
+            },
+            LaneClass::Shared,
+        );
+        let batches = pool.scoped(|| {
+            let mut batches = Vec::new();
+            for unit in 0..files.len() {
+                loop {
+                    match lane.next(unit, &opts).expect("the head's step arrives") {
+                        Event::Batch(output) => {
+                            let held = output
+                                .frames
+                                .as_ref()
+                                .map_or(0, rosetta_capture::PrebuiltFrames::held_bytes);
+                            batches.push((unit, captures(&output.batch), held));
+                            if output.ends.is_some() {
+                                break;
+                            }
+                        }
+                        Event::Finished { .. } => break,
+                        Event::Failed(error) => panic!("{budgets:?}: {error}"),
+                    }
+                }
+                lane.advance(unit);
+            }
+            batches
+        });
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        watchdog.join().unwrap();
+        assert!(!cancel.load(std::sync::atomic::Ordering::Relaxed));
+
+        assert_eq!(
+            batches
+                .iter()
+                .map(|(unit, shown, _)| (*unit, *shown))
+                .collect::<Vec<_>>(),
+            [(0, SENT_FILES), (1, SENT_FILES)],
+            "{budgets:?}"
+        );
+        let captured = SENT_BYTES * SENT_FILES as u64;
+        for (_, _, held) in &batches {
+            if compress.is_none() {
+                assert!(*held >= captured, "the frames carry every capture");
+            }
+        }
+        let stats = pool.stats();
+        assert!(
+            stats.peak_head_bytes >= captured,
+            "{budgets:?}: a batch of captures is counted against the bounds: {stats:?}"
+        );
+        assert_accounts(&pool.lock());
+        drop(lane);
+    }
+}
+
+#[test]
+fn a_pass_observes_no_sent_file_of_a_ledger_only_source_or_with_the_switch_off() {
+    use rosetta_capture::DocumentCaptureStatus::Captured;
+    let (home, files) = sending_home(1);
+    assert_eq!(
+        step_serially(home.path(), 0, &files[0]),
+        [vec![Captured; SENT_FILES]]
+    );
+    // An internal session is captured raw and never becomes canonical work:
+    // nothing it names is read.
+    let internal = SessionFile {
+        ledger_only: true,
+        ..files[0].clone()
+    };
+    assert_eq!(
+        step_serially(home.path(), 0, &internal),
+        [Vec::new()],
+        "a ledger-only source writes no frame"
+    );
+
+    // The switch leaves every fact a reference and writes no frame.
+    use crate::stream::{PassMode, PassStep};
+    let opts = IngestOptions {
+        observe_presented_media: false,
+        ..IngestOptions::default()
+    };
+    let tailer = Tailer::new(rosetta_capture::TailConfig::json_lines()).unwrap();
+    let mut pass = IngestPass::begin(
+        &SendsFiles,
+        &runtime_row(),
+        home.path(),
+        &files[0],
+        &opts,
+        fresh_cursor(0, &files[0]),
+        PassMode::Normal,
+    )
+    .unwrap();
+    let stepped = pass
+        .step(
+            &SendsFiles,
+            &runtime_row(),
+            &files[0],
+            &tailer,
+            &opts,
+            &Instrument::new(),
+        )
+        .unwrap();
+    let PassStep::Batch(output) = stepped else {
+        panic!("one batch")
+    };
+    assert!(output.raw.documents.is_empty());
+    assert_eq!(output.raw.records.len(), SENT_FILES);
+    assert_eq!(captures(&output.batch), 0);
+    assert!(crate::presented_media::has_fact(&output.batch.ops));
+}

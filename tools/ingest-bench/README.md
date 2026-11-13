@@ -50,6 +50,11 @@ directory. Use `--work-dir NEW_DIR` only when private artifacts are needed for
 manual inspection; the directory must not exist yet and must stay out of
 version control.
 
+A campaign exports `ROSETTA_PRESENTED_MEDIA=off` on both sides of a pair, in the
+shell that starts the harness or the workbench (the daemon inherits it): capture
+of sent images and video reads files outside the snapshot
+(`docs/ARCHITECTURE.md`, "Cold-build measurement").
+
 The report is intentionally honest about the current measurement boundary:
 `AgentAdapter::ingest_line` combines parse and normalize, while generic
 fold/merge is not a standalone stage. Those rows are marked combined instead

@@ -20,7 +20,10 @@ import "@vibefield/rosetta-room/styles/room.css"; // after the host's --vf-* tok
 
 `@vibefield/rosetta-room/fixtures` renders the room with no daemon at all:
 `<HistoryRoom {...createDemoPorts()} />` (six projects, eleven sessions, a year
-of figures, two transcripts with images and web lines, all relative to now).
+of figures, two transcripts with images, web lines and two sent videos (one
+captured, one not), all relative to now). The demo commits no encoded video: a
+video member reads as a header-only MP4, so pressing play ends at "Could not
+play video".
 `createColdImport({ now })` returns `{ ports, consent, daemon, controller }`
 for a first import instead, over a seeded synthetic archive (by default the
 MacBook trace's shape: 8,612 sessions in 1,139 trees over 119 projects;
@@ -48,7 +51,7 @@ sockets stay the simulator's.
 |---|---|---|
 | `CatalogPort` | `subscribeMeta` (runtimes, projects, every session row, live: one snapshot then mutations) · `status` → `CatalogStatus` · `projectStats(projectId, window)` → `ProjectStats` (per-day heat and per-session facts) · `usage` · `dayUsage` · `search(CatalogSearch)` · optional `onConnectionChange`, `unavailable` (the host's own words for why the index cannot answer), `boost` and `projectStatsBatch` (every listed project's figures in one ask; present, the room asks it once per refresh instead of `projectStats` per project) | its client's REST and `/ws/meta` (`catalogOver`) |
 | `SessionPort` | `open(sessionId)` → a `SessionClient` bound to that session (its live subscription, child threads and team members each open their own; entries, report work, commands, plans, file targets, stored members), or a promise of one; `close(sessionId)` | the one client for every session; close is nothing |
-| `AssetSource` | `imageAssetUrl(asset, variant)` → a URL, null, or a promise of either · `attachmentAssetUrl(asset)` → the attachment's address, for identity and can-open only | the daemon's own URLs |
+| `AssetSource` | `imageAssetUrl(asset, variant)` → a URL, null, or a promise of either · `attachmentAssetUrl(asset)` → the attachment's address, for identity and can-open only · optional `mediaAssetUrl(asset)` → an address a `<video src>` can load, null, or a promise of either | the daemon's own URLs |
 | `HostPort` (optional) | `homeDir` · `platform` · `openInBrowser(name, bytes, browserId?)` · optional `browsers()` · `favicon(site)` · optional `worktree: { open, gitFacts, fileAction, ports }` | the Electron bridge (`hostPortOver`) |
 
 - **The room opens a session at most once at a time and follows every `open`
@@ -78,6 +81,30 @@ sockets stay the simulator's.
   originals as placeholders. The SDK published as 0.1.2 answers an
   original's `full` with its plain URL, so a host pairs this room with the
   SDK released beside it.
+- **A sent video plays in place, and only when asked.** A tool row's
+  attachment of kind `video` is a recorded member (`/api/assets/<digest>.mp4`
+  or `.mov`, `video/mp4` or `video/quicktime`, no `image_variants`) or a
+  reference to a file that was sent but not captured. The rail draws a
+  captured one as a tile with a play glyph, the file's name and its size, at
+  the rail's height and the video's own shape (16:9 when its dimensions are
+  unknown, never narrower than a square nor wider than 21:9). There is no
+  poster and no thumbnail: the room asks nothing for a video until the reader
+  presses play. Then it asks the optional **`mediaAssetUrl(asset)`** for an
+  address a `<video src>` can load. A host answers one only for an address
+  that honours byte ranges: served whole, without ranges, a video plays but
+  cannot seek, and no error tells the room to fall back. The daemon serves a
+  member whole, so rosetta's app leaves `mediaAssetUrl` out. A host without
+  it, one that answers null, or one whose address the element cannot load
+  needs nothing more: the room reads the member's bytes through the reading
+  session's `readAsset` and plays an object URL it makes and revokes itself,
+  which seeks. If the bytes cannot be read or played either,
+  the tile says "Could not play video" and offers Retry, which asks the host
+  again. A video that was not captured keeps the tile's shape, says "Video not
+  captured" with its name and size, and is not a button; an image sent the
+  same way says "Image not captured". A video is never passed to
+  `imageAssetUrl`, never opens the image viewer and is not in its gallery.
+  While a video has focus the rail's arrow, Home and End keys are the
+  video's. `attachmentAssetUrl` is still asked for a video, as its identity.
 - **`boost` is optional** because a grant never opens a write: only a host
   holding the daemon's bearer offers it. Without it the index keeps its order.
 - **`browsers()`** returns installed browser ids, names and icon URLs. HTML

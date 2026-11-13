@@ -800,6 +800,8 @@ fn asset_media_type(name: &str) -> Option<&'static str> {
         "webp" => Some("image/webp"),
         "bmp" => Some("image/bmp"),
         "ico" => Some("image/x-icon"),
+        "mp4" => Some("video/mp4"),
+        "mov" => Some("video/quicktime"),
         "pdf" => Some("application/pdf"),
         "json" => Some("application/vnd.rosetta.canonical-document+json"),
         "txt" => Some("text/plain; charset=utf-8"),
@@ -1400,4 +1402,49 @@ async fn contribution(
     })
     .await?;
     Ok(Json(response))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::asset_media_type;
+
+    const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn recorded_video_members_are_served_under_their_container_type() {
+        assert_eq!(
+            asset_media_type(&format!("{DIGEST}.mp4")),
+            Some("video/mp4")
+        );
+        assert_eq!(
+            asset_media_type(&format!("{DIGEST}.mov")),
+            Some("video/quicktime")
+        );
+        for name in [
+            format!("{DIGEST}.webm"),
+            format!("{DIGEST}.m4v"),
+            format!("{DIGEST}.MP4"),
+            format!("{DIGEST}.mp4.mov"),
+            DIGEST.to_string(),
+            format!("{}.mp4", &DIGEST[1..]),
+            format!("{}.mp4", DIGEST.to_uppercase()),
+            format!("../{DIGEST}.mp4"),
+        ] {
+            assert_eq!(asset_media_type(&name), None, "{name}");
+        }
+    }
+
+    /// Every member type core can name is served under that exact type,
+    /// except HTML, which only the session artifact route serves.
+    #[test]
+    fn every_member_extension_maps_back_to_its_media_type() {
+        for (media_type, extension) in rosetta_core::assets::MEMBER_TYPES {
+            let served = asset_media_type(&format!("{DIGEST}.{extension}"));
+            if media_type == "text/html; charset=utf-8" {
+                assert_eq!(served, None, "generic asset URLs do not serve HTML");
+            } else {
+                assert_eq!(served, Some(media_type), "{extension}");
+            }
+        }
+    }
 }

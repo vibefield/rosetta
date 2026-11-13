@@ -28,6 +28,11 @@ of the hashed files) lets Node run them where they are; no hashed file changed.
 the bench Mac outside the repository. Check it before use:
 `node verify_r1_snapshot.js SNAPSHOT_DIR`.
 
+**Sent files (2026-11-12).** A campaign exports `ROSETTA_PRESENTED_MEDIA=off` on both sides of a
+pair, in the shell that starts `pair_r1.sh` (the daemon inherits it; no hashed file changes):
+capture of sent images and video reads files outside the snapshot (`docs/ARCHITECTURE.md`,
+"Cold-build measurement").
+
 **Paths.** `pair_r1.sh` and `taskc2/run_v2.sh` hard-code `S=` to the scratch directory the
 campaign ran in (binaries in `$S/bin2`, pairs in `$S/pairs2`). To rerun, copy the kit to a working
 directory, point `S` there and `SNAP=` at the snapshot, and record the copies' new hashes.

@@ -31,6 +31,7 @@
     "test:activity-chart": "electron test/activity-chart.electron.mjs",
     "test:models-chart": "electron test/models-chart.electron.mjs",
     "test:room-host": "electron test/room-host.electron.mjs",
+    "test:video-tile": "electron test/video-tile.electron.mjs",
     "test:cold-import": "electron test/cold-import.electron.mjs",
     "typecheck": "tsc --noEmit"
   },
