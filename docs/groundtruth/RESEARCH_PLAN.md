@@ -474,6 +474,19 @@ GitHub repo is issues + changelog only). Near-daily releases; npm dist-tags `sta
   boundaries, and checkpoint resume. Older unstamped records retain identity-based ordered
   positions after known slots. Synthetic adapter and pipeline tests cover the split source,
   streamed cold apply, live append, and raw-ledger replay; private history is not a fixture.
+- **Sent files (2026-11-12, normalizer still 39):** a proven `SendUserFile` result (a
+  remembered opener of that name, not failed, the only `tool_result` on its line) now
+  attaches each sent image or video to its tool row as a path reference and states one
+  transient capture fact per file. The adapter reads `attachments[].path`, `.size` and
+  `.media_type` only, as the canonical `tool-result` facet declares them (`path` and `size`
+  required, `media_type` optional), and opens no file; the pipeline reads the bytes. A
+  recorded path is presented as written or skipped (a backslash, a `.` or `..` segment, a
+  `/dev` or `/proc` path), and the remembered opener ids, at most 256, forget the oldest
+  first. This rests on the organic census alone. That `size` is the byte length of the file at `path`
+  when it was sent, and the vocabulary of `media_type`, are not proven in the canonical file
+  (the census cannot enumerate MIME strings); a fixture needs an isolated runner. Read set
+  and rules: `docs/groundtruth/claude-code.md` §3.1. Synthetic adapter tests cover the
+  shapes, and a guard test pins the three declared fields.
 
 ### 5.7 Codex CLI (OpenAI) — **Tier A**
 
@@ -744,7 +757,7 @@ the owning UI record is
 
 | Adapter / evidence reviewed | Authored-image evidence | Implemented projection | Remaining native evidence |
 |---|---|---|---|
-| [Claude Code 2.1.241](../../groundtruth/claude-code/groundtruth.json) | User image blocks with inline Base64 or URL sources | Shared validated assets or references; invalid slots survive. Team/injected/tool media is excluded from user uploads. The 2.1.267 writer’s `imagePasteIds` binds numbered markers to image blocks. | Capture an isolated prompt with inline, URL and omitted media; native paste binding is writer-proven and covered by synthetic conformance tests. |
+| [Claude Code 2.1.241](../../groundtruth/claude-code/groundtruth.json) | User image blocks with inline Base64 or URL sources | Shared validated assets or references; invalid slots survive. Team/injected/tool media is excluded from user uploads. The 2.1.267 writer’s `imagePasteIds` binds numbered markers to image blocks. Sent files (2026-11-12): a proven `SendUserFile` result attaches each sent image or video to its tool row as a path reference with one capture fact, read from `attachments[].path`, `.size` and `.media_type` only. | Capture an isolated prompt with inline, URL and omitted media; native paste binding is writer-proven and covered by synthetic conformance tests. Sent-file capture rests on the organic census alone: that `size` is the byte length of the file at `path` when it was sent, and the `media_type` vocabulary, are not proven in the canonical file; a fixture needs an isolated runner. |
 | [Codex 0.149.1 fixtures / 0.150.1 writer](../../groundtruth/codex/groundtruth.json) | Pinned writer's `ContentItem::InputImage` with `image_url`; local-image text delimiters surround the actual image block | Refreshed content-union facet; data URLs become assets. Only exact opener/image/closer sequences lose transport text. Source labels emit unambiguous Unicode-scalar spans. | Commit an isolated native image scenario, including local and remote inputs; conformance tests and the private local corroboration are not a harvested fixture. |
 | [Pi 0.84.3](../../groundtruth/pi/groundtruth.json) | Typed user `image` blocks with `data` and `mimeType` | Correct native MIME field binding; text and ordered image slots share one prompt. Invalid first slots and repeated bytes survive. | Capture text+image and image-only native sessions. |
 | [Grok 1.0.5](../../groundtruth/grok/groundtruth.json) | Observed `user_message_chunk` image content includes `data`, `mimeType`, and `uri`; prompt identity is in update metadata | Existing prompt accumulator now retains ordered attachments, inline assets and references across checkpoints. | Capture image/text chunk ownership, ordering and reference-only content. |

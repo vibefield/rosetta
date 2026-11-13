@@ -264,6 +264,114 @@ mod tests {
         assert_eq!(prune_unreferenced_images(&conn, &db).unwrap(), 0);
     }
 
+    /// A leading `ftyp` box (size 24: major brand, minor version, two
+    /// compatible brands) and padding: what the store accepts as a video.
+    fn video(major: &[u8; 4], compatible: [&[u8; 4]; 2], padding: &[u8]) -> Vec<u8> {
+        let mut bytes = 24_u32.to_be_bytes().to_vec();
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(major);
+        bytes.extend_from_slice(&[0, 0, 2, 0]);
+        for brand in compatible {
+            bytes.extend_from_slice(brand);
+        }
+        bytes.extend_from_slice(padding);
+        bytes
+    }
+
+    /// Video members are not image bases: image GC removes neither a
+    /// referenced one nor an unreferenced one, whatever else it removes.
+    #[test]
+    fn video_members_are_never_collected() {
+        use rosetta_core::{IngestOp, ProjectionAsset};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let root = super::super::asset_root(&db);
+        let conn = schema();
+        // The store places the members, under the names it gives them.
+        let videos: Vec<ProjectionAsset> = [
+            ("video/mp4", b"isom", "referenced mp4"),
+            ("video/mp4", b"isom", "unreferenced mp4"),
+            ("video/quicktime", b"qt  ", "referenced mov"),
+            ("video/quicktime", b"qt  ", "unreferenced mov"),
+        ]
+        .into_iter()
+        .map(|(media_type, major, padding)| {
+            let bytes = video(major, [b"isom", b"iso2"], padding.as_bytes());
+            ProjectionAsset::new(media_type, bytes).unwrap()
+        })
+        .collect();
+        let mut store = super::super::AssetStore::for_projection(&db);
+        let placed = store
+            .materialize_batch(
+                &crate::Batch {
+                    ops: videos
+                        .iter()
+                        .cloned()
+                        .map(|asset| IngestOp::ProjectionAsset { asset })
+                        .collect(),
+                    ..crate::Batch::default()
+                },
+                true,
+            )
+            .unwrap();
+        assert_eq!(placed.files_written, 4);
+        let names: Vec<String> = videos.iter().map(|v| v.file_name().unwrap()).collect();
+        assert!(names[0].ends_with(".mp4") && names[1].ends_with(".mp4"));
+        assert!(names[2].ends_with(".mov") && names[3].ends_with(".mov"));
+        assert!(names.iter().all(|name| image_base(name).is_none()));
+
+        // Rows name the first mp4 (a tool attachment) and the first mov (an
+        // authored one). Two image members sit beside them, one referenced.
+        let kept_image = format!("{}.png", "a".repeat(64));
+        let dropped_image = format!("{}.png", "b".repeat(64));
+        // A rendition cache named for a video's digest has no image base.
+        let stray_cache = ImageVariant::Tile.file_name(&videos[0].digest);
+        for name in [&kept_image, &dropped_image, &stray_cache] {
+            std::fs::write(root.join(name), b"fixture").unwrap();
+        }
+        let asset = |name: &str| {
+            serde_json::json!({"source": {"type": "asset",
+                "asset": {"url": format!("/api/assets/{name}")}}})
+        };
+        let detail = serde_json::json!({"type": "prose", "attachments": [asset(&names[2]), asset(&kept_image)]});
+        let tool = serde_json::json!({"attachments": [asset(&names[0])]});
+        conn.execute(
+            "INSERT INTO message(detail, tool_detail) VALUES (?1, ?2)",
+            [detail.to_string(), tool.to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            prune_unreferenced_images(&conn, &db).unwrap(),
+            2,
+            "the unreferenced image and the stray cache"
+        );
+        assert!(root.join(&kept_image).exists());
+        assert!(!root.join(&dropped_image).exists());
+        assert!(!root.join(&stray_cache).exists());
+        let videos_intact = || {
+            for (asset, name) in videos.iter().zip(&names) {
+                assert_eq!(
+                    std::fs::read(root.join(name)).unwrap(),
+                    asset.bytes,
+                    "{name} was removed or rewritten"
+                );
+            }
+        };
+        videos_intact();
+
+        // With no row left at all, and nothing but videos on disk, the pass
+        // still removes none of them.
+        conn.execute("DELETE FROM message", []).unwrap();
+        assert_eq!(prune_unreferenced_images(&conn, &db).unwrap(), 1);
+        assert!(!root.join(&kept_image).exists());
+        videos_intact();
+        assert_eq!(prune_unreferenced_images(&conn, &db).unwrap(), 0);
+        videos_intact();
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), videos.len());
+    }
+
     #[test]
     fn stale_caches_alone_need_no_reference_scan() {
         let dir = tempfile::tempdir().unwrap();

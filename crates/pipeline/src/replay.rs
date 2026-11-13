@@ -415,6 +415,7 @@ struct FileReplay {
     last_offset: Option<u64>,
     generation_clean: bool,
     activated: bool,
+    slots: crate::presented_media::Slots,
 }
 
 struct PreparedFile {
@@ -924,10 +925,11 @@ pub fn rebuild_runtime_with_options(
                     && !already_projected.contains(&source.relative_path)
                     && let Some(file) = files.get_mut(&source.relative_path)
                 {
-                    crate::html_artifacts::project(
+                    crate::presented_media::project_document(
                         &source.session_id,
                         start_offset,
                         &document,
+                        &mut file.slots,
                         &mut file.ops,
                     );
                 }
@@ -1124,6 +1126,7 @@ pub fn prepare_runtime(
         last_offset: Option<u64>,
         generation_clean: bool,
         sealed: bool,
+        slots: crate::presented_media::Slots,
     }
 
     let mut report = RebuildReport {
@@ -1186,6 +1189,7 @@ pub fn prepare_runtime(
                             last_offset: None,
                             generation_clean: true,
                             sealed: false,
+                            slots: Default::default(),
                         },
                     );
                     report.files += 1;
@@ -1230,6 +1234,7 @@ pub fn prepare_runtime(
                         report.hard_errors += 1;
                     }
                 }
+                file.slots.note(&outcome.ops);
                 file.ops.extend(outcome.ops);
             }
             LedgerEntry::Document {
@@ -1245,10 +1250,11 @@ pub fn prepare_runtime(
                         .is_some_and(|(elected, _)| generation == *elected)
                     && let Some(file) = files.get_mut(&source.relative_path)
                 {
-                    crate::html_artifacts::project(
+                    crate::presented_media::project_document(
                         &source.session_id,
                         start_offset,
                         &document,
+                        &mut file.slots,
                         &mut file.ops,
                     );
                 }
@@ -1282,6 +1288,7 @@ pub fn prepare_runtime(
                             last_offset: None,
                             generation_clean: true,
                             sealed: true,
+                            slots: Default::default(),
                         },
                     );
                     report.files += 1;
@@ -1335,6 +1342,7 @@ pub fn prepare_runtime(
                 .map_err(PipelineError::Config)?,
             snapshot_stamp: None,
             snapshot_revision: None,
+            reframing: false,
         }
         .encode();
         let activate =
@@ -1830,6 +1838,7 @@ fn open_file(
         last_offset: None,
         generation_clean: true,
         activated: false,
+        slots: Default::default(),
     })
 }
 
@@ -1870,6 +1879,7 @@ fn flush_chunk(
                 .map_err(PipelineError::Config)?,
             snapshot_stamp: None,
             snapshot_revision: None,
+            reframing: false,
         }
         .encode();
         let update = CheckpointUpdate {

@@ -24,15 +24,15 @@ pub use discovery::{
 pub use document::{DocumentOutcome, DocumentSnapshot, snapshot as snapshot_document};
 pub use ledger::{
     CapturedDocument, DocumentCaptureStatus, EntryDigest, EntryTally, Ledger, LedgerEntry,
-    LedgerScan, LedgerVerify, LedgerVisit, LedgerWriteStats, MAX_RAW_RECORD_BYTES, PrebuiltFrames,
-    SegmentVerify, SourceDef, scan as scan_ledger, verify as verify_ledger, visit as visit_ledger,
-    visit_segments as visit_ledger_segments,
+    LedgerScan, LedgerVerify, LedgerVisit, LedgerWriteStats, MAX_RAW_RECORD_BYTES, MediaClaim,
+    PrebuiltFrames, SegmentVerify, SourceDef, scan as scan_ledger, verify as verify_ledger,
+    visit as visit_ledger, visit_segments as visit_ledger_segments,
 };
 pub use recompress::{RecompressOutcome, recompress_segment, recompress_segment_controlled};
 pub use segment::{FrameCompressor, SMALLEST_COMPRESSED_BATCH, SegmentCodec, sniff_segment};
 pub use segment_index::{
     IndexedSource, SegmentFilter, SegmentIndexLine, candidate_segments, rebuild_segment_index,
-    segment_filter,
+    segment_filter, segment_filter_through,
 };
 pub use sqlite::{
     DbSnapshot, DbStamp, SnapshotOutcome, SqliteFileStatus, db_stamp, is_db_sidecar,

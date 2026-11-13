@@ -189,6 +189,28 @@ An asset URL is learned from a timeline, and its digest names bytes, not a
 session. The cost is that a grant holder who already knows an image's digest
 can confirm that the projection holds it.
 
+*Sent files (2026-11-12):* the members behind that route now include files an
+agent sent the user by path: images, and MP4 and QuickTime video
+(`<digest>.mp4`, `<digest>.mov`). The transcript holds only a path, a size and
+a type, so the daemon copied the bytes from its own disk into the ledger at
+capture: any absolute path a proven sent-file result names, when the file there
+has the recorded size and the declared type's signature. The path is opened
+exactly as recorded: one that holds a backslash or is not in normal form (a `.`
+or `..` segment, an empty segment, a trailing slash) is skipped, not rewritten,
+and `/dev` and `/proc` paths are refused before any open, in any letter case.
+A match of size and signature is not proof the
+file is the one that was sent. They are captured bytes, like captured HTML, so
+`"read"` opens them without `"files"`, and the asset route still compares no
+session: a holder who knows a member's digest can fetch it, whichever session
+sent it. A video is returned whole, with its own content type; the route has no
+Range support. A `<video src>` at this address plays but cannot seek in
+Chromium, so the History room reads the member's bytes over the same route
+(`readAsset`) and plays an object URL; rosetta's app offers the room no video
+address.
+`ROSETTA_PRESENTED_MEDIA=off` in the daemon's environment stops
+the capture (`docs/ARCHITECTURE.md`, "HTML review artifacts", *Sent media in
+the Document frame*); it removes nothing already captured.
+
 **With `"files"` beside `"read"`** it also opens, when `{id}` = `sid`,
 
 ```

@@ -74,6 +74,11 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // 39 (2026-11-05, schema 30): a native publish keeps its description
         // and counts the files-map members it did not keep; a files-map string
         // is a source path resolved against `root`, never inline HTML.
+        // Still 39 after `SendUserFile` sent files became path-reference
+        // attachments and capture facts: a bump re-streams every source, and
+        // the tool row is otherwise unchanged. A row normalized earlier keeps
+        // no attachment until its source is next normalized or the projection
+        // is rebuilt (docs/ARCHITECTURE.md, "Mixed representations").
         39
     }
 

@@ -118,20 +118,29 @@ impl fmt::Debug for ProjectionAsset {
     }
 }
 
+/// The closed projection-member allowlist: each media type with the file
+/// extension its member is stored and served under. One table, so the store's
+/// signature check and the server's extension map can be held to it.
+pub const MEMBER_TYPES: [(&str, &str); 12] = [
+    ("image/png", "png"),
+    ("image/jpeg", "jpg"),
+    ("image/gif", "gif"),
+    ("image/webp", "webp"),
+    ("image/bmp", "bmp"),
+    ("image/x-icon", "ico"),
+    ("video/mp4", "mp4"),
+    ("video/quicktime", "mov"),
+    ("application/pdf", "pdf"),
+    ("application/vnd.rosetta.canonical-document+json", "json"),
+    ("text/plain; charset=utf-8", "txt"),
+    ("text/html; charset=utf-8", "html"),
+];
+
 fn extension(media_type: &str) -> Option<&'static str> {
-    match media_type {
-        "image/png" => Some("png"),
-        "image/jpeg" => Some("jpg"),
-        "image/gif" => Some("gif"),
-        "image/webp" => Some("webp"),
-        "image/bmp" => Some("bmp"),
-        "image/x-icon" => Some("ico"),
-        "application/pdf" => Some("pdf"),
-        "application/vnd.rosetta.canonical-document+json" => Some("json"),
-        "text/plain; charset=utf-8" => Some("txt"),
-        "text/html; charset=utf-8" => Some("html"),
-        _ => None,
-    }
+    MEMBER_TYPES
+        .iter()
+        .find(|(known, _)| *known == media_type)
+        .map(|(_, extension)| *extension)
 }
 
 /// Compatibility name for callers that specifically construct image
@@ -239,6 +248,58 @@ mod tests {
                 media_type == "image/webp",
                 "only a WebP base may carry a rendition bundle"
             );
+        }
+    }
+
+    #[test]
+    fn recorded_video_members_are_named_by_container() {
+        for (media_type, extension) in [("video/mp4", "mp4"), ("video/quicktime", "mov")] {
+            assert_eq!(
+                ProjectionAsset::supported_extension(media_type),
+                Some(extension)
+            );
+            let asset = ProjectionAsset::new(media_type, b"video bytes".to_vec()).unwrap();
+            assert!(asset.url().unwrap().ends_with(&format!(".{extension}")));
+            let reference = asset.reference();
+            assert_eq!(reference.image_variants, None);
+            reference.validate().unwrap();
+        }
+        assert_eq!(ProjectionAsset::supported_extension("video/webm"), None);
+    }
+
+    #[test]
+    fn the_member_table_names_each_type_and_extension_once() {
+        use std::collections::BTreeSet;
+        let types: BTreeSet<_> = super::MEMBER_TYPES.iter().map(|(t, _)| *t).collect();
+        let extensions: BTreeSet<_> = super::MEMBER_TYPES.iter().map(|(_, e)| *e).collect();
+        assert_eq!(types.len(), super::MEMBER_TYPES.len());
+        assert_eq!(extensions.len(), super::MEMBER_TYPES.len());
+        for (media_type, extension) in super::MEMBER_TYPES {
+            assert_eq!(
+                ProjectionAsset::supported_extension(media_type),
+                Some(extension)
+            );
+        }
+        // The types as they were before recorded video, extension for extension.
+        for (media_type, extension) in [
+            ("image/png", "png"),
+            ("image/jpeg", "jpg"),
+            ("image/gif", "gif"),
+            ("image/webp", "webp"),
+            ("image/bmp", "bmp"),
+            ("image/x-icon", "ico"),
+            ("application/pdf", "pdf"),
+            ("application/vnd.rosetta.canonical-document+json", "json"),
+            ("text/plain; charset=utf-8", "txt"),
+            ("text/html; charset=utf-8", "html"),
+        ] {
+            assert_eq!(
+                ProjectionAsset::supported_extension(media_type),
+                Some(extension)
+            );
+        }
+        for unsupported in ["", "image/svg+xml", "IMAGE/PNG", "text/plain", "video/webm"] {
+            assert_eq!(ProjectionAsset::supported_extension(unsupported), None);
         }
     }
 

@@ -27,6 +27,8 @@ use super::{
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::meta::SessionFile;
+use crate::presented_media::Fallback;
+use crate::presented_media::prior::{Loaded, PriorCaptures};
 use crate::{IngestOptions, PipelineError, SliceBudget};
 
 /// What one [`IngestPass::step`] produced.
@@ -140,6 +142,20 @@ pub(crate) struct IngestPass {
     retries: u32,
     force_replay: bool,
     staged: Option<Staged>,
+    /// The pass resumed a generation whose checkpoint has no tail (a rebuild
+    /// or a stopped-source activation wrote it), or one such a pass committed
+    /// before it reached the end of the file ([`PipeCheckpoint::reframing`]),
+    /// so it reads records the ledger already holds for this generation, and
+    /// their media frames.
+    reframes: bool,
+    /// Where this source's earlier media captures are read from: set by the
+    /// serial driver that holds a ledger, never on a pooled worker.
+    prior: Option<PriorCaptures>,
+    /// Those captures, loaded once per generation of a pass: at the first
+    /// fact of a pass that can meet earlier frames, otherwise at the first
+    /// sent file append growth could not capture. Dropped when the
+    /// generation restarts.
+    loaded: Option<Loaded>,
 }
 
 impl IngestPass {
@@ -194,6 +210,13 @@ impl IngestPass {
         let tail = resumed
             .as_ref()
             .and_then(|(checkpoint, _)| checkpoint.tail_checkpoint());
+        // A fresh cursor resumes too, at generation zero with no tail, but
+        // nothing was ledgered for it: only an existing generation re-frames.
+        // A re-frame that stopped between batches left a tail behind; its
+        // checkpoint says the rest of the file is still a re-frame.
+        let reframes = resumed.as_ref().is_some_and(|(checkpoint, _)| {
+            checkpoint.source_generation > 0 && (tail.is_none() || checkpoint.reframing)
+        });
         // Ledger-first means everything at or below the resumed committed offset
         // is already durable in the raw ledger for this generation. An audit (or
         // sibling-heal) replay re-frames those records to verify the projection,
@@ -284,7 +307,16 @@ impl IngestPass {
             retries: 0,
             force_replay,
             staged: None,
+            reframes,
+            prior: None,
+            loaded: None,
         })
+    }
+
+    /// Let the pass ask the ledger for an earlier capture of a sent file
+    /// before it reads the filesystem.
+    pub(crate) fn set_prior_captures(&mut self, prior: PriorCaptures) {
+        self.prior = Some(prior);
     }
 
     /// The rotating audit: one sequential read of the committed range against
@@ -534,6 +566,10 @@ impl IngestPass {
             self.ctx.next_ordinal = 0;
             self.ctx.cumulative = CumulativeUsage::new();
             self.ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
+            // The new generation is a replacement, not a re-frame, and its
+            // earlier captures are read through its own number.
+            self.reframes = false;
+            self.loaded = None;
         }
 
         let mut ops: Vec<IngestOp> = Vec::with_capacity(batch.items.len());
@@ -607,6 +643,70 @@ impl IngestPass {
                             Some(&self.path),
                             &opts.artifact_recovery,
                         ));
+                        if opts.observe_presented_media
+                            && crate::presented_media::has_fact(&outcome.ops)
+                        {
+                            // Only a pass that can meet earlier frames of
+                            // this source asks the ledger first: a re-frame,
+                            // or a replacement generation. One scoped walk,
+                            // at its first fact.
+                            let wants = self.reframes
+                                || (self.source_generation > 1
+                                    && self.source_generation != self.active_generation);
+                            if wants
+                                && self.loaded.is_none()
+                                && let Some(prior) = &self.prior
+                            {
+                                self.loaded = Some(prior.load(
+                                    &file.session_id,
+                                    &file.relative_path,
+                                    self.source_generation,
+                                ));
+                            }
+                            let generation = self.source_generation;
+                            let frames = match &self.prior {
+                                // Append growth of a generation that existed
+                                // before this pass reads the file first. Its
+                                // source may still hold an earlier capture of
+                                // the same file (the record repeated, or a
+                                // later one sent it again), so a file that
+                                // cannot be captured falls back to the ledger:
+                                // one walk, paid only then. A first read
+                                // never looks: a first generation, and a
+                                // sliced pass, whose early activation makes
+                                // each later slice of a file never read
+                                // before look like append growth and would
+                                // pay a walk per slice.
+                                Some(prior)
+                                    if !wants
+                                        && self.active_generation > 0
+                                        && self.budget.is_none() =>
+                                {
+                                    let load = || {
+                                        prior.load(
+                                            &file.session_id,
+                                            &file.relative_path,
+                                            generation,
+                                        )
+                                    };
+                                    crate::presented_media::capture(
+                                        &mut outcome.ops,
+                                        self.ledgered_through,
+                                        generation,
+                                        None,
+                                        Some(Fallback::new(&mut self.loaded, &load)),
+                                    )
+                                }
+                                _ => crate::presented_media::capture(
+                                    &mut outcome.ops,
+                                    self.ledgered_through,
+                                    generation,
+                                    self.loaded.as_ref().filter(|_| wants),
+                                    None,
+                                ),
+                            };
+                            documents.extend(frames);
+                        }
                     }
                     ops.extend(outcome.ops);
                 }
@@ -690,6 +790,11 @@ impl IngestPass {
             adapter_state,
             snapshot_stamp: self.input.as_ref().map(|input| input.stamp.clone()),
             snapshot_revision: None,
+            // A re-frame with more to read: the pass that resumes from this
+            // tail still meets records the ledger holds. The batch that
+            // reaches the end of the file clears it, and a generation
+            // restart has already left the re-frame.
+            reframing: self.reframes && batch.more_available,
         }
         .encode();
 

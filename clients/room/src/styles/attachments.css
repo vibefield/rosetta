@@ -27,3 +27,16 @@ button.tr-att__tile { padding: 0; border: 0; color: inherit; cursor: pointer; ap
 @container (max-width: 300px) { .tr-att__tile--missing svg, .tr-att__tile--loading svg { display: none; } .tr-att__tile--missing, .tr-att__tile--loading { padding: 10px; } .tr-att figure { flex-basis: 96px; width: 96px; } .tr-att__tile { border-radius: 13px; } }
 .tr-ledger > .tr-attachments { margin-top: 8px; margin-bottom: 12px; }
 .tr-prompt-message + .tr-prompt-message:has(.tr-attachments), .tr-prompt-message:has(.tr-attachments) + .tr-prompt-message { margin-top: 8px; }
+/* §06A · sent videos, 2026-11-12: the rail's height and the video's own shape (16:9 when unmeasured); name and size stand in for a poster. */
+.tr-att { --tr-att-size: 144px; }
+.tr-att figure.tr-att__video { flex: 0 0 auto; width: calc(var(--tr-att-size) * var(--tr-video-aspect, 1.7778)); }
+.tr-att__video .tr-att__tile { aspect-ratio: auto; height: var(--tr-att-size); align-content: center; gap: 4px; padding: 12px; color: var(--vf-text-secondary); font-size: 11px; line-height: 1.4; text-align: center; }
+.tr-att__video .tr-att__tile--missing, .tr-att__video .tr-att__tile--loading { color: var(--vf-text-tertiary); }
+.tr-att__name, .tr-att__facts { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-att__name { color: var(--vf-text-primary); font-weight: 500; }
+.tr-att__facts { color: var(--vf-text-tertiary); font-variant-numeric: tabular-nums; }
+.tr-att__video .tr-att__tile--playing { padding: 0; background: #000; }
+.tr-att__tile video { display: block; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.tr-att__tile video:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
+@container (max-width: 440px) { .tr-att { --tr-att-size: 112px; } }
+@container (max-width: 300px) { .tr-att { --tr-att-size: 96px; } .tr-att__video .tr-att__tile { padding: 8px; gap: 2px; } }

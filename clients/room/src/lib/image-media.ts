@@ -60,3 +60,21 @@ export function isRecordedImageAsset(asset: AssetRef): boolean {
   const extension = recordedImageExtension(asset.media_type);
   return extension !== undefined && isMember(asset, asset.media_type, extension);
 }
+
+/** The two video containers ingestion records, each with the one extension
+ * its content-addressed member name carries. */
+const RECORDED_VIDEO_EXTENSION: ReadonlyMap<string, string> = new Map([
+  ["video/mp4", "mp4"],
+  ["video/quicktime", "mov"],
+]);
+
+/** A sent video the room may play: one recorded member,
+ * `/api/assets/<digest>.mp4` or `.mov`, with no rendition map. The room never
+ * draws it as an image and asks no rendition of it; `VideoTile` plays the
+ * member's own bytes once the reader asks. */
+export function isRecordedVideoAsset(asset: AssetRef): boolean {
+  // A malformed row's missing asset is refused, never a render-time throw.
+  if (asset == null || asset.image_variants != null) return false;
+  const extension = RECORDED_VIDEO_EXTENSION.get(asset.media_type);
+  return extension !== undefined && isMember(asset, asset.media_type, extension);
+}

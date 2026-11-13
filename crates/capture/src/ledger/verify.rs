@@ -15,7 +15,10 @@
 //! digest. The same encoding is therefore also split in two: a source digest
 //! over the raw, document and seal entries — the captured content, which two
 //! builds of read-only inputs must reproduce — and a meta digest over the
-//! metadata entries alone.
+//! metadata entries alone. A document entry's observation time is as
+//! run-dependent, so the entry digest alone sees it; the media claim of one
+//! that carries it (the type and size its transcript recorded) is source
+//! content.
 //!
 //! The source digest still depends on the order sources interleave in, which
 //! only a path walk fixes. A root-tree walk captures trees newest first and
@@ -32,13 +35,21 @@ use crate::segment::SegmentReader;
 use crate::segment_index::INDEX_FILE;
 use crate::{CaptureError, io_error};
 
-use super::{FramePrefix, LedgerEntry, SourceDef, frame_prefix, scan_segment, segment_files};
+use super::{
+    DocumentCaptureStatus, FramePrefix, LedgerEntry, SourceDef, frame_prefix, scan_segment,
+    segment_files,
+};
 
 // Entry kinds in the canonical encoding (not frame tags).
 const ENTRY_RAW: u8 = 1;
 const ENTRY_SEAL: u8 = 2;
 const ENTRY_META: u8 = 3;
 const ENTRY_DOCUMENT: u8 = 4;
+/// A document entry that carries a media claim. An HTML document keeps
+/// `ENTRY_DOCUMENT` and its whole earlier encoding, so a ledger with no media
+/// frame keeps its digests; the separate kind keeps the two forms apart
+/// whatever bytes either holds.
+const ENTRY_MEDIA: u8 = 5;
 
 /// What one segment decodes to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,10 +77,31 @@ pub struct EntryTally {
     pub entries: u64,
     pub raw_records: u64,
     pub raw_payload_bytes: u64,
+    /// Every document frame, HTML and media alike.
     pub documents: u64,
     pub document_bytes: u64,
     pub seals: u64,
     pub metas: u64,
+    /// The document frames that carry a media claim, by capture status: what
+    /// became of each sent image or video, as counts and bytes only. They are
+    /// also counted in `documents` and `document_bytes`.
+    pub media_captured: u64,
+    pub media_captured_bytes: u64,
+    pub media_missing: u64,
+    pub media_too_large: u64,
+    pub media_unsupported: u64,
+    pub media_changed_during_read: u64,
+}
+
+impl EntryTally {
+    /// Document frames that carry a media claim, whatever their status.
+    pub fn media_frames(&self) -> u64 {
+        self.media_captured
+            + self.media_missing
+            + self.media_too_large
+            + self.media_unsupported
+            + self.media_changed_during_read
+    }
 }
 
 /// One runtime ledger's evidence.
@@ -166,8 +198,26 @@ impl EntryDigest {
             } => {
                 tally.documents += 1;
                 tally.document_bytes += document.bytes.len() as u64;
+                if document.media.is_some() {
+                    match document.status {
+                        DocumentCaptureStatus::Captured => {
+                            tally.media_captured += 1;
+                            tally.media_captured_bytes += document.bytes.len() as u64;
+                        }
+                        DocumentCaptureStatus::Missing => tally.media_missing += 1,
+                        DocumentCaptureStatus::TooLarge => tally.media_too_large += 1,
+                        DocumentCaptureStatus::Unsupported => tally.media_unsupported += 1,
+                        DocumentCaptureStatus::ChangedDuringRead => {
+                            tally.media_changed_during_read += 1;
+                        }
+                    }
+                }
                 let mut out = Encoder::for_source(all, sources, per_source, source);
-                out.put(&[ENTRY_DOCUMENT]);
+                out.put(&[if document.media.is_some() {
+                    ENTRY_MEDIA
+                } else {
+                    ENTRY_DOCUMENT
+                }]);
                 out.source(source);
                 out.put(&generation.to_be_bytes());
                 out.put(&start_offset.to_be_bytes());
@@ -179,6 +229,12 @@ impl EntryDigest {
                         .expect("enum")
                         .as_bytes(),
                 );
+                // The claim is what the transcript recorded, so it is source
+                // content: an uncaptured frame differs by it alone.
+                if let Some(media) = &document.media {
+                    out.bytes(media.media_type.as_bytes());
+                    out.put(&media.expected_len.to_be_bytes());
+                }
                 out.bytes(&document.bytes);
             }
             LedgerEntry::GenerationComplete {
