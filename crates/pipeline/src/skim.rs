@@ -34,6 +34,8 @@ pub(crate) enum Skimmed {
     /// A transcript no skim identifies whose first record no delimiter has
     /// ended yet: its writer is still writing it, so it is not yet a session.
     Unfinished,
+    /// No bounded opening record can identify this source.
+    Unidentified,
     /// A transcript's skim, after any bounded identity or title fallback,
     /// and the file's length and mtime the skim read it at.
     Transcript(Box<SkimResult>, Cut),
@@ -78,12 +80,21 @@ pub(crate) fn skim_transcript(
     instrument: &Instrument,
 ) -> Result<Skimmed, PipelineError> {
     if let Some(location) = adapter.transcript_location(&file.relative_path) {
-        let head = match location
-            .source
-            .head(root, crate::MAX_PROJECTED_RECORD_BYTES)
-        {
+        let head = match instrument.time(Metric::SkimNanos, || {
+            location
+                .source
+                .head(root, crate::MAX_PROJECTED_RECORD_BYTES)
+        }) {
             Ok(Some(head)) => head,
             Ok(None) => return Ok(Skimmed::Vanished),
+            Err(rosetta_capture::CaptureError::LimitExceeded(_)) => {
+                instrument.add(Metric::FilesSkimmed, 1);
+                instrument.add(
+                    Metric::BytesRead,
+                    crate::MAX_PROJECTED_RECORD_BYTES as u64 + 1,
+                );
+                return Ok(Skimmed::Unidentified);
+            }
             Err(error) if error.incomplete_input() => return Ok(Skimmed::Vanished),
             Err(error) => return Err(error.into()),
         };

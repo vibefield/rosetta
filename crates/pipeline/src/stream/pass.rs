@@ -468,13 +468,7 @@ impl IngestPass {
             let read = match read {
                 Ok(read) => read,
                 Err(_) if opts.check_cancelled().is_err() => return Err(PipelineError::Cancelled),
-                Err(rosetta_capture::CaptureError::Io { source, .. })
-                    if file.input.is_some()
-                        && matches!(
-                            source.kind(),
-                            std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof
-                        ) =>
-                {
+                Err(error) if file.input.is_some() && error.incomplete_input() => {
                     deltas.retries_exhausted += 1;
                     instrument.add(Metric::RetriesExhausted, 1);
                     return Ok(self.stop_short(runtime, file, deltas));

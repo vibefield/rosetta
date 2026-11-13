@@ -160,6 +160,11 @@ pub(super) fn read_inventory(
                         report.files_unfinished += 1;
                         instrument.add(Metric::FilesUnfinished, 1);
                     }
+                    crate::skim::Skimmed::Unidentified => {
+                        report.files_skimmed += 1;
+                        report.files_unidentified += 1;
+                        instrument.add(Metric::FilesUnidentified, 1);
+                    }
                     crate::skim::Skimmed::Transcript(skim, cut) => {
                         report.files_skimmed += 1;
                         admit_skim(
