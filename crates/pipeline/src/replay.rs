@@ -107,6 +107,7 @@ struct ElectionCache {
     only_dirty: HashSet<String>,
     unsealed: BTreeMap<String, (u64, SourceDef)>,
     admission: ReplayAdmission,
+    required_sources: Vec<crate::meta_journal::SourceRequirement>,
 }
 
 struct ElectionState {
@@ -116,6 +117,7 @@ struct ElectionState {
     only_dirty: HashSet<String>,
     unsealed: BTreeMap<String, (u64, SourceDef)>,
     admission: ReplayAdmission,
+    required_sources: Vec<crate::meta_journal::SourceRequirement>,
 }
 
 fn segment_stamps(ledger_dir: &Path) -> Result<Vec<SegmentStamp>, PipelineError> {
@@ -162,7 +164,7 @@ fn load_election_cache(
 ) -> Option<ElectionState> {
     let payload = std::fs::read(path).ok()?;
     let cache: ElectionCache = serde_json::from_slice(&payload).ok()?;
-    if cache.schema != 3
+    if cache.schema != 4
         || cache.normalizer_version != normalizer_version
         || cache.segments != segments
     {
@@ -179,6 +181,7 @@ fn load_election_cache(
         only_dirty: cache.only_dirty,
         unsealed: cache.unsealed,
         admission: cache.admission,
+        required_sources: cache.required_sources,
     })
 }
 
@@ -200,7 +203,7 @@ fn save_election_cache(
         })?;
     }
     let cache = ElectionCache {
-        schema: 3,
+        schema: 4,
         normalizer_version,
         segments,
         visit_segments: state.visit.segments,
@@ -211,6 +214,7 @@ fn save_election_cache(
         only_dirty: state.only_dirty.clone(),
         unsealed: state.unsealed.clone(),
         admission: state.admission.clone(),
+        required_sources: state.required_sources.clone(),
     };
     let payload = serde_json::to_vec(&cache).map_err(|error| {
         PipelineError::Config(format!(
@@ -634,6 +638,7 @@ pub fn rebuild_runtime_with_options(
         let mut latest_seals: BTreeMap<String, (u64, SourceDef, bool)> = BTreeMap::new();
         let mut raw_generations: BTreeMap<(String, u64), SourceDef> = BTreeMap::new();
         let mut admission = AdmissionScan::default();
+        let mut required_sources = Vec::new();
         let visit = visit_election::<PipelineError, _>(ledger_dir, instrument, |entry| {
             if options
                 .cancel
@@ -678,7 +683,16 @@ pub fn rebuild_runtime_with_options(
                         *slot = (generation, source);
                     }
                 }
-                LedgerEntry::Meta { .. } | LedgerEntry::Document { .. } => {}
+                LedgerEntry::Meta {
+                    schema_version,
+                    payload,
+                } => {
+                    if schema_version == crate::LEDGER_META_SCHEMA_VERSION {
+                        required_sources =
+                            crate::LedgerMetadata::decode(&payload)?.required_sources;
+                    }
+                }
+                LedgerEntry::Document { .. } => {}
             }
             Ok(())
         })?;
@@ -726,6 +740,7 @@ pub fn rebuild_runtime_with_options(
             latest_seals,
             only_dirty,
             unsealed,
+            required_sources,
         };
         if let (Some(path), Some(segments)) =
             (options.election_cache.as_deref(), cache_segments.clone())
@@ -741,6 +756,7 @@ pub fn rebuild_runtime_with_options(
         only_dirty,
         unsealed,
         admission,
+        required_sources,
     } = election;
     report.segments = first.segments;
     report.torn_segments = first.torn_segments;
@@ -777,14 +793,12 @@ pub fn rebuild_runtime_with_options(
                 schema_version,
                 payload,
             } => {
-                if !matches!(schema_version, 0 | crate::LEDGER_META_SCHEMA_VERSION) {
+                if !matches!(schema_version, 0 | 2 | crate::LEDGER_META_SCHEMA_VERSION) {
                     return Err(PipelineError::Config(format!(
                         "unsupported ledger meta schema version {schema_version}"
                     )));
                 }
-                let mut ops: Vec<IngestOp> = serde_json::from_str(&payload).map_err(|error| {
-                    PipelineError::Config(format!("undecodable meta batch in ledger: {error}"))
-                })?;
+                let mut ops = crate::LedgerMetadata::decode(&payload)?.ops;
                 admission.filter_meta(&mut ops);
                 for op in &mut ops {
                     if let IngestOp::SessionMeta(row) = op {
@@ -1039,6 +1053,7 @@ pub fn rebuild_runtime_with_options(
     // sessions whose every sealed source is currently clean are Indexed.
     // Meta-only sessions are absent from this map and retain Pending.
     let mut session_health: BTreeMap<String, bool> = BTreeMap::new();
+    let required_present = latest_seals.keys().cloned().collect();
     for (path, (_, source, known_unclean)) in latest_seals {
         let clean = if known_unclean {
             false
@@ -1054,6 +1069,11 @@ pub fn rebuild_runtime_with_options(
             .and_modify(|healthy| *healthy &= clean)
             .or_insert(clean);
     }
+    crate::meta_journal::apply_requirements(
+        &required_sources,
+        &required_present,
+        &mut session_health,
+    );
     for (session_id, clean) in session_health {
         let next = if clean {
             StreamState::Indexed
@@ -1128,14 +1148,12 @@ pub fn prepare_runtime(
                 schema_version,
                 payload,
             } => {
-                if !matches!(schema_version, 0 | crate::LEDGER_META_SCHEMA_VERSION) {
+                if !matches!(schema_version, 0 | 2 | crate::LEDGER_META_SCHEMA_VERSION) {
                     return Err(PipelineError::Config(format!(
                         "unsupported ledger meta schema version {schema_version}"
                     )));
                 }
-                let mut ops = serde_json::from_str(&payload).map_err(|error| {
-                    PipelineError::Config(format!("undecodable meta batch in ledger: {error}"))
-                })?;
+                let mut ops = crate::LedgerMetadata::decode(&payload)?.ops;
                 election.admission.filter_meta(&mut ops);
                 meta_ops.push(ops);
                 report.meta_batches += 1;
@@ -1345,6 +1363,7 @@ pub fn prepare_runtime(
         .iter()
         .map(|file| (file.source.relative_path.as_str(), file))
         .collect::<BTreeMap<_, _>>();
+    let required_present = election.latest_seals.keys().cloned().collect();
     for (path, (generation, source, known_unclean)) in election.latest_seals {
         let clean = !known_unclean
             && prepared_by_path.get(path.as_str()).is_some_and(|file| {
@@ -1356,6 +1375,11 @@ pub fn prepare_runtime(
             .or_insert(clean);
     }
 
+    crate::meta_journal::apply_requirements(
+        &election.required_sources,
+        &required_present,
+        &mut session_health,
+    );
     Ok(PreparedRuntime {
         report,
         meta_ops,

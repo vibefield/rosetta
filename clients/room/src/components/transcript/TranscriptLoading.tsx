@@ -1,3 +1,5 @@
+import { useHostInputs } from "../../host-inputs";
+import { Hold } from "../ui/Hold";
 import "../../styles/transcript-loading.css";
 
 /** Which wait the loader shows: its words, keyed by the inert
@@ -24,6 +26,16 @@ export function TranscriptLoading({ error, waitingForTeam, seeking, canContinue,
     : seeking ? "seeking"
     : indexing ? "preparing" : "loading";
   const label = LOADING_LABELS[shown];
+  const { waitMark } = useHostInputs();
+  // R10 — in the host's mark, a conversation's wait is a hold in its column:
+  // the mark and its words, no sketch and no sweep. A load that failed is no
+  // wait, so it keeps the loader's own face with Try again.
+  if (waitMark !== undefined && error === null) {
+    return <div className="tr-loading" data-loading-label={shown} data-marked="">
+      <Hold place="column" face="transcript-loading" words={{ key: shown, line: label }}
+        act={canContinue ? <button type="button" onClick={onContinue}>Read available messages</button> : null} />
+    </div>;
+  }
   return <div className="tr-loading" data-error={error !== null || undefined} data-loading-label={shown}>
     <div className="tr-loading__body">
       <div className="tr-loading__sketch" aria-hidden="true">

@@ -275,6 +275,30 @@ The callbacks are called while the room renders, so a host keeps them cheap.
   a checked row. The room's own search sheet keeps its native selects.
 - **`repositoryUrl(projectId)`** — the address ②'s repository act opens.
   Undefined: the room's own reading of `git_repo`; null: no act.
+- **`waitMark`** → `RoomWaitMark` — the host's mark for the room's
+  waits: `mark(place, { resting })` draws it for a place (`"view"`,
+  `"column"`, `"card"`), at rest while the work it stands for is paused, and
+  `carried` says the host's own hold already stands where the room's first
+  one comes. With it:
+  - **the view's waits are one hold** — reaching the index, then the cold
+    start before its first project: the mark at the centre of the room's box,
+    one line 26 under it (`connectingTitle`, or the step's own title with the
+    ellipsis of work under way) and its count 4 under that ("1,333 files
+    checked"). It is late (nothing for 120ms), stands 800ms once it has shown,
+    fades over 280ms (120ms under reduced motion), and what comes next waits
+    for it; a new line crossfades in place. An index that has stopped
+    answering keeps the room's face: a failure is no wait.
+  - **the import card wears the mark** where IMPORTING HISTORY stood, the step
+    beside it; its words keep to the step's title and its count, a fraction
+    the step knows is a colourless 2px hairline (none for one it does not),
+    and the detail, the amount, the connection and the timer fold under Agent
+    details. Paused updates stand the mark at rest.
+  - **a conversation's wait is a hold in its column**, its sketch and sweep
+    gone; a load that failed keeps its own face and Try again.
+  - **nothing sweeps beside the mark**: a meter that knows no amount draws
+    nothing (a veil keeps its words), and one that knows still fills.
+
+  Absent: every wait is the room's own, as rosetta's app shows it.
 
 ## The reader (`TranscriptReader`)
 

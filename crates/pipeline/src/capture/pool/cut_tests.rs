@@ -26,6 +26,7 @@ fn runtime() -> RuntimeRow {
 fn unit(index: u32, size: u64, cut_len: Option<u64>) -> UnitSpec {
     UnitSpec {
         file: SessionFile {
+            input: None,
             ledger_only: false,
             relative_path: format!("projects/-w-cut/s{index}.jsonl"),
             stream_id: "transcript".into(),

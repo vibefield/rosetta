@@ -17,6 +17,7 @@ pulldown-cmark.workspace = true
 percent-encoding.workspace = true
 
 [dev-dependencies]
+zstd.workspace = true
 base64.workspace = true
 rosetta-media = { path = "../media" }
 rusqlite.workspace = true

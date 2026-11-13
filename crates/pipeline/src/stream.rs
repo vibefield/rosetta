@@ -529,7 +529,7 @@ pub(crate) fn ingest_file(
         ));
     }
     if mode == PassMode::Audit {
-        pass.audit(runtime, file, tailer, store, instrument, report)?;
+        pass.audit(runtime, file, tailer, opts, store, instrument, report)?;
     }
     loop {
         let started = Instant::now();

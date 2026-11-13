@@ -34,6 +34,8 @@ pub(crate) enum Skimmed {
     /// A transcript no skim identifies whose first record no delimiter has
     /// ended yet: its writer is still writing it, so it is not yet a session.
     Unfinished,
+    /// No bounded opening record can identify this source.
+    Unidentified,
     /// A transcript's skim, after any bounded identity or title fallback,
     /// and the file's length and mtime the skim read it at.
     Transcript(Box<SkimResult>, Cut),
@@ -53,12 +55,13 @@ pub(crate) enum Skimmed {
 /// taken at capture, so a root-tree build reads them to their capture-time
 /// end, not to the cut. Of those, only a document that frames records (a
 /// Claude Code workflow run) can project content newer than the cut; subagent
-/// sidecars frame none, and Codex declares no snapshot record queries. A
-/// fresh roster holds no transcript without a cut: a transcript the skim
-/// could not open is not admitted.
+/// sidecars frame none, and Codex selector records emit no canonical ops. A
+/// compressed input carries its mtime but no physical-to-logical length
+/// guess; capture pins and verifies it once. Composed inputs carry explicit
+/// ancestor byte cuts. Missing selected inputs retain an incomplete obligation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Cut {
-    pub(crate) len: u64,
+    pub(crate) len: Option<u64>,
     pub(crate) modified_ms: i64,
 }
 
@@ -76,6 +79,44 @@ pub(crate) fn skim_transcript(
     opts: &IngestOptions,
     instrument: &Instrument,
 ) -> Result<Skimmed, PipelineError> {
+    if let Some(location) = adapter.transcript_location(&file.relative_path) {
+        let head = match instrument.time(Metric::SkimNanos, || {
+            location
+                .source
+                .head(root, crate::MAX_PROJECTED_RECORD_BYTES)
+        }) {
+            Ok(Some(head)) => head,
+            Ok(None) => return Ok(Skimmed::Vanished),
+            Err(rosetta_capture::CaptureError::LimitExceeded(_)) => {
+                instrument.add(Metric::FilesSkimmed, 1);
+                instrument.add(
+                    Metric::BytesRead,
+                    crate::MAX_PROJECTED_RECORD_BYTES as u64 + 1,
+                );
+                return Ok(Skimmed::Unidentified);
+            }
+            Err(error) if error.incomplete_input() => return Ok(Skimmed::Vanished),
+            Err(error) => return Err(error.into()),
+        };
+        instrument.add(Metric::FilesSkimmed, 1);
+        instrument.add(Metric::BytesRead, head.bytes.len() as u64);
+        let stat = FileStat {
+            relative_path: file.relative_path.clone(),
+            size: head.len.unwrap_or(u64::MAX),
+            modified_ms: head.modified_ms,
+        };
+        let skim = adapter.skim(&stream.id, &stat, &head.bytes, &[]);
+        if skim.session_id.is_none() && !head.bytes.ends_with(b"\n") {
+            return Ok(Skimmed::Unfinished);
+        }
+        return Ok(Skimmed::Transcript(
+            Box::new(skim),
+            Cut {
+                len: head.len,
+                modified_ms: head.modified_ms,
+            },
+        ));
+    }
     let path = root.join(&file.relative_path);
     let Some(windows) = instrument.time(Metric::SkimNanos, || {
         rosetta_capture::head_tail(&path, opts.skim_head_bytes, opts.skim_tail_bytes)
@@ -89,7 +130,7 @@ pub(crate) fn skim_transcript(
         (windows.head.len() + windows.tail.len()) as u64,
     );
     let cut = Cut {
-        len: windows.len,
+        len: Some(windows.len),
         modified_ms: windows.modified_ms,
     };
 

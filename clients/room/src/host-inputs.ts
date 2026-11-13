@@ -231,6 +231,31 @@ export interface RoomRename {
   readonly label?: string | undefined;
 }
 
+/* ── R10: the mark the room's waits wear ───────────────────────────────── */
+
+/** Where the room waits with a host's mark: the view (its hold while it
+ * reaches the index, and through the cold start before the first project),
+ * the transcript's column (a conversation opening) and the import card's head. */
+export type RoomWaitPlace = "view" | "column" | "card";
+
+/** R10 — the host's mark for the room's waits (VibeField's living mark). With
+ * one, a wait that fills a place is a HOLD — the mark, one line under it, and
+ * its count under that — and the import card wears the mark at its head, its
+ * words kept to the step's title and its count, a fraction it knows drawn as
+ * a colourless hairline. The room's meters sweep no more beside the mark (the
+ * mark is the sign of working); a fraction the room knows still fills. The
+ * room draws the mark where it is put and never reaches into it. Absent: the
+ * room's own waits, exactly as rosetta's app shows them. */
+export interface RoomWaitMark {
+  /** The mark for one place, at rest while the work it stands for is paused
+   * (a mark moves only while its work does). */
+  readonly mark: (place: RoomWaitPlace, state: { readonly resting: boolean }) => ReactNode;
+  /** The host already shows its own hold where the room's first one stands
+   * (its load before the room's): the room's first hold stands at once, so
+   * the mark is carried, never faded out and shown again. */
+  readonly carried?: boolean | undefined;
+}
+
 /* ── everything, as `HistoryRoomProps` carries it ───────────────────────── */
 
 export interface RoomHostInputs {
@@ -265,6 +290,8 @@ export interface RoomHostInputs {
   /** R9 — the address ②'s repository act opens. Absent, or undefined for a
    * project: the room's own reading of `git_repo`; null: no act. */
   readonly repositoryUrl?: ((projectId: string) => string | null | undefined) | undefined;
+  /** R10 — the mark the room's waits wear (`RoomWaitMark`). */
+  readonly waitMark?: RoomWaitMark | undefined;
 }
 
 /** Only the host's inputs, picked out of the room's props. */
@@ -283,6 +310,7 @@ export function hostInputsOf(props: RoomHostInputs): RoomHostInputs {
     projectFilters: props.projectFilters,
     sessionFilters: props.sessionFilters,
     repositoryUrl: props.repositoryUrl,
+    waitMark: props.waitMark,
   };
 }
 

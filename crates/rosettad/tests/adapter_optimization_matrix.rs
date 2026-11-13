@@ -185,7 +185,8 @@ fn every_driver_matches_its_declared_storage_contract() {
         // The summary database and the per-conversation database.
         ("antigravity", 1, 0, 2),
         ("claude-code", 3, 2, 0),
-        ("codex", 1, 0, 1),
+        // Plain/zstd representations in active and archived storage.
+        ("codex", 4, 0, 1),
         // The session-store database carries the per-request usage.
         ("copilot", 1, 1, 1),
         ("grok", 1, 2, 0),
@@ -272,9 +273,9 @@ fn every_driver_matches_its_declared_storage_contract() {
                         panic!("SQLite stream {kind}/{} has no snapshot plan", stream.id)
                     });
                     assert!(!plan.sessions_sql.trim().is_empty(), "{kind}/{}", stream.id);
-                    // A snapshot may be metadata-only (Antigravity's summary
-                    // database or Codex's state database) and therefore have
-                    // no timeline queries.
+                    // A metadata-only snapshot may have no record queries,
+                    // or capture native selectors without emitting canonical
+                    // operations (Codex's state database).
                     assert!(
                         plan.record_queries.iter().all(|query| {
                             !query.name.is_empty() && !query.sql.trim().is_empty()

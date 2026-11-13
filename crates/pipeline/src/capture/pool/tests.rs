@@ -34,6 +34,7 @@ fn runtime_row() -> RuntimeRow {
 
 fn file(path: &str, size: u64) -> SessionFile {
     SessionFile {
+        input: None,
         ledger_only: false,
         relative_path: path.to_owned(),
         stream_id: "transcript".to_owned(),

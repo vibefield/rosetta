@@ -81,6 +81,13 @@ struct FacetView {
     record_types: BTreeMap<String, IgnoredAny>,
 }
 
+pub fn is_rollout(id: &str) -> bool {
+    matches!(
+        id,
+        ROLLOUT | "rollout-compressed" | "archived-rollout" | "archived-rollout-compressed"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ROLLOUT, STATE_DB, declared_event_subtypes, declared_response_items, doc};

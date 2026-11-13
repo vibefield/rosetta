@@ -6,6 +6,8 @@ export { DialogShell } from "./DialogShell";
 export type { DialogShellProps } from "./DialogShell";
 export { EmptyState } from "./EmptyState";
 export type { EmptyStateProps } from "./EmptyState";
+export { Hold } from "./Hold";
+export type { HoldWords } from "./Hold";
 export { ListSummaryHeader } from "./ListSummaryHeader";
 export type { ListSummaryHeaderProps } from "./ListSummaryHeader";
 export { ListToolbar } from "./ListToolbar";

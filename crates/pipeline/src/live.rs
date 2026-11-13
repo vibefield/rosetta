@@ -101,7 +101,8 @@ pub fn map_hint(
     let nominated: Vec<String> = files
         .iter()
         .filter(|file| {
-            file.relative_path == hinted
+            file.input.as_ref().is_some_and(|input| input.claims(hinted))
+                || file.relative_path == hinted
                 // macOS FSEvents commonly reports only the containing
                 // directory. An ancestor hint nominates its admitted children;
                 // their cursor anchors still decide whether any source work is
@@ -113,7 +114,14 @@ pub fn map_hint(
         .collect();
     if !nominated.is_empty() {
         return HintMapping {
-            needs_admission: snapshot.is_some(),
+            needs_admission: snapshot.is_some()
+                || files.iter().any(|file| {
+                    nominated.contains(&file.relative_path)
+                        && file
+                            .input
+                            .as_ref()
+                            .is_some_and(|input| input.segments.is_empty())
+                }),
             nominated,
         };
     }
@@ -175,13 +183,22 @@ pub struct PollEvidence {
     normalizer_version: Option<u32>,
     /// `None` before the first framed batch, and without a usable checkpoint.
     observed_len: Option<u64>,
+    input_stamp: Option<[u8; 32]>,
 }
 
 impl PollEvidence {
+    fn stamp(text: Option<&str>) -> Option<[u8; 32]> {
+        text.and_then(|text| blake3::Hash::from_hex(text).ok())
+            .map(|hash| *hash.as_bytes())
+    }
+
     /// The evidence of one cursor checkpoint as [`PipeCheckpoint::decode`]
     /// yields it; `None` is an absent or expired checkpoint.
     pub fn of(checkpoint: Option<&PipeCheckpoint>) -> Self {
         Self {
+            input_stamp: Self::stamp(
+                checkpoint.and_then(|checkpoint| checkpoint.snapshot_stamp.as_deref()),
+            ),
             normalizer_version: checkpoint.map(|checkpoint| checkpoint.normalizer_version),
             observed_len: checkpoint
                 .and_then(PipeCheckpoint::tail_checkpoint)
@@ -484,10 +501,32 @@ impl<'a> LiveRunner<'a> {
         &mut self,
         store: &mut Store,
         mut changed: BTreeSet<String>,
-        needs_admission: bool,
+        mut needs_admission: bool,
         audit: bool,
         instrument: &Instrument,
     ) -> Result<(), PipelineError> {
+        if !needs_admission {
+            for file in self
+                .files
+                .iter()
+                .filter(|file| changed.contains(&file.relative_path))
+            {
+                if let Some(input) = &file.input {
+                    match input.headers_match(&self.root) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            needs_admission = true;
+                            break;
+                        }
+                        Err(error) if error.incomplete_input() => {
+                            needs_admission = true;
+                            break;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            }
+        }
         if needs_admission {
             instrument.time(Metric::LiveAdmitNanos, || {
                 self.admit(store, &mut changed, instrument)
@@ -679,6 +718,14 @@ impl<'a> LiveRunner<'a> {
                 |path| layout.matching_stream(path).is_some_and(driven),
             )
         })?;
+        let mut walk = walk;
+        let mut seen = BTreeSet::new();
+        walk.files.retain_mut(|file| {
+            if let Some(location) = self.adapter.transcript_location(&file.relative_path) {
+                file.relative_path = location.logical_path;
+            }
+            seen.insert(file.relative_path.clone())
+        });
         instrument.add(Metric::LivePollFiles, walk.files.len() as u64);
         // Index once per poll instead of scanning the whole admitted roster
         // for every physical file. Preserve the old first-match behavior if
@@ -696,7 +743,17 @@ impl<'a> LiveRunner<'a> {
                     })?;
                     let known = &mut self.files[index];
                     let touched = known.modified_ms != walked.modified_ms;
-                    if evidence.behind(normalizer_version, walked.size) || touched {
+                    let behind = if let Some(input) = &known.input {
+                        if input.segments.is_empty() && (touched || known.size != walked.size) {
+                            *needs_admission = true;
+                        }
+                        evidence.normalizer_version != Some(normalizer_version)
+                            || evidence.input_stamp
+                                != PollEvidence::stamp(input.stamp(&self.root)?.as_deref())
+                    } else {
+                        evidence.behind(normalizer_version, walked.size) || touched
+                    };
+                    if behind {
                         known.size = walked.size;
                         known.modified_ms = walked.modified_ms;
                         changed.insert(known.relative_path.clone());
@@ -783,7 +840,7 @@ impl<'a> LiveRunner<'a> {
             let known = self
                 .files
                 .iter()
-                .any(|old| old.relative_path == file.relative_path);
+                .any(|old| old.relative_path == file.relative_path && old.input == file.input);
             if !known {
                 changed.insert(file.relative_path.clone());
             }

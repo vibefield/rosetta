@@ -88,6 +88,12 @@ public struct TimelineEntryResponse: Sendable, Hashable, Codable {
   public var watermark: String
 }
 
+/// Exact shell or code source recovered from the raw ledger only after an explicit disclosure. Timeline pages never
+/// carry this payload.
+public struct CommandResponse: Sendable, Hashable, Codable {
+  public var command: String
+}
+
 /// A session's catalog row, kept whole.
 public struct SessionResponse: Sendable, Hashable, Codable {
   public var session: JSONValue

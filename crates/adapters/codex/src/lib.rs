@@ -22,6 +22,7 @@ pub mod normalize;
 pub mod raw;
 mod session_policy;
 pub mod spec;
+mod storage;
 pub mod time;
 pub mod tool;
 mod usage;

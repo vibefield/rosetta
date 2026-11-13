@@ -105,8 +105,8 @@ npm, and GitHub Actions updates. Review and merge those through CI.
 The public packages are `@vibefield/rosetta-protocol` (SDK and wire types) and
 `@vibefield/rosetta-room` (React room, fixtures, and styles). Both ship compiled ESM
 and declarations. React 19 is supplied by the room's host. Package versions move
-together; the wire protocol version remains independent. Publishing does not grant
-an open-source license: the manifests retain `UNLICENSED` until a license is chosen.
+together; the wire protocol version remains independent. Both are MIT licensed and
+ship the `LICENSE` file.
 
 Use Node 24 and npm 12.0.1 for development and releases:
 
@@ -158,7 +158,7 @@ Use `gh workflow run npm-release.yml --ref main` to verify a release without pub
 The **Release** workflow builds native `rosettad` archives for Linux x64/ARM64 and
 macOS Intel/Apple Silicon. Linux archives target Ubuntu 24.04's glibc environment;
 macOS archives are unsigned command-line binaries, not notarized desktop installers.
-Each archive contains the binary, README, and `BUILD.json` with version, target,
+Each archive contains the binary, README, `LICENSE`, and `BUILD.json` with version, target,
 source commit, and compiler. Builds run a discovery smoke test against an empty
 home directory. `SHA256SUMS` verifies the four archives.
 
@@ -200,3 +200,10 @@ gh api --method PUT repos/vibefield/rosetta/branches/main/protection \
 That policy requires an up-to-date passing CI run and a pull request, blocks force
 pushes/deletion, requires resolved conversations, and applies to administrators.
 It allows zero approving reviews so a sole maintainer can merge their own PRs.
+
+## License
+
+Rosetta's own code is released under the [MIT License](LICENSE). That grant does not
+extend to material kept here that belongs to others: the agent fixtures, schemas, and
+censuses under `groundtruth/` remain their respective owners', and the vendored price
+data in `crates/pricing/catalog/genai-prices/` carries its own license file.

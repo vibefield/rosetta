@@ -45,6 +45,7 @@ fn roster_file(
     age_ms: i64,
 ) -> SessionFile {
     SessionFile {
+        input: None,
         ledger_only: false,
         relative_path: path.to_owned(),
         stream_id: "stream".to_owned(),
