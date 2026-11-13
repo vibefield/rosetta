@@ -190,10 +190,14 @@ pub(super) fn resolve(
                 file.relative_path = format!("missing-transcript/{native}");
             }
         }
-        let existing = cursors.iter().find(|(path, _, session)| {
-            session == &file.session_id && adapter.transcript_location(path).is_some()
-        });
+        let existing: Vec<_> = cursors
+            .iter()
+            .filter(|(path, _, session)| {
+                session == &file.session_id && adapter.transcript_location(path).is_some()
+            })
+            .collect();
         file.relative_path = existing
+            .first()
             .map(|(path, _, _)| path.clone())
             .unwrap_or_else(|| {
                 ids.iter()
@@ -216,6 +220,19 @@ pub(super) fn resolve(
             // This is a new virtual byte stream; its ancestor cuts are
             // explicit and its own file is pinned when capture starts.
             file.cut_len = None;
+        }
+        // Pre-selection importers could have projected several branches as
+        // independent sources. Keep those bounded compatibility cursors on
+        // the SAME selected view, so each replaces its abandoned contribution
+        // and offline replay cannot resurrect it. No new alias is created;
+        // fresh imports still have exactly one logical transcript per thread.
+        // Mirroring later changes is essential: merely fixing the aliases
+        // once would leave their old selected view alive after another revert.
+        for (path, stream, _) in existing.into_iter().skip(1) {
+            let mut alias = file.clone();
+            alias.relative_path = path.clone();
+            alias.stream_id = stream.clone();
+            retained.push(alias);
         }
         retained.push(file);
     }

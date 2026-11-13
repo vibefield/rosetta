@@ -3924,6 +3924,11 @@ prevents duplicated inherited usage and artifact publications. Codex's SQLite
 selector rows are also captured as raw records and emit no canonical operations.
 This preserves its root-tree closure contract. Existing ordinary rollout cursor
 paths remain stable across compression, archive moves and later reverts.
+An older database may already have separate cursors for several branches of one
+thread. Those existing cursors follow the same selected view, replacing each old
+contribution and keeping later reverts and offline replay consistent. This bounded
+compatibility case captures the selected view once per existing cursor when it
+changes; fresh imports create only one logical transcript per thread.
 
 Metadata journal schema 3 adds bounded required-source identifiers and availability
 beside the ordinary metadata operations. Rebuild uses these obligations to avoid

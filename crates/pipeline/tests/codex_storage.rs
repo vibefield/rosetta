@@ -280,6 +280,118 @@ fn revert_selects_one_branch_and_replaces_the_old_projection() {
 }
 
 #[test]
+fn legacy_branch_cursors_follow_the_selected_view_through_later_reverts() {
+    let mut w = World::new();
+    let original = transcript("one");
+    let old = w.write("one", &original, false, false);
+    w.select("one", &old);
+    w.ingest();
+
+    // Reproduce the old importer's independent plain-file cursor, bypassing
+    // representation/selection planning just as that importer did.
+    let legacy = w.write(
+        "one_legacy",
+        &[header("one", None), message(10, "discarded legacy branch")].concat(),
+        false,
+        false,
+    );
+    let opts = IngestOptions::default();
+    let instrument = Instrument::new();
+    let mut ledger = Ledger::open(&w.archive).unwrap();
+    let (_, files) = meta_ingest_into(
+        &CodexAdapter,
+        &w.runtime,
+        &w.root,
+        &mut w.store,
+        &opts,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    let mut file = files.into_iter().find(|f| f.input.is_some()).unwrap();
+    file.relative_path = legacy
+        .strip_prefix(&w.root)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .into();
+    file.input = None;
+    file.cut_len = None;
+    stream_backfill_into(
+        &CodexAdapter,
+        &w.runtime,
+        &w.root,
+        &mut w.store,
+        &[file],
+        &opts,
+        &instrument,
+        Some(&mut ledger),
+    )
+    .unwrap();
+    ledger.flush().unwrap();
+    drop(ledger);
+    assert!(
+        w.texts("one")
+            .iter()
+            .any(|t| t == "discarded legacy branch")
+    );
+
+    let cut = (header("one", None).len() + message(1, "first").len()) as u64;
+    let review = "Review [the design](/tmp/rosetta-missing-review.html)";
+    let totals = |w: &World| {
+        let one = |sql| {
+            w.store
+                .conn()
+                .query_row(sql, [], |r| r.get::<_, i64>(0))
+                .unwrap()
+        };
+        (
+            one("SELECT COUNT(*) FROM html_artifact"),
+            one("SELECT SUM(in_tokens + out_tokens) FROM usage_bucket"),
+        )
+    };
+    for (index, branch) in ["replacement", "later replacement"].into_iter().enumerate() {
+        let mut live = (index > 0).then(|| runner(&mut w));
+        let usage = json!({"input_tokens":10,"cached_input_tokens":0,"output_tokens":2,"reasoning_output_tokens":0,"total_tokens":12});
+        let current = w.write(
+            "one_reverted",
+            &[
+                header("one", Some(("one", 2, cut))),
+                message(3, branch),
+                message(4, review),
+                line(json!({
+                    "timestamp":"2026-11-01T12:00:01Z", "ordinal":5, "type":"token_usage_record",
+                    "payload":{
+                        "thread_id":"one",
+                        "turn_id":"turn", "session_id":"execution", "root_turn_id":"turn",
+                        "response_id":"native-response", "usage":usage,
+                        "turn_token_usage":usage, "thread_token_usage":usage
+                    }
+                })),
+            ]
+            .concat(),
+            true,
+            false,
+        );
+        w.select("one", &current);
+        if let Some(live) = live.as_mut() {
+            live.catch_up(&mut w.store, &instrument).unwrap();
+        } else {
+            let report = w.ingest();
+            assert_eq!((report.hard_errors, report.unknown), (0, 0));
+        }
+        assert_eq!(w.texts("one"), ["first", branch, review]);
+        assert!(w.indexed("one"));
+        assert_eq!(totals(&w), (1, 12));
+        drop(live);
+        assert_eq!(w.ingest().records, 0);
+    }
+    w.rebuild();
+    assert_eq!(w.texts("one"), ["first", "later replacement", review]);
+    assert_eq!(totals(&w), (1, 12));
+}
+
+#[test]
 fn missing_selected_rollout_does_not_resurrect_an_old_branch() {
     let mut w = World::new();
     w.write("one", &transcript("one"), false, false);
