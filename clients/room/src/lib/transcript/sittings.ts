@@ -10,7 +10,7 @@
 //
 // Pure over the ordered entries' `at`. `now` is a parameter, never a clock read.
 import type { TimelineEntry } from "@vibefield/rosetta-protocol";
-import { dayLabel } from "../format";
+import { clockShort, dayLabel } from "../format";
 
 /** A silence this long or longer means the reader left and came back. */
 export const SITTING_PAUSE_MS = 15 * 60_000;
@@ -63,6 +63,53 @@ export function sittingDayLabel(timestamp: number, now: number): string {
   return dayLabel(timestamp, now);
 }
 
+const DAY_MS = 86_400_000;
+
+/** A viewer-local day key as the UTC midnight of that date: two of them differ by whole days, never by an hour. */
+function dayOrdinal(timestamp: number): number {
+  const [year, month, day] = calendarDayKey(timestamp).split("-").map(Number) as [number, number, number];
+  return Date.UTC(year, month - 1, day);
+}
+
+/**
+ * How many of the viewer's calendar days `timestamp` lies before `now`'s: 0 for today, 1 for the day before. Counted
+ * between the two days' keys, so a 23- or 25-hour day never moves it. Negative for a stamp ahead of `now` (a clock
+ * skew between devices).
+ */
+export function viewerDaysBack(timestamp: number, now: number): number {
+  return Math.round((dayOrdinal(now) - dayOrdinal(timestamp)) / DAY_MS);
+}
+
+/**
+ * §07 — a pill that carries a clock says how far back it is. By the viewer's own calendar days, counted from
+ * today:
+ * - today: the clock alone, `20:21`;
+ * - one of the six days before today: the weekday and the clock, `Fri · 20:21`;
+ * - earlier: the day and the clock, `Fri 6 Nov · 20:21`, and with its year when it is not this one,
+ *   `6 Nov 2025 · 20:21`.
+ * This holds for every pill with a clock, where the day turned and inside a day alike. A stamp ahead of `now`
+ * (a clock skew between devices) takes today's form, never a negative distance's. Six days, not seven: a weekday
+ * then never names today's own.
+ */
+export function clockPillLead(at: number, now: number): string {
+  const clock = clockShort(at);
+  const back = viewerDaysBack(at, now);
+  if (back <= 0) return clock;
+  const then = new Date(at);
+  if (back <= 6) return `${then.toLocaleDateString("en-GB", { weekday: "short" })} · ${clock}`;
+  return `${sittingDayLabel(at, now)} · ${clock}`;
+}
+
+/**
+ * How long until the viewer's next calendar day begins, by the wall clock: the room re-reads its clock then, so a
+ * pill's words are tomorrow's tomorrow. 23 or 25 hours across a daylight-saving change, as the wall clock has them.
+ */
+export function msToNextViewerDay(now: number): number {
+  const next = new Date(now);
+  next.setHours(24, 0, 0, 0);
+  return next.getTime() - now;
+}
+
 export interface Sitting {
   /** Stable across renders: the first row's `timeline_id`. */
   readonly key: string;
@@ -73,6 +120,9 @@ export interface Sitting {
   /** The pill's time, drawn only when the reader actually came back: null for
    * the first sitting and for a day that turned without a pause. */
   readonly resumedAt: number | null;
+  /** That time's words, by how far back its day is (`clockPillLead`): `20:21`, `Fri · 20:21`,
+   * `Fri 6 Nov · 20:21`. Null exactly when `resumedAt` is. */
+  readonly clockLabel: string | null;
   /** The silence before this sitting. Null when the cut was a day change with
    * no pause of fifteen minutes or more. */
   readonly pauseMs: number | null;
@@ -148,6 +198,7 @@ export function sittings(rows: readonly TimelineEntry[], now = Date.now()): Sitt
       dayKey: startedAt === null ? null : calendarDayKey(startedAt),
       dayLabel: startedAt === null ? null : sittingDayLabel(startedAt, now),
       resumedAt: sitting.resumedAt,
+      clockLabel: sitting.resumedAt === null ? null : clockPillLead(sitting.resumedAt, now),
       pauseMs: sitting.pauseMs,
       dayChanged: sitting.dayChanged,
       isFirst: index === 0,

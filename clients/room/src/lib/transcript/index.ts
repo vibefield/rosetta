@@ -100,10 +100,13 @@ export {
   PROMPT_CLUSTER_MS,
   SITTING_PAUSE_MS,
   calendarDayKey,
+  clockPillLead,
   dayList,
+  msToNextViewerDay,
   sittingCount,
   sittingDayLabel,
   sittings,
+  viewerDaysBack,
   withinPromptCluster,
 } from "./sittings";
 
@@ -147,3 +150,15 @@ export {
   teamSessionIds,
   workerThreadLinks,
 } from "./collaboration";
+
+export type { PromptJumpPlan } from "./prompt-jump";
+export {
+  PROMPT_JUMP_EASE_MS,
+  PROMPT_JUMP_LANDING_PX,
+  jumpMotion,
+  jumpScrollTop,
+  previousMessageTarget,
+  promptJumpPlan,
+  promptJumpShown,
+  settleEase,
+} from "./prompt-jump";

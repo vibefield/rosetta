@@ -39,8 +39,10 @@ import { DayMenu, markStuckPills } from "./transcript/DayPill";
 import { TranscriptDocument } from "./transcript/Document";
 import { TranscriptLoading } from "./transcript/TranscriptLoading";
 import { useTranscriptModel } from "./transcript/document-model";
+import { useViewerDay } from "./transcript/viewer-day";
 import { useFoldPreference } from "./transcript/fold-preference";
 import { MessageViewerContext } from "./transcript/MessagePreview";
+import { PromptJump } from "./transcript/PromptJump";
 import { ThreadNavigationContext } from "./transcript/thread-navigation";
 import { handleForMessage, messageFileSource } from "./transcript/message-file-source";
 import type { FullMessage } from "./transcript/message-file-source";
@@ -203,7 +205,9 @@ function SessionTranscript({
   const targetIsMeta = requestedTimelineId === null && metaFocus !== null;
 
   const cuts = useMemo(() => activityCuts(feed.rows, feed.watermark), [feed.rows, feed.watermark]);
-  const model = useTranscriptModel(feed.rows, session, homeDirectory, Date.now(), { cutBefore: cuts.cutBefore });
+  // The viewer's day, re-read at midnight and on focus: a pill's words are the drawing's.
+  const viewerDay = useViewerDay();
+  const model = useTranscriptModel(feed.rows, session, homeDirectory, viewerDay.now, { cutBefore: cuts.cutBefore });
   const opening = useTranscriptOpening(feed.snapshotReady, focus !== null || metaFocus !== null);
   const loading = session !== null && opening.visible;
   useEffect(() => {
@@ -646,6 +650,16 @@ function SessionTranscript({
           <span>{tail.unseen > 0 ? `${tail.unseen} new ${tail.unseen === 1 ? "message" : "messages"}` : "Latest"}</span>
           {tail.unseen > 0 && <i aria-hidden="true" />}
         </button>
+      )}
+      {session !== null && (
+        // A button at the side goes to the message before.
+        <PromptJump
+          scrollRef={scrollRef}
+          earlier={feed.earlier.kind}
+          layoutKey={model.plan}
+          onLeaveTail={tail.pause}
+          hidden={loading}
+        />
       )}
       {!reader && <span className="ah-tail-announcement" role="status" aria-live="polite" aria-atomic="true">
         {tail.away && tail.unseen > 0
