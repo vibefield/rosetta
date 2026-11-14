@@ -2605,3 +2605,5 @@ async fn status_reports_daemon_health_only_when_a_loop_feeds_it() {
 mod image_pipeline;
 #[path = "http/image_renditions.rs"]
 mod image_renditions;
+#[path = "http/video_assets.rs"]
+mod video_assets;

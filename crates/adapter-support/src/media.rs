@@ -3,9 +3,10 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rosetta_core::ProjectionAsset;
+use rosetta_core::presented_media::VIDEO_MAX_BYTES;
 use rosetta_core::timeline::{
     AttachmentKind, AttachmentRef, AttachmentSource, AttachmentUnavailableReason as Missing,
-    CORE_SCALAR_MAX_BYTES, ID_MAX_BYTES, ResourceRef,
+    CORE_SCALAR_MAX_BYTES, Dimensions, ID_MAX_BYTES, ResourceRef,
 };
 
 pub type MaterializedAttachment = (AttachmentRef, Option<ProjectionAsset>);
@@ -209,6 +210,72 @@ pub fn canonical_media_type(mime: &str) -> Option<&'static str> {
     }
 }
 
+/// The canonical type of a file an agent sent by path, or `None` when that
+/// type is not presented. Its own entry point: the inline-media table above
+/// stays as it is, so a recorded `video_url` data URL is still not captured.
+pub fn presented_media_type(declared: &str) -> Option<&'static str> {
+    match declared.trim().to_ascii_lowercase().as_str() {
+        "video/mp4" => Some("video/mp4"),
+        "video/quicktime" => Some("video/quicktime"),
+        _ => canonical_media_type(declared).filter(|mime| mime.starts_with("image/")),
+    }
+}
+
+/// The attachment kind of a canonical presented type.
+pub fn presented_kind(canonical: &str) -> Option<AttachmentKind> {
+    match presented_media_type(canonical)? {
+        mime if mime != canonical => None,
+        mime if mime.starts_with("image/") => Some(AttachmentKind::Image),
+        _ => Some(AttachmentKind::Video),
+    }
+}
+
+/// The most bytes a presented file of a canonical type may have.
+pub fn presented_limit(canonical: &str) -> Option<u64> {
+    match presented_kind(canonical)? {
+        AttachmentKind::Image => Some(rosetta_media::MAX_INPUT_BYTES as u64),
+        _ => Some(VIDEO_MAX_BYTES),
+    }
+}
+
+/// Verify the captured bytes of a presented file against the type it was
+/// declared with and keep them as the member. An image passes the same
+/// header probe as inline media; a video passes when its container header
+/// names the declared type. `None` is every refusal: a type that is not
+/// presented, bytes over the limit, a wrong signature, a failed probe.
+pub fn from_presented_bytes(
+    media_type: &str,
+    bytes: Vec<u8>,
+) -> Option<(ProjectionAsset, Option<Dimensions>)> {
+    let mime = presented_media_type(media_type)?;
+    if bytes.len() as u64 > presented_limit(mime)? {
+        return None;
+    }
+    match presented_kind(mime)? {
+        AttachmentKind::Image => match from_bytes("x", AttachmentKind::Image, mime, bytes) {
+            (
+                AttachmentRef {
+                    source: AttachmentSource::Asset { .. },
+                    dimensions,
+                    ..
+                },
+                Some(asset),
+            ) => Some((asset, dimensions)),
+            _ => None,
+        },
+        _ => {
+            let probe = rosetta_media::probe_video(&bytes).ok()?;
+            if probe.media_type != mime {
+                return None;
+            }
+            let dimensions = probe
+                .dimensions
+                .filter(|size| size.width > 0 && size.height > 0);
+            Some((ProjectionAsset::new(mime, bytes)?, dimensions))
+        }
+    }
+}
+
 fn magic_matches(mime: &str, bytes: &[u8]) -> bool {
     match mime {
         "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
@@ -226,7 +293,6 @@ fn magic_matches(mime: &str, bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rosetta_core::timeline::Dimensions;
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
 
     #[test]
@@ -293,6 +359,195 @@ mod tests {
                 reason: Missing::InvalidData
             }
         ));
+    }
+
+    /// A leading `ftyp` box with one compatible brand, then a `moov` header.
+    fn video(major: &[u8; 4], compatible: &[u8; 4]) -> Vec<u8> {
+        let mut bytes = 20_u32.to_be_bytes().to_vec();
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(major);
+        bytes.extend_from_slice(&[0, 0, 2, 0]);
+        bytes.extend_from_slice(compatible);
+        bytes.extend_from_slice(b"\0\0\0\x08moov");
+        bytes
+    }
+
+    #[test]
+    fn presented_types_are_images_and_two_video_containers() {
+        for (declared, canonical, kind, limit) in [
+            ("image/png", "image/png", AttachmentKind::Image, 32),
+            ("image/apng", "image/png", AttachmentKind::Image, 32),
+            (" IMAGE/JPG ", "image/jpeg", AttachmentKind::Image, 32),
+            ("image/gif", "image/gif", AttachmentKind::Image, 32),
+            ("image/webp", "image/webp", AttachmentKind::Image, 32),
+            ("image/bmp", "image/bmp", AttachmentKind::Image, 32),
+            (
+                "image/vnd.microsoft.icon",
+                "image/x-icon",
+                AttachmentKind::Image,
+                32,
+            ),
+            ("video/mp4", "video/mp4", AttachmentKind::Video, 64),
+            (" Video/MP4", "video/mp4", AttachmentKind::Video, 64),
+            (
+                "video/quicktime",
+                "video/quicktime",
+                AttachmentKind::Video,
+                64,
+            ),
+        ] {
+            assert_eq!(
+                presented_media_type(declared),
+                Some(canonical),
+                "{declared}"
+            );
+            assert_eq!(presented_kind(canonical), Some(kind), "{canonical}");
+            assert_eq!(
+                presented_limit(canonical),
+                Some(limit * 1024 * 1024),
+                "{canonical}"
+            );
+            // Every presented type is one core accepts as a fact and a member.
+            assert!(rosetta_core::presented_media::MEDIA_TYPES.contains(&canonical));
+            assert!(ProjectionAsset::supported_extension(canonical).is_some());
+        }
+        for media_type in rosetta_core::presented_media::MEDIA_TYPES {
+            assert_eq!(presented_media_type(media_type), Some(media_type));
+        }
+        for declared in [
+            "",
+            "text/html",
+            "text/markdown",
+            "text/plain",
+            "application/pdf",
+            "image/svg+xml",
+            "image/heic",
+            "image/avif",
+            "video/webm",
+            "video/x-m4v",
+            "audio/mp4",
+            "video/mp4; codecs=avc1",
+        ] {
+            assert_eq!(presented_media_type(declared), None, "{declared}");
+            assert_eq!(presented_kind(declared), None, "{declared}");
+            assert_eq!(presented_limit(declared), None, "{declared}");
+        }
+    }
+
+    #[test]
+    fn presented_bytes_are_verified_against_their_declared_type() {
+        let png = STANDARD.decode(PNG).unwrap();
+        let (asset, dimensions) = from_presented_bytes("image/png", png.clone()).unwrap();
+        assert_eq!(asset.media_type, "image/png");
+        assert_eq!(asset.bytes, png);
+        assert_eq!(
+            asset.digest,
+            blake3::hash(&png).to_hex().to_string(),
+            "the member is the recorded bytes"
+        );
+        assert_eq!(
+            dimensions,
+            Some(Dimensions {
+                width: 1,
+                height: 1
+            })
+        );
+        asset.reference().validate().unwrap();
+
+        let mp4 = video(b"isom", b"mp41");
+        let (asset, dimensions) = from_presented_bytes("video/mp4", mp4.clone()).unwrap();
+        assert_eq!(
+            (asset.media_type.as_str(), &asset.bytes, dimensions),
+            ("video/mp4", &mp4, None)
+        );
+        assert!(asset.url().unwrap().ends_with(".mp4"));
+        asset.reference().validate().unwrap();
+
+        let mov = video(b"qt  ", b"qt  ");
+        let (asset, dimensions) = from_presented_bytes("video/quicktime", mov.clone()).unwrap();
+        assert_eq!(
+            (asset.media_type.as_str(), &asset.bytes, dimensions),
+            ("video/quicktime", &mov, None)
+        );
+        assert!(asset.url().unwrap().ends_with(".mov"));
+
+        // Wrong magic, in each direction.
+        assert_eq!(from_presented_bytes("image/png", mp4.clone()), None);
+        assert_eq!(from_presented_bytes("image/jpeg", png.clone()), None);
+        assert_eq!(from_presented_bytes("video/mp4", png.clone()), None);
+        assert_eq!(
+            from_presented_bytes("video/mp4", b"not a video".to_vec()),
+            None
+        );
+        assert_eq!(from_presented_bytes("video/mp4", Vec::new()), None);
+        assert_eq!(from_presented_bytes("image/png", Vec::new()), None);
+        // The detected container must be the declared one.
+        assert_eq!(from_presented_bytes("video/mp4", mov.clone()), None);
+        assert_eq!(from_presented_bytes("video/quicktime", mp4.clone()), None);
+        // A type that is not presented is refused whatever the bytes are.
+        assert_eq!(from_presented_bytes("video/webm", mp4.clone()), None);
+        assert_eq!(
+            from_presented_bytes("application/pdf", b"%PDF-1.7".to_vec()),
+            None
+        );
+        assert_eq!(from_presented_bytes("text/plain", b"hello".to_vec()), None);
+        // A truncated image fails the header probe, not just the signature.
+        assert_eq!(from_presented_bytes("image/png", png[..20].to_vec()), None);
+    }
+
+    #[test]
+    fn presented_bytes_over_the_limit_are_refused() {
+        let limit = VIDEO_MAX_BYTES as usize;
+        let mut video = video(b"isom", b"mp41");
+        video.resize(limit, 0);
+        let (asset, _) = from_presented_bytes("video/mp4", video.clone()).unwrap();
+        assert_eq!(asset.bytes.len(), limit);
+        video.push(0);
+        assert_eq!(from_presented_bytes("video/mp4", video), None);
+
+        let mut image = STANDARD.decode(PNG).unwrap();
+        image.resize(rosetta_media::MAX_INPUT_BYTES + 1, 0);
+        assert_eq!(from_presented_bytes("image/png", image), None);
+    }
+
+    /// The presented entry points are additions: inline media is classified
+    /// exactly as before, so a recorded video data URL is still not captured.
+    #[test]
+    fn inline_video_is_still_not_materialized() {
+        assert_eq!(canonical_media_type("video/mp4"), None);
+        assert_eq!(canonical_media_type("video/quicktime"), None);
+        let mp4 = video(b"isom", b"mp41");
+        let url = format!("data:video/mp4;base64,{}", STANDARD.encode(&mp4));
+        let (attachment, asset) = from_url("clip", AttachmentKind::Video, &url, None);
+        assert_eq!(asset, None);
+        assert_eq!(
+            attachment.source,
+            AttachmentSource::Unavailable {
+                reason: Missing::UnsupportedMedia
+            }
+        );
+        assert_eq!(attachment.media_type.as_deref(), Some("video/mp4"));
+        let (attachment, asset) = from_base64(
+            "clip",
+            AttachmentKind::Video,
+            "video/mp4",
+            &STANDARD.encode(&mp4),
+        );
+        assert_eq!(asset, None);
+        assert!(matches!(
+            attachment.source,
+            AttachmentSource::Unavailable {
+                reason: Missing::UnsupportedMedia
+            }
+        ));
+        let (attachment, asset) = from_bytes("clip", AttachmentKind::Video, "video/mp4", mp4);
+        assert_eq!(asset, None);
+        assert_eq!(
+            attachment.source,
+            AttachmentSource::Unavailable {
+                reason: Missing::UnsupportedMedia
+            }
+        );
     }
 }
 

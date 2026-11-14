@@ -356,6 +356,9 @@ fn magic_matches(media_type: &str, bytes: &[u8]) -> bool {
         "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
         "image/bmp" => bytes.starts_with(b"BM"),
         "image/x-icon" => bytes.starts_with(&[0, 0, 1, 0]),
+        "video/mp4" | "video/quicktime" => {
+            rosetta_media::video_media_type(bytes) == Some(media_type)
+        }
         "application/pdf" => bytes.starts_with(b"%PDF-"),
         "application/vnd.rosetta.canonical-document+json" => {
             serde_json::from_slice::<serde_json::Value>(bytes).is_ok()
@@ -383,8 +386,8 @@ fn sync_parent(path: &Path) -> Result<(), StoreError> {
 mod tests {
     use rosetta_core::{IngestOp, ProjectionAsset};
 
-    use super::{AssetStore, asset_root};
-    use crate::Batch;
+    use super::{AssetStore, asset_root, magic_matches};
+    use crate::{Batch, StoreError};
 
     fn png() -> ProjectionAsset {
         ProjectionAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap()
@@ -547,5 +550,115 @@ mod tests {
             let mislabeled = ProjectionAsset::new(media_type, b"\x89PNG".to_vec()).unwrap();
             assert!(store.materialize_batch(&batch(mislabeled), true).is_err());
         }
+    }
+
+    /// A leading `ftyp` box with one compatible brand, then a `moov` header.
+    fn video(major: &[u8; 4], compatible: &[u8; 4]) -> Vec<u8> {
+        let mut bytes = 20_u32.to_be_bytes().to_vec();
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(major);
+        bytes.extend_from_slice(&[0, 0, 2, 0]);
+        bytes.extend_from_slice(compatible);
+        bytes.extend_from_slice(b"\0\0\0\x08moov");
+        bytes
+    }
+
+    #[test]
+    fn mp4_and_mov_are_recorded_video_members() {
+        let root = tempfile::tempdir().unwrap();
+        let projection = root.path().join("rosetta.db");
+        let mut store = AssetStore::for_projection(&projection);
+        let mp4 = video(b"isom", b"mp41");
+        let mov = video(b"qt  ", b"qt  ");
+        for (media_type, bytes, extension) in [
+            ("video/mp4", mp4.clone(), "mp4"),
+            ("video/quicktime", mov.clone(), "mov"),
+        ] {
+            let asset = ProjectionAsset::new(media_type, bytes).unwrap();
+            assert!(asset.file_name().unwrap().ends_with(extension));
+            let stats = store
+                .materialize_batch(&batch(asset.clone()), true)
+                .unwrap();
+            assert_eq!(stats.files_written, 1);
+            assert_eq!(
+                std::fs::read(asset_root(&projection).join(asset.file_name().unwrap())).unwrap(),
+                asset.bytes
+            );
+            // The in-memory store has no files but holds the same contract.
+            AssetStore::in_memory()
+                .materialize_batch(&batch(asset), true)
+                .unwrap();
+        }
+        // Wrong magic is refused before anything is written, on disk and in
+        // memory alike: another container, an image, an image-brand file.
+        let heic = video(b"heic", b"mif1");
+        let before = std::fs::read_dir(asset_root(&projection)).unwrap().count();
+        for (media_type, bytes) in [
+            ("video/mp4", mov),
+            ("video/quicktime", mp4),
+            ("video/mp4", b"\x89PNG\r\n\x1a\nbody".to_vec()),
+            ("video/mp4", heic),
+            ("video/quicktime", b"\0\0\0\x08wide".to_vec()),
+        ] {
+            let mislabeled = ProjectionAsset::new(media_type, bytes).unwrap();
+            for store in [&mut store, &mut AssetStore::in_memory()] {
+                let error = store
+                    .materialize_batch(&batch(mislabeled.clone()), true)
+                    .unwrap_err();
+                assert!(
+                    matches!(error, StoreError::AssetInvalid { .. }),
+                    "{media_type}: {error}"
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read_dir(asset_root(&projection)).unwrap().count(),
+            before
+        );
+    }
+
+    /// Every member type core can name has a signature this store accepts:
+    /// a supported asset can never be refused for lacking a magic arm.
+    #[test]
+    fn every_supported_member_type_passes_its_signature_check() {
+        let sample = |media_type: &str| -> Vec<u8> {
+            match media_type {
+                "image/png" => b"\x89PNG\r\n\x1a\nbody".to_vec(),
+                "image/jpeg" => b"\xff\xd8\xffbody".to_vec(),
+                "image/gif" => b"GIF89abody".to_vec(),
+                "image/webp" => b"RIFF\x04\0\0\0WEBPVP8L".to_vec(),
+                "image/bmp" => b"BM bitmap".to_vec(),
+                "image/x-icon" => b"\0\0\x01\0icon".to_vec(),
+                "video/mp4" => video(b"isom", b"mp41"),
+                "video/quicktime" => video(b"qt  ", b"qt  "),
+                "application/pdf" => b"%PDF-1.7 body".to_vec(),
+                "application/vnd.rosetta.canonical-document+json" => b"{\"blocks\":[]}".to_vec(),
+                "text/plain; charset=utf-8" => b"plain text".to_vec(),
+                "text/html; charset=utf-8" => b"<h1>html</h1>".to_vec(),
+                other => panic!("no sample for member type {other}: add one and its magic arm"),
+            }
+        };
+        let root = tempfile::tempdir().unwrap();
+        let projection = root.path().join("rosetta.db");
+        let mut store = AssetStore::for_projection(&projection);
+        for (media_type, extension) in rosetta_core::assets::MEMBER_TYPES {
+            assert_eq!(
+                ProjectionAsset::supported_extension(media_type),
+                Some(extension)
+            );
+            let bytes = sample(media_type);
+            assert!(magic_matches(media_type, &bytes), "{media_type}");
+            let asset = ProjectionAsset::new(media_type, bytes).unwrap();
+            store
+                .materialize_batch(&batch(asset.clone()), true)
+                .unwrap_or_else(|error| panic!("{media_type}: {error}"));
+            assert!(
+                asset_root(&projection)
+                    .join(format!("{}.{extension}", asset.digest))
+                    .is_file(),
+                "{media_type}"
+            );
+        }
+        assert!(!magic_matches("video/webm", &video(b"isom", b"mp41")));
     }
 }

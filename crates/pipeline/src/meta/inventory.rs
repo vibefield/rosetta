@@ -160,9 +160,15 @@ pub(super) fn read_inventory(
                         report.files_unfinished += 1;
                         instrument.add(Metric::FilesUnfinished, 1);
                     }
+                    crate::skim::Skimmed::Unidentified => {
+                        report.files_skimmed += 1;
+                        report.files_unidentified += 1;
+                        instrument.add(Metric::FilesUnidentified, 1);
+                    }
                     crate::skim::Skimmed::Transcript(skim, cut) => {
                         report.files_skimmed += 1;
                         admit_skim(
+                            adapter,
                             runtime,
                             report,
                             output,
@@ -185,8 +191,8 @@ pub(super) fn read_inventory(
                         report.files_skimmed += 1;
                         for skim in skims {
                             admit_skim(
-                                runtime, report, output, file, stream, driver, skim, true, None,
-                                instrument,
+                                adapter, runtime, report, output, file, stream, driver, skim, true,
+                                None, instrument,
                             );
                         }
                     }
@@ -196,5 +202,89 @@ pub(super) fn read_inventory(
         },
     )?;
 
+    Ok(())
+}
+
+/// Meta admission for a `SqliteSnapshot` stream: enumerate the database's
+/// sessions via the adapter's declared plan and admit each as a VIRTUAL
+/// source (`<db-path>#<native-id>`) — its own cursor, its own generation
+/// swaps, its own ledger entries, exactly like a file.
+#[allow(clippy::too_many_arguments)]
+fn admit_database(
+    adapter: &dyn AgentAdapter,
+    runtime: &RuntimeRow,
+    root: &Path,
+    stream: &rosetta_adapter_support::StreamSpec,
+    driver: StreamDriver,
+    db_relative: &str,
+    size: u64,
+    modified_ms: i64,
+    report: &mut MetaReport,
+    output: &mut MetaOutput,
+    instrument: &Instrument,
+) -> Result<(), PipelineError> {
+    let Some(plan) = adapter.snapshot_plan(&stream.id) else {
+        return Err(PipelineError::Config(format!(
+            "{} drives stream {} as SqliteSnapshot but declares no snapshot plan",
+            adapter.kind(),
+            stream.id
+        )));
+    };
+    let outcome = instrument.time(Metric::SkimNanos, || {
+        rosetta_capture::snapshot_db(&root.join(db_relative))
+    })?;
+    let snapshot = match outcome {
+        rosetta_capture::SnapshotOutcome::Ready(snapshot) => snapshot,
+        // A racing writer or vanished db is the stream phase's problem.
+        rosetta_capture::SnapshotOutcome::Missing | rosetta_capture::SnapshotOutcome::Unstable => {
+            report.files_vanished += 1;
+            instrument.add(Metric::FilesVanished, 1);
+            return Ok(());
+        }
+    };
+    report.files_skimmed += 1;
+    instrument.add(Metric::FilesSkimmed, 1);
+
+    for row in snapshot.query_rows(&plan.sessions_sql, None)? {
+        let value: serde_json::Value = serde_json::from_str(&row).map_err(|error| {
+            PipelineError::Config(format!("sessions_sql row is not an object: {error}"))
+        })?;
+        let skim = adapter.snapshot_session(&stream.id, &value);
+        let Some(native) = skim.session_id.clone() else {
+            if output.admission.excludes_cwd(skim.cwd.as_deref()) {
+                continue;
+            }
+            report.files_unidentified += 1;
+            instrument.add(Metric::FilesUnidentified, 1);
+            continue;
+        };
+        if let Some(selection) = adapter.transcript_selection(&stream.id, &value) {
+            output.selections.insert(native.clone(), selection);
+        }
+        let updated = skim.updated_at.unwrap_or(modified_ms);
+        admit_identified(
+            runtime,
+            output,
+            AdmitSource {
+                relative_path: format!("{db_relative}#{native}"),
+                stream_id: stream.id.clone(),
+                file_format: stream.file_format,
+                discipline: stream.discipline,
+                driver,
+                size,
+                modified_ms: updated,
+                cut: None,
+            },
+            skim,
+            native,
+            instrument,
+        );
+    }
+
+    // A member no longer returned by sessions_sql keeps its last projected
+    // generation, exactly as a deleted JSONL transcript keeps its rows: an
+    // agent pruning its own store (Hermes 0.21.4 retains 90 days by default)
+    // must not erase Rosetta's history (product decision, 2026-09-24). The
+    // cursor simply sees no further activity.
     Ok(())
 }

@@ -370,6 +370,9 @@ pub(crate) fn apply_snapshot_records(
     let mut ops: Vec<IngestOp> = Vec::new();
     let mut conflicted = false;
     let mut progress_bytes = 0;
+    // Earlier media captures of this source, read once at the pass's first
+    // fact when the generation can have any.
+    let mut prior_captures = None;
     for (index, record) in records.iter().enumerate() {
         opts.check_cancelled()?;
         report.records += 1;
@@ -406,7 +409,7 @@ pub(crate) fn apply_snapshot_records(
         }
         let mut record_ops = outcome.ops;
         if !file.ledger_only {
-            let documents = crate::html_artifacts::capture(
+            let mut documents = crate::html_artifacts::capture(
                 &mut record_ops,
                 0,
                 adapter,
@@ -415,6 +418,26 @@ pub(crate) fn apply_snapshot_records(
                 None,
                 &opts.artifact_recovery,
             );
+            if opts.observe_presented_media && crate::presented_media::has_fact(&record_ops) {
+                if generation > 1
+                    && prior_captures.is_none()
+                    && let Some(raw_ledger) = ledger.as_deref()
+                {
+                    let ledgered =
+                        crate::presented_media::prior::PriorCaptures::new(raw_ledger.dir());
+                    prior_captures =
+                        Some(ledgered.load(&file.session_id, &file.relative_path, generation));
+                }
+                documents.extend(crate::presented_media::capture(
+                    &mut record_ops,
+                    0,
+                    generation,
+                    prior_captures.as_ref(),
+                    // A snapshot pass is never append growth: every pass
+                    // above the first generation asks the ledger first.
+                    None,
+                ));
+            }
             if !documents.is_empty()
                 && let Some(raw_ledger) = ledger.as_deref_mut()
             {
@@ -590,6 +613,7 @@ pub(crate) fn flush_chunk(
                 .map_err(PipelineError::Config)?,
             snapshot_stamp: Some(stamp.to_string()),
             snapshot_revision: Some(revision.to_string()),
+            reframing: false,
         }
         .encode();
         let update = CheckpointUpdate {

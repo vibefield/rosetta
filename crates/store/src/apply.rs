@@ -1242,6 +1242,9 @@ fn apply_op(
         IngestOp::HtmlArtifactContent(row) => {
             stats.library_changes += crate::html_artifacts::apply_content(tx, row, src_cursor)?;
         }
+        // A capture-seam fact. What a reader sees is the tool update beside
+        // it and, once captured, the asset and upgrade the pipeline derives.
+        IngestOp::PresentedMedia(_) => {}
         IngestOp::Runtime(row) => profile_other(stats, || apply_runtime(tx, row))?,
         IngestOp::Project(row) => profile_other(stats, || apply_project(tx, row))?,
         IngestOp::SessionMeta(row) => profile_other(stats, || apply_session(tx, row))?,

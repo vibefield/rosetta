@@ -30,7 +30,10 @@ pub use html_artifacts::ArtifactRecovery;
 pub mod instrument;
 pub mod live;
 pub mod meta;
+mod meta_journal;
+pub use meta_journal::LedgerMetadata;
 pub mod plan;
+mod presented_media;
 pub mod progress;
 mod project;
 pub mod replay;
@@ -83,9 +86,9 @@ pub use streamed::{
 
 /// Version of the canonical-op envelope stored in ledger meta frames. Replay
 /// routes explicitly by this value instead of assuming today's row JSON.
-/// Meta payload v2 makes the adapter-selected primary cwd explicit on the
-/// session and removes streamed workspace observations from the projection.
-pub const LEDGER_META_SCHEMA_VERSION: u32 = 2;
+/// Metadata v3 journals required-source readiness beside canonical metadata.
+/// Readers retain support for the legacy operation arrays (v0 and v2).
+pub const LEDGER_META_SCHEMA_VERSION: u32 = 3;
 
 /// The largest record the pipeline normalizes. A longer JSONL record is still
 /// captured and ledgered whole, up to what one raw ledger frame holds
@@ -231,6 +234,11 @@ pub struct IngestOptions {
     pub cancel: Option<Arc<AtomicBool>>,
     /// RAM-only cold progress; absent on the ordinary live path.
     pub progress: Option<Arc<dyn progress::ColdProgressObserver>>,
+    /// Whether capture observes the files an agent sent the user by path
+    /// (images and MP4/MOV video) and ledgers them. `true` by default.
+    /// `false` leaves every such file a path reference and writes no media
+    /// frame; it exists for frozen before/after pairs.
+    pub observe_presented_media: bool,
 }
 
 impl IngestOptions {
@@ -265,6 +273,7 @@ impl Default for IngestOptions {
             cut_bounded: false,
             cancel: None,
             progress: None,
+            observe_presented_media: true,
         }
     }
 }

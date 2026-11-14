@@ -310,6 +310,7 @@ mod tests {
         sources
             .iter()
             .map(|(source, _)| crate::meta::SessionFile {
+                input: None,
                 ledger_only: false,
                 relative_path: source.relative_path.clone(),
                 stream_id: source.stream_id.clone(),

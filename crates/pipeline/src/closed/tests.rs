@@ -404,6 +404,7 @@ fn eager_cursors_and_roster_keys_match_the_lazy_dense_walk_across_a_restart_and_
 #[test]
 fn close_file_skips_an_unread_source_and_refuses_what_only_a_bug_leaves() {
     let file = SessionFile {
+        input: None,
         ledger_only: false,
         relative_path: "projects/-w/close.jsonl".into(),
         stream_id: "transcript".into(),
@@ -514,6 +515,7 @@ fn close_file_skips_an_unread_source_and_refuses_what_only_a_bug_leaves() {
 #[test]
 fn a_frontier_that_never_closed_names_its_lane() {
     let file = |path: &str| SessionFile {
+        input: None,
         ledger_only: false,
         relative_path: path.into(),
         stream_id: "transcript".into(),

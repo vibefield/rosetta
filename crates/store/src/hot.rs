@@ -316,6 +316,7 @@ pub(crate) fn meta_touch(op: &IngestOp) -> MetaTouch<'_> {
         IngestOp::HtmlArtifact(row) => MetaTouch::Session(&row.session_id),
         IngestOp::HtmlArtifactContent(row) => MetaTouch::Session(&row.session_id),
         IngestOp::ProjectionAsset { .. }
+        | IngestOp::PresentedMedia(_)
         | IngestOp::FileEdit(_)
         | IngestOp::Plan(_)
         | IngestOp::Task(_)

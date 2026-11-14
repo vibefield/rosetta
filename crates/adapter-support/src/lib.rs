@@ -10,6 +10,7 @@ pub mod adapter;
 mod glob;
 pub mod html_artifacts;
 pub mod media;
+pub mod presented_media;
 pub mod time;
 pub mod tool;
 
@@ -159,3 +160,5 @@ impl GroundTruthDoc {
 pub fn glob_match(pattern: &str, path: &str) -> bool {
     Glob::new(pattern).matches(path)
 }
+
+pub mod transcripts;

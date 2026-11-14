@@ -168,7 +168,7 @@ timing.
 > census size). Each lane holds whole trees by recency key `k` (the newest skim mtime over the
 > tree's own sources) descending, then tree id, each tree's sources in path order; the serial
 > driver walks `P`, then every lane's trees merged by the same key. A plan that cannot hoist a
-> shared member (one with per-session record queries) or cannot place a source in a tree walks
+> shared member (one whose records can emit canonical operations) or cannot place a source in a tree walks
 > paths instead, and a truncated discovery or metadata walk falls back to runtime admission
 > before the producer starts. Only a transcript whose session still has an
 > uncaptured transcript, or a pending sibling heal after a restart, is held; the heal runs as soon
@@ -549,6 +549,20 @@ timing.
 > interleaved rounds put its share of the cold build's peak at about 215 MB, and about 315 MB with
 > the look-ahead reservation above (1,091 against 776 MB), at unchanged canonical readiness
 > (2026-11-02). It lowers every mode's peak, the path walk's included.
+>
+> **Sent files and frozen pairs (2026-11-12).** Capture of sent files (§4.1.2; "HTML review
+> artifacts", *Sent media in the Document frame*) reads files outside the source snapshot: a
+> transcript names an absolute path anywhere on the machine, and whether that file is there,
+> with its recorded size, can differ between the two sides of a pair, between runs and between
+> machines. A captured file adds a ledger frame of up to 64 MiB, a member and an asset
+> attachment, so it moves `sourceSetDigest`, the projection and the run's cost, none of which
+> the snapshot's checksums cover. A frozen pair therefore either runs **both** sides with
+> `ROSETTA_PRESENTED_MEDIA=off` exported to the daemon (every sent file stays a path
+> reference and no media frame is written), or freezes the sent files with the snapshot: at
+> the paths the transcripts record, read-only and checksummed like its sources. One side
+> with the switch and one without is not a pair. `tools/r1-bench`, `tools/ui-bench` and
+> `tools/ingest-bench` start the daemon with the calling shell's environment, and their
+> READMEs carry the rule.
 >
 > **UI readiness (2026-11-03).** The progressive cold import is judged by what a reader sees in
 > the app, not only by daemon milestones. `tools/ui-bench` runs the production app (the built
@@ -1607,6 +1621,15 @@ capture contract explicit.
   sources in a run-dependent order. The text output adds `<runtime> source set digest <hex>` per
   runtime and `source set digest <hex>` over all of them (folded like the other root digests);
   JSON carries `sourceSetDigest`.
+  Since 2026-11-12 a document entry that carries a media claim (a sent image or video) is
+  hashed under its own entry kind with its claim, which is source content, so a ledger with
+  no media frame keeps its digests. Those frames are also tallied by capture status, as
+  counts and bytes only, never a path or content: JSON always carries
+  `media: {frames, captured, capturedBytes, missing, tooLarge, unsupported,
+  changedDuringRead}` per runtime and in `total`, and the text report adds a media line only
+  where such frames exist. They are counted in `documents` and `documentBytes` too. The
+  prefix walk now knows the `Document` tag, so a segment holding one verifies clean
+  ("HTML review artifacts", *Sent media in the Document frame*).
   Each closed segment also appends one line to `<agent>/.segments` naming the sources and
   generation ranges it holds, so a read scoped to one source generation (the transcript's
   exact-command fetch) opens the owning segments instead of walking the ledger; the index is
@@ -1705,7 +1728,9 @@ user-facing semantic projection. These are deliberately different jobs:
 - Attachments are typed image/document/audio/video/file references, while citations remain
   distinct bounded source/span references. Inline bytes become immutable content-addressed
   projection members; the database retains relocatable refs. Attachment-only prose rows are
-  valid and do not fabricate empty text.
+  valid and do not fabricate empty text. A file an agent sent the user by path (an image, or
+  MP4/MOV video; 2026-11-12) is a member too once capture has ledgered its bytes, and a path
+  reference until then (§4.1.2, "Sent files").
 - Every entry belongs to a deterministic causal group classified as a human turn, agent cycle,
   parent invocation, system cycle, or synthetic group. Group and optional response derivation
   (`native`, `parent_linked`, `ordered`, or `synthetic`) prevents clients from presenting an
@@ -1852,6 +1877,14 @@ renditions are a disposable cache derived from it after ingestion, and the raw l
 keeps the native encoding. Rows normalized earlier name legacy WebP bundles, which stay
 valid (see mixed representations below).
 
+Since 2026-11-12 a `Reference { File }` on a tool row can also mean *sent, not captured*:
+a file the agent sent the user by path whose bytes capture did not ledger. It carries the
+file's name, declared type and recorded size, and stays what it always was, a locator and
+not a promise. The same slot becomes an `Asset` when a captured frame projects (Sent files,
+below). The row has only those two states. Why the bytes were not captured (missing,
+changed, unsupported, too large) is in the ledger frame's status, never on the row and
+never an `Unavailable` reason.
+
 Attachment identity is derived from a stable native part identity, or a deterministic
 source-block position when none exists. It is not a content digest: two uses of the
 same image keep two attachment slots while sharing one immutable blob. An invalid
@@ -1902,10 +1935,35 @@ frame limit `prepare` would have reached only after the broken frame. Copilot's 
 asset joins validate the *native* MIME, byte count and digest; display metadata never
 replaces that source proof.
 
+Recorded video (2026-11-12) has its own entry points and is never an inline type.
+`rosetta-media`'s `video_media_type` classifies a file from its container header alone, on
+checked slices of the caller's bytes (no codec, no decode, no filesystem, no allocation),
+and `probe_video` adds a display size when the header proves one.
+The first box must be `ftyp`. A major brand of `qt  ` is `video/quicktime`; otherwise a
+major or compatible brand in `isom`, `iso2`–`iso6`, `mp41`, `mp42`, `avc1` or `M4V ` is
+`video/mp4`. Anything else is not a video here: HEIC and AVIF (image brands), WebM (no
+`ftyp`), a `.mov` written without one. The brand list cannot tell an audio-only MP4 from
+one with a picture, so a caller accepts a file only when the detected type equals the
+declared one. Dimensions are a layout hint and never part of acceptance: the width and
+height of the first track header (`moov` > `trak` > `tkhd`) that records both above zero,
+found by a bounded walk of box headers and read through that header's matrix. An identity
+matrix or a 180° turn keeps width by height. A quarter turn (90° or 270°: cells *a* and
+*d* zero, *b* and *c* not) gives height by width, so a portrait phone recording reports
+its upright shape. Under any other matrix (a scale, a mirror, a skew) there are no
+dimensions, because the header alone does not prove what a player would show, and a later
+track is not read in that track's place. A file whose `moov` is cut, missing or malformed
+still classifies, without a size. Sample descriptions and edit lists are not read.
+Adapter-support's
+`presented_media_type`, `presented_kind`, `presented_limit` and `from_presented_bytes`
+serve sent files only. The inline-media table (`canonical_media_type`, `from_bytes`) is
+unchanged, so an inline `video/*` data URL is still `Unavailable { UnsupportedMedia }`.
+
 Display renditions use one recipe for photos and screenshots: the Rust `webp` binding to
 bundled libwebp, lossy quality 80, method 2, alpha quality 100, sharp YUV off, encoder
 threading off. The raw ledger keeps the original native Base64; the projection keeps each
 recorded image once as `<blake3(original)>.<png|jpg|gif|webp|bmp|ico>` (APNG is `png`).
+A captured sent video is `<blake3>.mp4` or `<blake3>.mov` (2026-11-12): a member with no
+rendition, never decoded by the daemon.
 Every display resource is a WebP derived from its pixels, so the renderer never decodes a
 recorded original. Images are fully decoded, EXIF-oriented and, for RGB ICC profiles,
 converted to sRGB before resizing. The full rendition preserves the complete frame and
@@ -1938,7 +1996,9 @@ with its recorded MIME and byte count and no `image_variants` map. The store mat
 and syncs every member before publishing its references; identical member bytes
 deduplicate. It refuses a projection op that carries `image_variants` (renditions are never
 ops), admits `image/bmp` (`BM`) and `image/x-icon` (`00 00 01 00`) beside PNG, JPEG, GIF and
-WebP, and remembers the members it wrote or hash-verified, so a repeated occurrence costs
+WebP, admits `video/mp4` and `video/quicktime` through the kernel's `video_media_type`
+(2026-11-12; the check runs on disk and in memory alike, before anything is written), and
+remembers the members it wrote or hash-verified, so a repeated occurrence costs
 one stat instead of a re-read and re-hash. A member pruned since is written again and one
 whose type or length changed is re-verified; only a same-length overwrite of a file this
 store already verified goes unnoticed until a later process verifies it. The set lives
@@ -1981,7 +2041,11 @@ no recorded bytes reach the renderer through a rendition URL. A missing base ans
 (recover with a rebuild), a hash mismatch 500 with the bytes never decoded, and a base
 the kernel refuses (invalid, unsupported or over a limit) 400. The plain URL is
 unchanged: the verified recorded bytes with their own Content-Type, `nosniff` and
-immutable caching, for opening, saving and downloading only.
+immutable caching, for opening, saving and downloading only. A video member (`.mp4`,
+`.mov`; 2026-11-12) has only that plain URL: the whole file, read and BLAKE3-verified on
+every request, as `video/mp4` or `video/quicktime`. The route has no Range support, so a
+`Range` request gets 200 and every byte, and `?image=` on a video answers 400 like any
+non-image member (`crates/server/tests/http/video_assets.rs`).
 `crates/server/tests/http/image_renditions.rs` holds the codec pool's background slot and
 its other slot, and shows eight cached tiles return while the cold bases wait.
 
@@ -1999,7 +2063,9 @@ rendition map that `message.detail` `$.attachments` and `$.event.attachments` an
 4,096 message ids, each one short statement with an `instr(…, '/api/assets/')` prefilter
 before `json_each`, so no long read transaction holds back WAL checkpoints. Workflow-run
 and canonical-document image resources, and legacy bundles, are left to their first
-view. A stat-only pass drops complete bases, so a warm start with nothing to do reads no
+view. A video member a row names is a reference like any other and never rendition work:
+the sweep is handed image bases only.
+A stat-only pass drops complete bases, so a warm start with nothing to do reads no
 image bytes. Each remaining base gets one decode (`RenditionSet::All`: the thumbs and the
 preview, plus the full link when preview is Full); Full of an image over 1600 pixels
 waits for its first 1:1 view. The sweep never waits on the pool: `try_admit(Background)`
@@ -2015,7 +2081,8 @@ as a full disk ends the run `deferred`. Stderr receives
 a stop before `started` emits nothing.
 
 The adapter-support helper never reads paths or fetches URLs. Source-only references
-remain references; recovering historical bytes requires separately ledgered capture.
+remain references; recovering historical bytes requires separately ledgered capture. Sent
+files (below) are the one such capture for media.
 
 **Recorded tool images (2026-10-02).** `ToolInteraction.attachments` owns images
 returned by a tool, including an opaque orchestration tool. Adapters classify only
@@ -2027,6 +2094,62 @@ slot, including after a checkpoint resume. Merge evidence stays in RAM; SQLite's
 existing `tool_detail` holds only the action and resolved attachment references.
 Attachment collections allow up to 1,024 occurrences independently of the smaller
 semantic-field list bound. No native output or new reconciliation table is stored.
+
+**Sent files (2026-11-12).** An agent can send the user a file by path. The transcript
+then names a path, a size and a type, and holds no bytes. A sent image or MP4/MOV video
+becomes a `ToolInteraction` attachment in two steps.
+
+1. *Reference and fact, in the adapter.* From transcript facts alone, the adapter attaches
+   one path `Reference` per file to the tool row in one tool update (kind `image` or
+   `video`, the file's name, its declared type and its recorded size) and states one pure
+   fact per file, `IngestOp::PresentedMedia` (`core/src/presented_media.rs`): the session,
+   the raw record's offset, the path, the recorded size, the type, the tool's correlation
+   key, the reference slot exactly as attached, and the evidence of its upgrade.
+   `adapter_support::presented_media::push` is the only producer. It examines the first 32
+   files of a result, and a slot id uses the file's native index, so a skipped file never
+   shifts a later one. It skips a type outside the eight presented types (PNG, JPEG, GIF,
+   WebP, BMP, ICO, MP4, QuickTime), a zero size, an HTML path (the publication seam owns
+   those), a network path, a path that does not resolve lexically to an absolute one, and a
+   repeat. **A recorded path is presented as written or not at all**, because capture
+   opens exactly the fact's path and a rewritten path would name a file the transcript did
+   not: a backslash is a legal POSIX file-name byte, not a separator, and `..` after a
+   symlinked directory is not its lexical parent. So a path holding a backslash is
+   skipped, and so is an absolute path that is not already in normal form (a `.` or `..`
+   segment, an empty segment, a trailing slash). A relative path is kept only when a
+   working directory is supplied, both are in normal form, and the fact's path is the two
+   joined by one `/`. It also skips any file whose finished fact fails
+   `PresentedMedia::validate`, so nothing it emits can fail a store batch: that refuses an
+   over-long path and any path that is `/dev` or `/proc` or lies under one, in any letter
+   case (the default macOS volume resolves `/DEV` to `/dev`). Opening such a path can act
+   on the daemon itself: `/dev/fd/N` duplicates its own descriptor N and shares its read
+   offset. A skipped file gets no attachment and no fact. No file is opened.
+2. *Capture and upgrade, in the pipeline.* The capture seam ledgers the file's bytes
+   ("HTML review artifacts", *Sent media in the Document frame*). One pure `project()`,
+   called by capture and by replay, turns a captured frame plus its fact into a
+   `ProjectionAsset` and a tool update that replaces the same slot's source with that
+   `Asset`, carrying the verified type, the byte count and, when the header proves them,
+   the dimensions. The fact, the member and the upgraded attachment are validated before
+   anything is pushed.
+
+The store applies nothing for the fact itself; what a reader sees is the attachment. The
+reference sits at mutation index `REFERENCE_MUTATION` and the upgrade of file *n* at
+`REFERENCE_MUTATION + 1 + n`, directly below the two indexes reserved at the top of the
+range, so a captured asset always outranks the reference it replaces. No table, column or
+wire type is added and no version moves: the resolved attachment lives in
+`message.tool_detail`, as recorded tool images do, and `AttachmentKind::Video` with an
+`Asset` source was already on the wire.
+
+Claude Code is the only producer today. It reads `toolUseResult.attachments[]` on a
+`SendUserFile` result whose opener it remembered by name (checkpointed, at most 256 ids,
+the oldest forgotten first; an opener seen again counts as the newest), that did not fail,
+and that is the only `tool_result` on its line. It reads `path`, `size`
+and `media_type` and nothing else, and passes no working directory, so a relative path is
+skipped (`docs/groundtruth/claude-code.md` §3.1, which also records what the census does
+not prove). `crates/adapters/claude-code/tests/presented_media.rs` covers the shapes.
+`crates/pipeline/tests/presented_media.rs` and its submodules cover the capture, every
+replay entry point, the snapshot driver, append growth and re-read passes with a
+synthetic adapter, and `crates/pipeline/tests/presented_media_e2e.rs` and its submodules
+cover the same paths end to end with the Claude Code adapter.
 
 Schema 27 / protocol 26 and the seven image-producing normalizer versions land
 together. Existing projections follow the established **explicit ledger rebuild**
@@ -2055,6 +2178,16 @@ through the same routes; only a new bundle *op* is refused. `rosettad rebuild --
 converts everything to originals and then prunes the old bundle members. The seven
 image-producing adapters' version comments record why each version stays.
 
+Sent files (2026-11-12) follow the same rule: the Claude Code normalizer stays at 39, and
+no schema or protocol version moves. A `SendUserFile` tool row normalized before the change
+keeps no attachment, and one normalized after it has a reference or an asset; both are
+valid in one projection and one transcript. A row gains its attachment when its source is
+next normalized (a new generation, affected-scope replay) or the projection is rebuilt.
+A rebuild alone restores only what the ledger holds: with no media frame the slot is a
+reference, whatever is on disk today. A source read afresh after the change (a new
+generation, or the live pass that follows a rebuild) can still capture a file that exists
+with its recorded size.
+
 *Note (2026-11-05, MA-2a):* schema 30 takes the cost this paragraph avoided. Every
 installed schema 29 projection fails closed on the 0.1.4 binary, and the app still has no
 rebuild path: `rosettad serve` exits with `SchemaVersionMismatch`, and
@@ -2070,7 +2203,10 @@ defers it in both places, and warm starts never prune. It removes an image membe
 names (a legacy bundle member a row still names is a reference like any other), and a
 rendition cache whose base no row names or whose recipe or variant this build does not
 make. Text, document and HTML members, `.live-images-v1/` and tempfiles are never
-touched. Its reference walk is paged by 4,096 message ids with an `instr` prefilter before
+touched. Neither are video members (`<64hex>.mp4`, `.mov`; 2026-11-12): they are not image
+bases, so the pass removes none, referenced or not, and nothing else collects them
+(§11, image-member retention).
+Its reference walk is paged by 4,096 message ids with an `instr` prefilter before
 `json_tree`, and caches that are all stale need no scan. It runs on the serve thread and
 cannot be interrupted: a SIGINT during it waits for the scan, and that scan's cost on a
 large corpus is unmeasured.
@@ -2102,6 +2238,33 @@ through the same renditions and reads no bytes. Current-file reads cannot stand 
 for a recorded transcript image; deleting the original temporary file has no effect
 on an image whose bytes were captured. No arbitrary tool output or Markdown URL is
 parsed into an image request.
+
+A sent video (2026-11-12) has its own tile in the same strip. A captured one (a recorded
+member `/api/assets/<digest>.mp4` or `.mov` of type `video/mp4` or `video/quicktime`, no
+rendition map) is a tile with a play glyph, the file's name and its size, at the strip's
+height and the video's own shape: 16:9 when its dimensions are unknown, never narrower than
+1:1 nor wider than 21:9. There is no poster and no thumbnail, and the room requests nothing
+for a video until the reader presses play. It then asks the host's optional
+`AssetSource.mediaAssetUrl(asset)` for an address a `<video src>` can load. **A host
+offers that door only for an address that honours byte ranges, and rosetta's app offers
+none.** The daemon serves a member whole (a `Range` request answers 200 with every byte),
+and a `<video>` loaded from such an address plays in Chromium but cannot seek: every seek
+lands at 0 and no error fires for the room to fall back on (measured in this app's
+Electron, 2026-11-12). So in rosetta's app, and on any host without that door, one that
+answers null, or one whose address the element cannot load, the room reads the member's
+bytes through the reading session's `readAsset` and plays an object URL it makes and
+revokes itself, which seeks. The whole member (up to 64 MiB) is read before the first
+frame and held as a blob until the tile is left. If that fails too, the tile says "Could
+not play video" and offers Retry. A video that was sent but not captured keeps the tile's
+shape, says "Video not captured" with its name and size, and is not a button; an image
+reference says "Image not captured". A captured video the room cannot address (the host
+answers no attachment address for it, or the member is not an MP4 or QuickTime file under
+its digest) says "Video is not available here". A video is never passed to
+`imageAssetUrl`, never opens the image viewer and is not in its gallery. Unlabelled tiles
+are numbered among their own kind, so an image has the same "Image N" in the strip and in
+the gallery it opens (`clients/room/README.md`; `clients/app/test/video-tile.test.mjs`,
+and `video-tile.electron.mjs`, which records a short H.264 clip in the test window and
+plays and seeks it through the bytes path and through a host address that answers 206).
 
 Opening an image snapshots its visible row into the shared file viewer (2026-10-01).
 For multi-image rows, a bottom thumbnail strip retains every occurrence in order,
@@ -2613,7 +2776,11 @@ browser Origin rule (loopback origins, the Tauri and Electron shells, `--allow-o
 guards against web pages and is never a credential, since any other process can send
 any Origin. A browser's WebSocket carries the credential as a
 subprotocol pair, because it cannot set `Authorization`. The rule, the grant's canonical
-form and the threat model are in `docs/AUTH.md`.
+form and the threat model are in `docs/AUTH.md`. Since 2026-11-12 the asset route a `read`
+grant opens (`/api/assets/{name}`) also returns captured sent files: images and MP4/MOV
+video an agent sent the user by path, copied from the daemon's disk into the ledger at
+capture. They are captured bytes, so `read` opens them without `files`, by digest and with
+no session comparison, like every other member (`docs/AUTH.md` §5.4).
 
 ### 5.2 The three services
 
@@ -3027,6 +3194,13 @@ now does too, through a start-time **enrollment file**:
   SQLite file remain the only atomic swap. The raw ledger keeps the original inline form.
   Display renditions beside members (`<digest>.image-v1-<variant>.webp`) are a disposable
   cache, not members: never referenced, never synced, recreated on demand (2026-11-01).
+  A sent file (2026-11-12) is a member of the same kind: `<blake3>.<ext>` for an image, or
+  `<blake3>.mp4` / `.mov` for recorded video, written by the store under the same durability
+  rule. Its bytes were never inline, so the ledger's lossless copy is the `Document` frame
+  capture appended (below, "HTML review artifacts"), and a rebuild recreates the member from
+  that frame without reading the sent file. `core::assets::MEMBER_TYPES` is the one table of
+  member types and extensions; tests hold the store's signature check and the server's
+  extension map to it.
 - **A generation this daemon cannot use is no generation.** A well-formed `CURRENT` manifest
   whose search schema or format differs reads as absent (2026-09-09): the worker rebuilds, status
   reports `building` with the rebuild's progress, and a query answers unavailable — a schema
@@ -3569,7 +3743,7 @@ layer's design is frozen.
 | FTS5 vs Tantivy | detached FTS5 sidecar today; Tantivy prototype remains benchmark-only | revisit with judged relevance + declared/observed query mix + accepted storage margin; FTS5 coherence/crash gates are already implemented |
 | WS vs SSE for streams | WS (bidirectional subscribe/ack) | if consumers end up read-only-simple |
 | Ledger retention | keep forever; segments zstd-compressed since 2026-09-04 (`ledger compact` for older ones); no segment GC yet | compressed ledger > tens of GB |
-| Image-member retention | keep immutable content-addressed members; image GC prunes unreferenced image members and stale or orphan rendition caches after a rebuild and right after a fresh RAM or resumed publication (2026-11-01); warm starts never prune | `.assets/` growth between those points justifies a ledger-derived mark/sweep under the projection lock, or the post-publication reference scan shows in large-corpus startup time |
+| Image-member retention | keep immutable content-addressed members; image GC prunes unreferenced image members and stale or orphan rendition caches after a rebuild and right after a fresh RAM or resumed publication (2026-11-01); warm starts never prune. Video members (`.mp4`, `.mov`; 2026-11-12) are never collected, referenced or not: up to 64 MiB each, and the ledger keeps a copy in every source generation that captured or carried one | `.assets/` growth between those points justifies a ledger-derived mark/sweep under the projection lock, or the post-publication reference scan shows in large-corpus startup time; unreferenced video members (a source deleted or replaced without the file) take measurable disk |
 | Grok/Codex priority | after M2 | chopsticks needs them sooner |
 | UDS transport | not in v1 | localhost TCP shows up in profiles |
 | Daemon access control | DECIDED 2026-09-30: open on its listener by default (unchanged); `--token-file` bearer on every route and upgrade; per-session HMAC-SHA256 grants over RFC 8785 JSON with `--grant-key-file`; the Origin rule is the browser guard and never a credential (`docs/AUTH.md`) | a supervisor needs revocation, one grant for a session tree, or UDS lands |
@@ -3585,7 +3759,10 @@ layer's design is frozen.
 
 An artifact is an HTML review/design deliverable explicitly presented by an
 agent. Creating, editing, or reading an HTML source file is not sufficient.
-Media attachments keep their existing ingestion and presentation path.
+Media attachments keep their existing ingestion and presentation path. Since
+2026-11-12 a sent image or MP4/MOV video uses this section's capture mechanism,
+the `Document` frame, and nothing else of it: it never becomes an artifact or a
+library entry (*Sent media in the Document frame*, below).
 
 The global Artifacts button sits beside global search. Its library lists
 presented artifacts across admitted sessions, opens their captured HTML, and
@@ -3642,15 +3819,229 @@ remote URLs and links with source-line anchors. Ordinary file tools do not
 create library entries. These recognition rules currently cover Claude Code
 and Codex; other adapters keep their existing media behavior.
 
+*Sent files (2026-11-12, normalizer still 39):* a `SendUserFile` result now has
+two readers that never overlap. An HTML attachment is a publication, as above.
+An image or MP4/MOV attachment is a sent file: a path reference on the tool row
+and one `PresentedMedia` fact (§4.1.2, "Sent files"). The sent-file producer
+skips every HTML path, and markdown, PDF and untyped attachments present
+nothing. The sent-file reader acts only on a remembered `SendUserFile` opener
+whose result did not fail and is the only `tool_result` on its line.
+
 The capture layer writes a `Document` ledger frame (tag 7) containing the
 original bytes, status, observation time and source offset before checkpointing
 or sealing the source. Plain, compressed, synchronous, asynchronous and pooled
 capture use the same record. Adapters remain pure. A read is limited to a stable
 regular file of at most 16 MiB, accepts UTF-8 or BOM-marked UTF-16LE, and rejects
-symlink files and network locators. UTF-16LE is converted to UTF-8 only in the
+symlink files, network locators and, since 2026-11-12, any path that is `/dev` or
+`/proc` or lies under one (refused before the open). UTF-16LE is converted to UTF-8 only in the
 disposable projection; the ledger preserves the source encoding. Projection
 assets participate in the streamed queue's byte budget. Source-generation
 election controls both publications and observations during replay.
+
+**Sent media in the Document frame (2026-11-12).** The same frame carries the
+images and video an agent sent by path (§4.1.2, "Sent files", for the fact and
+the attachment). IO stays in the capture layer
+(`crates/pipeline/src/presented_media.rs`); adapters and replay read no file.
+
+*Frame.* The frame's metadata tuple has an optional fifth element, the media
+claim `{media_type, expected_len}`: the type and size the transcript recorded.
+**A frame without a claim is HTML**, and is written byte for byte as before, in
+its three- or four-field form. `CapturedDocument::validate` is the one frame
+contract: encode refuses exactly the frames decode rejects, because a
+checksum-valid frame that decode rejects ends the walk of its whole segment. A
+claim needs a non-zero size and a bounded type, a captured media frame holds
+exactly `expected_len` bytes, and an uncaptured frame of either kind holds no
+bytes and no recovery source. The ledger's prefix walk (`frame_prefix`) now
+knows tag 7. Before, every segment holding a `Document` frame read as torn at
+its first one, so it never verified clean and was never compacted or
+recompressed; such segments, HTML ones in existing ledgers included, now verify
+clean and are compactable. `rosettad ledger verify` tallies media frames by
+status (§3.5).
+
+*Capture, per fact, in this order.*
+
+1. **The ledger first**, on a pass that can meet earlier frames of the source
+   (below). It looks for a `Captured` media frame with the same path and claim:
+   the one at this record's offset, otherwise the newest generation's, then the
+   lowest offset. If that frame projects, it is used and the filesystem is not
+   read. A frame already at this exact generation and offset appends nothing.
+   Otherwise a copy is appended at this coordinate with the original
+   observation time and `recovered_from = "ledger:<generation>:<offset>"`.
+2. **The claim.** A recorded size over the type's limit, or one that would take
+   the record's captured bytes past its budget, is `TooLarge` and the file is
+   not opened.
+3. **The filesystem, under an identity check.** The open is the HTML capture's
+   (one shared helper, `open_regular`: absolute, not a `//` network path, not
+   `/dev` or `/proc` or under one in any letter case, `O_NOFOLLOW`,
+   `O_NONBLOCK`, a regular file). A device or process path is refused before
+   any open, because opening one can act on the daemon: `/dev/fd/N` duplicates
+   its own descriptor N, reports the regular file behind it and shares its
+   read offset. The path's directory is resolved first and refused the same
+   way, so a symlinked directory that leads into either tree is no way round
+   (`O_NOFOLLOW` guards the last component alone). The producer already skips such a path (§4.1.2), so for a sent
+   file this is a second guard; the HTML capture gets the same refusal. The
+   file's current length must equal the
+   recorded size before a byte is read, the read must return exactly that many
+   bytes, and length and modification time must be the same before and after.
+   The bytes must then pass the declared type's check: the image header probe,
+   or the video `ftyp` rule (§4.1.2), with the detected type equal to the
+   declared one.
+4. **The ledger after all, on append growth only.** When step 3 captured
+   nothing (`Missing`, `ChangedDuringRead` or `Unsupported`) and the pass is
+   append growth of a source that already had an active generation (below),
+   the ledger is asked the same question as in step 1. A capture it holds for
+   this path and claim stands in for the failed observation: a copy with
+   `recovered_from`, or nothing appended when the capture already sits at this
+   coordinate. A `TooLarge` claim is not looked up, because no capture of it
+   could be carried under the same two limits.
+
+| Outcome | Frame status |
+| --- | --- |
+| Not absolute, a network path, a device or process path, an open error other than not-found, not a regular file | `Unsupported` |
+| Nothing at the path | `Missing` |
+| Length differs from the recorded size; a short or long read; length or mtime moved under the read | `ChangedDuringRead` |
+| Recorded size over the limit or the record's budget (decided from the claim) | `TooLarge` |
+| Bytes fail the signature, the probe or a limit | `Unsupported`, bytes dropped |
+| Otherwise | `Captured`, with the bytes |
+
+Limits: 32 MiB per image (the image kernel's input limit), 64 MiB per video,
+128 MiB of captured bytes per raw record, and the first 32 files of a record.
+Every status is kept in the frame. The canonical row has two states, an `Asset`
+when a captured frame projected and the path `Reference` otherwise. Size plus
+magic is not content identity: capture copies whatever file sits at the
+recorded path today with the recorded size and the declared type.
+
+*Which passes ask the ledger.* Only a serial pass that holds a ledger handle,
+and only when earlier frames can exist. Three kinds of pass ask it **first**
+(step 1):
+
+- a **re-frame**: the JSONL pass resumed a checkpoint of generation above zero
+  that has no tail. A rebuild or a stopped-source activation wrote it, so the
+  next live pass re-reads the file from byte zero in the same generation, and
+  its re-emitted opener rewrites the tool row. Without the lookup that pass
+  would re-observe today's filesystem and could turn a captured video back
+  into a reference. A fresh cursor never looks.
+  **An interrupted re-frame resumes as a re-frame.** Its first committed batch
+  writes a tail, so the tail alone would make the pass that resumes (after a
+  stop, a kill, a cancellation or a conflict) look like append growth. The
+  pipeline checkpoint therefore carries a boolean, `reframing`
+  (`PipeCheckpoint`, `crates/pipeline/src/checkpoint.rs`): a re-frame sets it
+  on every batch that leaves more of the file to read, the batch that reaches
+  the end of the file clears it, and a pass that resumes a checkpoint with it
+  set is a re-frame too. A generation restart leaves the re-frame. The field
+  is absent when false, so every other checkpoint keeps its exact bytes, an
+  older binary reads this one, and the checkpoint version does not move. It is
+  cursor state: one flag, no payload;
+- a **replacement**: the pass builds a generation above 1 that is not the
+  active one (after a normalizer change, a sibling heal or an audit mismatch,
+  for example). A capture is carried into the new generation, so the video
+  survives its file's deletion;
+- a **snapshot or document pass** at a generation above 1.
+
+One kind asks it **afterwards** (step 4): **ordinary append growth** of a JSONL
+source that had an active generation before the pass. It reads the file first
+and looks in the ledger only after an observation that captured nothing, so a
+send whose file is there costs no walk. This covers a record the agent wrote
+twice (the repeated opener empties the tool row's attachments and the repeated
+result names the same slot at a later offset) and a later call that sends the
+same path and size again, each after the file is gone: the row is the asset,
+live and rebuilt, and one carried copy is ledgered at the later record.
+
+**A first generation and pooled cold workers never look**, before or after: a
+first generation has nothing earlier to find (the one exception is the crash
+case under *Accepted limits*), and a pooled worker holds no ledger reader. The snapshot and document drivers have no step 4, because a
+snapshot pass is never append growth. **A sliced pass has no step 4 either**
+(one carrying a slice budget, the legacy `ColdEngine` lanes): its first slice
+activates early, so each later slice of a file never read before would look
+like append growth and pay a walk for nothing. The cost is that a record
+repeated across slices of that first read, whose file vanished in between,
+stays a reference, live and rebuilt alike.
+
+It is one scoped ledger walk per pass, through the pass's own generation: at
+the first fact of a pass that asks first, at the first failed observation of
+an append pass, and kept for the rest of that pass (dropped if the generation
+restarts). It holds at most 256 MiB of earlier bytes. **That budget gives way
+by age**: frames arrive in ledger order, oldest generation first, and a frame
+that would take the held bytes past the budget takes the room of frames of strictly lower
+generations, lowest generation first and then lowest offset. So the copies
+earlier rewrites carried forward cannot crowd out a newer generation's only
+capture of a file. A frame is refused only when the lower generations cannot
+free enough room, and then nothing is given up for it. Lookup is unchanged: the
+frame at this record's offset, otherwise the newest generation's, then the
+lowest offset. The segment index only narrows the walk, a torn tail ends
+its own segment's walk, and an unreadable index or segment gives an empty
+answer, which only means the filesystem is observed, or that its answer
+stands. Both drivers are
+wired: the JSONL pass, and the snapshot and document drivers through
+`apply_snapshot_records`. Each appends a record's raw bytes before its
+documents, the order the replay join needs. A ledger-only source writes no
+frame.
+
+*Replay reads no filesystem.* Each replay entry point
+(`rebuild_runtime_with_options`, `prepare_runtime`, `activate_stopped_source`)
+notes the facts its raw records normalize to in a RAM map per source, keyed
+`(source_offset, path)`, and a media frame joins the fact at its coordinate
+through the same `project()` capture used. **The first captured frame that
+projects wins** the coordinate, and a later frame there is ignored. A frame
+that captured nothing emits nothing and leaves the slot for one that did. A
+frame with no fact is ignored. The map holds 65,536 facts per source and evicts
+the lowest coordinate; it is rebuilt from the same records on every replay and
+never persisted. A ledger with no media frame rebuilds a reference, whatever is
+on disk today.
+
+*Switch.* `IngestOptions::observe_presented_media` is true by default.
+`ROSETTA_PRESENTED_MEDIA=off` in the daemon's environment (any letter case; no
+other value) sets it false in the options `rosettad` builds through
+`Enrollment::ingest_options` (`crates/rosettad/src/enroll.rs`). Then capture is
+not called: every fact stays
+a reference and no media frame is written. It exists for frozen before/after
+pairs (Cold-build measurement).
+
+*Accepted limits.*
+
+- **Crash window, what is left of it.** A hard kill can land between the
+  ledger append and the store commit. The restart reads that record again as
+  append growth, and step 4 closes the window for a file that is gone, has
+  another size, or no longer passes its type's check: the capture is found at
+  its own coordinate, the row is the asset the batch would have committed, the
+  member is written from the frame, and nothing is appended
+  (`a_restart_after_a_crash_between_ledger_and_store_finds_the_capture_in_the_ledger`).
+  Two cases remain, and in both the next replay of the source shows the first
+  capture, because the first captured frame at a coordinate wins:
+  - *The path holds other bytes of the recorded size and the declared type at
+    the restart.* The file is read before the ledger is asked, so it is
+    captured as found: live shows today's bytes, and the ledger holds a second
+    `Captured` frame at the same record
+    (`documented_limit_a_file_replaced_before_a_crashed_batch_is_reread_shows_its_new_bytes_live`).
+  - *The killed batch was the first the store would have committed for that
+    source.* The restart then reads the source as a first generation, which
+    never looks. If the file is gone or can no longer be captured, live shows a reference and a
+    second, status-only frame is ledgered at the record
+    (`a_first_generation_whose_file_is_missing_does_not_walk_the_ledger` shows
+    the same pass over a ledger that already holds the capture).
+- **Path and claim, not content.** A carried capture is matched on path, size
+  and type. Two sends of one path with equal size and different bytes can show
+  the earlier bytes: after a re-read, and, through step 4, live for a later
+  send whose file is gone or no longer capturable.
+- **Ledger growth.** Each new generation of a source re-appends its captured
+  media, as it does its raw records. Within a generation, each record that
+  sends a file ledgers its own frame, and a carried copy is a whole copy:
+  nothing deduplicates one file sent by several records. A re-frame also
+  appends one more status-only frame, with no bytes, for each sent file of the
+  source that was never captured, because only captured frames are looked up;
+  rows do not change.
+- **Forward compatibility.** An older binary cannot decode a media frame, so
+  the rest of that segment is invisible to its replay.
+- **Exposure.** Any absolute path a proven sent-file result names (in normal
+  form, outside `/dev` and `/proc`), with a matching size and magic, is copied
+  into the ledger and served to every `read` grant that knows its digest
+  (`docs/AUTH.md` §5.4).
+- **Memory and time.** A step holds each captured file about twice (frame and
+  member) until it is framed and applied. The 128 MiB bound is per raw record;
+  nothing bounds the captured bytes of one batch. A re-frame or replacement pass holds
+  up to 256 MiB of earlier bytes as well, and so does an append pass from its
+  first failed observation. The lookup decodes whole segments on the writer
+  thread, and a read on a slow volume cannot be cancelled.
 
 Schema 29 keeps source-owned `html_artifact` rows and adds `recovered_from`,
 the selected copy's location, without storing candidate lists. The `HtmlArtifact` and
@@ -3895,3 +4286,54 @@ start until the rebuild is run by hand. The release notes must say so.
   record ruled that confinement is the serving host's policy and a stored page is
   never rewritten (its DR-D1 (b) and DR-D11 (a)), so the door places the page by
   digest and the shell became the option above. The draft never shipped.
+
+
+### Decoded transcript inputs and fixed history ranges (2026-11-12)
+
+Adapters can declare a stable logical transcript path and an ordered set of
+physical representations through `transcript_location`. Capture owns plain/zstd
+IO, root-relative path validation, bounded headers, pinned file handles, anonymous
+seekable spools, cancellation and decoded-size limits. The adapter owns native
+filename rules, current-source selection and immutable history references. Metadata
+resolves those references into transient ordered byte ranges; the canonical SQLite
+schema contains neither the graph nor native selection rows.
+
+All cursor offsets and prefix checks apply to decoded bytes. A changed physical
+identity can continue only after verifying the complete committed prefix; legacy
+checkpoints without a content chain replay safely. Ordinary quiet polls compare
+physical stamps without decoding. A compressed source is decoded and checked to
+EOF once per pass, not once per batch. A changed header forces metadata admission;
+a changed body stages a replacement while the previous valid projection remains
+readable. Native files are read without restoration or writer locks. Limits are
+32 MiB for bounded headers and reference-boundary records, 64 GiB per decoded
+source, and 128 lineage segments. Invalid, missing or truncated inputs are not EOF.
+
+The selected header precedes the ancestral ranges and each range retains its
+native header. The raw ledger therefore contains a closed, deterministic selected
+view, even if native files disappear before rebuilding. Original record ownership
+prevents duplicated inherited usage and artifact publications. Codex's SQLite
+selector rows are also captured as raw records and emit no canonical operations.
+This preserves its root-tree closure contract. Existing ordinary rollout cursor
+paths remain stable across compression, archive moves and later reverts.
+An older database may already have separate cursors for several branches of one
+thread. Those existing cursors follow the same selected view, replacing each old
+contribution and keeping later reverts and offline replay consistent. This bounded
+compatibility case captures the selected view once per existing cursor when it
+changes; fresh imports create only one logical transcript per thread.
+
+Metadata journal schema 3 adds bounded required-source identifiers and availability
+beside the ordinary metadata operations. Rebuild uses these obligations to avoid
+marking a metadata-only session Indexed when its selected transcript was never
+captured. Legacy metadata arrays (schemas 0 and 2) remain readable; the disposable
+election cache advances to schema 4. This is an additive ledger change, not a
+canonical database migration.
+
+
+A release-mode frozen comparison on 2026-11-12 used 16 synthetic sessions,
+4,136,966 decoded bytes and 8,000 canonical messages in both representations.
+One paired run took 485.63 ms (plain) and 493.43 ms (zstd), with identical
+projection-content digest `6dd1498dc98c2d5216ddca147574c7d2eb9d95ae7d0d59ef6539ce62b5f34d47`.
+Twenty quiet polls took 9.86/10.32 ms and started zero capture passes. Corpus
+creation/compression was excluded. This small warm-filesystem measurement is
+not an estimate for a full user archive or long shared prefixes. Reproduce with
+`cargo test --release -p rosetta-pipeline --test codex_storage frozen_representation_benchmark -- --ignored --nocapture`.

@@ -29,6 +29,7 @@ impl IngestOp {
             }
             Self::HtmlArtifact(publication) => Some(&publication.session_id),
             Self::HtmlArtifactContent(content) => Some(&content.session_id),
+            Self::PresentedMedia(fact) => Some(&fact.session_id),
             Self::SessionMeta(row) => Some(&row.id),
             Self::SessionTitle(row) => Some(&row.session_id),
             Self::Message(entry) => Some(&entry.session_id),
@@ -58,6 +59,7 @@ impl IngestOp {
                 .saturating_add(len(&asset.media_type)),
             Self::HtmlArtifact(publication) => json_len(publication),
             Self::HtmlArtifactContent(content) => json_len(content),
+            Self::PresentedMedia(fact) => json_len(fact),
             Self::Runtime(row) => json_len(row),
             Self::Project(row) => json_len(row),
             Self::SessionMeta(row) => json_len(row),

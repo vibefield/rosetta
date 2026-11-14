@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useContext } from "react";
 import type { CanonicalText } from "@vibefield/rosetta-protocol";
 import type { AttachmentFact } from "../../lib/transcript";
+import { isRailMedia } from "../../lib/transcript/images";
 import { ActivityImagesContext, Attachments, useAttachmentActions } from "./Attachments";
 import { MessagePreview } from "./MessagePreview";
 import { Prose } from "./Prose";
@@ -32,7 +33,8 @@ export function AuthoredMessage({ text, recordedText, attachments, messageKey, r
       : <Prose {...prose} />) : null;
   return <>
     {renderText ? renderText(content) : content}
-    <Attachments facts={shared ? attachments.filter(fact => fact.kind !== "image") : attachments}
+    {/* A run's own rail already holds this message's images and videos. */}
+    <Attachments facts={shared ? attachments.filter(fact => !isRailMedia(fact)) : attachments}
       onOpenAttachment={open} reveal={actions.reveal} />
   </>;
 }

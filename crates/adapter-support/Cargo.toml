@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rosetta-capture = { path = "../capture" }
 rosetta-media = { path = "../media" }
 base64 = { workspace = true }
 blake3 = { workspace = true }

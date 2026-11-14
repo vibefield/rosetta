@@ -10,12 +10,12 @@
 import { useMemo } from "react";
 import type { AssetRef } from "@vibefield/rosetta-protocol";
 import type { AttachmentFact } from "../../lib/transcript";
-import type { AssetSource } from "../../ports";
+import type { AssetSource, AssetUrl } from "../../ports";
 import { useReadingSession, useRoom } from "../../room-context";
 import { resolveKind } from "../file-viewer";
 import type { FileHandle, FileSource } from "../file-viewer";
 import type { ImageResource } from "../file-viewer/types";
-import { isRecordedImageAsset } from "../../lib/image-media";
+import { isRecordedImageAsset, isRecordedVideoAsset } from "../../lib/image-media";
 
 const EXTENSION_BY_MEDIA_TYPE: ReadonlyMap<string, string> = new Map([
   ["image/png", "png"],
@@ -37,8 +37,16 @@ export interface AttachmentReader {
   /** The address of bytes the daemon kept, never a provider-authored path. */
   assetUrl(fact: AttachmentFact): string | null;
   imageResource(fact: AttachmentFact): ImageResource | null;
+  /** The recorded member of a sent video the room may play, or null: not a
+   * video, not captured, or a member the host does not offer. Never an image
+   * resource: a video asks no rendition. */
+  videoAsset(fact: AttachmentFact): AssetRef | null;
+  /** The host's address for a `<video src>`, asked only on play; undefined on
+   * a host that offers none (the bytes are read instead). */
+  readonly mediaAssetUrl: ((asset: AssetRef) => AssetUrl) | undefined;
   /** A stored transcript asset as the generic file viewer understands it. */
   handleFor(fact: AttachmentFact): FileHandle | null;
+  /** Images only: the viewer and its gallery never take a video. */
   canOpen(fact: AttachmentFact): boolean;
   /** Stable by construction: `useFileContent` treats source identity as a read. */
   readonly fileSource: FileSource;
@@ -68,6 +76,7 @@ export function createAttachmentReader(assets: AssetSource, readAsset: AssetRead
     const source = fact.ref?.source;
     if (source === undefined || source === null || source.type !== "asset") return null;
     if (fact.kind === "image" && !isRecordedImageAsset(source.asset)) return null;
+    if (fact.kind === "video" && !isRecordedVideoAsset(source.asset)) return null;
     return assets.attachmentAssetUrl(source.asset);
   }
 
@@ -76,6 +85,11 @@ export function createAttachmentReader(assets: AssetSource, readAsset: AssetRead
     const asset = source?.type === "asset" && assetUrl(fact) !== null ? source.asset : null;
     if (!asset || !isRecordedImageAsset(asset)) return null;
     return imageOf(assets, asset, fact.ref?.dimensions?.width, fact.ref?.dimensions?.height);
+  }
+
+  function videoAsset(fact: AttachmentFact): AssetRef | null {
+    const source = fact.ref?.source;
+    return fact.kind === "video" && source?.type === "asset" && assetUrl(fact) !== null ? source.asset : null;
   }
 
   function handleFor(fact: AttachmentFact): FileHandle | null {
@@ -107,6 +121,8 @@ export function createAttachmentReader(assets: AssetSource, readAsset: AssetRead
   return {
     assetUrl,
     imageResource,
+    videoAsset,
+    mediaAssetUrl: assets.mediaAssetUrl === undefined ? undefined : (asset) => assets.mediaAssetUrl?.(asset) ?? null,
     handleFor,
     canOpen: (fact) => fact.kind === "image" && handleFor(fact) !== null,
     fileSource,

@@ -6,6 +6,7 @@ use std::{io::Cursor, sync::Arc};
 mod corpus;
 mod parity;
 mod pool;
+mod video;
 
 fn png(width: u32, height: u32) -> Vec<u8> {
     let image = RgbaImage::from_fn(width, height, |x, y| {

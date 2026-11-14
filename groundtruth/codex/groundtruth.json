@@ -31,11 +31,19 @@
       "writer_version": "main@e7bbc79f"
     },
     {
+      "generator": "writer-source openai/codex pinned release; storage and lineage audit 2026-11-12",
+      "agent_version": "0.167.2",
+      "evidence": "writer",
+      "path": "sources/0.167.2.writer.json",
+      "sha256": "745af4d0171448e74f240855caf8f0f3fcdb9e24a9ad8e8dc8715b644aec3fb4",
+      "writer_version": "rust-v0.167.2@ce21072c90d32c40af7a55b60b2fb35c84a43a6a"
+    },
+    {
       "generator": "tools.groundtruth farm 1",
       "agent_version": "0.149.1",
       "evidence": "fixture",
       "path": "sources/0.149.1.fixtures.json",
-      "sha256": "1a370297cf6553f137943591fe04542a40f99bd8f6ecc1f47b902593b3e9b2bd"
+      "sha256": "f78063b85966c03408614b157ec26a2a4a86284c86d7c98d521096f877d31343"
     }
   ],
   "streams": [
@@ -1295,13 +1303,18 @@
                 "shape": {
                   "kind": "number"
                 },
-                "required": true,
-                "observed": 3
+                "required": false
               },
               "payload": {
                 "shape": {
                   "kind": "object",
                   "fields": {
+                    "attached_thread": {
+                      "required": false,
+                      "shape": {
+                        "kind": "boolean"
+                      }
+                    },
                     "base_instructions": {
                       "shape": {
                         "kind": "object",
@@ -1344,7 +1357,7 @@
                           }
                         }
                       },
-                      "required": true,
+                      "required": false,
                       "observed": 3
                     },
                     "cli_version": {
@@ -1354,7 +1367,7 @@
                           "0.149.1": 3
                         }
                       },
-                      "required": true,
+                      "required": false,
                       "observed": 3
                     },
                     "context_window": {
@@ -1370,32 +1383,65 @@
                           }
                         }
                       },
-                      "required": true,
+                      "required": false,
                       "observed": 3
                     },
                     "cwd": {
                       "shape": {
                         "kind": "string"
                       },
-                      "required": true,
+                      "required": false,
                       "observed": 3
+                    },
+                    "forked_from_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "forked_from_ordinal_exclusive": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false
+                    },
+                    "history_base": {
+                      "required": false,
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "thread_id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true
+                          },
+                          "end_ordinal_exclusive": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "end_byte_offset": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          }
+                        }
+                      }
                     },
                     "history_mode": {
                       "shape": {
-                        "kind": "string",
-                        "values": {
-                          "paginated": 3
-                        }
+                        "kind": "string"
                       },
-                      "required": true,
-                      "observed": 3
+                      "required": false
                     },
                     "id": {
                       "shape": {
                         "kind": "string"
                       },
-                      "required": true,
-                      "observed": 3
+                      "required": true
                     },
                     "model_provider": {
                       "shape": {
@@ -1404,21 +1450,27 @@
                           "mock": 3
                         }
                       },
-                      "required": true,
+                      "required": false,
                       "observed": 3
                     },
                     "originator": {
                       "shape": {
                         "kind": "string"
                       },
-                      "required": true,
+                      "required": false,
                       "observed": 3
+                    },
+                    "parent_thread_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
                     },
                     "session_id": {
                       "shape": {
                         "kind": "string"
                       },
-                      "required": true,
+                      "required": false,
                       "observed": 3
                     },
                     "source": {
@@ -1428,8 +1480,14 @@
                           "exec": 3
                         }
                       },
-                      "required": true,
+                      "required": false,
                       "observed": 3
+                    },
+                    "subagent_history_start_ordinal": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false
                     },
                     "thread_source": {
                       "shape": {
@@ -1438,26 +1496,25 @@
                           "user": 3
                         }
                       },
-                      "required": true,
+                      "required": false,
                       "observed": 3
                     },
                     "timestamp": {
                       "shape": {
                         "kind": "string"
                       },
-                      "required": true,
+                      "required": false,
                       "observed": 3
                     }
                   }
                 },
-                "required": true,
-                "observed": 3
+                "required": true
               },
               "timestamp": {
                 "shape": {
                   "kind": "string"
                 },
-                "required": true,
+                "required": false,
                 "observed": 3
               },
               "type": {
@@ -1467,12 +1524,11 @@
                     "session_meta": 3
                   }
                 },
-                "required": true,
-                "observed": 3
+                "required": true
               }
             }
           },
-          "evidence": "fixture"
+          "evidence": "writer"
         },
         "token_usage_record": {
           "observed": 0,
@@ -4715,6 +4771,339 @@
           }
         }
       ]
+    },
+    {
+      "id": "rollout-compressed",
+      "glob": "sessions/*/*/*/rollout-*.jsonl.zst",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "Pinned rust-v0.167.2. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/rollout/src/compression.rs: cold mtime >=7 days; run throttle 6 hours; 2 workers; zstd level 3; verified no-clobber publication, original removed last. Resume materializes to a temporary file and publishes plain before removing compressed; plain is preferred. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/rollout/src/seekable_reader.rs: all offsets are decoded JSONL; old frames can omit size and streams can have concatenated frames. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/thread_rollout_resolver.rs: state threads.rollout_path selects the current rollout, even when only .zst exists; paginated missing selection never falls back to older history. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/rollout_lineage.rs: history_base.thread_id is an immutable rollout ID, not necessarily the stable session_meta.id; prefix ends are exclusive, recursive, bounded by decoded byte and ordinal. Revert writes a new threadID_rolloutID filename and changes the DB selection. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/thread_history_materialization.rs: thread_history SQLite is a rebuildable, potentially incomplete projection, not a raw transcript source. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/rollout_migration.rs: legacy to paginated can rewrite content under unchanged mtime; encoding equivalence must verify decoded content.",
+      "discriminator": "type",
+      "record_types": {
+        "session_meta": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session_meta": 0
+                  }
+                },
+                "required": true
+              },
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "history_mode": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "history_base": {
+                      "required": false,
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "thread_id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true
+                          },
+                          "end_ordinal_exclusive": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "end_byte_offset": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "forked_from_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "forked_from_ordinal_exclusive": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false
+                    },
+                    "subagent_history_start_ordinal": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false
+                    },
+                    "parent_thread_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "attached_thread": {
+                      "required": false,
+                      "shape": {
+                        "kind": "boolean"
+                      }
+                    }
+                  }
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "writer"
+        }
+      }
+    },
+    {
+      "id": "archived-rollout",
+      "glob": "archived_sessions/rollout-*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "Pinned rust-v0.167.2. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/rollout/src/compression.rs: cold mtime >=7 days; run throttle 6 hours; 2 workers; zstd level 3; verified no-clobber publication, original removed last. Resume materializes to a temporary file and publishes plain before removing compressed; plain is preferred. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/rollout/src/seekable_reader.rs: all offsets are decoded JSONL; old frames can omit size and streams can have concatenated frames. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/thread_rollout_resolver.rs: state threads.rollout_path selects the current rollout, even when only .zst exists; paginated missing selection never falls back to older history. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/rollout_lineage.rs: history_base.thread_id is an immutable rollout ID, not necessarily the stable session_meta.id; prefix ends are exclusive, recursive, bounded by decoded byte and ordinal. Revert writes a new threadID_rolloutID filename and changes the DB selection. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/thread_history_materialization.rs: thread_history SQLite is a rebuildable, potentially incomplete projection, not a raw transcript source. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/rollout_migration.rs: legacy to paginated can rewrite content under unchanged mtime; encoding equivalence must verify decoded content.",
+      "discriminator": "type",
+      "record_types": {
+        "session_meta": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session_meta": 0
+                  }
+                },
+                "required": true
+              },
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "history_mode": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "history_base": {
+                      "required": false,
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "thread_id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true
+                          },
+                          "end_ordinal_exclusive": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "end_byte_offset": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "forked_from_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "forked_from_ordinal_exclusive": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false
+                    },
+                    "subagent_history_start_ordinal": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false
+                    },
+                    "parent_thread_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "attached_thread": {
+                      "required": false,
+                      "shape": {
+                        "kind": "boolean"
+                      }
+                    }
+                  }
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "writer"
+        }
+      }
+    },
+    {
+      "id": "archived-rollout-compressed",
+      "glob": "archived_sessions/rollout-*.jsonl.zst",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "Pinned rust-v0.167.2. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/rollout/src/compression.rs: cold mtime >=7 days; run throttle 6 hours; 2 workers; zstd level 3; verified no-clobber publication, original removed last. Resume materializes to a temporary file and publishes plain before removing compressed; plain is preferred. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/rollout/src/seekable_reader.rs: all offsets are decoded JSONL; old frames can omit size and streams can have concatenated frames. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/thread_rollout_resolver.rs: state threads.rollout_path selects the current rollout, even when only .zst exists; paginated missing selection never falls back to older history. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/rollout_lineage.rs: history_base.thread_id is an immutable rollout ID, not necessarily the stable session_meta.id; prefix ends are exclusive, recursive, bounded by decoded byte and ordinal. Revert writes a new threadID_rolloutID filename and changes the DB selection. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/thread_history_materialization.rs: thread_history SQLite is a rebuildable, potentially incomplete projection, not a raw transcript source. https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/thread-store/src/local/rollout_migration.rs: legacy to paginated can rewrite content under unchanged mtime; encoding equivalence must verify decoded content.",
+      "discriminator": "type",
+      "record_types": {
+        "session_meta": {
+          "observed": 0,
+          "shape": {
+            "kind": "object",
+            "fields": {
+              "type": {
+                "shape": {
+                  "kind": "string",
+                  "values": {
+                    "session_meta": 0
+                  }
+                },
+                "required": true
+              },
+              "ordinal": {
+                "shape": {
+                  "kind": "number"
+                },
+                "required": false
+              },
+              "payload": {
+                "shape": {
+                  "kind": "object",
+                  "fields": {
+                    "id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": true
+                    },
+                    "history_mode": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "history_base": {
+                      "required": false,
+                      "shape": {
+                        "kind": "object",
+                        "fields": {
+                          "thread_id": {
+                            "shape": {
+                              "kind": "string"
+                            },
+                            "required": true
+                          },
+                          "end_ordinal_exclusive": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          },
+                          "end_byte_offset": {
+                            "shape": {
+                              "kind": "number"
+                            },
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "forked_from_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "forked_from_ordinal_exclusive": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false
+                    },
+                    "subagent_history_start_ordinal": {
+                      "shape": {
+                        "kind": "number"
+                      },
+                      "required": false
+                    },
+                    "parent_thread_id": {
+                      "shape": {
+                        "kind": "string"
+                      },
+                      "required": false
+                    },
+                    "attached_thread": {
+                      "required": false,
+                      "shape": {
+                        "kind": "boolean"
+                      }
+                    }
+                  }
+                },
+                "required": true
+              }
+            }
+          },
+          "evidence": "writer"
+        }
+      }
     },
     {
       "id": "state-db",

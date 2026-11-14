@@ -70,7 +70,7 @@ pub(crate) fn capture(
     documents
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -83,11 +83,68 @@ fn observe(path: String) -> CapturedDocument {
         captured_at: now(),
         status: Status::Unsupported,
         recovered_from: None,
+        media: None,
         bytes: Vec::new(),
     };
-    let path = Path::new(&document.path);
-    if !path.is_absolute() || document.path.starts_with("//") {
-        return document;
+    let file = match open_regular(&document.path) {
+        Ok(file) => file,
+        Err(status) => {
+            document.status = status;
+            return document;
+        }
+    };
+    document.status = read_stable(
+        &mut &file,
+        || FileStat::of(&file),
+        HTML_MAX_BYTES as u64,
+        None,
+        &mut document.bytes,
+    );
+    if document.status == Status::Captured && utf8(&document.bytes).is_none() {
+        document.status = Status::Unsupported;
+    }
+    if document.status != Status::Captured {
+        document.bytes.clear();
+    }
+    document
+}
+
+/// Whether an absolute path is the device or process tree, or lies under
+/// one. Letter case is ignored because the default macOS volume resolves
+/// `/DEV` to `/dev`.
+fn is_device_path(path: &str) -> bool {
+    let root = path
+        .strip_prefix('/')
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or_default();
+    root.eq_ignore_ascii_case("dev") || root.eq_ignore_ascii_case("proc")
+}
+
+/// Open the file a transcript names, for one bounded observation. `Err` is
+/// the status the observation ends with: `Missing` when nothing is there,
+/// `Unsupported` for a path that is not absolute (or is a network path), a
+/// device or process path, any other open error, and anything that is not a
+/// regular file.
+pub(crate) fn open_regular(path: &str) -> Result<File, Status> {
+    if !Path::new(path).is_absolute() || path.starts_with("//") {
+        return Err(Status::Unsupported);
+    }
+    if is_device_path(path) {
+        // Refused before any open: opening one can act on this process.
+        // `/dev/fd/N` duplicates its own descriptor N, which then reports
+        // the regular file behind it and shares its read offset, and a
+        // character device can act on being opened at all.
+        return Err(Status::Unsupported);
+    }
+    // The same refusal for a path that only reaches those trees through a
+    // symlinked directory: `O_NOFOLLOW` guards the last component alone, so
+    // the directory is resolved first. A directory that does not resolve is
+    // left to the open below, which reports what is wrong with it.
+    if let Some(parent) = Path::new(path).parent()
+        && let Ok(resolved) = std::fs::canonicalize(parent)
+        && is_device_path(&resolved.to_string_lossy())
+    {
+        return Err(Status::Unsupported);
     }
     let mut options = OpenOptions::new();
     options.read(true);
@@ -98,55 +155,97 @@ fn observe(path: String) -> CapturedDocument {
         // stall the ingest worker. Reject non-regular descriptors below.
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    let mut file = match options.open(path) {
-        Ok(file) => file,
-        Err(error) => {
-            document.status = if error.kind() == std::io::ErrorKind::NotFound {
-                Status::Missing
-            } else {
-                Status::Unsupported
-            };
-            return document;
+    let file = options.open(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            Status::Missing
+        } else {
+            Status::Unsupported
         }
-    };
-    document.status = read_stable(&mut file, &mut document.bytes);
-    if document.status != Status::Captured {
-        document.bytes.clear();
+    })?;
+    match file.metadata() {
+        Ok(metadata) if metadata.is_file() => Ok(file),
+        _ => Err(Status::Unsupported),
     }
-    document
 }
 
-fn read_stable(file: &mut File, bytes: &mut Vec<u8>) -> Status {
-    let Ok(before) = file.metadata() else {
+/// What a stable read compares before and after it reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileStat {
+    pub(crate) is_file: bool,
+    pub(crate) len: u64,
+    pub(crate) modified: Option<SystemTime>,
+}
+
+impl FileStat {
+    pub(crate) fn of(file: &File) -> Option<Self> {
+        let metadata = file.metadata().ok()?;
+        Some(Self {
+            is_file: metadata.is_file(),
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        })
+    }
+}
+
+/// Read a whole file of at most `limit` bytes into `bytes`, and say whether
+/// it held still: `Captured` only when the length and modification time
+/// `stat` reports are the same before and after the read and the read
+/// returned exactly that many bytes.
+///
+/// `expected_len` is the size a transcript recorded for the file. With one,
+/// a file of any other length is `ChangedDuringRead` before a byte is read,
+/// the buffer is reserved up front, and a short or long read is
+/// `ChangedDuringRead` too. Without one, a file over `limit` is `TooLarge`.
+/// The reader and `stat` are separate so a test can move the file under the
+/// read; the caller clears `bytes` on any status but `Captured`.
+pub(crate) fn read_stable<R: Read>(
+    reader: &mut R,
+    mut stat: impl FnMut() -> Option<FileStat>,
+    limit: u64,
+    expected_len: Option<u64>,
+    bytes: &mut Vec<u8>,
+) -> Status {
+    let Some(before) = stat() else {
         return Status::Unsupported;
     };
-    if !before.is_file() {
+    if !before.is_file {
         return Status::Unsupported;
     }
-    if before.len() > HTML_MAX_BYTES as u64 {
+    if expected_len.is_some_and(|expected| before.len != expected) {
+        return Status::ChangedDuringRead;
+    }
+    if before.len > limit {
         return Status::TooLarge;
     }
-    if file
-        .take(HTML_MAX_BYTES as u64 + 1)
+    if let Some(expected) = expected_len {
+        // One allocation of the recorded size, refused instead of aborting
+        // the daemon when the memory is not there.
+        let reserved = usize::try_from(expected)
+            .ok()
+            .is_some_and(|len| bytes.try_reserve_exact(len).is_ok());
+        if !reserved {
+            return Status::Unsupported;
+        }
+    }
+    if reader
+        .take(limit.saturating_add(1))
         .read_to_end(bytes)
         .is_err()
     {
         return Status::Unsupported;
     }
-    if bytes.len() > HTML_MAX_BYTES {
+    let read = bytes.len() as u64;
+    if expected_len.is_some_and(|expected| read != expected) {
+        return Status::ChangedDuringRead;
+    }
+    if read > limit {
         return Status::TooLarge;
     }
-    let Ok(after) = file.metadata() else {
+    let Some(after) = stat() else {
         return Status::ChangedDuringRead;
     };
-    if before.len() != after.len()
-        || after.len() != bytes.len() as u64
-        || before.modified().ok() != after.modified().ok()
-    {
+    if before.len != after.len || after.len != read || before.modified != after.modified {
         return Status::ChangedDuringRead;
-    }
-    if utf8(bytes).is_none() {
-        return Status::Unsupported;
     }
     Status::Captured
 }

@@ -14,6 +14,16 @@ use rosetta_core::{EvidenceOrder, IngestOp, SourceIdentity};
 
 use crate::GroundTruthDoc;
 
+pub use rosetta_capture::input::{InputCandidate, InputEncoding, InputSource};
+
+/// Physical representations of one logical transcript. Paths are relative
+/// to the runtime root; the stable key survives compression and relocation.
+#[derive(Debug, Clone)]
+pub struct TranscriptLocation {
+    pub logical_path: String,
+    pub source: InputSource,
+}
+
 /// A stream parser the generic pipeline knows how to frame. Layout inventory
 /// is intentionally broader than this list: an adapter must opt a stream into
 /// normalization instead of every matching file being treated as a transcript.
@@ -256,6 +266,40 @@ impl NormalizeCtx {
 /// One implementation per agent. Object-safe: the pipeline holds a registry
 /// of `&'static dyn AgentAdapter`.
 pub trait AgentAdapter: Send + Sync {
+    /// Native position of a range's final record; capture remains format-blind.
+    fn transcript_record_index(&self, _record: &[u8]) -> Option<u64> {
+        None
+    }
+
+    fn transcript_header(
+        &self,
+        _path: &str,
+        _first: &[u8],
+    ) -> Result<Option<crate::transcripts::TranscriptHeader>, String> {
+        Ok(None)
+    }
+
+    /// A promise that snapshot records emit no canonical operations. Such
+    /// shared metadata sources can precede independently publishable trees.
+    fn snapshot_is_metadata_only(&self, stream: &str) -> bool {
+        self.snapshot_plan(stream)
+            .is_some_and(|plan| plan.record_queries.is_empty())
+    }
+
+    fn transcript_selection(
+        &self,
+        _stream: &str,
+        _row: &serde_json::Value,
+    ) -> Option<crate::transcripts::TranscriptSelection> {
+        None
+    }
+
+    /// Opt in to representation-independent, decoded-byte capture. Native
+    /// naming rules stay in the adapter; capture only opens declared paths.
+    fn transcript_location(&self, _path: &str) -> Option<TranscriptLocation> {
+        None
+    }
+
     /// Agent kind, e.g. "claude-code".
     fn kind(&self) -> &'static str;
 

@@ -8,6 +8,7 @@
 
 pub mod discovery;
 pub mod document;
+pub mod input;
 pub mod ledger;
 mod recompress;
 pub mod segment;
@@ -23,15 +24,15 @@ pub use discovery::{
 pub use document::{DocumentOutcome, DocumentSnapshot, snapshot as snapshot_document};
 pub use ledger::{
     CapturedDocument, DocumentCaptureStatus, EntryDigest, EntryTally, Ledger, LedgerEntry,
-    LedgerScan, LedgerVerify, LedgerVisit, LedgerWriteStats, MAX_RAW_RECORD_BYTES, PrebuiltFrames,
-    SegmentVerify, SourceDef, scan as scan_ledger, verify as verify_ledger, visit as visit_ledger,
-    visit_segments as visit_ledger_segments,
+    LedgerScan, LedgerVerify, LedgerVisit, LedgerWriteStats, MAX_RAW_RECORD_BYTES, MediaClaim,
+    PrebuiltFrames, SegmentVerify, SourceDef, scan as scan_ledger, verify as verify_ledger,
+    visit as visit_ledger, visit_segments as visit_ledger_segments,
 };
 pub use recompress::{RecompressOutcome, recompress_segment, recompress_segment_controlled};
 pub use segment::{FrameCompressor, SMALLEST_COMPRESSED_BATCH, SegmentCodec, sniff_segment};
 pub use segment_index::{
     IndexedSource, SegmentFilter, SegmentIndexLine, candidate_segments, rebuild_segment_index,
-    segment_filter,
+    segment_filter, segment_filter_through,
 };
 pub use sqlite::{
     DbSnapshot, DbStamp, SnapshotOutcome, SqliteFileStatus, db_stamp, is_db_sidecar,
@@ -93,5 +94,14 @@ pub(crate) fn io_error(
         operation,
         path: path.to_string_lossy().into_owned(),
         source,
+    }
+}
+
+impl CaptureError {
+    /// A native source exists but cannot yet supply a complete decoded view.
+    /// This is not EOF and must not activate an empty replacement.
+    pub fn incomplete_input(&self) -> bool {
+        matches!(self, Self::LimitExceeded(_))
+            || matches!(self, Self::Io { source, .. } if matches!(source.kind(), std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof))
     }
 }

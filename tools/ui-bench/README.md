@@ -129,7 +129,9 @@ the script, and the document holds counts, sizes, timings, enums and digests onl
 
 `pair.mjs` turns runs into the frozen before/after pair a perf commit cites (CLAUDE.md,
 Conventions); `pair-eval.mjs` judges it. `run_ui.mjs` is unchanged: the runner only
-schedules it.
+schedules it. A campaign exports `ROSETTA_PRESENTED_MEDIA=off` on both sides of a pair, in
+the shell that starts `pair.mjs` (the daemon inherits it): capture of sent images and video
+reads files outside the snapshot (`docs/ARCHITECTURE.md`, "Cold-build measurement").
 
 ```sh
 # 1. one side file per side (hashes computed here; edit nothing by hand)
