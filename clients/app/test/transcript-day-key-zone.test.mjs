@@ -8,6 +8,8 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { calendarDayKey, sittings } from "../../room/src/lib/transcript/index.ts";
+// The pill's new names are read off the module whole, so a build without them fails its own rows, not the file.
+import * as transcript from "../../room/src/lib/transcript/index.ts";
 
 process.env.TZ = "America/Los_Angeles";
 
@@ -65,5 +67,42 @@ describe("a day key is the stamp's own day, whatever today's offset (America/Los
     assert.notEqual(calendarDayKey(WINTER_JUST_BEFORE_MIDNIGHT), calendarDayKey(winterAfter));
     assert.equal(calendarDayKey(summerBefore), "2026-07-14");
     assert.equal(calendarDayKey(winterAfter), "2026-01-16");
+  });
+});
+
+// §07 — a pill that carries a clock says how far back it is, counted in the viewer's calendar days, so a 23- or
+// 25-hour day never moves it; and the wait for the next day, when the room re-reads its clock, is the wall clock's
+// own. In 2026 the clocks spring forward on 8 March and fall back on 1 November.
+describe("a pill's distance is whole calendar days across a daylight-saving change (America/Los_Angeles)", () => {
+  const wall = (y, mo, d, h, mi) => new Date(y, mo - 1, d, h, mi).getTime();
+
+  it("spring forward: 23:30 yesterday is a day back though under 24 hours have passed", () => {
+    assert.equal(typeof transcript.clockPillLead, "function", "clockPillLead is exported");
+    // 7 March 23:30 PST to 8 March 23:45 PDT is 23h 15m
+    assert.equal(transcript.clockPillLead(wall(2026, 3, 7, 23, 30), wall(2026, 3, 8, 23, 45)), "Sat · 23:30");
+  });
+
+  it("spring forward: seven days back is the date though under seven days of hours have passed", () => {
+    assert.equal(typeof transcript.clockPillLead, "function", "clockPillLead is exported");
+    // 1 March 23:30 PST to 8 March 23:00 PDT is 6 days 22h 30m
+    assert.equal(
+      transcript.clockPillLead(wall(2026, 3, 1, 23, 30), wall(2026, 3, 8, 23, 0)),
+      "Sun 1 Mar · 23:30",
+    );
+  });
+
+  it("fall back: one day of 25 hours is still today at its end", () => {
+    assert.equal(typeof transcript.clockPillLead, "function", "clockPillLead is exported");
+    // 1 November 00:05 PDT to 23:55 PST is 24h 50m
+    assert.equal(transcript.clockPillLead(wall(2026, 11, 1, 0, 5), wall(2026, 11, 1, 23, 55)), "00:05");
+  });
+
+  it("the wait for the next day is the wall clock's: 23 hours, 25 hours, and 12 on an ordinary noon", () => {
+    assert.equal(typeof transcript.msToNextViewerDay, "function", "msToNextViewerDay is exported");
+    const hour = 3_600_000;
+    assert.equal(transcript.msToNextViewerDay(wall(2026, 3, 8, 0, 0)), 23 * hour);
+    assert.equal(transcript.msToNextViewerDay(wall(2026, 11, 1, 0, 0)), 25 * hour);
+    assert.equal(transcript.msToNextViewerDay(wall(2026, 7, 15, 12, 0)), 12 * hour);
+    assert.equal(transcript.msToNextViewerDay(wall(2026, 7, 15, 23, 59) + 59_999), 1);
   });
 });
