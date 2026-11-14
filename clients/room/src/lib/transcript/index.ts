@@ -150,3 +150,15 @@ export {
   teamSessionIds,
   workerThreadLinks,
 } from "./collaboration";
+
+export type { PromptJumpPlan } from "./prompt-jump";
+export {
+  PROMPT_JUMP_EASE_MS,
+  PROMPT_JUMP_LANDING_PX,
+  jumpMotion,
+  jumpScrollTop,
+  previousMessageTarget,
+  promptJumpPlan,
+  promptJumpShown,
+  settleEase,
+} from "./prompt-jump";

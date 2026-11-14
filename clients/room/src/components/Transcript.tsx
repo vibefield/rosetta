@@ -42,6 +42,7 @@ import { useTranscriptModel } from "./transcript/document-model";
 import { useViewerDay } from "./transcript/viewer-day";
 import { useFoldPreference } from "./transcript/fold-preference";
 import { MessageViewerContext } from "./transcript/MessagePreview";
+import { PromptJump } from "./transcript/PromptJump";
 import { ThreadNavigationContext } from "./transcript/thread-navigation";
 import { handleForMessage, messageFileSource } from "./transcript/message-file-source";
 import type { FullMessage } from "./transcript/message-file-source";
@@ -649,6 +650,16 @@ function SessionTranscript({
           <span>{tail.unseen > 0 ? `${tail.unseen} new ${tail.unseen === 1 ? "message" : "messages"}` : "Latest"}</span>
           {tail.unseen > 0 && <i aria-hidden="true" />}
         </button>
+      )}
+      {session !== null && (
+        // A button at the side goes to the message before.
+        <PromptJump
+          scrollRef={scrollRef}
+          earlier={feed.earlier.kind}
+          layoutKey={model.plan}
+          onLeaveTail={tail.pause}
+          hidden={loading}
+        />
       )}
       {!reader && <span className="ah-tail-announcement" role="status" aria-live="polite" aria-atomic="true">
         {tail.away && tail.unseen > 0
