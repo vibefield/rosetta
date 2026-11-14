@@ -100,10 +100,13 @@ export {
   PROMPT_CLUSTER_MS,
   SITTING_PAUSE_MS,
   calendarDayKey,
+  clockPillLead,
   dayList,
+  msToNextViewerDay,
   sittingCount,
   sittingDayLabel,
   sittings,
+  viewerDaysBack,
   withinPromptCluster,
 } from "./sittings";
 

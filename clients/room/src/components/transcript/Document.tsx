@@ -43,6 +43,7 @@ import { useRoom } from "../../room-context";
 import { lastActive } from "../../lib/format";
 import { sessionLastActive } from "../../lib/session-activity";
 import { withinHistoryWindow } from "../../lib/transcript/history-window";
+import { useViewerDay } from "./viewer-day";
 import { EmptyState, Meter } from "../ui";
 import { Anchor } from "./Anchor";
 import { DayPill, Sitting } from "./DayPill";
@@ -197,9 +198,11 @@ function ReportWorkDocument({
     [session],
   );
   const feed = useMemo(() => staticTimelineFeed(rows), [rows]);
+  // A pill's words are the drawing's: the model is re-derived when the viewer's day turns.
+  const viewerDay = useViewerDay();
   const model = useMemo(
-    () => transcriptModel(rows, boundedSession, homeDirectory, Date.now()),
-    [rows, boundedSession, homeDirectory],
+    () => transcriptModel(rows, boundedSession, homeDirectory, viewerDay.now),
+    [rows, boundedSession, homeDirectory, viewerDay.now],
   );
   const scopedIndex = useMemo<ThreadIndex>(() => {
     const linked = new Set(rows.flatMap((row) => linkedChildSessionIds(row)));
@@ -286,12 +289,14 @@ export function TranscriptDocument({
   );
   const displayedRows = chronology.rows;
   const cuts = useMemo(() => activityCuts(feed.rows, feed.watermark, displayedRows), [feed.rows, feed.watermark, displayedRows]);
+  // A pill's words are the drawing's: the derived model is re-derived when the viewer's day turns.
+  const viewerDay = useViewerDay();
   const model = useMemo(
     () => {
         const derived =
           displayedRows === feed.rows
             ? baseModel
-            : transcriptModel(displayedRows, session, homeDirectory, Date.now(), {
+            : transcriptModel(displayedRows, session, homeDirectory, viewerDay.now, {
                 sharedCollaborationSessionIds: teamIdSet,
                 cutBefore: cuts.cutBefore,
               });
@@ -314,6 +319,7 @@ export function TranscriptDocument({
       teamIdSet,
       chronology.duplicateRepresentatives,
       cuts,
+      viewerDay.now,
     ],
   );
   const previousReading = useRef<{ sessionId: string; reading: readonly ReadingSitting[] } | null>(null);

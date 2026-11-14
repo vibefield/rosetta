@@ -3,7 +3,9 @@
 // A day change draws the day; a pause of fifteen minutes or more draws the
 // resumption time and the length of the silence; when both happen at once they
 // share ONE pill — `Tue 1 Sep · 00:02 · after 44m`. Two marks for one moment
-// would be the same fact told twice.
+// would be the same fact told twice. A pill with a clock says how far back it
+// is: the clock alone today, the weekday on one of the six days
+// before, the day earlier — inside a day as where the day turned.
 //
 // The pill is the one marker that is an OBJECT, because it travels: it sits on
 // its hairline in the flow and pins to the top edge while the reader scrolls
@@ -16,7 +18,7 @@
 // pill push the previous one OUT instead of stacking on it.
 import type { MouseEvent, ReactNode } from "react";
 import { useEffect } from "react";
-import { clockShort, duration } from "../../lib/format";
+import { duration } from "../../lib/format";
 import type { DayEntry, Sitting as SittingModel } from "../../lib/transcript";
 import { useReaderMode } from "./reader-context";
 
@@ -26,19 +28,19 @@ export interface PillText {
 }
 
 /**
- * `Mon 31 Aug` for a day cut, `Tue 1 Sep · 00:02` + `after 44m` when a pause
- * crossed a day, `12:31` + `after 12h 18m` within one. Null when the sitting
- * is neither — a session that lives on one day with no pause draws no pill at
- * all, because the column head's range already says when it was.
+ * A pill with a clock — the reader came back after a pause — leads with that
+ * clock by how far back its day is (`20:21` today,
+ * `Fri · 20:21` on one of the six days before, `Fri 6 Nov · 20:21` earlier),
+ * then `after 3h 37m`; where the day turned and inside a day alike. A pill
+ * with no clock — the day turned with no pause — keeps its day alone: `Today`,
+ * `Yesterday`, `Mon 31 Aug`. Null when the sitting is neither — a session that
+ * lives on one day with no pause draws no pill at all, because the column
+ * head's range already says when it was.
  */
 export function pillText(sitting: SittingModel): PillText | null {
   const after = sitting.pauseMs === null ? null : `after ${duration(0, sitting.pauseMs)}`;
-  const day = sitting.dayLabel;
-  const resumed = sitting.resumedAt === null ? null : clockShort(sitting.resumedAt);
-  if (sitting.dayChanged && day !== null) {
-    return { lead: resumed === null ? day : `${day} · ${resumed}`, after };
-  }
-  if (resumed !== null) return { lead: resumed, after };
+  if (sitting.clockLabel !== null) return { lead: sitting.clockLabel, after };
+  if (sitting.dayChanged && sitting.dayLabel !== null) return { lead: sitting.dayLabel, after };
   return null;
 }
 

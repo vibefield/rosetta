@@ -39,6 +39,7 @@ import { DayMenu, markStuckPills } from "./transcript/DayPill";
 import { TranscriptDocument } from "./transcript/Document";
 import { TranscriptLoading } from "./transcript/TranscriptLoading";
 import { useTranscriptModel } from "./transcript/document-model";
+import { useViewerDay } from "./transcript/viewer-day";
 import { useFoldPreference } from "./transcript/fold-preference";
 import { MessageViewerContext } from "./transcript/MessagePreview";
 import { ThreadNavigationContext } from "./transcript/thread-navigation";
@@ -203,7 +204,9 @@ function SessionTranscript({
   const targetIsMeta = requestedTimelineId === null && metaFocus !== null;
 
   const cuts = useMemo(() => activityCuts(feed.rows, feed.watermark), [feed.rows, feed.watermark]);
-  const model = useTranscriptModel(feed.rows, session, homeDirectory, Date.now(), { cutBefore: cuts.cutBefore });
+  // The viewer's day, re-read at midnight and on focus: a pill's words are the drawing's.
+  const viewerDay = useViewerDay();
+  const model = useTranscriptModel(feed.rows, session, homeDirectory, viewerDay.now, { cutBefore: cuts.cutBefore });
   const opening = useTranscriptOpening(feed.snapshotReady, focus !== null || metaFocus !== null);
   const loading = session !== null && opening.visible;
   useEffect(() => {
