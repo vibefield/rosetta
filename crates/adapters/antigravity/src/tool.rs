@@ -11,10 +11,13 @@ use rosetta_core::timeline::{
 use serde_json::Value;
 
 pub const AGENT: &str = "antigravity";
+/// Oldest writer whose fixtures replay through these projectors
+/// (fixtures/1.1.20). The canonical ground truth is pinned at 1.4.12
+/// (`groundtruth/antigravity/watch.toml`); 1.1.20 stays accepted for replay.
 pub const PINNED_WRITER_VERSION: &str = "1.1.20";
 /// Newest writer whose fixtures replay through these projectors
-/// (fixtures/1.4.12). The canonical ground truth stays pinned at
-/// [`PINNED_WRITER_VERSION`]; this bound only widens what the registry accepts.
+/// (fixtures/1.4.12); together with [`PINNED_WRITER_VERSION`] it bounds what
+/// the registry accepts.
 pub const LATEST_FIXTURE_WRITER_VERSION: &str = "1.4.12";
 
 const fn registration(name: &'static str, action_kind: ToolActionKind) -> ProjectorRegistration {
