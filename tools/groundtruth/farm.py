@@ -202,6 +202,15 @@ SCENARIOS: dict[str, tuple[dict[str, Any], ...]] = {
             "prompts": ("Reply with a short greeting.", "Continue: say goodbye."),
             "extra_args": (),
         },
+        # The Gemini mock answers `[use-tool-fail]` with a run_command that exits
+        # 3, then a closing reply. No allow_failure: only the agent's own exit
+        # code fails a step, and the mock still ends the turn with text. No
+        # usage twin: twins derive from `tool-use` alone.
+        {
+            "name": "tool-failure",
+            "prompts": ("Run the failing command now. [use-tool-fail]",),
+            "extra_args": (),
+        },
     ),
     "hermes": (
         {"name": "basic-chat", "prompts": ("Reply with a short greeting.",), "extra_args": ()},

@@ -3,6 +3,10 @@ from __future__ import annotations
 import unittest
 
 from tools.groundtruth.mock_model import (
+    FAILING_COMMAND,
+    TOOL_DONE,
+    TOOL_FAIL_MARKER,
+    TOOL_FAILED,
     USAGE_MARKER,
     _anthropic_script,
     _anthropic_usage,
@@ -256,6 +260,119 @@ class MockModelTests(unittest.TestCase):
         self.assertEqual(script[0], "text")
         self.assertIn("Scenario complete", script[1])
 
+    def test_gemini_streaming_failing_tool_call(self) -> None:
+        script = _gemini_script(
+            {
+                "contents": [
+                    {"role": "user", "parts": [{"text": f"please {TOOL_FAIL_MARKER}"}]}
+                ],
+                "tools": [
+                    {
+                        "functionDeclarations": [
+                            {"name": "run_command"},
+                            {"name": "list_dir"},
+                        ]
+                    }
+                ],
+            }
+        )
+        self.assertEqual(script[0], "function_call")
+        self.assertEqual(script[1], "run_command")
+        self.assertEqual(script[2]["commandLine"], FAILING_COMMAND)
+        text = _gemini_sse(0, "mock-model", script)
+        self.assertIn("functionCall", text)
+        self.assertIn("exit 3", text)
+
+    def test_gemini_failing_tool_call_follows_the_declared_schema(self) -> None:
+        script = _gemini_script(
+            {
+                "contents": [
+                    {"role": "user", "parts": [{"text": f"please {TOOL_FAIL_MARKER}"}]}
+                ],
+                "tools": [
+                    {
+                        "functionDeclarations": [
+                            {
+                                "name": "run_command",
+                                "parametersJsonSchema": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "properties": {
+                                        "CommandLine": {"type": "string"},
+                                        "IsDaemon": {"type": "boolean"},
+                                        "WaitMsBeforeAsync": {"type": "integer"},
+                                        "toolSummary": {"type": "string"},
+                                    },
+                                    "required": ["CommandLine", "toolSummary", "WaitMsBeforeAsync"],
+                                },
+                            }
+                        ]
+                    }
+                ],
+            }
+        )
+        self.assertEqual(
+            script,
+            (
+                "function_call",
+                "run_command",
+                {
+                    "CommandLine": "sh -c 'exit 3'",
+                    "toolSummary": "Failing command check",
+                    "WaitMsBeforeAsync": 5000,
+                },
+            ),
+        )
+
+    def test_gemini_failing_function_response_closes_loop(self) -> None:
+        script = _gemini_script(
+            {
+                "contents": [
+                    {"role": "user", "parts": [{"text": f"please {TOOL_FAIL_MARKER}"}]},
+                    {
+                        "role": "model",
+                        "parts": [{"functionCall": {"name": "run_command"}}],
+                    },
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "functionResponse": {
+                                    "name": "run_command",
+                                    "response": {"output": "Command exited with code 3."},
+                                }
+                            }
+                        ],
+                    },
+                ]
+            }
+        )
+        self.assertEqual(script, ("text", TOOL_FAILED, None))
+        self.assertIn("Scenario complete", script[1])
+        self.assertNotIn("successfully", script[1])
+
+    def test_gemini_fail_marker_and_use_tool_marker_stay_apart(self) -> None:
+        # `[use-tool-fail]` does not contain `[use-tool]`, so the other dialects
+        # (which match `[use-tool]` only) never see it as a tool request, and a
+        # plain `[use-tool]` prompt still runs the echo and closes as before.
+        self.assertNotIn("[use-tool]", TOOL_FAIL_MARKER)
+        tools = [{"functionDeclarations": [{"name": "run_command"}]}]
+        plain = _gemini_script(
+            {"contents": [{"role": "user", "parts": [{"text": "[use-tool]"}]}], "tools": tools}
+        )
+        self.assertEqual(plain[2]["commandLine"], "echo rosetta-mock")
+        closed = _gemini_script(
+            {
+                "contents": [
+                    {"role": "user", "parts": [{"text": "[use-tool]"}]},
+                    {
+                        "role": "user",
+                        "parts": [{"functionResponse": {"name": "run_command", "response": {}}}],
+                    },
+                ]
+            }
+        )
+        self.assertEqual(closed, ("text", TOOL_DONE, None))
 
 
 class UsageMarkerTests(unittest.TestCase):
@@ -316,6 +433,19 @@ class UsageMarkerTests(unittest.TestCase):
                 self.assertIn("usage", names, agent)
                 twin = next(scenario for scenario in scenarios if scenario["name"] == "usage")
                 self.assertTrue(all(USAGE_MARKER in prompt for prompt in twin["prompts"]))
+
+    def test_the_antigravity_tool_failure_scenario_has_no_usage_twin(self) -> None:
+        from tools.groundtruth.farm import SCENARIOS
+
+        scenarios = SCENARIOS["antigravity"]
+        names = [scenario["name"] for scenario in scenarios]
+        self.assertEqual(names, ["basic-chat", "tool-use", "resume", "tool-failure", "usage"])
+        failure = next(scenario for scenario in scenarios if scenario["name"] == "tool-failure")
+        self.assertTrue(all(TOOL_FAIL_MARKER in prompt for prompt in failure["prompts"]))
+        self.assertFalse(failure.get("allow_failure"))
+        twin = next(scenario for scenario in scenarios if scenario["name"] == "usage")
+        self.assertTrue(all("[use-tool]" in prompt for prompt in twin["prompts"]))
+        self.assertFalse(any(TOOL_FAIL_MARKER in prompt for prompt in twin["prompts"]))
 
 
 if __name__ == "__main__":
