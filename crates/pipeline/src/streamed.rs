@@ -11,15 +11,14 @@
 //! until the fold has written each remaining tool row once and the single
 //! stream-state commit flips them.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::time::Instant;
 
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_core::IngestOp;
 use rosetta_core::rows::{RuntimeRow, SessionRole, SessionRow, StreamState};
 use rosetta_store::{
-    ApplyStats, Batch, CheckpointUpdate, ColdReconciliation, SourceMode, SourceWrite, Store,
-    StreamedSource,
+    ApplyStats, Batch, CheckpointUpdate, ColdReconciliation, ResolvedSession, Store, StreamedSource,
 };
 
 use crate::PipelineError;
@@ -30,6 +29,19 @@ use crate::instrument::{Instrument, Metric};
 use crate::live::PollEvidence;
 use crate::replay::{RebuildReport, stamp_source_cursor};
 use crate::stream::merge_stats;
+
+mod item;
+mod ordinals;
+mod trees;
+
+#[cfg(test)]
+mod slices_tests;
+
+pub use item::{ApplyItem, Step, StepReport, TxKind, cut_slices};
+use item::{Settled, ops_bytes, plan_stage, resolved_bytes, terminal_batch};
+pub(crate) use ordinals::OrdinalPlan;
+use trees::TreeLedger;
+pub use trees::{FlipCaps, TreeAdmission};
 
 struct StreamedCursor {
     id: i64,
@@ -50,6 +62,15 @@ pub struct StreamedRuntime {
     sources_applied: u64,
     resolved_sessions: u64,
     resolved_tool_rows: u64,
+    /// Writer time spent resolving withheld facts (R1 D22).
+    resolve_nanos: u64,
+    /// Items between their first and their terminal transaction.
+    items_in_progress: u32,
+    /// The trees of a runtime admitted per root tree.
+    trees: Option<TreeLedger>,
+    /// Measurement only: split each step's bytes by kind (the writer's
+    /// `--json --profile`); off, a step scans none of its ops for it.
+    measure_steps: bool,
 }
 
 impl StreamedRuntime {
@@ -147,10 +168,21 @@ impl StreamedRuntime {
             )));
         }
         let cursors_len = cursors.len();
+        // A runtime admitted per tree folds each tree's facts apart, so a
+        // closed tree flips on its own; one admitted whole keeps one fold.
+        let trees = setup
+            .trees
+            .as_deref()
+            .map(|trees| TreeLedger::new(&setup.sources, trees));
+        let reconciliation = trees
+            .as_ref()
+            .map_or_else(ColdReconciliation::default, |trees| {
+                ColdReconciliation::partitioned(trees.unit_of_path())
+            });
         Ok(Self {
             runtime_id: runtime.id.clone(),
             cursors,
-            reconciliation: ColdReconciliation::default(),
+            reconciliation,
             session_health: BTreeMap::new(),
             evidence: HashMap::with_capacity(cursors_len),
             report,
@@ -158,7 +190,17 @@ impl StreamedRuntime {
             sources_applied: 0,
             resolved_sessions: 0,
             resolved_tool_rows: 0,
+            resolve_nanos: 0,
+            items_in_progress: 0,
+            trees,
+            measure_steps: false,
         })
+    }
+
+    /// Measurement only: whether each step reports its asset bytes apart
+    /// ([`StepReport::asset_bytes`]; zero when off). Changes no write.
+    pub fn measure_steps(&mut self, on: bool) {
+        self.measure_steps = on;
     }
 
     pub fn runtime_id(&self) -> &str {
@@ -187,20 +229,61 @@ impl StreamedRuntime {
         std::mem::take(&mut self.evidence)
     }
 
-    /// Apply closed sources, prepared in the path order the producer emits
-    /// them, in one private transaction: their rows with the final ordinals
-    /// the preparer ranked, the tool rows of the sessions they completed, and
+    /// Writer time spent resolving the sessions sources completed.
+    pub fn resolve_nanos(&self) -> u64 {
+        self.resolve_nanos
+    }
+
+    /// Items between their first and their terminal transaction.
+    pub fn items_in_progress(&self) -> u32 {
+        self.items_in_progress
+    }
+
+    /// Apply closed sources, prepared in the order the producer emits them,
+    /// in one private transaction: their rows with the final ordinals the
+    /// preparer ranked, the tool rows of the sessions they completed, and
     /// every relational fact left to admission collected into this runtime's
-    /// own fold as the transaction commits.
+    /// own fold as the transaction commits. The unchunked path:
+    /// [`StreamedRuntime::begin_item`] then [`StreamedRuntime::step`] once.
     pub fn apply(
         &mut self,
         store: &mut Store,
         sources: Vec<ClosedSource>,
         instrument: &Instrument,
     ) -> Result<ApplyStats, PipelineError> {
-        let started = Instant::now();
-        let mut batches = Vec::with_capacity(sources.len());
-        let mut evidence = Vec::with_capacity(sources.len());
+        let bytes = sources
+            .iter()
+            .map(ClosedSource::budget_bytes)
+            .fold(0, u64::saturating_add);
+        let mut item = self.begin_item(sources, bytes, u64::MAX)?;
+        let mut totals = ApplyStats::default();
+        loop {
+            let (step, _, stats) = self.step(store, &mut item, instrument)?;
+            totals.merge_from(&stats);
+            if step == Step::Done {
+                return Ok(totals);
+            }
+        }
+    }
+
+    /// Begin one writer item holding `bytes` of the writer budget: validate
+    /// its sources, stamp each op's cursor, resolve the sessions they
+    /// complete from the facts the preparer withheld, bind resolved and
+    /// released facts to their cursors, and plan its transactions. One
+    /// source over `chunk_bytes` that does not abandon is planned in Stage
+    /// and resolved-row slices; anything else is one terminal transaction.
+    /// Writes nothing.
+    pub fn begin_item(
+        &mut self,
+        sources: Vec<ClosedSource>,
+        bytes: u64,
+        chunk_bytes: u64,
+    ) -> Result<ApplyItem, PipelineError> {
+        let chunked = sources.len() == 1
+            && bytes > chunk_bytes
+            && (sources[0].activate || sources[0].skipped());
+        let mut terminal = Vec::with_capacity(sources.len());
+        let mut settled = Vec::with_capacity(sources.len());
         for mut source in sources {
             let cursor = self
                 .cursors
@@ -220,95 +303,241 @@ impl StreamedRuntime {
             cursor.applied = true;
             let cursor_id = cursor.id;
             let initial = cursor.initial.clone();
-            let mut prepared = source.prepared.take().ok_or_else(|| {
+            let prepared = source.prepared.take().ok_or_else(|| {
                 PipelineError::Config(format!(
                     "streamed source {} reached the writer unprepared",
                     source.source.relative_path
                 ))
             })?;
             stamp_source_cursor(&mut source.ops, cursor_id);
-            // What the preparer resolved or released belongs to the sources
-            // that captured it; stamp their cursors, as on every other row.
-            let cursor_of = |path: &str| self.cursors.get(path).map(|cursor| cursor.id);
-            for session in &mut prepared.resolved {
-                session.bind_cursors(cursor_of)?;
+            // What the preparer withheld belongs to the sources that
+            // captured it: resolve it here, on the writer (R1 D22), and stamp
+            // their cursors, as on every other row.
+            let resolve_started = Instant::now();
+            let mut resolved = Vec::with_capacity(prepared.to_resolve.len());
+            for facts in prepared.to_resolve {
+                let mut session = ResolvedSession::resolve(facts)?;
+                session.bind_cursors(|path| self.cursors.get(path).map(|cursor| cursor.id))?;
                 self.resolved_sessions += 1;
                 self.resolved_tool_rows += session.tool_rows();
+                resolved.push(session);
             }
-            for facts in &mut prepared.released {
-                let cursor_id = cursor_of(facts.path()).ok_or_else(|| {
-                    PipelineError::Config(format!(
-                        "released facts of {} have no cursor in runtime {}",
-                        facts.path(),
-                        self.runtime_id
-                    ))
-                })?;
+            self.resolve_nanos = self
+                .resolve_nanos
+                .saturating_add(u64::try_from(resolve_started.elapsed().as_nanos()).unwrap_or(0));
+            let mut released = prepared.released;
+            for facts in &mut released {
+                let cursor_id = self
+                    .cursors
+                    .get(facts.path())
+                    .map(|cursor| cursor.id)
+                    .ok_or_else(|| {
+                        PipelineError::Config(format!(
+                            "released facts of {} have no cursor in runtime {}",
+                            facts.path(),
+                            self.runtime_id
+                        ))
+                    })?;
                 facts.bind_cursor(cursor_id);
             }
             // The pass's own verdict decides the badge: a source that is not
             // complete — unclean, stopped before a record its writer has not
             // finished, or cut short or skipped because its file could not be
             // read — holds its session Streaming, exactly as a live pass does.
-            let complete = source.complete;
-            self.session_health
-                .entry(source.source.session_id.clone())
-                .and_modify(|healthy| *healthy &= complete)
-                .or_insert(complete);
-            evidence.push((source.source.relative_path.clone(), source.evidence));
-            if source.skipped() {
+            settled.push(Settled {
+                path: source.source.relative_path.clone(),
+                session_id: source.source.session_id.clone(),
+                complete: source.complete,
+                evidence: source.evidence,
+                closed_trees: prepared.closed_trees,
+            });
+            let skipped = source.skipped();
+            let batch = if skipped {
                 // Nothing to write: its cursor keeps the fresh checkpoint.
                 // Only the facts of a session it completed travel with it.
-                batches.push(StreamedSource {
-                    batch: Batch {
-                        ops: Vec::new(),
-                        checkpoints: Vec::new(),
-                        source: None,
-                    },
-                    withheld: false,
-                    resolved: prepared.resolved,
-                    released: prepared.released,
-                });
-                continue;
-            }
-            batches.push(StreamedSource {
-                batch: Batch {
-                    ops: source.ops,
-                    checkpoints: vec![CheckpointUpdate {
-                        runtime_id: self.runtime_id.clone(),
-                        session_id: source.source.projected_session_id(),
-                        stream: source.source.stream_id,
-                        path: source.source.relative_path,
-                        expected: Some(initial),
-                        next: source.checkpoint,
-                        updated_at: None,
-                    }],
-                    source: Some(SourceWrite {
-                        cursor_id,
-                        session_id: source.source.session_id,
-                        generation: source.generation,
-                        first_sequence: 0,
-                        mode: if source.activate {
-                            SourceMode::Activate
-                        } else {
-                            SourceMode::Abandon
-                        },
-                    }),
-                },
-                withheld: prepared.withheld,
-                resolved: prepared.resolved,
-                released: prepared.released,
+                Batch {
+                    ops: Vec::new(),
+                    checkpoints: Vec::new(),
+                    source: None,
+                }
+            } else {
+                terminal_batch(
+                    &self.runtime_id,
+                    &source.source,
+                    cursor_id,
+                    initial,
+                    source.checkpoint,
+                    source.generation,
+                    source.activate,
+                    source.ops,
+                )
+            };
+            terminal.push(StreamedSource {
+                batch,
+                withheld: prepared.withheld && !skipped,
+                resolved,
+                released,
             });
         }
+        let (stage, terminal_bytes) = if chunked {
+            let resolved = resolved_bytes(&terminal);
+            let ops = ops_bytes(&terminal[0].batch.ops);
+            plan_stage(
+                &mut terminal[0],
+                chunk_bytes,
+                resolved.saturating_add(ops.min(chunk_bytes)) > chunk_bytes,
+            )
+        } else {
+            let ops = terminal
+                .iter()
+                .map(|source| ops_bytes(&source.batch.ops))
+                .fold(0, u64::saturating_add);
+            (VecDeque::new(), ops)
+        };
+        Ok(ApplyItem::new(
+            terminal,
+            settled,
+            stage,
+            terminal_bytes,
+            if chunked { chunk_bytes } else { u64::MAX },
+            bytes,
+        ))
+    }
+
+    /// Run exactly one writer transaction of `item`: its next Stage slice,
+    /// else its next resolved-row slice, else its terminal. Returns whether
+    /// more follow, the budget bytes to release (by remainder: the terminal
+    /// releases whatever the item still holds) and what it wrote.
+    pub fn step(
+        &mut self,
+        store: &mut Store,
+        item: &mut ApplyItem,
+        instrument: &Instrument,
+    ) -> Result<(Step, u64, ApplyStats), PipelineError> {
+        // Measurement only, when asked: the asset bytes the transaction
+        // writes, read before its clock starts.
+        let assets = if self.measure_steps {
+            item.next_asset_bytes()
+        } else {
+            0
+        };
+        let started = Instant::now();
+        // Measurement only: its resolved bytes and sources.
+        let (mut resolved, mut sources) = (0, 1);
+        let (kind, approx, stats, release, step) = if let Some((slice, approx)) =
+            item.stage.pop_front()
+        {
+            let stats = instrument.apply_streamed_slice(store, &mut self.reconciliation, slice)?;
+            (
+                TxKind::Stage,
+                approx,
+                stats,
+                item.release_share(approx),
+                Step::More,
+            )
+        } else if item.needs_resolved_slice() {
+            let chunk_bytes = item.chunk_bytes;
+            let session = item
+                .terminal
+                .iter_mut()
+                .flat_map(|source| source.resolved.iter_mut())
+                .find(|session| session.rows_left())
+                .expect("a resolved-row slice has rows left");
+            let before = session.rows_bytes();
+            let (stats, _) = instrument.apply_resolved_slice(store, session, chunk_bytes)?;
+            let approx = before.saturating_sub(session.rows_bytes());
+            resolved = approx;
+            (
+                TxKind::ResolvedRows,
+                approx,
+                stats,
+                item.release_share(approx),
+                Step::More,
+            )
+        } else {
+            resolved = resolved_bytes(&item.terminal);
+            sources = u32::try_from(item.terminal.len()).unwrap_or(u32::MAX);
+            let approx = item.terminal_bytes.saturating_add(resolved);
+            let stats = self.apply_terminal(store, item, instrument)?;
+            (
+                TxKind::Terminal,
+                approx,
+                stats,
+                item.release_rest(),
+                Step::Done,
+            )
+        };
+        let wall_nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        match (step, item.txs) {
+            (Step::More, 0) => self.items_in_progress += 1,
+            (Step::Done, txs) if txs > 0 => self.items_in_progress -= 1,
+            _ => {}
+        }
+        item.txs += 1;
+        item.last = Some(StepReport {
+            kind,
+            approx_bytes: approx,
+            asset_bytes: assets,
+            resolved_bytes: resolved,
+            sources,
+            wall_nanos,
+        });
+        if kind != TxKind::Terminal {
+            merge_stats(&mut self.report.stats, &stats);
+        }
+        self.apply_nanos = self.apply_nanos.saturating_add(wall_nanos);
+        Ok((step, release, stats))
+    }
+
+    /// The item's terminal transaction, then what its commit settles: each
+    /// source's committed checkpoint evidence and badge, and the trees it
+    /// closed, ready once all their sources have committed.
+    fn apply_terminal(
+        &mut self,
+        store: &mut Store,
+        item: &mut ApplyItem,
+        instrument: &Instrument,
+    ) -> Result<ApplyStats, PipelineError> {
+        let batches = std::mem::take(&mut item.terminal);
         let count = u64::try_from(batches.len()).unwrap_or(u64::MAX);
+        let cursors: Vec<i64> = batches
+            .iter()
+            .filter_map(|source| source.batch.source.as_ref().map(|write| write.cursor_id))
+            .collect();
         let stats = instrument.apply_streamed_sources(store, &mut self.reconciliation, batches)?;
-        // Each checkpoint above is now the committed value of its cursor.
-        self.evidence.extend(evidence);
+        // This item's terminal merged its own staged slices (I12). Another
+        // lane's chunked item of this runtime may be between its slices
+        // right now — the writer interleaves keys — so only this item's
+        // cursors are checked; the runtime's close checks them all.
+        if let Some(cursor) = cursors
+            .iter()
+            .find(|cursor| self.reconciliation.is_staged(**cursor))
+        {
+            return Err(PipelineError::Config(format!(
+                "streamed runtime {} left cursor {cursor} between its slices",
+                self.runtime_id
+            )));
+        }
+        for settled in std::mem::take(&mut item.settled) {
+            // Each checkpoint is now the committed value of its cursor.
+            self.evidence.insert(settled.path.clone(), settled.evidence);
+            self.session_health
+                .entry(settled.session_id)
+                .and_modify(|healthy| *healthy &= settled.complete)
+                .or_insert(settled.complete);
+            if let Some(trees) = &mut self.trees {
+                trees.applied(&settled.path);
+                for tree in settled.closed_trees {
+                    trees.closed(tree);
+                }
+            }
+        }
+        if let Some(trees) = &mut self.trees {
+            trees.promote();
+        }
         instrument.add(Metric::BatchesApplied, count);
         merge_stats(&mut self.report.stats, &stats);
         self.sources_applied += count;
-        self.apply_nanos = self
-            .apply_nanos
-            .saturating_add(u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX));
         Ok(stats)
     }
 
@@ -319,507 +548,63 @@ impl StreamedRuntime {
     /// rows can be read. `prepared` is what the runtime's preparer handed
     /// over once its last source was emitted.
     pub fn admit(
-        mut self,
+        self,
         store: &mut Store,
         instrument: &Instrument,
         prepared: &PreparedAdmission,
     ) -> Result<RebuildReport, PipelineError> {
+        self.admit_remainder(store, instrument, prepared)
+            .map(|admitted| admitted.report)
+    }
+
+    /// [`StreamedRuntime::admit`] for a runtime that may have flipped trees
+    /// already: everything not flipped — bound and tainted trees, trees
+    /// closed but never flipped, and every session of a runtime admitted
+    /// whole — is folded, renumbered and flipped in one writer transaction,
+    /// flip last. Returns the sessions whose state that commit moved, and the
+    /// sessions it changed under a reader instead: trees flipped earlier
+    /// whose usage the remainder's fold displaced (R1 D15).
+    pub fn admit_remainder(
+        mut self,
+        store: &mut Store,
+        instrument: &Instrument,
+        prepared: &PreparedAdmission,
+    ) -> Result<RemainderAdmission, PipelineError> {
         if let Some((path, _)) = self.cursors.iter().find(|(_, cursor)| !cursor.applied) {
             return Err(PipelineError::Config(format!(
                 "streamed runtime {} admitted before source {path} closed",
                 self.runtime_id
             )));
         }
-        let reconciled =
-            instrument.fold_cold_reconciliation(store, std::mem::take(&mut self.reconciliation))?;
-        merge_stats(&mut self.report.stats, &reconciled);
-
-        let reorder = prepared.sessions_to_renumber();
-        if !reorder.is_empty() {
-            let started = Instant::now();
-            let rows = store.renumber_sessions_by_source_order(reorder)?;
-            instrument.add(
-                Metric::SessionRenumbers,
-                u64::try_from(reorder.len()).unwrap_or(u64::MAX),
-            );
-            instrument.add(Metric::SessionRenumberRows, rows);
-            instrument.add(
-                Metric::SessionRenumberNanos,
-                u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
-            );
+        if self.items_in_progress != 0 || self.reconciliation.staged_slices() != 0 {
+            return Err(PipelineError::Config(format!(
+                "streamed runtime {} admitted while an item is between its transactions",
+                self.runtime_id
+            )));
         }
-
-        let stream_states = self
-            .session_health
-            .into_iter()
-            .map(|(session_id, clean)| {
-                (
-                    session_id,
-                    if clean {
-                        StreamState::Indexed
-                    } else {
-                        StreamState::Streaming
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        store.set_session_stream_states(&stream_states)?;
-        Ok(self.report)
-    }
-}
-
-/// Final presentation ordinals for a streamed runtime, assigned as each
-/// closed source lands instead of over the retained runtime.
-///
-/// The whole-runtime precompute ([`crate::prepare_captured_runtime`]) orders
-/// every session by `(source path, position, source sequence, timeline id)`,
-/// where a timeline repeated across sources takes its final occurrence. Within
-/// one closed source this plan applies exactly that key; sources arrive in
-/// path order, so continuing each session's counter reproduces the
-/// precompute. Only a timeline repeated in a later source of the same session
-/// (it moves there, leaving a gap) or a source arriving out of path order
-/// breaks the continuation; those sessions are canonicalized at admission by
-/// `(source path, assigned ordinal)`, which is the precompute order again.
-/// Everything here is RAM only: a 128-bit key per timeline identity.
-#[derive(Debug, Default)]
-pub(crate) struct OrdinalPlan {
-    next: HashMap<u32, i64>,
-    sessions: HashMap<String, u32>,
-    names: Vec<String>,
-    last_path: HashMap<u32, String>,
-    seen: HashMap<u128, (u32, u32)>,
-    sources: u32,
-    renumber: BTreeSet<u32>,
-}
-
-fn timeline_key(timeline_id: &str) -> u128 {
-    let digest = blake3::hash(timeline_id.as_bytes());
-    let mut key = [0_u8; 16];
-    key.copy_from_slice(&digest.as_bytes()[..16]);
-    u128::from_le_bytes(key)
-}
-
-struct FinalMessage {
-    key: u128,
-    session: u32,
-    position: i64,
-    sequence: u64,
-    timeline_id: String,
-}
-
-impl OrdinalPlan {
-    fn intern(&mut self, session_id: &str) -> Result<u32, PipelineError> {
-        if let Some(index) = self.sessions.get(session_id) {
-            return Ok(*index);
-        }
-        let index = u32::try_from(self.names.len()).map_err(|_| {
-            PipelineError::Config("streamed runtime has more sessions than u32".to_string())
-        })?;
-        self.sessions.insert(session_id.to_owned(), index);
-        self.names.push(session_id.to_owned());
-        Ok(index)
-    }
-
-    pub(crate) fn assign(&mut self, path: &str, ops: &mut [IngestOp]) -> Result<(), PipelineError> {
-        let source = self.sources;
-        self.sources = self.sources.checked_add(1).ok_or_else(|| {
-            PipelineError::Config("streamed runtime has more sources than u32".to_string())
-        })?;
-
-        // Final occurrence of each timeline identity within this source.
-        let mut keys = Vec::with_capacity(ops.len());
-        let mut finals: Vec<FinalMessage> = Vec::new();
-        let mut final_index: HashMap<u128, usize> = HashMap::new();
-        for (index, op) in ops.iter().enumerate() {
-            let IngestOp::Message(row) = op else {
-                keys.push(None);
-                continue;
-            };
-            let sequence = u64::try_from(index).map_err(|_| {
-                PipelineError::Config("source operation sequence exceeds u64".to_string())
-            })?;
-            let key = timeline_key(&row.timeline_id);
-            let session = self.intern(&row.session_id)?;
-            let message = FinalMessage {
-                key,
-                session,
-                position: row
-                    .provenance
-                    .src_offset
-                    .unwrap_or_else(|| i64::try_from(sequence).unwrap_or(i64::MAX)),
-                sequence,
-                timeline_id: row.timeline_id.clone(),
-            };
-            match final_index.get(&key) {
-                Some(&at) => {
-                    if finals[at].session != session {
-                        return Err(self.moved(&row.timeline_id, finals[at].session, session));
-                    }
-                    finals[at] = message;
-                }
-                None => {
-                    final_index.insert(key, finals.len());
-                    finals.push(message);
-                }
-            }
-            keys.push(Some(key));
-        }
-
-        finals.sort_by(|left, right| {
-            (
-                left.session,
-                left.position,
-                left.sequence,
-                &left.timeline_id,
-            )
-                .cmp(&(
-                    right.session,
-                    right.position,
-                    right.sequence,
-                    &right.timeline_id,
-                ))
-        });
-        let mut assigned: HashMap<u128, i64> = HashMap::with_capacity(finals.len());
-        for message in &finals {
-            match self.last_path.get(&message.session) {
-                Some(last) if last.as_str() == path => {}
-                // An earlier path after a later one: the session's sources
-                // arrived out of path order.
-                Some(last) if last.as_str() > path => {
-                    self.renumber.insert(message.session);
-                }
-                _ => {
-                    self.last_path.insert(message.session, path.to_owned());
-                }
-            }
-            match self.seen.insert(message.key, (message.session, source)) {
-                Some((session, _)) if session != message.session => {
-                    return Err(self.moved(&message.timeline_id, session, message.session));
-                }
-                Some((_, earlier)) if earlier != source => {
-                    // The identity takes its final position in this later
-                    // source; the ordinal it held earlier becomes a gap.
-                    self.renumber.insert(message.session);
-                }
-                _ => {}
-            }
-            let next = self.next.entry(message.session).or_insert(0);
-            assigned.insert(message.key, *next);
-            *next = next.checked_add(1).ok_or_else(|| {
-                PipelineError::Config("session has more messages than i64 ordinals".to_string())
-            })?;
-        }
-
-        for (op, key) in ops.iter_mut().zip(keys) {
-            if let (IngestOp::Message(row), Some(key)) = (op, key) {
-                row.ordinal = *assigned
-                    .get(&key)
-                    .expect("every message identity was assigned");
-            }
-        }
-        Ok(())
-    }
-
-    fn moved(&self, timeline_id: &str, from: u32, to: u32) -> PipelineError {
-        PipelineError::Config(format!(
-            "timeline {timeline_id} moved between sessions {} and {} during cold planning",
-            self.names[from as usize], self.names[to as usize]
-        ))
-    }
-
-    pub(crate) fn sessions_to_renumber(&self) -> Vec<String> {
-        self.renumber
-            .iter()
-            .map(|session| self.names[*session as usize].clone())
-            .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use rosetta_adapter_claude_code::ClaudeCodeAdapter;
-    use rosetta_capture::SourceDef;
-    use rosetta_core::rows::{MessageKind, MessageRow};
-
-    use super::*;
-    use crate::replay::precomputed_ordinals;
-
-    const RUNTIME: &str = "runtime-ordinals";
-
-    fn runtime() -> RuntimeRow {
-        RuntimeRow {
-            id: RUNTIME.into(),
-            kind: "claude-code".into(),
-            data_root: "~/.claude".into(),
-            enabled: true,
-            account: None,
-            config: None,
-            skills: None,
-            versions_seen: None,
-            discovered_at: 0,
-            label: None,
-            provenance: Default::default(),
-        }
-    }
-
-    fn session(id: &str) -> IngestOp {
-        IngestOp::SessionMeta(SessionRow {
-            id: id.into(),
-            native_session_id: id.into(),
-            runtime_id: RUNTIME.into(),
-            project_id: None,
-            cwd: None,
-            parent_session_id: None,
-            delegation: None,
-            root_session_id: id.into(),
-            role: SessionRole::Main,
-            title: None,
-            summary: None,
-            started_at: 1,
-            updated_at: 1,
-            activity: None,
-            stream_state: StreamState::Pending,
+        let (states, unflipped) = self.remainder();
+        let mut renumber = prepared.sessions_to_renumber().to_vec();
+        renumber.extend(unflipped);
+        let mut fold = std::mem::take(&mut self.reconciliation);
+        fold.absorb_units()?;
+        let admitted = instrument.admit_cold_units(store, fold, &renumber, &states)?;
+        let displaced = self.flipped_among(&admitted.stats.usage_displaced_sessions);
+        merge_stats(&mut self.report.stats, &admitted.stats);
+        Ok(RemainderAdmission {
+            report: self.report,
+            changed: admitted.changed,
+            displaced,
         })
     }
+}
 
-    fn message(timeline_id: &str, session_id: &str, src_offset: Option<i64>) -> IngestOp {
-        IngestOp::project_message(MessageRow {
-            timeline_id: timeline_id.into(),
-            session_id: session_id.into(),
-            ordinal: 0,
-            kind: MessageKind::User,
-            subtype: None,
-            uuid: None,
-            parent_uuid: None,
-            ts: Some(10),
-            model: None,
-            effort: None,
-            content: Some(format!("text of {timeline_id}")),
-            tool: None,
-            attachments: Vec::new(),
-            citations: Vec::new(),
-            group: None,
-            response: None,
-            block_index: None,
-            branch_tool_id: None,
-            usage: None,
-            agent_version: None,
-            src_cursor: None,
-            src_offset,
-        })
-        .pop()
-        .expect("a user message projects one row")
-    }
-
-    fn source(path: &str, session_id: &str) -> SourceDef {
-        SourceDef {
-            ledger_only: false,
-            relative_path: path.into(),
-            stream_id: "transcript".into(),
-            session_id: session_id.into(),
-            native_session_id: session_id.into(),
-            agent_version: None,
-        }
-    }
-
-    fn closed(source: SourceDef, ops: Vec<IngestOp>) -> ClosedSource {
-        let mut checkpoint = PipeCheckpoint::fresh(
-            &source.session_id,
-            &source.stream_id,
-            ClaudeCodeAdapter.normalizer_version(),
-        );
-        checkpoint.source_generation = 1;
-        ClosedSource {
-            source,
-            generation: 1,
-            ops,
-            evidence: PollEvidence::of(Some(&checkpoint)),
-            checkpoint: checkpoint.encode(),
-            activate: true,
-            complete: true,
-            payload_bytes: 1,
-            prepared: None,
-        }
-    }
-
-    fn roster(sources: &[(SourceDef, Vec<IngestOp>)]) -> Vec<crate::meta::SessionFile> {
-        sources
-            .iter()
-            .map(|(source, _)| crate::meta::SessionFile {
-                ledger_only: false,
-                relative_path: source.relative_path.clone(),
-                stream_id: source.stream_id.clone(),
-                file_format: rosetta_adapter_support::FileFormat::Jsonl,
-                discipline: rosetta_adapter_support::FileDiscipline::AppendOnly,
-                driver: rosetta_adapter_support::StreamDriver::JsonLines,
-                session_id: source.session_id.clone(),
-                native_session_id: source.native_session_id.clone(),
-                size: 1,
-                modified_ms: 1,
-                agent_version: None,
-                source_missing: false,
-            })
-            .collect()
-    }
-
-    /// Apply `sources` through the streamed writer in `order` and read every
-    /// stored ordinal back, with the number of sessions it had to re-rank.
-    fn streamed_ordinals(
-        sources: &[(SourceDef, Vec<IngestOp>)],
-        order: &[usize],
-    ) -> Result<(BTreeMap<String, i64>, u64), PipelineError> {
-        let instrument = Instrument::new();
-        let mut store = Store::open_in_memory_for_rebuild().unwrap();
-        store.use_precomputed_bulk_ordinals().unwrap();
-        store
-            .apply(&Batch {
-                ops: vec![IngestOp::Runtime(runtime()), session("s-a"), session("s-b")],
-                checkpoints: vec![],
-                source: None,
-            })
-            .unwrap();
-        let mut setup_sources = sources
-            .iter()
-            .map(|(source, _)| source.clone())
-            .collect::<Vec<_>>();
-        setup_sources.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-        let setup = StreamedSetup {
-            sources: setup_sources,
-            metadata_sessions: ["s-a".to_string(), "s-b".to_string()].into(),
-        };
-        let mut writer = StreamedRuntime::open(
-            &ClaudeCodeAdapter,
-            &runtime(),
-            setup,
-            &mut store,
-            &instrument,
-        )?;
-        let mut preparer = crate::StreamedPreparer::new(&roster(sources));
-        for index in order {
-            let (source, ops) = &sources[*index];
-            let mut emitted = vec![closed(source.clone(), ops.clone())];
-            preparer.prepare(&mut emitted)?;
-            writer.apply(&mut store, emitted, &instrument)?;
-        }
-        let prepared = preparer.finish()?;
-        writer.admit(&mut store, &instrument, &prepared)?;
-        let ordinals = store
-            .conn()
-            .prepare("SELECT timeline_id, ordinal FROM message")
-            .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        Ok((ordinals, instrument.get(Metric::SessionRenumbers)))
-    }
-
-    fn repeated_corpus() -> Vec<(SourceDef, Vec<IngestOp>)> {
-        vec![
-            (
-                source("a.jsonl", "s-a"),
-                vec![
-                    message("m1", "s-a", Some(0)),
-                    message("m2", "s-a", Some(10)),
-                    message("m3", "s-a", Some(20)),
-                    // A repeat inside one source takes its final position.
-                    message("m2", "s-a", Some(30)),
-                    // One source may carry another session's rows.
-                    message("x1", "s-b", Some(5)),
-                ],
-            ),
-            (
-                source("b.jsonl", "s-a"),
-                vec![
-                    // A repeat in a later source moves the row here.
-                    message("m3", "s-a", Some(0)),
-                    // Equal offsets fall back to the source sequence.
-                    message("m4", "s-a", Some(10)),
-                    message("m5", "s-a", Some(10)),
-                    // No offset ranks at the source sequence.
-                    message("m6", "s-a", None),
-                ],
-            ),
-            (
-                source("c.jsonl", "s-b"),
-                vec![
-                    message("x2", "s-b", None),
-                    message("x3", "s-b", Some(1)),
-                    message("x1", "s-b", Some(2)),
-                ],
-            ),
-        ]
-    }
-
-    #[test]
-    fn streamed_ordinals_equal_the_whole_runtime_precompute() {
-        let corpus = repeated_corpus();
-        let expected = precomputed_ordinals(corpus.clone()).unwrap();
-        let (actual, renumbered) = streamed_ordinals(&corpus, &[0, 1, 2]).unwrap();
-        assert_eq!(actual, expected);
-        // Both sessions saw a cross-source repeat; nothing else was re-ranked.
-        assert_eq!(renumbered, 2);
-    }
-
-    #[test]
-    fn in_order_sources_without_repeats_need_no_admission_renumber() {
-        let corpus = vec![
-            (
-                source("a.jsonl", "s-a"),
-                vec![message("m1", "s-a", Some(0)), message("m2", "s-a", Some(9))],
-            ),
-            (
-                source("b.jsonl", "s-a"),
-                vec![message("m3", "s-a", Some(0)), message("m4", "s-a", None)],
-            ),
-            (
-                source("c.jsonl", "s-b"),
-                vec![message("x1", "s-b", Some(3))],
-            ),
-        ];
-        let expected = precomputed_ordinals(corpus.clone()).unwrap();
-        let (actual, renumbered) = streamed_ordinals(&corpus, &[0, 1, 2]).unwrap();
-        assert_eq!(actual, expected);
-        assert_eq!(renumbered, 0);
-    }
-
-    #[test]
-    fn a_source_arriving_out_of_path_order_is_re_ranked_at_admission() {
-        let corpus = vec![
-            (
-                source("a.jsonl", "s-a"),
-                vec![message("m1", "s-a", Some(0)), message("m2", "s-a", Some(9))],
-            ),
-            (
-                source("b.jsonl", "s-a"),
-                vec![message("m3", "s-a", Some(0)), message("m4", "s-a", Some(1))],
-            ),
-        ];
-        let expected = precomputed_ordinals(corpus.clone()).unwrap();
-        let (actual, renumbered) = streamed_ordinals(&corpus, &[1, 0]).unwrap();
-        assert_eq!(actual, expected);
-        assert_eq!(renumbered, 1);
-    }
-
-    #[test]
-    fn a_timeline_moving_between_sessions_fails_like_the_precompute() {
-        let corpus = vec![
-            (
-                source("a.jsonl", "s-a"),
-                vec![message("m1", "s-a", Some(0))],
-            ),
-            (
-                source("b.jsonl", "s-b"),
-                vec![message("m1", "s-b", Some(0))],
-            ),
-        ];
-        assert!(precomputed_ordinals(corpus.clone()).is_err());
-        let error = streamed_ordinals(&corpus, &[0, 1]).unwrap_err();
-        assert!(
-            error.to_string().contains("moved between sessions"),
-            "{error}"
-        );
-    }
+/// What a runtime's close admitted ([`StreamedRuntime::admit_remainder`]).
+#[derive(Debug)]
+pub struct RemainderAdmission {
+    pub report: RebuildReport,
+    /// The sessions whose `stream_state` the commit moved.
+    pub changed: Vec<String>,
+    /// Sessions flipped earlier whose usage the commit displaced: readers
+    /// may hold their rows (R1 D15).
+    pub displaced: Vec<String>,
 }

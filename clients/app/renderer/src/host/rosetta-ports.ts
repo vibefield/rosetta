@@ -83,8 +83,13 @@ export function sameOriginAssetUrl(client: Pick<RosettaClient, "baseUrl">, asset
   }
 }
 
-/** Every image and attachment by the daemon's own URL: this daemon serves
- * an `<img src>` without a credential. */
+/** Every image and attachment by the daemon's own URL: this daemon serves an
+ * `<img src>` without a credential. A video has no address here
+ * (`mediaAssetUrl` is left out): the daemon answers a member whole, without
+ * byte ranges, and a `<video>` loaded from such an address plays but cannot
+ * seek (every seek lands at 0, measured in this app's Electron, 2026-11-12).
+ * The room therefore reads the member's bytes and plays an object URL, which
+ * seeks. */
 export function assetsOver(client: RosettaClient): AssetSource {
   return {
     imageAssetUrl: (asset, variant) => client.imageAssetUrl(asset, variant),

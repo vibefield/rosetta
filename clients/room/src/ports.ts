@@ -253,7 +253,7 @@ export interface HostPort {
   readonly worktree?: WorktreeHostPort | undefined;
 }
 
-/** An address an `<img>` can load: now, later, or not at all. */
+/** An address an `<img>` or a `<video>` can load: now, later, or not at all. */
 export type AssetUrl = string | null | PromiseLike<string | null>;
 
 /** Where every stored image and attachment is addressed. */
@@ -266,13 +266,30 @@ export interface AssetSource {
    * and answers an object URL — a promise while it fetches — bounding and
    * revoking what it made. The room asks on every mount and every retry, so
    * an evicted URL is asked for again, never reused, and a host must not
-   * keep a failure.
+   * keep a failure. Every variant, `full` included, names a WebP the daemon
+   * encoded (`RosettaClient.imageAssetUrl`): a recorded original's plain
+   * member URL returns its recorded bytes, for opening or saving, and is
+   * never an image's address.
    */
   imageAssetUrl(asset: AssetRef, variant: ImageVariant): AssetUrl;
   /** The address that names one stored attachment member, or null when the
    * room should not offer it. The room uses it as the attachment's identity
    * and to decide it can be opened; it never loads it. */
   attachmentAssetUrl(asset: AssetRef): string | null;
+  /**
+   * An address a `<video src>` can load for one recorded video member (MP4
+   * or QuickTime), or null. Optional. The room asks only after the reader
+   * presses play, never for a poster or a thumbnail. Answer one only for an
+   * address that honours byte ranges: an address served whole, without
+   * ranges, plays but cannot seek, and raises no error for the room to fall
+   * back on. The daemon serves a member whole, so rosetta's app leaves this
+   * door out. A host without this door, one that answers null, or one whose
+   * address the element then fails to load is not an error: the room reads
+   * the member's bytes through the reading session's client (`readAsset`)
+   * and plays an object URL it makes and revokes itself, which seeks.
+   * `attachmentAssetUrl` stays the member's identity and is never loaded.
+   */
+  mediaAssetUrl?(asset: AssetRef): AssetUrl;
 }
 
 /** Everything a host hands the room. */

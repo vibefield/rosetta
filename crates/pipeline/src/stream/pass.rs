@@ -27,6 +27,8 @@ use super::{
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::meta::SessionFile;
+use crate::presented_media::Fallback;
+use crate::presented_media::prior::{Loaded, PriorCaptures};
 use crate::{IngestOptions, PipelineError, SliceBudget};
 
 /// What one [`IngestPass::step`] produced.
@@ -69,6 +71,9 @@ pub(crate) struct ReportDelta {
     pub(crate) hard_errors: u64,
     pub(crate) oversized: u64,
     pub(crate) quarantined: u64,
+    /// The largest framed record the step read (measurement only: the
+    /// capture clock's; no report counter).
+    pub(crate) max_record_bytes: u64,
 }
 
 impl ReportDelta {
@@ -100,6 +105,8 @@ struct Staged {
 
 pub(crate) struct IngestPass {
     path: PathBuf,
+    input_root: PathBuf,
+    input: Option<rosetta_capture::input::OpenedInput>,
     cursor_id: i64,
     /// The planner's exact stored checkpoint: the next batch's CAS expectation.
     prev_blob: String,
@@ -120,9 +127,35 @@ pub(crate) struct IngestPass {
     budget_records: u64,
     /// [`IngestOptions::private_build`].
     private_build: bool,
+    /// The logical end each read stops at ([`IngestOptions::cut_bounded`]):
+    /// the source's metadata cut, until a rewrite drops it for the rest of
+    /// the pass.
+    ceiling: Option<u64>,
+    /// The last read stopped at the ceiling before any complete record, with
+    /// bytes past it: the cut falls at or inside the opening record. The
+    /// skim's one-record identity fallback reads a fresh handle, so it can
+    /// name a session from bytes past the cut; nothing of that session's
+    /// content is inside the cut. Like an unfinished record, this holds the
+    /// pass short of complete (the session publishes Streaming), and the
+    /// live runner lands the rest.
+    cut_before_first_record: bool,
     retries: u32,
     force_replay: bool,
     staged: Option<Staged>,
+    /// The pass resumed a generation whose checkpoint has no tail (a rebuild
+    /// or a stopped-source activation wrote it), or one such a pass committed
+    /// before it reached the end of the file ([`PipeCheckpoint::reframing`]),
+    /// so it reads records the ledger already holds for this generation, and
+    /// their media frames.
+    reframes: bool,
+    /// Where this source's earlier media captures are read from: set by the
+    /// serial driver that holds a ledger, never on a pooled worker.
+    prior: Option<PriorCaptures>,
+    /// Those captures, loaded once per generation of a pass: at the first
+    /// fact of a pass that can meet earlier frames, otherwise at the first
+    /// sent file append growth could not capture. Dropped when the
+    /// generation restarts.
+    loaded: Option<Loaded>,
 }
 
 impl IngestPass {
@@ -177,6 +210,13 @@ impl IngestPass {
         let tail = resumed
             .as_ref()
             .and_then(|(checkpoint, _)| checkpoint.tail_checkpoint());
+        // A fresh cursor resumes too, at generation zero with no tail, but
+        // nothing was ledgered for it: only an existing generation re-frames.
+        // A re-frame that stopped between batches left a tail behind; its
+        // checkpoint says the rest of the file is still a re-frame.
+        let reframes = resumed.as_ref().is_some_and(|(checkpoint, _)| {
+            checkpoint.source_generation > 0 && (tail.is_none() || checkpoint.reframing)
+        });
         // Ledger-first means everything at or below the resumed committed offset
         // is already durable in the raw ledger for this generation. An audit (or
         // sibling-heal) replay re-frames those records to verify the projection,
@@ -244,6 +284,8 @@ impl IngestPass {
             && source_generation == active_generation;
         Ok(Self {
             path: root.join(&file.relative_path),
+            input_root: root.to_path_buf(),
+            input: None,
             cursor_id,
             prev_blob,
             active_generation,
@@ -260,10 +302,21 @@ impl IngestPass {
             budget_bytes: 0,
             budget_records: 0,
             private_build: opts.private_build,
+            ceiling: opts.cut_bounded.then_some(file.cut_len).flatten(),
+            cut_before_first_record: false,
             retries: 0,
             force_replay,
             staged: None,
+            reframes,
+            prior: None,
+            loaded: None,
         })
+    }
+
+    /// Let the pass ask the ledger for an earlier capture of a sent file
+    /// before it reads the filesystem.
+    pub(crate) fn set_prior_captures(&mut self, prior: PriorCaptures) {
+        self.prior = Some(prior);
     }
 
     /// The rotating audit: one sequential read of the committed range against
@@ -272,11 +325,13 @@ impl IngestPass {
     /// a mismatch is real content change hiding under a quiet stat, and THAT
     /// escalates to the full replacement replay. A pre-chain checkpoint has
     /// its chain computed once and persisted, so the next audit verifies.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn audit(
         &mut self,
         runtime: &RuntimeRow,
         file: &SessionFile,
         tailer: &Tailer,
+        opts: &IngestOptions,
         store: &mut Store,
         instrument: &Instrument,
         report: &mut StreamReport,
@@ -287,7 +342,29 @@ impl IngestPass {
         let Some(tail_checkpoint) = self.tail.as_mut() else {
             return Ok(());
         };
-        match tailer.verify_committed(&self.path, tail_checkpoint)? {
+        let verification = if let Some(source) = &file.input {
+            if self.input.is_none() {
+                self.input = match source.open(&self.input_root, || opts.check_cancelled().is_err())
+                {
+                    Ok(input) => input,
+                    Err(error) if error.incomplete_input() => return Ok(()),
+                    Err(_) if opts.check_cancelled().is_err() => {
+                        return Err(PipelineError::Cancelled);
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+            }
+            if let Some(input) = &mut self.input {
+                input.cancel = opts.cancel.clone();
+            }
+            match &mut self.input {
+                Some(input) => tailer.verify_input(input, tail_checkpoint)?,
+                None => CommittedVerification::Missing,
+            }
+        } else {
+            tailer.verify_committed(&self.path, tail_checkpoint)?
+        };
+        match verification {
             CommittedVerification::Verified => {
                 instrument.add(Metric::BytesRead, tail_checkpoint.committed_offset);
             }
@@ -361,8 +438,75 @@ impl IngestPass {
                 _ => tailer,
             };
             let read = instrument.time(Metric::ReadNanos, || {
-                read_tailer.read(&self.path, self.tail.as_ref(), self.force_replay)
-            })?;
+                if let Some(source) = &file.input {
+                    if self.input.is_none() {
+                        self.input =
+                            source.open(&self.input_root, || opts.check_cancelled().is_err())?;
+                        if let Some(input) = &mut self.input {
+                            input.cancel = opts.cancel.clone();
+                        }
+                        if let (Some(input), Some(previous)) = (&mut self.input, &self.tail)
+                            && PipeCheckpoint::decode(&self.prev_blob)
+                                .and_then(|c| c.snapshot_stamp)
+                                .as_deref()
+                                != Some(input.stamp.as_str())
+                            && input
+                                .file
+                                .metadata()
+                                .is_ok_and(|m| m.len() <= previous.observed_len)
+                            && matches!(
+                                read_tailer.verify_input(input, previous)?,
+                                CommittedVerification::Mismatch
+                            )
+                        {
+                            self.force_replay = true;
+                        }
+                    }
+                    if self.input.as_ref().is_some_and(|input| {
+                        input.boundaries.iter().any(|(expected, record)| {
+                            adapter
+                                .transcript_record_index(record)
+                                .and_then(|i| i.checked_add(1))
+                                != Some(*expected)
+                        })
+                    }) {
+                        return Err(rosetta_capture::CaptureError::Io {
+                            operation: "validating transcript range",
+                            path: file.relative_path.clone(),
+                            source: std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "native ordinal and decoded byte boundary disagree",
+                            ),
+                        });
+                    }
+                    match &mut self.input {
+                        Some(input) => read_tailer.read_input(
+                            input,
+                            self.tail.as_ref(),
+                            self.force_replay,
+                            self.ceiling,
+                        ),
+                        None => Ok(TailRead::Missing),
+                    }
+                } else {
+                    read_tailer.read_cut(
+                        &self.path,
+                        self.tail.as_ref(),
+                        self.force_replay,
+                        self.ceiling,
+                    )
+                }
+            });
+            let read = match read {
+                Ok(read) => read,
+                Err(_) if opts.check_cancelled().is_err() => return Err(PipelineError::Cancelled),
+                Err(error) if file.input.is_some() && error.incomplete_input() => {
+                    deltas.retries_exhausted += 1;
+                    instrument.add(Metric::RetriesExhausted, 1);
+                    return Ok(self.stop_short(runtime, file, deltas));
+                }
+                Err(error) => return Err(error.into()),
+            };
             match read {
                 TailRead::Missing => {
                     deltas.files_missing += 1;
@@ -382,6 +526,16 @@ impl IngestPass {
         };
         self.force_replay = false;
         instrument.add(Metric::BytesRead, batch.bytes_read);
+        if matches!(
+            batch.transition,
+            Transition::Truncated | Transition::IdentityChanged | Transition::PrefixMismatch
+        ) {
+            // A rewrite: the cut measured content that is gone, so the
+            // replacement reads to its end for the rest of the pass.
+            self.ceiling = None;
+        }
+        self.cut_before_first_record =
+            batch.cut_applied && !batch.more_available && batch.checkpoint.committed_offset == 0;
 
         if batch.transition.starts_new_generation()
             && !matches!(batch.transition, Transition::Initial)
@@ -412,6 +566,10 @@ impl IngestPass {
             self.ctx.next_ordinal = 0;
             self.ctx.cumulative = CumulativeUsage::new();
             self.ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
+            // The new generation is a replacement, not a re-frame, and its
+            // earlier captures are read through its own number.
+            self.reframes = false;
+            self.loaded = None;
         }
 
         let mut ops: Vec<IngestOp> = Vec::with_capacity(batch.items.len());
@@ -422,6 +580,8 @@ impl IngestPass {
                 TailItem::Record(record) => {
                     deltas.records += 1;
                     deltas.payload_bytes += record.payload.len() as u64;
+                    deltas.max_record_bytes =
+                        deltas.max_record_bytes.max(record.payload.len() as u64);
                     self.budget_records += 1;
                     // The budget counts FRAMED PAYLOAD, mirroring the soft
                     // batch cap — physical amplification (anchor and
@@ -483,6 +643,70 @@ impl IngestPass {
                             Some(&self.path),
                             &opts.artifact_recovery,
                         ));
+                        if opts.observe_presented_media
+                            && crate::presented_media::has_fact(&outcome.ops)
+                        {
+                            // Only a pass that can meet earlier frames of
+                            // this source asks the ledger first: a re-frame,
+                            // or a replacement generation. One scoped walk,
+                            // at its first fact.
+                            let wants = self.reframes
+                                || (self.source_generation > 1
+                                    && self.source_generation != self.active_generation);
+                            if wants
+                                && self.loaded.is_none()
+                                && let Some(prior) = &self.prior
+                            {
+                                self.loaded = Some(prior.load(
+                                    &file.session_id,
+                                    &file.relative_path,
+                                    self.source_generation,
+                                ));
+                            }
+                            let generation = self.source_generation;
+                            let frames = match &self.prior {
+                                // Append growth of a generation that existed
+                                // before this pass reads the file first. Its
+                                // source may still hold an earlier capture of
+                                // the same file (the record repeated, or a
+                                // later one sent it again), so a file that
+                                // cannot be captured falls back to the ledger:
+                                // one walk, paid only then. A first read
+                                // never looks: a first generation, and a
+                                // sliced pass, whose early activation makes
+                                // each later slice of a file never read
+                                // before look like append growth and would
+                                // pay a walk per slice.
+                                Some(prior)
+                                    if !wants
+                                        && self.active_generation > 0
+                                        && self.budget.is_none() =>
+                                {
+                                    let load = || {
+                                        prior.load(
+                                            &file.session_id,
+                                            &file.relative_path,
+                                            generation,
+                                        )
+                                    };
+                                    crate::presented_media::capture(
+                                        &mut outcome.ops,
+                                        self.ledgered_through,
+                                        generation,
+                                        None,
+                                        Some(Fallback::new(&mut self.loaded, &load)),
+                                    )
+                                }
+                                _ => crate::presented_media::capture(
+                                    &mut outcome.ops,
+                                    self.ledgered_through,
+                                    generation,
+                                    self.loaded.as_ref().filter(|_| wants),
+                                    None,
+                                ),
+                            };
+                            documents.extend(frames);
+                        }
                     }
                     ops.extend(outcome.ops);
                 }
@@ -519,7 +743,9 @@ impl IngestPass {
             .next_source_sequence
             .checked_add(ops.len() as u64)
             .ok_or_else(|| PipelineError::Config("source sequence overflowed".to_string()))?;
-        let complete = !batch.more_available && batch.checkpoint.incomplete_suffix_len == 0;
+        let complete = !batch.more_available
+            && batch.checkpoint.incomplete_suffix_len == 0
+            && !self.cut_before_first_record;
         // The partial-record stop: all that is left is a record its writer
         // has not finished, and a private build must end its generation
         // anyway ([`IngestOptions::private_build`]). Every rule below reads it
@@ -529,7 +755,8 @@ impl IngestPass {
         // later arrives as ordinary append growth. A replacement generation
         // ends here too: unlike a budget pause it has read every complete
         // record the file holds, and a private build has published no
-        // generation of the source for it to hide.
+        // generation of the source for it to hide. A cut that falls at or
+        // inside the opening record ends the same way, with nothing framed.
         let partial_stop = self.private_build && !batch.more_available && !complete;
         let ended = complete || partial_stop;
         // The slice boundary: enough clean bytes and complete records are
@@ -561,8 +788,13 @@ impl IngestPass {
             tail: Some(batch.checkpoint.encode_hex()),
             cumulative: (!last_reading.is_empty()).then_some(last_reading),
             adapter_state,
-            snapshot_stamp: None,
+            snapshot_stamp: self.input.as_ref().map(|input| input.stamp.clone()),
             snapshot_revision: None,
+            // A re-frame with more to read: the pass that resumes from this
+            // tail still meets records the ledger holds. The batch that
+            // reaches the end of the file clears it, and a generation
+            // restart has already left the re-frame.
+            reframing: self.reframes && batch.more_available,
         }
         .encode();
 
@@ -751,10 +983,14 @@ impl IngestPass {
             .tail
             .as_ref()
             .map(|checkpoint| checkpoint.incomplete_suffix_len);
-        if self.private_build && active_clean && suffix.is_some_and(|len| len > 0) {
-            // Stopped before a record its writer has not finished: the clean
-            // prefix is active, and the record is append growth for a later
-            // pass. Deliberate, like a budget pause — never a failure.
+        if self.private_build
+            && active_clean
+            && (suffix.is_some_and(|len| len > 0) || self.cut_before_first_record)
+        {
+            // Stopped before a record its writer has not finished, or at a
+            // cut before the opening record: the clean prefix is active, and
+            // the rest is append growth for a later pass. Deliberate, like a
+            // budget pause — never a failure.
             return FilePass::Paused;
         }
         FilePass::Finished(active_clean && suffix == Some(0))

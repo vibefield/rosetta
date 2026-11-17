@@ -16,6 +16,8 @@ import type { IngestionControlRequest } from "./generated/IngestionControlReques
 import type { ApiError } from "./generated/ApiError";
 import type { ImageVariant } from "./generated/ImageVariant";
 import type { AssetRef } from "./generated/AssetRef";
+import type { ArtifactExportRequest } from "./generated/ArtifactExportRequest";
+import type { ArtifactExportResponse } from "./generated/ArtifactExportResponse";
 import type { ArtifactListRequest } from "./generated/ArtifactListRequest";
 import type { ArtifactPage } from "./generated/ArtifactPage";
 import type { BoostResponse } from "./generated/BoostResponse";
@@ -489,16 +491,23 @@ export class RosettaClient {
    * supplies identities and an index, never a path; the daemon resolves the
    * exact path already stored on that timeline row. */
   /** Direct image URLs let the browser share compressed and decoded resources.
-   * Recipes are finite, versioned and enforced by the daemon. */
+   * Recipes are finite, versioned and enforced by the daemon. Every address is
+   * a WebP the daemon encoded: a legacy bundle names its own members, and a
+   * recorded original (any image member without a WebP bundle) is drawn only
+   * through `?image=<variant>&v=1`, `full` included. Its plain URL returns the
+   * recorded bytes for opening or saving, never for display. */
   imageAssetUrl(asset: AssetRef, variant: ImageVariant): string {
     const base = new URL(`${this.baseUrl}/`);
-    const rendition = variant === "full" ? asset : asset.image_variants?.[variant];
+    const variants = asset.image_variants;
+    const bundled = asset.media_type === "image/webp" && variants != null && Object.keys(variants).length > 0;
+    const member = !bundled ? undefined : variant === "full" ? asset : variants?.[variant];
+    const rendition = member?.media_type === "image/webp" ? member : undefined;
     const url = new URL((rendition ?? asset).url, base);
     if (url.origin !== base.origin || !["http:", "https:"].includes(url.protocol)) {
       throw new Error("the stored image has an unsupported address");
     }
-    // Older projection fixtures have no rendition set. The versioned daemon
-    // route can prepare a legacy member without modifying its immutable URL.
+    // A recorded original, or a bundle missing this rendition: the versioned
+    // daemon route encodes it from the member without changing its URL.
     if (!rendition) {
       url.searchParams.set("image", variant);
       url.searchParams.set("v", "1");
@@ -572,6 +581,32 @@ export class RosettaClient {
       withSignal(signal),
     );
     return new Uint8Array(await response.arrayBuffer());
+  }
+
+  /**
+   * Place one captured page by its digest as `index.html` in the directory
+   * `request.into`, below the daemon's `--export-root` (RO-32): a hard link
+   * from rosetta's asset store when both share a volume, else a verified
+   * copy. `shell: "room"` writes the room's shell around the page instead.
+   * Bearer only. The same page already there answers the same; a different
+   * file there is `export_conflict`. Every answer carries the room's
+   * `environment` (hosts per CSP directive, theme variables).
+   */
+  exportArtifact(
+    sessionId: string,
+    publicationId: string,
+    request: ArtifactExportRequest,
+    signal?: AbortSignal,
+  ): Promise<ArtifactExportResponse> {
+    return this.request(
+      `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(publicationId)}/export`,
+      {
+        method: "POST",
+        ...withSignal(signal),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      },
+    );
   }
 
   // @atlas step search-query.client

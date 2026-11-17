@@ -442,10 +442,9 @@ fn codex_large_opening_record_gets_a_bounded_identity_retry() {
 fn codex_state_titles_merge_with_rollouts_and_update_incrementally() {
     let root = TempDir::new().unwrap();
     let native = "01a036c5-6e18-73f3-8c07-d4430763840b";
+    let rollout = format!("sessions/2026/08/25/rollout-2026-08-25T02-35-03-{native}.jsonl");
     write_lines(
-        &root
-            .path()
-            .join("sessions/2026/08/25/rollout-session.jsonl"),
+        &root.path().join(&rollout),
         &[json!({
             "timestamp": "2026-08-25T02:35:03.577Z",
             "type": "session_meta",
@@ -473,11 +472,12 @@ fn codex_state_titles_merge_with_rollouts_and_update_incrementally() {
     db.execute(
         "INSERT INTO threads
            (id, rollout_path, created_at, updated_at, source, cwd, title, cli_version, name)
-         VALUES (?1, 'rollout', 10, 11, 'exec', '/w/project', ?2, '0.150.1', ?3)",
+         VALUES (?1, ?4, 10, 11, 'exec', '/w/project', ?2, '0.150.1', ?3)",
         rusqlite::params![
             native,
             "a very long first prompt that is only a fallback",
-            "Review Rosetta codebase"
+            "Review Rosetta codebase",
+            rollout
         ],
     )
     .unwrap();

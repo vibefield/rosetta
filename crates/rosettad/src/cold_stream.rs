@@ -2,19 +2,26 @@
 //!
 //! One producer thread per runtime captures through its private planner and
 //! hands every source to the sole canonical writer as a closed source the
-//! moment nothing can supersede it (`rosetta_pipeline::closed`). The writer —
-//! this thread — writes those final rows into the shared canonical RAM
-//! projection while capture continues, then admits each runtime when its
-//! producer closes: one RAM fold writes each resolved tool row once, and one
-//! stream-state commit makes the whole runtime public. Nothing about
-//! visibility changed: the runtime's sessions are `Pending` (the read
-//! barrier) until that commit. What changed is that no runtime is retained
-//! whole in RAM and the canonical write overlaps capture instead of following
-//! it.
+//! moment nothing can supersede it (`rosetta_pipeline::closed`). The writer
+//! — this thread (`writer.rs`) — writes those final rows into the shared
+//! canonical RAM projection while capture continues, one bounded transaction
+//! per turn, round-robin over every runtime's lanes. A runtime admitted per
+//! root tree makes each tree readable as soon as its last source commits
+//! (`flips.rs`): one transaction folds the tree's leftover facts and flips
+//! its sessions out of `Pending`, last. Everything else is admitted when its
+//! producer closes (`admit.rs`): one RAM fold writes each remaining tool row
+//! once, and one stream-state commit makes it public. The read barrier is
+//! unchanged — a session is `Pending` until its commit — and no runtime is
+//! retained whole in RAM.
 //!
-//! A byte budget bounds the closed sources in flight across all producers, so
+//! Byte budgets bound the closed sources in flight across all producers, so
 //! a fast producer cannot pile gigabytes up behind the writer while it admits
-//! another runtime.
+//! another runtime (`emit.rs`: per lane class, with a drain ticket each).
+//!
+//! A runtime admitted per root tree walks its newest trees first, in lanes
+//! (`rosetta_pipeline::closed::walk_order`; the `walk:` line), and a lane
+//! whose budget class is full holds its emission instead of stalling the
+//! others.
 //!
 //! Every producer shares one capture pool (`rosetta_pipeline::capture`,
 //! `--capture-workers N`, `0` for none): its workers read, normalize and
@@ -27,43 +34,41 @@
 //! runtime early in the registry therefore captures while later runtimes are
 //! still skimming, and no runtime waits for another's capture to start.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::{Scope, ScopedJoinHandle};
 use std::time::{Duration, Instant};
 
-use rosetta_adapter_support::AgentAdapter;
+use rosetta_adapter_support::{AgentAdapter, ColdAdmission};
 use rosetta_capture::Ledger;
 use rosetta_pipeline::{
-    CapturePool, ClosedSource, Instrument, InstrumentSnapshot, MetaReport, Metric, PoolBudgets,
-    PreparedAdmission, StreamReport, StreamedPreparer, StreamedRuntime, StreamedSetup,
-    stream_closed_sources_into, stream_closed_sources_pooled, streamed_setup,
+    CapturePool, ClosedSource, ColdWalkOptions, Instrument, InstrumentSnapshot, LaneId, MetaReport,
+    Metric, PoolBudgets, PreparedAdmission, StreamReport, StreamedPreparer, StreamedSetup,
+    stream_closed_sources_into, stream_closed_sources_pooled, streamed_setup_for, walk_summary,
 };
-use rosetta_server::{BackfillState, DaemonHealth, Hub, ProgressBoard, RuntimeIdentity};
+use rosetta_server::{AdmissionCourse, DaemonHealth, Hub, ProgressBoard, RuntimeIdentity};
 use rosetta_store::Store;
 use serde_json::json;
 
-use crate::cold_progress::ColdProgress;
-use crate::engine::{absorb_effects, now_ms};
-use crate::ledger_compression::thread_cpu_time;
+use crate::engine::absorb_effects;
+use crate::maintenance_pace::thread_cpu_time;
 use crate::serve::counter_source;
 use crate::{
-    AppliedColdRuntime, ColdCaptureRequest, Flags, PlannedColdRuntime, bench, identity_name,
-    plan_parallel_cold_runtime, record_fresh_failures,
+    AppliedColdRuntime, ColdCaptureRequest, Flags, PlannedColdRuntime, bench,
+    plan_parallel_cold_runtime,
 };
 
-/// Closed sources in flight between all producers and the writer, measured
-/// in framed payload bytes. One source larger than the budget still moves
-/// alone.
-const IN_FLIGHT_BYTES: u64 = 256 * 1024 * 1024;
-/// Queued sources of one runtime share a private transaction up to these
-/// bounds, so commits amortize while a shared-cache reader never waits
-/// behind one very long write.
-const TRANSACTION_BYTES: u64 = 16 * 1024 * 1024;
-const TRANSACTION_SOURCES: usize = 256;
+mod admit;
+mod emit;
+mod flips;
+mod queues;
+mod slowest;
+mod walk_report;
+mod writer;
+use emit::{BudgetClass, LaneBudgets, ProducerEmit};
 /// Runtimes whose metadata is planned at once. Each plan already reads its
 /// sources on a bounded pool, and publication stays in registry order, so
 /// this only needs to keep the small runtimes planning while a large one
@@ -80,6 +85,10 @@ enum StreamMessage {
     Opened(Box<OpenedColdRuntime>),
     Sources {
         runtime_id: String,
+        /// The walk span that emitted them (the writer queues by it), and
+        /// the budget they hold.
+        lane: LaneId,
+        class: BudgetClass,
         sources: Vec<ClosedSource>,
         bytes: u64,
     },
@@ -92,6 +101,26 @@ struct OpenedColdRuntime {
     adapter: &'static dyn AgentAdapter,
     runtime: rosetta_core::rows::RuntimeRow,
     setup: StreamedSetup,
+    /// Its trees flip one by one: it got root-tree admission and walks by
+    /// recency. Otherwise every session waits for the runtime's close.
+    per_tree: bool,
+}
+
+/// The course a fresh build's runtime asks for before its setup decides.
+pub(crate) fn requested_course(admission: ColdAdmission) -> AdmissionCourse {
+    match admission {
+        ColdAdmission::RootTree => AdmissionCourse::PerTree,
+        ColdAdmission::Runtime => AdmissionCourse::AtRuntimeClose,
+    }
+}
+
+/// The course its setup granted: per tree only when trees close one by one.
+pub(crate) fn granted_course(per_tree: bool) -> AdmissionCourse {
+    if per_tree {
+        AdmissionCourse::PerTree
+    } else {
+        AdmissionCourse::AtRuntimeClose
+    }
 }
 
 /// Everything admission and the live handoff need once a producer's capture
@@ -112,59 +141,6 @@ struct ClosedColdRuntime {
     captured_at: Instant,
 }
 
-#[derive(Default)]
-struct BudgetState {
-    in_flight: u64,
-    aborted: bool,
-}
-
-struct ByteBudget {
-    limit: u64,
-    state: Mutex<BudgetState>,
-    released: Condvar,
-}
-
-impl ByteBudget {
-    fn new(limit: u64) -> Self {
-        Self {
-            limit,
-            state: Mutex::new(BudgetState::default()),
-            released: Condvar::new(),
-        }
-    }
-
-    /// Wait until `bytes` fit beside what the writer has not applied yet.
-    fn acquire(&self, bytes: u64) -> Result<(), String> {
-        let mut state = self.state.lock().expect("cold byte budget poisoned");
-        while state.in_flight > 0 && state.in_flight.saturating_add(bytes) > self.limit {
-            if state.aborted {
-                break;
-            }
-            state = self
-                .released
-                .wait(state)
-                .expect("cold byte budget poisoned");
-        }
-        if state.aborted {
-            return Err("fresh cold writer stopped".to_string());
-        }
-        state.in_flight = state.in_flight.saturating_add(bytes);
-        Ok(())
-    }
-
-    fn release(&self, bytes: u64) {
-        let mut state = self.state.lock().expect("cold byte budget poisoned");
-        state.in_flight = state.in_flight.saturating_sub(bytes);
-        self.released.notify_all();
-    }
-
-    fn abort(&self) {
-        let mut state = self.state.lock().expect("cold byte budget poisoned");
-        state.aborted = true;
-        self.released.notify_all();
-    }
-}
-
 fn millis(nanos: u64) -> f64 {
     nanos as f64 / 1_000_000.0
 }
@@ -182,9 +158,10 @@ fn cpu_millis(started: Option<Duration>) -> Option<f64> {
 fn produce(
     planned: PlannedColdRuntime,
     sender: &Sender<StreamMessage>,
-    budget: &ByteBudget,
+    budgets: &LaneBudgets,
     stage_profiles: bool,
     pool: Option<&CapturePool>,
+    walk: &ColdWalkOptions,
 ) -> Result<(), String> {
     let PlannedColdRuntime {
         adapter,
@@ -193,6 +170,7 @@ fn produce(
         root,
         files,
         discovery_truncated,
+        admission,
         meta,
         mut planner,
         mut ledger,
@@ -203,12 +181,28 @@ fn produce(
         capture_started,
     } = planned;
     let gone = |_| "fresh cold writer stopped".to_string();
-    let setup = streamed_setup(&files, &mut planner).map_err(|error| error.to_string())?;
+    // A truncated walk cannot prove a tree whole: it is admitted per runtime.
+    let truncated = discovery_truncated || meta.walk_truncated;
+    let setup = streamed_setup_for(&files, &mut planner, admission, truncated)
+        .map_err(|error| error.to_string())?;
+    // A runtime admitted per tree reads each transcript only to its cut.
+    let trees = setup.trees().cloned();
+    let plan = walk_summary(adapter, &files, trees.as_deref(), walk);
+    walk_report::announce(
+        &plan,
+        &runtime.id,
+        adapter.kind(),
+        setup.fell_back(),
+        stage_profiles,
+    );
+    // The preparer below closes trees exactly when this holds.
+    let per_tree = trees.is_some() && !plan.is_path();
     sender
         .send(StreamMessage::Opened(Box::new(OpenedColdRuntime {
             adapter,
             runtime: runtime.clone(),
             setup,
+            per_tree,
         })))
         .map_err(gone)?;
 
@@ -220,32 +214,31 @@ fn produce(
     let stream_cpu_started = thread_cpu_time();
     // Final ordinals, and the tool rows of every session proven
     // self-contained, are prepared here, off the canonical writer, as each
-    // source is emitted — in path order on the pooled walk too, where this
-    // thread is the runtime's sequencer.
-    let mut preparer = StreamedPreparer::new(&files);
-    let mut prepare_cpu = Duration::ZERO;
-    let mut emit = |mut sources: Vec<ClosedSource>| {
-        let prepare_started = stage_profiles.then(thread_cpu_time).flatten();
-        preparer.prepare(&mut sources)?;
-        if let Some(before) = prepare_started
-            && let Some(after) = thread_cpu_time()
-        {
-            prepare_cpu += after.saturating_sub(before);
+    // source is emitted — in each lane's order on a recency walk, and in
+    // path order otherwise, where this thread is the runtime's sequencer.
+    // The path walk and the serial driver emit blocking, as HEAD did.
+    // A recency walk closes root trees as it goes (R1 D21); any other
+    // runtime is admitted whole.
+    let preparer = match &trees {
+        Some(trees) if !plan.is_path() => {
+            StreamedPreparer::with_trees(&files, Arc::clone(trees), plan.lane_of_tree.clone())
         }
-        let bytes = sources.iter().map(ClosedSource::payload_bytes).sum();
-        instrument
-            .time(Metric::WriterBudgetWaitNanos, || budget.acquire(bytes))
-            .map_err(rosetta_pipeline::PipelineError::Config)?;
-        sender
-            .send(StreamMessage::Sources {
-                runtime_id: runtime.id.clone(),
-                sources,
-                bytes,
-            })
-            .map_err(|_| {
-                rosetta_pipeline::PipelineError::Config("fresh cold writer stopped".into())
-            })
+        _ => StreamedPreparer::new(&files),
     };
+    let preparer = if stage_profiles {
+        preparer.measuring_big_sources(&files)
+    } else {
+        preparer
+    };
+    let mut emit = ProducerEmit::new(
+        runtime.id.clone(),
+        preparer,
+        sender,
+        budgets,
+        &instrument,
+        pool.is_none() || plan.is_path(),
+        stage_profiles,
+    );
     let stream = match pool {
         Some(pool) => stream_closed_sources_pooled(
             pool,
@@ -257,6 +250,8 @@ fn produce(
             &opts,
             &instrument,
             ledger.as_mut(),
+            trees.as_deref(),
+            walk,
             &mut emit,
         ),
         None => stream_closed_sources_into(
@@ -268,10 +263,13 @@ fn produce(
             &opts,
             &instrument,
             ledger.as_mut(),
+            trees.as_deref(),
+            walk,
             &mut emit,
         ),
     }
     .map_err(|error| error.to_string())?;
+    let (preparer, prepare_cpu) = emit.finish();
     let stream_wall_ms = stream_started.elapsed().as_secs_f64() * 1_000.0;
     let stream_cpu_ms = cpu_millis(stream_cpu_started);
     let prepare_cpu_ms = stream_cpu_started
@@ -284,6 +282,8 @@ fn produce(
     let closing_started = Instant::now();
     let wall_ms = capture_started.elapsed().as_secs_f64() * 1_000.0;
     if stage_profiles {
+        let (lane_switches, big_lane_chain_ms, all_lanes_held_ms) =
+            walk_report::scalars(stream.walk.as_deref());
         // Emitted where capture ends, so the harness attributes the writer's
         // queued tail and the admission separately from capture.
         bench::emit(&json!({
@@ -311,8 +311,34 @@ fn produce(
             "crossedSessions": early.crossed_sessions,
             "releasedSources": early.released_sources,
             "peakPendingSessions": early.peak_pending_sessions,
+            "peakPendingWithheldBytes": early.peak_pending_withheld_bytes,
+            "treesClosed": early.trees_closed,
+            "treesBound": early.trees_bound,
+            "treesTainted": early.trees_tainted,
+            "factlessResolved": early.factless_resolved,
+            "lateSamples": early.late_samples,
+            "crossTreeCrossings": early.cross_tree_crossings,
+            "bigSourceSplits": prepared
+                .big_source_splits()
+                .iter()
+                .map(|split| json!({
+                    "readLen": split.read_len,
+                    "immediateBytes": split.immediate,
+                    "relationalBytes": split.relational,
+                    "assetBytes": split.asset,
+                    "assetOps": split.asset_ops,
+                    "captureWallMs": millis(split.capture.wall_nanos()),
+                    "captureSteps": split.capture.steps(),
+                    "longestStepMs": millis(split.capture.longest_step_nanos()),
+                    "maxRecordBytes": split.capture.max_record_bytes(),
+                }))
+                .collect::<Vec<_>>(),
             "prepareMs": millis(early.nanos),
             "prepareCpuMs": prepare_cpu_ms,
+            "lanes": walk_report::lanes(stream.walk.as_deref()),
+            "laneSwitches": lane_switches,
+            "bigLaneChainMs": big_lane_chain_ms,
+            "sequencerAllLanesHeldMs": all_lanes_held_ms,
         }));
         // Streamed capture closes each source inside the stream wall; no
         // serial plan preparation follows it any more. The closing work is
@@ -379,7 +405,6 @@ pub(crate) fn build_streamed(
     mut cx: StreamedCold<'_>,
     failures: &mut Vec<String>,
 ) -> Result<Vec<AppliedColdRuntime>, String> {
-    let budget = ByteBudget::new(IN_FLIGHT_BYTES);
     let stage_profiles = cx.flags.json && cx.flags.profile;
     let names: Vec<String> = requests
         .iter()
@@ -392,10 +417,15 @@ pub(crate) fn build_streamed(
             .enumerate()
             .collect::<VecDeque<_>>(),
     );
+    // What each runtime's sessions wait for, until its setup says (Opened).
+    for (_, request) in queue.lock().expect("cold planning queue poisoned").iter() {
+        cx.health
+            .ingest_admission_course(&request.identity.id, requested_course(request.admission));
+    }
     let abandoned = AtomicBool::new(false);
     // One capture pool for the whole build: every producer registers its
     // runtime as it starts, and the pool's workers serve them all.
-    let pool = CapturePool::new(
+    let pool = Arc::new(CapturePool::new(
         cx.flags
             .capture_workers
             .unwrap_or_else(CapturePool::default_workers),
@@ -406,8 +436,17 @@ pub(crate) fn build_streamed(
                 .unwrap_or(PoolBudgets::DEFAULT.look_ahead_bytes),
             ..PoolBudgets::DEFAULT
         },
+    ));
+    // Per-class budgets, unless a HEAD-compatible mode keeps one; a release
+    // wakes every sequencer holding an emission.
+    let walk = &cx.flags.cold_walk;
+    let wake = Arc::clone(&pool);
+    let budgets = LaneBudgets::new(
+        !walk.admission_override && !walk.single_lane,
+        Some(Arc::new(move || wake.notify_output())),
     );
-    let pooled = (pool.workers() > 0).then_some(&pool);
+    let walk = walk.clone();
+    let pooled = (pool.workers() > 0).then_some(&*pool);
     let pool_started = Instant::now();
     let built = pool.scoped(|| {
         std::thread::scope(|scope| {
@@ -423,20 +462,15 @@ pub(crate) fn build_streamed(
             let mut producers = Producers {
                 scope,
                 sender: Some(sender),
-                budget: &budget,
+                budgets: &budgets,
                 stage_profiles,
                 pool: pooled,
+                walk: &walk,
                 handles: &mut handles,
             };
-            let written = write(receiver, &names, &mut producers, &mut cx, failures);
+            let written = writer::write(receiver, &names, &mut producers, &mut cx, failures);
             if written.is_err() {
-                // Planners stop before their next runtime. Producers blocked
-                // on the budget must see the writer is gone; the dropped
-                // receiver fails every later send, and a closed pool fails
-                // every sequencer waiting on its workers.
-                abandoned.store(true, Ordering::SeqCst);
-                budget.abort();
-                pool.close();
+                abort_build(&abandoned, &budgets, &pool);
             }
             drop(producers);
             for handle in handles {
@@ -465,9 +499,23 @@ pub(crate) fn build_streamed(
             "runtimes": stats.runtimes,
             "peakLookAheadBytes": stats.peak_look_ahead_bytes,
             "peakHeadBytes": stats.peak_head_bytes,
+            "peakSharedLookAheadBytes": stats.peak_shared_look_ahead_bytes,
+            "peakReservedLookAheadBytes": stats.peak_reserved_look_ahead_bytes,
+            "peakHeadBytesTotal": stats.peak_head_bytes_total,
         }));
     }
     built
+}
+
+/// The writer failed: planners stop before their next runtime, and no
+/// producer stays blocked behind it — every budget class aborts (a producer
+/// may wait in a blocking acquire of either), the dropped receiver fails
+/// every later send, and a closed pool fails every sequencer waiting on its
+/// workers.
+fn abort_build(abandoned: &AtomicBool, budgets: &LaneBudgets, pool: &CapturePool) {
+    abandoned.store(true, Ordering::SeqCst);
+    budgets.abort();
+    pool.close();
 }
 
 /// One planning thread: skim queued runtimes, earliest in registry order
@@ -519,9 +567,10 @@ fn plan_queued(
 struct Producers<'h, 'scope, 'env> {
     scope: &'scope Scope<'scope, 'env>,
     sender: Option<Sender<StreamMessage>>,
-    budget: &'scope ByteBudget,
+    budgets: &'scope LaneBudgets,
     stage_profiles: bool,
     pool: Option<&'scope CapturePool>,
+    walk: &'scope ColdWalkOptions,
     handles: &'h mut Vec<ScopedJoinHandle<'scope, ()>>,
 }
 
@@ -535,9 +584,10 @@ impl Producers<'_, '_, '_> {
         let Some(sender) = sender else {
             return;
         };
-        let (budget, stage_profiles, pool) = (self.budget, self.stage_profiles, self.pool);
+        let (budgets, stage_profiles, pool, walk) =
+            (self.budgets, self.stage_profiles, self.pool, self.walk);
         self.handles.push(self.scope.spawn(move || {
-            if let Err(error) = produce(plan, &sender, budget, stage_profiles, pool) {
+            if let Err(error) = produce(plan, &sender, budgets, stage_profiles, pool, walk) {
                 let _ = sender.send(StreamMessage::Failed(error));
             }
         }));
@@ -583,317 +633,27 @@ fn publish_metadata(
     Ok(())
 }
 
-fn write(
-    receiver: Receiver<StreamMessage>,
-    names: &[String],
-    producers: &mut Producers<'_, '_, '_>,
-    cx: &mut StreamedCold<'_>,
-    failures: &mut Vec<String>,
-) -> Result<Vec<AppliedColdRuntime>, String> {
-    let workers = names.len();
-    let mut plans: Vec<Option<Result<Box<PlannedColdRuntime>, String>>> =
-        std::iter::repeat_with(|| None).take(workers).collect();
-    let mut published = 0_usize;
-    let mut ownership = BTreeMap::new();
-    let mut open: HashMap<String, StreamedRuntime> = HashMap::new();
-    let mut outputs = Vec::with_capacity(workers);
-    let mut pending: Option<StreamMessage> = None;
-    let mut closed = 0_usize;
-    let mut idle_nanos = 0_u64;
-    let mut apply_calls = 0_u64;
-    let writer_started = Instant::now();
-    // Writer-thread CPU, whole window and per runtime's streamed applies.
-    let writer_cpu_started = thread_cpu_time();
-    let mut apply_cpu: HashMap<String, Duration> = HashMap::new();
-    while closed < workers {
-        let message = match pending.take() {
-            Some(message) => message,
-            None => {
-                let waited = Instant::now();
-                let message = receiver
-                    .recv()
-                    .map_err(|_| "fresh cold capture channel closed".to_string())?;
-                idle_nanos = idle_nanos
-                    .saturating_add(u64::try_from(waited.elapsed().as_nanos()).unwrap_or(u64::MAX));
-                message
-            }
-        };
-        match message {
-            StreamMessage::Planned { index, planned } => {
-                plans[index] = Some(planned);
-                // Publish in registry order, whatever order plans finish in:
-                // runtimes share project rows, and the canonical row must not
-                // depend on thread timing.
-                while let Some(planned) = plans.get_mut(published).and_then(Option::take) {
-                    let mut plan = *planned?;
-                    if cx.stop.load(Ordering::SeqCst) {
-                        return Err("stopped before cold metadata completed".into());
-                    }
-                    publish_metadata(&plan, &names[published], &mut ownership, cx)?;
-                    published += 1;
-                    let last = published == workers;
-                    plan.opts.progress = Some(ColdProgress::observe(
-                        &plan.runtime.id,
-                        &plan.files,
-                        &ownership,
-                        cx.board.clone(),
-                        cx.health.clone(),
-                        true,
-                    ));
-                    if last {
-                        cx.health.ingest_metadata_ready(now_ms());
-                        println!(
-                            "milestone: metadata-ready elapsed_s={:.2}",
-                            cx.started.elapsed().as_secs_f64()
-                        );
-                    }
-                    let baseline = plan.instrument.snapshot();
-                    cx.health.ingest_stream(
-                        &plan.runtime.id,
-                        counter_source(&plan.instrument, baseline),
-                    );
-                    producers.start(plan, last);
-                }
-            }
-            StreamMessage::Opened(opened) => {
-                let OpenedColdRuntime {
-                    adapter,
-                    runtime,
-                    setup,
-                } = *opened;
-                let streamed =
-                    StreamedRuntime::open(adapter, &runtime, setup, cx.store, cx.instrument)
-                        .map_err(|error| {
-                            format!("opening streamed {} runtime: {error}", adapter.kind())
-                        })?;
-                open.insert(runtime.id.clone(), streamed);
-            }
-            StreamMessage::Sources {
-                runtime_id,
-                mut sources,
-                mut bytes,
-            } => {
-                // Queued sources of the same runtime share one transaction.
-                while bytes < TRANSACTION_BYTES && sources.len() < TRANSACTION_SOURCES {
-                    match receiver.try_recv() {
-                        Ok(StreamMessage::Sources {
-                            runtime_id: next,
-                            sources: more,
-                            bytes: more_bytes,
-                        }) if next == runtime_id => {
-                            sources.extend(more);
-                            bytes = bytes.saturating_add(more_bytes);
-                        }
-                        Ok(other) => {
-                            pending = Some(other);
-                            break;
-                        }
-                        Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-                    }
-                }
-                let entry = open.get_mut(&runtime_id).ok_or_else(|| {
-                    format!("streamed sources arrived for unopened runtime {runtime_id}")
-                })?;
-                let cpu_before = thread_cpu_time();
-                entry
-                    .apply(cx.store, sources, cx.instrument)
-                    .map_err(|error| format!("applying streamed {runtime_id} sources: {error}"))?;
-                if let (Some(before), Some(after)) = (cpu_before, thread_cpu_time()) {
-                    *apply_cpu.entry(runtime_id).or_default() += after.saturating_sub(before);
-                }
-                apply_calls += 1;
-                producers.budget.release(bytes);
-            }
-            StreamMessage::Closed(runtime) => {
-                closed += 1;
-                let runtime = *runtime;
-                let streamed = open.remove(&runtime.runtime.id).ok_or_else(|| {
-                    format!("streamed runtime {} closed unopened", runtime.runtime.id)
-                })?;
-                let applied_cpu = apply_cpu.remove(&runtime.runtime.id).unwrap_or_default();
-                if let Some(output) =
-                    admit(runtime, streamed, applied_cpu, &ownership, cx, failures)?
-                {
-                    outputs.push(output);
-                }
-            }
-            StreamMessage::Failed(error) => return Err(error),
-        }
-    }
-    if cx.flags.json && cx.flags.profile {
+/// After publication: the RAM generation's shared-cache lock evidence —
+/// the writer's session-lock waits and the readers' prologue waits, split
+/// into the streaming and finalization windows, with reader lock retries
+/// and refusals and writer lock-order violations (all expected 0).
+/// Measurement only.
+pub(crate) fn emit_shared_cache_locks(projection: &rosetta_server::ProjectionReader) {
+    if let Some(locks) = projection.shared_cache_locks() {
         bench::emit(&json!({
             "event": "stage-profile",
             "command": "serve",
-            "stage": "streamed-writer",
+            "stage": "shared-cache-locks",
             "agent": null,
-            "wallMs": writer_started.elapsed().as_secs_f64() * 1_000.0,
-            "idleMs": millis(idle_nanos),
-            "cpuMs": cpu_millis(writer_cpu_started),
-            "applyCalls": apply_calls,
+            "locks": locks.report(),
         }));
     }
-    Ok(outputs)
-}
-
-/// Admit one closed runtime: fold, canonical ordinals, the Pending flip, then
-/// the same publication steps the retained path runs after an apply.
-/// `applied_cpu` is the writer CPU its streamed sources took.
-fn admit(
-    runtime: ClosedColdRuntime,
-    mut streamed: StreamedRuntime,
-    applied_cpu: Duration,
-    ownership: &BTreeMap<String, Option<String>>,
-    cx: &mut StreamedCold<'_>,
-    failures: &mut Vec<String>,
-) -> Result<Option<AppliedColdRuntime>, String> {
-    let name = identity_name(&runtime.identity);
-    let mut runtime_failures = Vec::new();
-    let tolerated = record_fresh_failures(
-        &name,
-        runtime.discovery_truncated,
-        &runtime.meta,
-        &runtime.stream,
-        &mut runtime_failures,
-    );
-    if !runtime_failures.is_empty() {
-        // Streamed rows stay behind the Pending barrier; the build fails
-        // before anything is published.
-        failures.extend(runtime_failures);
-        return Ok(None);
-    }
-    if let Some(line) = tolerated {
-        println!("{line}");
-    }
-    let runtime_id = runtime.runtime.id.clone();
-    let kind = runtime.adapter.kind();
-    cx.health
-        .ingest_runtime_stage(&runtime_id, BackfillState::Applying);
-    cx.instrument.merge_snapshot(&runtime.profile);
-    let stage_profiles = cx.flags.json && cx.flags.profile;
-    if cx.flags.json {
-        bench::emit(&bench::meta_event(kind, &runtime.meta));
-        bench::emit(&json!({
-            "event": "stream-prepared",
-            "agent": kind,
-            "runtime": runtime_id,
-            "records": runtime.stream.records,
-            "parsed": runtime.stream.parsed,
-            "unknown": runtime.stream.unknown,
-            "hardErrors": runtime.stream.hard_errors,
-            "oversized": runtime.stream.oversized,
-            "quarantined": runtime.stream.quarantined,
-            "filesMissing": runtime.stream.files_missing,
-            "retriesExhausted": runtime.stream.retries_exhausted,
-            "conflicts": runtime.stream.conflicts,
-            "filesIncomplete": runtime.stream.files_incomplete,
-            "captureWallMs": runtime.wall_ms,
-        }));
-    } else {
-        println!(
-            "{name}: streamed {} records and {} sessions in {:.2}s",
-            runtime.stream.records,
-            runtime.meta.sessions,
-            runtime.wall_ms / 1_000.0,
-        );
-    }
-    if stage_profiles {
-        let (resolved_sessions, resolved_tool_rows) = streamed.resolved_before_admission();
-        bench::emit(&json!({
-            "event": "stage-profile",
-            "command": "serve",
-            "stage": "streamed-apply",
-            "agent": kind,
-            "runtime": runtime_id,
-            "wallMs": millis(streamed.apply_nanos()),
-            "sources": streamed.sources_applied(),
-            "resolvedSessions": resolved_sessions,
-            "resolvedToolRows": resolved_tool_rows,
-            "cpuMs": applied_cpu.as_secs_f64() * 1_000.0,
-            "lagMs": runtime.captured_at.elapsed().as_secs_f64() * 1_000.0,
-        }));
-    }
-
-    let admission_started = Instant::now();
-    let admission_cpu_started = thread_cpu_time();
-    let admission_before = cx.instrument.snapshot();
-    // Admission writes no cursor, so these stay the committed checkpoints
-    // through finalization and publication.
-    let poll_evidence = streamed.take_poll_evidence();
-    let report = streamed
-        .admit(cx.store, cx.instrument, &runtime.prepared)
-        .map_err(|error| format!("admitting {name}: {error}"))?;
-    if stage_profiles {
-        bench::emit_command_stage_profile(
-            "ingest",
-            "apply-prepared",
-            Some(kind),
-            admission_started,
-            &admission_before,
-            cx.instrument,
-        );
-    }
-    if cx.flags.json {
-        bench::emit(&json!({
-            "event": "canonical-applied",
-            "agent": kind,
-            "runtime": runtime_id,
-            "files": report.files,
-            "messagesInserted": report.stats.messages_inserted,
-            "messagesUpdated": report.stats.messages_updated,
-            "toolResultsMerged": report.stats.tool_results_merged,
-        }));
-    }
-
-    let admission_cpu_ms = cpu_millis(admission_cpu_started);
-    let absorb_started = Instant::now();
-    let absorb_cpu_started = thread_cpu_time();
-    absorb_effects(cx.store, cx.hub)?;
-    if stage_profiles {
-        bench::emit(&json!({
-            "event": "stage-profile",
-            "command": "serve",
-            "stage": "admission-absorb",
-            "agent": kind,
-            "runtime": runtime_id,
-            "wallMs": absorb_started.elapsed().as_secs_f64() * 1_000.0,
-            "cpuMs": cpu_millis(absorb_cpu_started),
-            "admissionCpuMs": admission_cpu_ms,
-        }));
-    }
-    let session_ids = cx
-        .store
-        .runtime_session_ids(&runtime_id)
-        .map_err(|error| format!("reading {name} sessions after cold admission: {error}"))?;
-    cx.hub
-        .invalidate_sessions(session_ids.iter().map(String::as_str), now_ms());
-    for session_id in &session_ids {
-        cx.board.session_done(
-            ownership.get(session_id).and_then(Option::as_deref),
-            session_id,
-        );
-    }
-    cx.health.ingest_done(
-        &runtime_id,
-        runtime.stream.payload_bytes,
-        runtime.stream.records,
-    );
-    println!(
-        "{name}: canonical RAM public — {} records, {} sessions",
-        runtime.stream.records,
-        session_ids.len()
-    );
-    Ok(Some(AppliedColdRuntime {
-        adapter: runtime.adapter,
-        runtime: runtime.runtime,
-        identity: runtime.identity,
-        root: runtime.root,
-        roster: runtime.roster,
-        admission_sources: runtime.meta.admission_sources,
-        ledger: runtime.ledger,
-        poll_evidence,
-    }))
 }
 
 #[cfg(test)]
 #[path = "cold_stream_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cold_stream/writer_tests.rs"]
+mod writer_tests;

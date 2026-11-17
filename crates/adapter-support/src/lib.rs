@@ -10,12 +10,13 @@ pub mod adapter;
 mod glob;
 pub mod html_artifacts;
 pub mod media;
+pub mod presented_media;
 pub mod time;
 pub mod tool;
 
 pub use adapter::{
-    AgentAdapter, FileStat, LineOutcome, LineStatus, NormalizeCtx, ProjectHint, SkimResult,
-    SnapshotPlan, SnapshotQuery, StreamDriver,
+    AgentAdapter, ColdAdmission, FileStat, LineOutcome, LineStatus, NormalizeCtx, ProjectHint,
+    SkimResult, SnapshotPlan, SnapshotQuery, StreamDriver,
 };
 pub use glob::Glob;
 pub use time::rfc3339_ms;
@@ -159,3 +160,5 @@ impl GroundTruthDoc {
 pub fn glob_match(pattern: &str, path: &str) -> bool {
     Glob::new(pattern).matches(path)
 }
+
+pub mod transcripts;

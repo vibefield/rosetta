@@ -141,6 +141,51 @@ fn folder_exclusions_are_optional_absolute_and_independent_of_existing_roots() {
     }
 }
 
+/// `ROSETTA_PRESENTED_MEDIA=off` is the only value that stops capture from
+/// observing sent files. The process environment is read, never written:
+/// `crates/rosettad/tests/presented_media.rs` sets the variable on a spawned
+/// daemon and checks what it captured.
+#[test]
+fn only_off_turns_presented_media_observation_off() {
+    use std::ffi::OsStr;
+
+    for off in ["off", "OFF", "Off", "oFf"] {
+        assert!(!observes_presented_media(Some(OsStr::new(off))), "{off:?}");
+    }
+    assert!(observes_presented_media(None), "absent leaves it on");
+    for on in [
+        "", "on", "0", "1", "false", "no", "none", "disabled", " off", "off ", "off\n", "offf",
+        "of", "o",
+    ] {
+        assert!(observes_presented_media(Some(OsStr::new(on))), "{on:?}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        assert!(observes_presented_media(Some(OsStr::from_bytes(
+            b"off\xff"
+        ))));
+    }
+
+    // The options every command builds carry the switch, with or without an
+    // enrollment file, and the default is on.
+    assert!(IngestOptions::default().observe_presented_media);
+    let expected = observes_presented_media(std::env::var_os(PRESENTED_MEDIA_ENV).as_deref());
+    assert_eq!(
+        Enrollment::ingest_options(None).observe_presented_media,
+        expected
+    );
+    let enrollment = parse(
+        r#"{"format":1,"exclude_cwds":["/client"]}"#,
+        Path::new("/h"),
+    )
+    .unwrap();
+    let opts = Enrollment::ingest_options(Some(&enrollment));
+    assert_eq!(opts.observe_presented_media, expected);
+    assert!(opts.exclude_cwds.excludes("/client"));
+    assert_eq!(PRESENTED_MEDIA_ENV, "ROSETTA_PRESENTED_MEDIA");
+}
+
 /// Witness (e): every refusal at start names the entry.
 #[test]
 fn refusals_name_the_entry() {

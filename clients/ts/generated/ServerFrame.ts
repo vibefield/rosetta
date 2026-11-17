@@ -16,4 +16,12 @@ import type { TimelineMeta } from "./TimelineMeta";
  * `timeline_id`), and `Resync` announces a barrier — the server re-stamps
  * and sends a fresh snapshot immediately after.
  */
-export type ServerFrame = { "frame": "hello", protocol_version: number, stamp: Stamp | null, } | { "frame": "timeline_snapshot", stamp: Stamp, entries: Array<TimelineEntry>, timeline_meta: TimelineMeta, cursor: string | null, watermark: string, } | { "frame": "caught_up", stamp: Stamp, } | { "frame": "collaboration_snapshot", entries: Array<TimelineEntry>, response_runtimes: Array<ResponseRuntime>, } | { "frame": "response_runtime", observation: ResponseRuntime, } | { "frame": "timeline_meta_snapshot", stamp: Stamp | null, timeline_meta: TimelineMeta, } | { "frame": "meta_snapshot", runtimes: Array<RuntimeRow>, projects: Array<ProjectRow>, sessions: Array<SessionRow>, } | { "frame": "mutation", stamp: Stamp | null, mutation: Mutation, } | { "frame": "resync" } | { "frame": "error", error: ApiError, };
+export type ServerFrame = { "frame": "hello", protocol_version: number, stamp: Stamp | null, } | { "frame": "timeline_snapshot", stamp: Stamp, entries: Array<TimelineEntry>, timeline_meta: TimelineMeta, cursor: string | null, watermark: string, } | { "frame": "caught_up", stamp: Stamp, } | { "frame": "collaboration_snapshot", entries: Array<TimelineEntry>, response_runtimes: Array<ResponseRuntime>, } | { "frame": "response_runtime", observation: ResponseRuntime, } | { "frame": "timeline_meta_snapshot", stamp: Stamp | null, timeline_meta: TimelineMeta, } | { "frame": "meta_snapshot", runtimes: Array<RuntimeRow>, projects: Array<ProjectRow>, sessions: Array<SessionRow>, 
+/**
+ * The artifact library revision the mirror last read (RO-35), so a
+ * subscriber that connects late or is resynced (an overflowed queue
+ * drops its events, `artifacts_changed` among them) learns where the
+ * library stands. Null before the mirror's first read; daemons
+ * before protocol 30 omit it.
+ */
+artifacts_revision?: number | null, } | { "frame": "mutation", stamp: Stamp | null, mutation: Mutation, } | { "frame": "resync" } | { "frame": "error", error: ApiError, };

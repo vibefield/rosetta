@@ -12,4 +12,17 @@ artifact_id: string, session_id: string, timeline_id: string, title: string, fil
 /**
  * Raw-record coordinate for the separately ledgered file observation.
  */
-source_offset: number, };
+source_offset: number, 
+/**
+ * The publish request's own description, as the agent wrote it, bounded
+ * by [`HTML_DESCRIPTION_MAX_BYTES`] (RO-33, schema 30). Null when the
+ * request carried none, or when the source records no request at all.
+ */
+description: string | null, 
+/**
+ * How many members of the publish request's `files` map the library did
+ * not keep beside this page (RO-34a, schema 30). Zero when the request
+ * named none; null when the source records no request (a delivery link,
+ * another agent's presentation), which means unknown.
+ */
+dropped_files: number | null, };

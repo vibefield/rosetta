@@ -9,7 +9,13 @@ use crate::StoreError;
 
 /// Bump on any DDL or incompatible projection-semantic change. Existing
 /// nonzero versions fail closed.
-pub const SCHEMA_VERSION: i64 = 29;
+///
+/// 30 (2026-11-05): `html_artifact` keeps the publish's `description` and its
+/// `dropped_files` count (RO-33, RO-34a), and `projection_state` carries the
+/// library's `artifacts_revision` (RO-35). Like every bump, a schema 29
+/// projection is not migrated: it fails closed, and only an explicit
+/// `rosettad rebuild` (run by an operator or a supervisor) replaces it.
+pub const SCHEMA_VERSION: i64 = 30;
 
 pub const DDL: &str = r#"
 -- ————— phase 1 · discovery ——————————————————————————————————————
@@ -37,7 +43,13 @@ CREATE TABLE IF NOT EXISTS projection_state (
   canonical_ready   INTEGER NOT NULL DEFAULT 0 CHECK (canonical_ready IN (0, 1)),
   -- The price catalog `usage_bucket` costs were computed with. A writer that
   -- finds another version re-prices the rollup from stored usage facts.
-  pricing_version   TEXT
+  pricing_version   TEXT,
+  -- The artifact library's revision: one step per writer transaction, live
+  -- or cold, that writes, replaces or removes an `html_artifact` row or its
+  -- capture, or flips a publishing session across Pending. The library's
+  -- list cursor binds it, so a walk outlives unrelated ingest, and
+  -- `/ws/meta` announces each step.
+  artifacts_revision INTEGER NOT NULL DEFAULT 0 CHECK (artifacts_revision >= 0)
 ) WITHOUT ROWID;
 INSERT OR IGNORE INTO projection_state
   (singleton, projection_epoch, search_revision, canonical_ready)
@@ -137,7 +149,11 @@ CREATE TABLE IF NOT EXISTS html_artifact (
   captured_at INTEGER,
   recovered_from TEXT,
   asset TEXT CHECK (asset IS NULL OR json_valid(asset)),
-  src_cursor INTEGER REFERENCES ingest_cursor(id)
+  src_cursor INTEGER REFERENCES ingest_cursor(id),
+  -- The publish request's own words and the files-map members the library
+  -- did not keep beside the page. NULL means the source recorded no request.
+  description TEXT,
+  dropped_files INTEGER CHECK (dropped_files IS NULL OR dropped_files >= 0)
 );
 CREATE INDEX IF NOT EXISTS html_artifact_src ON html_artifact(src_cursor, source_offset, path);
 CREATE INDEX IF NOT EXISTS html_artifact_latest ON html_artifact(artifact_id, sort_at DESC, id DESC);

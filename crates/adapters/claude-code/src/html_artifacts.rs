@@ -3,23 +3,20 @@
 
 use rosetta_adapter_support::{NormalizeCtx, html_artifacts::publication};
 use rosetta_core::{
-    IngestOp, ProjectionAsset,
-    html_artifacts::{
-        HTML_MAX_BYTES, HTML_MEDIA_TYPE, HtmlArtifactAvailability, HtmlArtifactContent,
-        HtmlArtifactPublication, identity, is_html_path,
-    },
+    IngestOp,
+    html_artifacts::{HTML_DESCRIPTION_MAX_BYTES, HtmlArtifactPublication, identity, is_html_path},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// A publication request awaiting its tool result. A checkpoint written by
+/// normalizer 38 or earlier may also hold `inline_html`/`inline_availability`
+/// for a files-map string; that reading was wrong (a string names a source
+/// path, see `member_source`) and those fields are ignored on restore.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PendingPublication {
     publications: Vec<HtmlArtifactPublication>,
     native: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    inline_html: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    inline_availability: Option<HtmlArtifactAvailability>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,89 +68,110 @@ pub(crate) fn request(
         .get("title")
         .or_else(|| input.get("label"))
         .and_then(Value::as_str);
-    let mut paths = Vec::new();
-    let mut inline_html = None;
-    let mut inline_availability = None;
-    let mut publications = Vec::new();
+    let mut paths: Vec<String> = Vec::new();
     if let Some(path) = input
         .get("file_path")
         .or_else(|| input.get("path"))
         .and_then(Value::as_str)
     {
-        paths.push(path);
+        paths.push(path.to_owned());
     }
     if !native && let Some(files) = input.get("files").and_then(Value::as_array) {
-        paths.extend(files.iter().filter_map(Value::as_str).take(32));
+        paths.extend(
+            files
+                .iter()
+                .filter_map(Value::as_str)
+                .take(32)
+                .map(str::to_owned),
+        );
     }
-    // In the files-map form only a typed `from` is a source path. String
-    // values are content, never filenames to probe on the host filesystem.
-    if native
-        && paths.is_empty()
-        && let Some(files) = input.get("files").and_then(Value::as_object)
-    {
-        let sources: Vec<_> = files
-            .iter()
-            .filter(|(name, value)| {
-                is_html_path(name)
-                    || value
-                        .get("from")
-                        .and_then(Value::as_str)
-                        .is_some_and(is_html_path)
-            })
-            .take(2)
-            .collect();
-        // One self-contained page has one entrypoint. A multi-page bundle
-        // cannot be reconstructed by guessing which HTML dependency is root.
-        if sources.len() == 1 {
-            let (member, value) = sources[0];
-            if let Some(path) = value.get("from").and_then(Value::as_str) {
-                paths.push(path);
-            } else if let Some(html) = value.as_str() {
-                let filename = member.rsplit('/').next()?.to_owned();
-                publications.push(HtmlArtifactPublication {
-                    id: identity(&[&ctx.session_id, timeline_id, "inline", member]),
-                    artifact_id: identity(&[&ctx.session_id, "inline", member]),
-                    session_id: ctx.session_id.clone(),
-                    timeline_id: timeline_id.to_owned(),
-                    title: title
-                        .filter(|title| !title.trim().is_empty())
-                        .unwrap_or(&filename)
-                        .to_owned(),
-                    filename,
-                    path: None,
-                    url: None,
-                    native_id: None,
-                    version: None,
-                    published_at: at,
-                    source_offset: ctx.src_offset.and_then(|v| v.try_into().ok()).unwrap_or(0),
-                });
-                let availability = if html.len() > HTML_MAX_BYTES {
-                    HtmlArtifactAvailability::TooLarge
-                } else if html.contains('\0') {
-                    HtmlArtifactAvailability::Unsupported
-                } else {
-                    inline_html = Some(html.to_owned());
-                    HtmlArtifactAvailability::Captured
-                };
-                inline_availability = Some(availability);
+    // A native publish's own words (RO-33) and what the library did not keep
+    // of it (RO-34a): the library keeps a publish's page, so every other
+    // member its files map names is counted as dropped.
+    let description = native.then(|| request_description(input)).flatten();
+    let mut dropped_files = native.then_some(0_u32);
+    if native && let Some(files) = input.get("files").and_then(Value::as_object) {
+        let root = input
+            .get("root")
+            .and_then(Value::as_str)
+            .filter(|root| !root.trim().is_empty());
+        // A `null` value removes a member on an update; it names nothing.
+        let members: Vec<(&String, &Value)> = files.iter().filter(|(_, v)| !v.is_null()).collect();
+        let named = u32::try_from(members.len()).unwrap_or(u32::MAX);
+        if paths.is_empty() {
+            // One self-contained page has one entrypoint. A multi-page bundle
+            // cannot be reconstructed by guessing which HTML member is root.
+            let pages: Vec<_> = members
+                .iter()
+                .filter(|(member, value)| {
+                    is_html_path(member) || member_source(value).is_some_and(is_html_path)
+                })
+                .take(2)
+                .collect();
+            if let [(_, page)] = pages.as_slice()
+                && let Some(source) = member_source(page)
+            {
+                paths.push(rooted(root, source));
+                dropped_files = Some(named.saturating_sub(1));
             }
+        } else {
+            // `file_path` is the page; the map holds its supporting files.
+            dropped_files = Some(named);
         }
     }
-    for path in paths {
-        if let Some(row) = publication(ctx, timeline_id, path, title, Some(cwd), at)
-            && !publications
-                .iter()
-                .any(|other: &HtmlArtifactPublication| other.id == row.id)
+    let mut publications: Vec<HtmlArtifactPublication> = Vec::new();
+    for path in &paths {
+        if let Some(mut row) = publication(ctx, timeline_id, path, title, Some(cwd), at)
+            && !publications.iter().any(|other| other.id == row.id)
         {
+            row.description.clone_from(&description);
+            row.dropped_files = dropped_files;
             publications.push(row);
         }
     }
     (!publications.is_empty()).then_some(PendingPublication {
         publications,
         native,
-        inline_html,
-        inline_availability,
     })
+}
+
+/// A files-map member's local source. The Artifact tool documents the map as
+/// `{"published/path": "source/path" | {from, contentType} | {artifact, path} |
+/// null}`: a string value is a source path on disk, exactly as a typed `from`
+/// is, never inline content (corrected 2026-11-05; normalizer 38 read a string
+/// as the page's HTML). A `{artifact, path}` copy names another artifact's
+/// file, never a local one.
+fn member_source(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.get("from").and_then(Value::as_str))
+}
+
+/// Resolve a member's source against the request's `root`, the base its
+/// relative sources resolve against; whatever stays relative then resolves
+/// against the working directory, as `file_path` does.
+fn rooted(root: Option<&str>, source: &str) -> String {
+    let portable = source.replace('\\', "/");
+    let absolute = portable.starts_with('/') || portable.as_bytes().get(1) == Some(&b':');
+    match root {
+        Some(root) if !absolute => format!("{}/{source}", root.trim_end_matches(['/', '\\'])),
+        _ => source.to_owned(),
+    }
+}
+
+/// The request's description, trimmed and clipped at a character boundary to
+/// [`HTML_DESCRIPTION_MAX_BYTES`]. A NUL makes it unusable, so it is dropped.
+fn request_description(input: &Value) -> Option<String> {
+    let text = input.get("description")?.as_str()?.trim();
+    if text.is_empty() || text.contains('\0') {
+        return None;
+    }
+    let mut end = text.len().min(HTML_DESCRIPTION_MAX_BYTES);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let clipped = text[..end].trim_end();
+    (!clipped.is_empty()).then(|| clipped.to_owned())
 }
 
 pub(crate) fn confirmed(
@@ -178,7 +196,7 @@ pub(crate) fn confirmed(
     if pending.native && native_id.is_none() && url.is_none() {
         return Vec::new();
     }
-    let mut ops: Vec<_> = pending
+    pending
         .publications
         .into_iter()
         .filter_map(|mut row| {
@@ -207,26 +225,5 @@ pub(crate) fn confirmed(
             row.validate().ok()?;
             Some(IngestOp::HtmlArtifact(row))
         })
-        .collect();
-    if let Some(availability) = pending.inline_availability
-        && let Some(IngestOp::HtmlArtifact(row)) = ops.first()
-    {
-        let asset = pending
-            .inline_html
-            .and_then(|html| ProjectionAsset::new(HTML_MEDIA_TYPE, html.into_bytes()));
-        let content = HtmlArtifactContent {
-            session_id: row.session_id.clone(),
-            source_offset: row.source_offset,
-            path: None,
-            availability,
-            captured_at: None,
-            recovered_from: None,
-            asset: asset.as_ref().map(ProjectionAsset::reference),
-        };
-        if let Some(asset) = asset {
-            ops.push(IngestOp::ProjectionAsset { asset });
-        }
-        ops.push(IngestOp::HtmlArtifactContent(content));
-    }
-    ops
+        .collect()
 }

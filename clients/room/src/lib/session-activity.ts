@@ -1,6 +1,9 @@
 import type { SessionRow } from "@vibefield/rosetta-protocol";
 
-/** Recorded conversation time; metadata/file timestamps are never a fallback. */
+/** Recorded conversation time; metadata/file timestamps are never a fallback.
+ * The import's one exception orders beside it, never through it: rows and
+ * projects no recorded activity can rank yet order by `updated_at` until
+ * publication (`compareNotImported`, `compareProjectOrder`). */
 export function sessionLastActive(session: SessionRow): number | null {
   const at = session.activity?.last_at;
   return typeof at === "number" && Number.isFinite(at) ? at : null;

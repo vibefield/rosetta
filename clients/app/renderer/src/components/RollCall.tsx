@@ -14,8 +14,13 @@ function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
 }
 
-/** Consent is the app's to ask: it speaks to its own daemon directly. */
-export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient, "discoveries" | "enableRuntimes"> }) {
+/** Consent is the app's to ask: it speaks to its own daemon directly.
+ * `onGranted` runs once the daemon took the grant, so the room can ask its
+ * status at once rather than at its next poll. */
+export function RollCallPanel({ client, onGranted }: {
+  readonly client: Pick<RosettaClient, "discoveries" | "enableRuntimes">;
+  readonly onGranted?: () => void;
+}) {
   const [rows, setRows] = useState<DiscoveryRow[] | null>(null);
   const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
@@ -57,25 +62,37 @@ export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient,
   const begin = () => {
     setSubmitting(true);
     setError(null);
-    client.enableRuntimes([...checked]).catch((err: unknown) => {
+    client.enableRuntimes([...checked]).then(() => onGranted?.(), (err: unknown) => {
       setSubmitting(false);
       setError(err instanceof Error ? err.message : String(err));
     });
-    // On success this panel simply waits: the daemon's phase flips to
-    // backfilling and the room replaces the roll call on the next poll.
+    // On success this panel waits for the room's status answer, which it
+    // asks for at once (`onGranted`): the daemon's phase has left
+    // awaiting_consent and the room replaces the roll call.
   };
 
+  // `data-roll-call`, `data-agent-kind` and `data-action` are inert: what a
+  // scripted reader walks instead of the copy (the DOM contract in
+  // test/dom-contract.test.mjs).
   return (
-    <div className="ah-empty" style={{ flex: 1 }}>
+    <div className="ah-empty" style={{ flex: 1 }}
+      data-roll-call={rows === null ? "looking" : submitting ? "starting" : "ready"}>
       <strong>Choose what rosetta reads</strong>
       <p>
-        These agent stores were found on this machine. Nothing is read until
-        you say so — and everything stays on this machine.
+        {rows === null ? "" : "These agent stores were found on this machine. "}
+        Nothing is read until you say so — and everything stays on this machine.
       </p>
       {rows === null ? (
-        <div className="ah-meter">
-          <i style={{ width: "8%" }} />
-        </div>
+        // The census has no amount until it answers: a sweep, never a
+        // fixed sliver that reads as progress.
+        <>
+          <div className="ah-meter" data-indeterminate="" aria-hidden="true">
+            <i />
+          </div>
+          <p className="ah-rollcall__absent" role="status">
+            Looking for agent stores on this machine…
+          </p>
+        </>
       ) : (
         <>
           <div className="ah-rollcall" role="group" aria-label="Agents to enroll">
@@ -85,6 +102,7 @@ export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient,
                   type="checkbox"
                   checked={checked.has(row.kind)}
                   disabled={submitting}
+                  data-agent-kind={row.kind}
                   onChange={(event) => {
                     const next = new Set(checked);
                     if (event.target.checked) next.add(row.kind);
@@ -112,9 +130,10 @@ export function RollCallPanel({ client }: { readonly client: Pick<RosettaClient,
             type="button"
             className="ah-rollcall__begin"
             disabled={checked.size === 0 || submitting}
+            data-action="begin-ingest"
             onClick={begin}
           >
-            {submitting ? "Starting…" : "Begin ingest"}
+            {submitting ? "Starting your import…" : "Begin ingest"}
           </button>
           {error !== null && <p className="ah-rollcall__error">{error}</p>}
         </>

@@ -1,0 +1,125 @@
+{
+  "base_style": "html { background: #fff; color: #252521; font-family: var(--font-sans); } body { margin: 24px; } * { box-sizing: border-box; } button,input,select,textarea { font: inherit; } a { color: #315e9c; }",
+  "hosts": {
+    "all": [
+      "cdn.jsdelivr.net",
+      "cdnjs.cloudflare.com",
+      "unpkg.com",
+      "fonts.googleapis.com",
+      "fonts.gstatic.com"
+    ],
+    "font": [
+      "fonts.gstatic.com"
+    ],
+    "script": [
+      "cdn.jsdelivr.net",
+      "cdnjs.cloudflare.com",
+      "unpkg.com"
+    ],
+    "style": [
+      "fonts.googleapis.com",
+      "cdn.jsdelivr.net"
+    ]
+  },
+  "policy": [
+    "default-src 'none'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    "img-src 'self' data: blob:",
+    "media-src 'self' data: blob:",
+    "connect-src 'self'",
+    "frame-src 'none'",
+    "object-src 'none'",
+    "worker-src 'none'",
+    "base-uri 'self'",
+    "form-action 'none'"
+  ],
+  "shell_version": "1",
+  "variables": [
+    [
+      "--color-background-primary",
+      "#fff"
+    ],
+    [
+      "--color-background-secondary",
+      "#f5f5f3"
+    ],
+    [
+      "--color-background-tertiary",
+      "#eeede9"
+    ],
+    [
+      "--color-text-primary",
+      "#252521"
+    ],
+    [
+      "--color-text-secondary",
+      "#62625c"
+    ],
+    [
+      "--color-text-tertiary",
+      "#85857e"
+    ],
+    [
+      "--color-border-primary",
+      "#d5d5ce"
+    ],
+    [
+      "--color-border-secondary",
+      "#e5e5df"
+    ],
+    [
+      "--color-border-tertiary",
+      "#efefea"
+    ],
+    [
+      "--color-background-info",
+      "#eaf1ff"
+    ],
+    [
+      "--color-text-info",
+      "#2e5b99"
+    ],
+    [
+      "--color-background-success",
+      "#edf6e8"
+    ],
+    [
+      "--color-text-success",
+      "#3c6530"
+    ],
+    [
+      "--color-background-warning",
+      "#fff3d6"
+    ],
+    [
+      "--color-text-warning",
+      "#855c12"
+    ],
+    [
+      "--color-background-danger",
+      "#fdecea"
+    ],
+    [
+      "--color-text-danger",
+      "#9a3830"
+    ],
+    [
+      "--border-radius-md",
+      "8px"
+    ],
+    [
+      "--border-radius-lg",
+      "12px"
+    ],
+    [
+      "--font-sans",
+      "system-ui,sans-serif"
+    ],
+    [
+      "--font-mono",
+      "ui-monospace,monospace"
+    ]
+  ]
+}

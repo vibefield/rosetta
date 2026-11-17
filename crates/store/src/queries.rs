@@ -3,21 +3,18 @@
 //! docs/canonical-model.html; higher scopes are query-time sums through
 //! `session` (session-grain-only cache).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 use rosetta_core::rows::{Ms, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState};
-use rosetta_core::timeline::{
-    ResourceRef, SearchMember, WORKFLOW_ATTEMPT_LIMIT, WORKFLOW_JOURNAL_LIMIT,
-    WORKFLOW_RUNTIME_PROFILE_LIMIT,
-};
-use rosetta_core::{
-    TimelineBody, TimelineEntry, ToolAction, WorkflowAttempt, WorkflowJournalObservation,
-    WorkflowRun,
-};
+use rosetta_core::timeline::{ResourceRef, SearchMember};
+use rosetta_core::{TimelineBody, TimelineEntry};
 
 use crate::{StoreError, message_codec};
+
+mod workflows;
+use workflows::hydrate_workflows;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -314,7 +311,9 @@ pub fn file_read_target(
         return Ok(None);
     };
     let mut entries = vec![entry];
-    hydrate_workflows(conn, session_id, &mut entries)?;
+    // Only resources are read from the hydrated run; child profiles never
+    // reach a file target, so the published join answers both readers.
+    hydrate_workflows(conn, session_id, &mut entries, false)?;
     let Some(entry) = entries.pop() else {
         return Ok(None);
     };
@@ -666,12 +665,23 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
 }
 
 pub fn session(conn: &Connection, session_id: &str) -> Result<Option<SessionRow>, StoreError> {
+    session_visible(conn, session_id, false)
+}
+
+/// [`session`], with `hide_pending` applying the cold admission barrier to
+/// its activity: a Pending session has none, and the family rollup stops at
+/// Pending members, whose rows are not public yet.
+pub fn session_visible(
+    conn: &Connection,
+    session_id: &str,
+    hide_pending: bool,
+) -> Result<Option<SessionRow>, StoreError> {
     let mut row = conn
         .prepare_cached("SELECT * FROM session WHERE id = ?1")?
         .query_row(params![session_id], session_from_row)
         .optional()?;
     if let Some(row) = &mut row {
-        row.activity = crate::activity::session_activity(conn, &row.id)?;
+        row.activity = crate::activity::session_activity(conn, &row.id, hide_pending)?;
     }
     Ok(row)
 }
@@ -722,14 +732,46 @@ pub fn runtime(conn: &Connection, runtime_id: &str) -> Result<Option<RuntimeRow>
         .optional()?)
 }
 
+/// One session's readiness, read from its own column alone. Every payload
+/// route's admission check asks only this; [`session`] would also roll up the
+/// family's activity, which the check never looks at.
+pub fn session_stream_state(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<StreamState>, StoreError> {
+    Ok(conn
+        .prepare_cached("SELECT stream_state FROM session WHERE id = ?1")?
+        .query_row(params![session_id], |row| row.get::<_, String>(0))
+        .optional()?
+        .map(|state| parse_state(&state)))
+}
+
+/// Every session still behind the admission barrier.
+pub fn pending_session_ids(conn: &Connection) -> Result<BTreeSet<String>, StoreError> {
+    let mut stmt = conn.prepare_cached("SELECT id FROM session WHERE stream_state = 'pending'")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// The whole metadata surface, for warming the hot tier's mirror. These are
 /// full-table scans by design — the mirror is fully resident.
 pub fn all_sessions(conn: &Connection) -> Result<Vec<SessionRow>, StoreError> {
+    all_sessions_visible(conn, false)
+}
+
+/// [`all_sessions`] with [`session_visible`]'s barrier on every activity.
+pub fn all_sessions_visible(
+    conn: &Connection,
+    hide_pending: bool,
+) -> Result<Vec<SessionRow>, StoreError> {
     let mut stmt = conn.prepare_cached("SELECT * FROM session ORDER BY id")?;
     let rows = stmt.query_map([], session_from_row)?;
     let mut rows = rows.collect::<Result<Vec<_>, _>>()?;
-    let mut activity =
-        crate::activity::sessions_activity(conn, rows.iter().map(|row| row.id.as_str()))?;
+    let mut activity = crate::activity::sessions_activity(
+        conn,
+        rows.iter().map(|row| row.id.as_str()),
+        hide_pending,
+    )?;
     for row in &mut rows {
         row.activity = activity.remove(&row.id).flatten();
     }
@@ -742,6 +784,15 @@ pub fn all_sessions(conn: &Connection) -> Result<Vec<SessionRow>, StoreError> {
 pub fn named_sessions<'a>(
     conn: &Connection,
     session_ids: &'a BTreeSet<String>,
+) -> Result<Vec<(&'a str, Option<SessionRow>)>, StoreError> {
+    named_sessions_visible(conn, session_ids, false)
+}
+
+/// [`named_sessions`] with [`session_visible`]'s barrier on every activity.
+pub fn named_sessions_visible<'a>(
+    conn: &Connection,
+    session_ids: &'a BTreeSet<String>,
+    hide_pending: bool,
 ) -> Result<Vec<(&'a str, Option<SessionRow>)>, StoreError> {
     let mut statement = conn.prepare_cached("SELECT * FROM session WHERE id = ?1")?;
     let mut rows = Vec::with_capacity(session_ids.len());
@@ -758,6 +809,7 @@ pub fn named_sessions<'a>(
         rows.iter()
             .filter(|(_, row)| row.is_some())
             .map(|(session_id, _)| *session_id),
+        hide_pending,
     )?;
     for (session_id, row) in &mut rows {
         if let Some(row) = row {
@@ -900,6 +952,19 @@ pub fn timeline_page(
     before: Option<i64>,
     limit: i64,
 ) -> Result<Vec<TimelineEntry>, StoreError> {
+    timeline_page_visible(conn, session_id, before, limit, false)
+}
+
+/// [`timeline_page`], with `hide_pending` keeping a Pending child's runtime
+/// profile out of the page's hydrated Workflow runs. The caller still gates
+/// the session itself.
+pub fn timeline_page_visible(
+    conn: &Connection,
+    session_id: &str,
+    before: Option<i64>,
+    limit: i64,
+    hide_pending: bool,
+) -> Result<Vec<TimelineEntry>, StoreError> {
     let mut stmt = conn.prepare_cached(
         "SELECT * FROM (
            SELECT * FROM message
@@ -915,7 +980,7 @@ pub fn timeline_page(
     for row in rows {
         out.push(row?);
     }
-    hydrate_workflows(conn, session_id, &mut out)?;
+    hydrate_workflows(conn, session_id, &mut out, hide_pending)?;
     Ok(out)
 }
 
@@ -992,6 +1057,16 @@ pub fn timeline_entry(
     session_id: &str,
     timeline_id: &str,
 ) -> Result<Option<TimelineEntry>, StoreError> {
+    timeline_entry_visible(conn, session_id, timeline_id, false)
+}
+
+/// [`timeline_entry`] with [`timeline_page_visible`]'s profile barrier.
+pub fn timeline_entry_visible(
+    conn: &Connection,
+    session_id: &str,
+    timeline_id: &str,
+    hide_pending: bool,
+) -> Result<Option<TimelineEntry>, StoreError> {
     let entry = conn
         .prepare_cached("SELECT * FROM message WHERE session_id = ?1 AND timeline_id = ?2")?
         .query_row(
@@ -1004,23 +1079,24 @@ pub fn timeline_entry(
         return Ok(None);
     };
     let mut entries = vec![entry];
-    hydrate_workflows(conn, session_id, &mut entries)?;
+    hydrate_workflows(conn, session_id, &mut entries, hide_pending)?;
     Ok(entries.pop())
 }
 
 /// Resolve a report's recorded bounds without accepting caller-supplied paths
 /// or ordinal ranges. All reads must share the caller's read transaction.
+/// A Pending report or source session answers nothing in every serve mode;
+/// `hide_pending` also keeps a Pending child's profile out of the work rows.
 pub fn report_work(
     conn: &Connection,
     session_id: &str,
     timeline_id: &str,
+    hide_pending: bool,
 ) -> Result<Option<Vec<TimelineEntry>>, StoreError> {
-    if session(conn, session_id)?
-        .is_none_or(|row| row.stream_state == rosetta_core::rows::StreamState::Pending)
-    {
+    if session_stream_state(conn, session_id)?.is_none_or(|state| state == StreamState::Pending) {
         return Ok(None);
     }
-    let Some(report) = timeline_entry(conn, session_id, timeline_id)? else {
+    let Some(report) = timeline_entry_visible(conn, session_id, timeline_id, hide_pending)? else {
         return Ok(None);
     };
     let TimelineBody::Collaboration { event } = report.body else {
@@ -1037,10 +1113,7 @@ pub fn report_work(
     ) else {
         return Ok(None);
     };
-    let Some(source_session) = session(conn, &source)? else {
-        return Ok(None);
-    };
-    if source_session.stream_state == rosetta_core::rows::StreamState::Pending {
+    if session_stream_state(conn, &source)?.is_none_or(|state| state == StreamState::Pending) {
         return Ok(None);
     }
     let ordinal = |id: &str| -> Result<Option<i64>, StoreError> {
@@ -1070,261 +1143,8 @@ pub fn report_work(
     {
         return Ok(None);
     }
-    hydrate_workflows(conn, &source, &mut entries)?;
+    hydrate_workflows(conn, &source, &mut entries, hide_pending)?;
     Ok(Some(entries))
-}
-
-/// Join the generation-owned Workflow document onto each chronological
-/// invocation that proved the same native run id. Runtime profiles come from
-/// child transcripts and therefore override neither configured values nor one
-/// another; the UI can honestly say "varies" when multiple were observed.
-fn hydrate_workflows(
-    conn: &Connection,
-    session_id: &str,
-    entries: &mut [TimelineEntry],
-) -> Result<(), StoreError> {
-    let wanted = entries
-        .iter()
-        .filter_map(|entry| match &entry.body {
-            TimelineBody::ToolUse { tool } => match &tool.action {
-                ToolAction::Workflow {
-                    run_id: Some(run_id),
-                    ..
-                } => Some(run_id.clone()),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
-    if wanted.is_empty() {
-        return Ok(());
-    }
-
-    let mut runs = BTreeMap::<String, WorkflowRun>::new();
-    for run_id in &wanted {
-        let detail = conn
-            .prepare_cached(
-                "SELECT detail FROM workflow_run WHERE session_id = ?1 AND run_id = ?2",
-            )?
-            .query_row(params![session_id, run_id], |row| row.get::<_, String>(0))
-            .optional()?;
-        let Some(detail) = detail else {
-            continue;
-        };
-        let mut run = serde_json::from_str::<WorkflowRun>(&detail)?;
-        hydrate_workflow_attempts(conn, session_id, &mut run)?;
-        hydrate_workflow_journal(conn, session_id, &mut run)?;
-        runs.insert(run_id.clone(), run);
-    }
-    if runs.is_empty() {
-        return Ok(());
-    }
-
-    let mut profiles = BTreeMap::<String, (Vec<String>, Vec<String>)>::new();
-    let mut statement = conn.prepare_cached(
-        "SELECT m.session_id, m.model, m.effort
-         FROM message m
-         JOIN session child ON child.id = m.session_id
-         WHERE child.parent_session_id = ?1
-           AND (m.model IS NOT NULL OR m.effort IS NOT NULL)
-         ORDER BY m.id",
-    )?;
-    let rows = statement.query_map(params![session_id], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, Option<String>>(2)?,
-        ))
-    })?;
-    for row in rows {
-        let (child_session_id, model, effort) = row?;
-        let profile = profiles.entry(child_session_id).or_default();
-        if let Some(model) = model {
-            push_unique(&mut profile.0, model);
-        }
-        if let Some(effort) = effort {
-            push_unique(&mut profile.1, effort);
-        }
-    }
-    drop(statement);
-
-    for run in runs.values_mut() {
-        for worker in &mut run.workers {
-            let Some(child_session_id) = worker.child_session_id.as_ref() else {
-                continue;
-            };
-            if let Some((models, efforts)) = profiles.get(child_session_id) {
-                worker.observed_models.clone_from(models);
-                worker.observed_efforts.clone_from(efforts);
-            }
-        }
-        run.validate()
-            .map_err(|error| StoreError::ProjectionInvalid {
-                message: error.to_string(),
-            })?;
-    }
-
-    for entry in entries {
-        let TimelineBody::ToolUse { tool } = &mut entry.body else {
-            continue;
-        };
-        let ToolAction::Workflow { run_id, run, .. } = &mut tool.action else {
-            continue;
-        };
-        *run = run_id
-            .as_ref()
-            .and_then(|run_id| runs.get(run_id))
-            .cloned()
-            .map(Box::new);
-    }
-    Ok(())
-}
-
-/// Hydrate every ordinary attempt independent of the caller's timeline page.
-/// A pathological native history is capped for wire safety while the exact
-/// total remains visible; real Workflow runs are far below this boundary.
-fn hydrate_workflow_attempts(
-    conn: &Connection,
-    session_id: &str,
-    run: &mut WorkflowRun,
-) -> Result<(), StoreError> {
-    let total = conn
-        .prepare_cached(
-            "SELECT COUNT(*) FROM message
-         WHERE session_id = ?1 AND type = 'tool_use' AND tool_kind = 'workflow'
-           AND json_extract(tool_detail, '$.run_id') = ?2",
-        )?
-        .query_row(params![session_id, run.run_id], |row| row.get::<_, i64>(0))?;
-    run.attempt_total_count = u64::try_from(total).map_err(|_| StoreError::ProjectionInvalid {
-        message: "workflow attempt count is negative".into(),
-    })?;
-
-    let mut statement = conn.prepare_cached(
-        "SELECT * FROM (
-           SELECT * FROM message
-           WHERE session_id = ?1 AND type = 'tool_use' AND tool_kind = 'workflow'
-             AND json_extract(tool_detail, '$.run_id') = ?2
-           ORDER BY ordinal DESC LIMIT ?3
-         ) ORDER BY ordinal ASC",
-    )?;
-    let rows = statement.query_map(
-        params![
-            session_id,
-            run.run_id,
-            i64::try_from(WORKFLOW_ATTEMPT_LIMIT).unwrap_or(i64::MAX),
-        ],
-        message_codec::decode,
-    )?;
-    run.attempts.clear();
-    for row in rows {
-        let entry = row?;
-        let TimelineBody::ToolUse { tool } = &entry.body else {
-            continue;
-        };
-        let ToolAction::Workflow {
-            task_id,
-            resume_id,
-            attempt,
-            callback_summary,
-            ..
-        } = &tool.action
-        else {
-            continue;
-        };
-        let started_at = tool
-            .timing
-            .as_ref()
-            .and_then(|timing| timing.started_at)
-            .or(entry.at);
-        let completed_at = tool.timing.as_ref().and_then(|timing| timing.completed_at);
-        let duration_ms = tool
-            .timing
-            .as_ref()
-            .and_then(|timing| timing.duration_ms)
-            .or_else(|| {
-                completed_at
-                    .zip(started_at)
-                    .and_then(|(completed, started)| completed.checked_sub(started))
-                    .and_then(|value| u64::try_from(value).ok())
-            });
-        let attempt = attempt.unwrap_or(1);
-        run.attempts.push(WorkflowAttempt {
-            timeline_id: entry.timeline_id,
-            attempt,
-            task_id: task_id.clone(),
-            resumed: attempt > 1 || resume_id.is_some(),
-            status: tool.status.value,
-            at: started_at,
-            completed_at,
-            duration_ms,
-            summary: callback_summary.clone(),
-        });
-    }
-    Ok(())
-}
-
-/// Keep only the latest bounded observation window on the wire. Aggregate
-/// counts come from all durable observations, so a large journal never makes
-/// the whole timeline unreadable and never under-reports progress.
-fn hydrate_workflow_journal(
-    conn: &Connection,
-    session_id: &str,
-    run: &mut WorkflowRun,
-) -> Result<(), StoreError> {
-    let (total, started, result) = conn.prepare_cached(
-        "SELECT COUNT(*),
-                COALESCE(SUM(CASE WHEN json_extract(detail, '$.kind') = 'started' THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN json_extract(detail, '$.kind') = 'result' THEN 1 ELSE 0 END), 0)
-         FROM workflow_journal WHERE session_id = ?1 AND run_id = ?2",
-    )?
-    .query_row(params![session_id, run.run_id], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, i64>(2)?,
-        ))
-    })?;
-    let count = |value: i64, label: &str| {
-        u64::try_from(value).map_err(|_| StoreError::ProjectionInvalid {
-            message: format!("workflow journal {label} count is negative"),
-        })
-    };
-    run.journal_total_count = count(total, "total")?;
-    run.journal_started_count = count(started, "started")?;
-    run.journal_result_count = count(result, "result")?;
-
-    let mut statement = conn.prepare_cached(
-        "SELECT detail FROM workflow_journal
-         WHERE session_id = ?1 AND run_id = ?2
-         ORDER BY COALESCE(CAST(json_extract(detail, '$.source_offset') AS INTEGER), -1) DESC,
-                  observation_id DESC
-         LIMIT ?3",
-    )?;
-    let rows = statement.query_map(
-        params![
-            session_id,
-            run.run_id,
-            i64::try_from(WORKFLOW_JOURNAL_LIMIT).unwrap_or(i64::MAX),
-        ],
-        |row| row.get::<_, String>(0),
-    )?;
-    run.journal.clear();
-    for row in rows {
-        run.journal
-            .push(serde_json::from_str::<WorkflowJournalObservation>(&row?)?);
-    }
-    run.journal.sort_by(|left, right| {
-        left.source_offset
-            .cmp(&right.source_offset)
-            .then_with(|| left.observation_id.cmp(&right.observation_id))
-    });
-    Ok(())
-}
-
-fn push_unique(values: &mut Vec<String>, value: String) {
-    if values.len() < WORKFLOW_RUNTIME_PROFILE_LIMIT && !values.contains(&value) {
-        values.push(value);
-    }
 }
 
 /// Deterministic UTC compatibility wrapper for a GitHub-style activity

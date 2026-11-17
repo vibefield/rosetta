@@ -1,0 +1,125 @@
+{
+  "campaign": "image-defer-cold-20261101",
+  "change": "Deferred image renditions: ingestion stores each recorded image once as its verified original bytes; WebP display renditions are a disposable cache made by a paced background sweep after search is ready and on demand (docs/ARCHITECTURE.md §4.1.2).",
+  "baseline_commit": "be2fe71",
+  "machine": {
+    "model": "Mac16,10 (Apple M4 Mac mini)",
+    "cores": "4P+6E",
+    "ram_gb": 16,
+    "os": "macOS 26.7.2 (25G332)",
+    "power": "AC",
+    "conditions": "An unrelated iOS Simulator was running throughout; 1-minute load 2.2-6.9; swap steady at 3.0 GB with no growth in any run."
+  },
+  "binaries": {
+    "before_sha256": "58c7126f6f5087cc722dd844939b593f15f40ac2319a66f8d67d8429a6780997",
+    "after_sha256": "1ef19a10413168d4e7fb24fa6d34c5856614cf28a43a179701120e2581cf05cc"
+  },
+  "source": {
+    "description": "The 12 largest admitted Claude Code JSON-lines sources on the measuring machine (4 transcripts, 8 subagent transcripts), copied with stable-stat checks, SHA-256 verified and frozen permission-read-only, using the tools/ingest-bench profile-cold-start selection and copy method. Source names are private and omitted.",
+    "bytes": 1022216033,
+    "manifest_sha256": "a3227cd8ab2216f7be809d8a48356a8e102511f33d7f4ae00f1acfe89d400d84",
+    "image_attachments": 1076,
+    "distinct_recorded_images": 1041,
+    "recorded_formats": { "jpeg": 616, "png": 420, "webp": 5 },
+    "long_edge_le_1600": 703,
+    "long_edge_gt_1600": 338
+  },
+  "configuration": {
+    "capture_workers": 9,
+    "cold_ledger_codec": "zstd-frames level 1",
+    "serve": "rosettad serve --home <snapshot> --agent claude-code --ticks 0 --addr 127.0.0.1:0 --json --profile --db <fresh dir>",
+    "ingest": "rosettad ingest --db <fresh> --ledger <fresh> --home <snapshot> --agent claude-code --profile --json",
+    "protocol_version": 29
+  },
+  "import": {
+    "serve": {
+      "before_wall_s": [39.13, 39.65, 41.81],
+      "after_wall_s": [2.43, 2.47, 2.46],
+      "before_user_cpu_s": 58.45,
+      "after_user_cpu_s": 3.87,
+      "normalize_summed_s": { "before": 152.4, "after": 0.90 },
+      "capture_step_summed_s": { "before": 155.0, "after": 3.77 },
+      "sequencer_head_wait_s": { "before": 38.0, "after": 1.72 },
+      "milestones_s": {
+        "first_session_complete": { "before": 16.46, "after": 0.36 },
+        "first_readable": { "before": 38.87, "after": 2.22 },
+        "canonical_ready": { "before": 39.10, "after": 2.40 }
+      },
+      "peak_footprint_mib": { "before": 1199, "after": 936 }
+    },
+    "ingest": {
+      "before_wall_s": [57.21, 59.22],
+      "after_wall_s": [4.75, 4.17],
+      "normalize_s": { "before": 53.2, "after": 0.67 }
+    },
+    "run_order": "B-ingest, B-serve-1, B-serve-2 (earlier) | A-ingest, A-serve-1, A-serve-2 | B-serve-3, A-serve-3 | B-ingest-2, A-ingest-2"
+  },
+  "equalities": {
+    "logical_digest_suite_sha256": "e09c5d8835038b47f008cd7e429bfcc9b7190cfa639346179c6ed85a491f756f",
+    "logical_total_sha256": "7bfbcb752c7d16c3b673c270650753203247f5b394c455255cfbe0ade6e88438",
+    "logical_total_rows": 80956,
+    "logical_and_count_sections_equal_in_every_run": true,
+    "ledger_source_digest": {
+      "serve": "9acaa4707a983281256ad146f508ecaf7be16a589972534d890aac08fa1215e8",
+      "ingest": "b0546a4cf5bd7244e0f218a06c84e89b3b743c8bf09bd8d2faaf8423c1b8d034",
+      "equal_before_after": true
+    },
+    "pipeline_counters_equal": true,
+    "ranked_results": {
+      "suite": "crates/search-bench/workloads/product-diagnostic-v3.json",
+      "suite_sha256": "12e38e5ecc9a0e3d89bdd15b4c9fcc429defd07325f685cb108e91a97465aee7",
+      "ordered_hits_sha256_before": "a0d0e470f32e80747af78d00ac91c119d4fa3e9a68936e51e28dd69803d3b152",
+      "ordered_hits_sha256_after": "a0d0e470f32e80747af78d00ac91c119d4fa3e9a68936e51e28dd69803d3b152",
+      "hits_per_case": [22, 104, 0, 11, 1, 0, 0, 0, 22, 0]
+    },
+    "rendition_parity": {
+      "attachments_compared": 1076,
+      "rail": "1076/1076 equal",
+      "tile": "1076/1076 equal",
+      "tile2x": "1076/1076 equal",
+      "preview": "1076/1076 equal",
+      "full": "1076/1076 equal (718 served from the preview inode, 358 encoded on demand)"
+    }
+  },
+  "intended_differences": {
+    "attachment_media_types": { "before": { "image/webp": 1076 }, "after": { "image/jpeg": 637, "image/png": 434, "image/webp": 5 } },
+    "attachments_with_rendition_maps": { "before": 1076, "after": 0 },
+    "distinct_asset_digests": { "before": 1039, "after": 1041 },
+    "asset_byte_len_sum": { "before": 73555866, "after": 247446467 },
+    "asset_files_written": { "before": 4459, "after": 1084 },
+    "asset_files_reused": { "before": 972, "after": 43 },
+    "assets_dir_at_publication": { "before": { "files": 4459, "bytes": 138211388 }, "after": { "files": 1084, "bytes": 238557045 } }
+  },
+  "sweep": {
+    "start": "after publication and catch-up, once search is ready",
+    "bases": 1041,
+    "made": 1041,
+    "failed": 0,
+    "missing": 0,
+    "files": 4867,
+    "bytes": 103416368,
+    "cpu_s": 68.48,
+    "wall_s": 240.52,
+    "effective_core_share": 0.28,
+    "budget_core_share": 0.50,
+    "pacing_note": "Under utility QoS, macOS timer coalescing makes park_timeout overshoot (median +132 ms on a 65 ms sleep), so the sweep runs under budget, never over.",
+    "search_ready_s": { "with_sweep": 0.229, "with_sweep_off": 0.231 },
+    "second_warm_start": { "made": 0, "wall_s": 0.080, "cpu_s": 0.035 },
+    "assets_dir_after_sweep": { "names": 5951, "inodes": 5248, "bytes_on_disk": 341973413 }
+  },
+  "rebuild": {
+    "after_projection_prune": 0,
+    "before_projection_rebuilt_with_after_binary": "pruned 4,416 legacy WebP members; census then equals a fresh after import (1,084 files / 238,557,045 B)"
+  },
+  "first_view_ms": {
+    "sample": "50 bases, every 20th of 1,041 sorted digests (26 jpg, 24 png, 10 over 1600 px); sequential over one keep-alive connection",
+    "after_cold": { "tile_p50": 17.7, "tile_p95": 27.1, "preview_p50": 20.9, "preview_p95": 40.1, "full_over_1600_p50": 38.7, "full_over_1600_p95": 64.6 },
+    "after_cached": { "tile_p50": 0.127, "tile_p95": 0.142, "preview_p50": 0.166, "preview_p95": 0.227 },
+    "before_bundle": { "tile_p50": 0.32, "tile_p95": 0.54, "preview_p50": 0.34, "preview_p95": 0.46 }
+  },
+  "notes": [
+    "Warm-starting a copied projection requires removing its rosetta.sqlite.ingestion.json receipt, which binds the absolute db and ledger paths; this was done on both sides and only affects /api/ingestions.",
+    "Real-data parity covers stills only (the snapshot has no GIF, APNG, animated WebP, BMP, ICO or EXIF-rotated images); those cases are pinned by the synthesized corpus in crates/media/src/tests/.",
+    "Raw artifacts (private: snapshot, run logs, ranked hits with snippets) were kept outside the repository in the session scratch directory."
+  ]
+}

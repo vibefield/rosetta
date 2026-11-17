@@ -41,6 +41,10 @@ impl AgentAdapter for PiAdapter {
         // unreported, provider-segment routes (2026-09-23 audit PI-1/2/6/8/9/10).
         // 10: image members are WebP with bounded display renditions.
         // 11: recorded tool images use durable optimized attachment members.
+        // Still 11 after image members became recorded originals with WebP
+        // renditions made after import (2026-11-01): legacy bundle refs stay
+        // valid, so re-streaming every source is not worth it; a rebuild
+        // converts them (docs/ARCHITECTURE.md).
         11
     }
 

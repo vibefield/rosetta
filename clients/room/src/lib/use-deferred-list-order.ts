@@ -1,11 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FocusEvent, PointerEvent, UIEvent } from "react";
+import { importArrivals } from "./import-state";
 
 export interface ListPosition {
   readonly id: string;
   readonly day: number | null;
   /** Which of a host's sections the row is drawn in (R3); absent without them. */
   readonly section?: number;
+  /** Drawn in one of the import's not-imported groups; absent otherwise. */
+  readonly pending?: boolean;
+  /** That group is the top one, "Still importing"; absent otherwise. */
+  readonly importing?: boolean;
 }
 
 interface Interaction {
@@ -122,9 +127,15 @@ export function useDeferredListOrder(desired: readonly ListPosition[], scope: st
     }, 180);
   };
 
+  const pending = current.signature !== wanted;
+  // The rows at the top of the reader's view, as the last commit or scroll
+  // left them: what "below" means for the import's arrivals.
+  const anchorIds = anchor.current?.scope === scope ? anchor.current.rows.map(row => row.id) : [];
   return {
     items: current.items,
-    pending: current.signature !== wanted,
+    pending,
+    /** Held not-imported rows the wanted order draws as imported. */
+    arrivals: pending ? importArrivals(current.items, desired, anchorIds) : null,
     scrollRef,
     hostProps: {
       onPointerEnter: (event: PointerEvent<HTMLDivElement>) => {

@@ -38,8 +38,9 @@ pub struct PipeCheckpoint {
     pub cumulative: Option<TokenSnapshot>,
     /// Adapter-owned, versioned by `normalizer_version` and opaque to pipeline.
     pub adapter_state: Option<serde_json::Value>,
-    /// Snapshot sources only: the db file-set stamp at the last successful
-    /// pass — equal stamps skip even the copy. Additive with a default so
+    /// Physical input stamp at the last successful pass: a DB file set or
+    /// a representation-independent transcript's source set. Equal stamps
+    /// skip copying/decoding quiet inputs. Additive with a default so
     /// pre-existing blobs still decode.
     #[serde(default)]
     pub snapshot_stamp: Option<String>,
@@ -48,6 +49,15 @@ pub struct PipeCheckpoint {
     /// this session's content is unchanged when it matches.
     #[serde(default)]
     pub snapshot_revision: Option<String>,
+    /// JSONL sources only: a pass that re-reads records the ledger already
+    /// holds for this generation (a re-frame) committed this checkpoint with
+    /// more of the file still to read. The pass that resumes from it is a
+    /// re-frame too, so it still asks the ledger for a sent file's capture
+    /// before it reads the filesystem. Cleared by the batch that reaches the
+    /// end of the file. Absent when false, so every other blob keeps its
+    /// exact bytes and an older binary reads this one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reframing: bool,
 }
 
 impl PipeCheckpoint {
@@ -66,6 +76,7 @@ impl PipeCheckpoint {
             adapter_state: None,
             snapshot_stamp: None,
             snapshot_revision: None,
+            reframing: false,
         }
     }
 
@@ -108,5 +119,47 @@ mod tests {
 
         // A fresh checkpoint has no tail to resume from.
         assert!(checkpoint.tail_checkpoint().is_none());
+    }
+
+    /// The blob as it was written before `reframing` existed.
+    const BEFORE_REFRAMING: &str = concat!(
+        r#"{"v":2,"session_id":"s1","stream_id":"transcript","normalizer_version":7,"#,
+        r#""source_generation":3,"next_source_sequence":12,"generation_clean":true,"#,
+        r#""next_ordinal":42,"tail":"00ff","cumulative":null,"adapter_state":{"open":["a"]},"#,
+        r#""snapshot_stamp":null,"snapshot_revision":null}"#,
+    );
+
+    #[test]
+    fn a_checkpoint_that_is_not_reframing_keeps_its_exact_bytes() {
+        let mut checkpoint = PipeCheckpoint::fresh("s1", "transcript", 7);
+        checkpoint.source_generation = 3;
+        checkpoint.next_source_sequence = 12;
+        checkpoint.next_ordinal = 42;
+        checkpoint.tail = Some("00ff".to_string());
+        checkpoint.adapter_state = Some(serde_json::json!({"open": ["a"]}));
+
+        // The field is absent while false: the stored blob is byte for byte
+        // the one an earlier binary wrote, so its CAS expectation still holds
+        // and a quiet file is still recognised as unchanged.
+        assert!(!checkpoint.reframing);
+        assert_eq!(checkpoint.encode(), BEFORE_REFRAMING);
+        // And that earlier blob decodes as not re-framing.
+        assert_eq!(
+            PipeCheckpoint::decode(BEFORE_REFRAMING).unwrap(),
+            checkpoint
+        );
+
+        // Set, it is one more member at the end, with no version change.
+        checkpoint.reframing = true;
+        let marked = checkpoint.encode();
+        assert_eq!(
+            marked,
+            BEFORE_REFRAMING.replace(
+                r#""snapshot_revision":null}"#,
+                r#""snapshot_revision":null,"reframing":true}"#
+            )
+        );
+        assert_eq!(PipeCheckpoint::decode(&marked).unwrap(), checkpoint);
+        assert_eq!(PIPE_CHECKPOINT_VERSION, 2);
     }
 }

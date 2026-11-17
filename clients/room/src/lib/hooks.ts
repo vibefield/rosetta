@@ -1,7 +1,7 @@
 // The room's data spine: one meta subscription for who/what exists, REST for
 // figures, and one session subscription for the transcript being read. Every
 // hook reads through the port it is handed; none of them dials anything.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApiError,
   CollaborationTimeline,
@@ -19,6 +19,7 @@ import type {
 import { CursorExpiredError } from "@vibefield/rosetta-protocol";
 import type { ProjectStats } from "./model";
 import { getActivityGridStartTimestamp, getViewerUtcOffsetMinutes } from "./model";
+import { figureRetryDelay } from "./figure-order";
 import type { CatalogPort, CollaborationFeed, SessionClient, SessionFeed } from "../ports";
 import type { SessionLeases } from "./session-leases";
 import { conversationStart, readConversationPage } from "./transcript/history-window";
@@ -47,23 +48,40 @@ export interface MetaFeed {
   error: ApiError | null;
 }
 
-export function useMeta(catalog: CatalogPort): MetaFeed {
+export interface MetaFeedOptions {
+  /** Land each metadata change as a React transition: the renders it causes
+   * yield to input, and a burst coalesces into the newest state. The room
+   * asks for it while an import runs; what renders is unchanged, only when. */
+  readonly transition?: boolean;
+}
+
+export function useMeta(catalog: CatalogPort, options: MetaFeedOptions = {}): MetaFeed {
   const [feed, setFeed] = useState<{ meta: MetaState | null; snapshotVersion: number }>({
     meta: null, snapshotVersion: 0,
   });
   const [status, setStatus] = useState<SubscriptionStatus>("connecting");
   const [error, setError] = useState<ApiError | null>(null);
+  // Read at delivery, so turning it on or off never resubscribes.
+  const transition = useRef(options.transition === true);
+  transition.current = options.transition === true;
   useEffect(() => {
+    // Status and errors travel the same way as the rows, so a "live" never
+    // commits ahead of the snapshot it announces.
+    const deliver = (apply: () => void) => {
+      if (transition.current) startTransition(apply);
+      else apply();
+    };
     const sub = catalog.subscribeMeta({
-      onChange: (meta, source) => {
-        setFeed((previous) => ({
-          meta,
-          snapshotVersion: previous.snapshotVersion + (source === "snapshot" ? 1 : 0),
-        }));
-        setError(null);
-      },
-      onStatus: setStatus,
-      onError: setError,
+      onChange: (meta, source) =>
+        deliver(() => {
+          setFeed((previous) => ({
+            meta,
+            snapshotVersion: previous.snapshotVersion + (source === "snapshot" ? 1 : 0),
+          }));
+          setError(null);
+        }),
+      onStatus: (next) => deliver(() => setStatus(next)),
+      onError: (next) => deliver(() => setError(next)),
     });
     return () => sub.close();
   }, [catalog]);
@@ -88,9 +106,19 @@ export interface DaemonStatusFeed {
 /** The daemon's status surface. It answers from the daemon's first breath —
  * before the projection is even readable — so it is the room's connectivity
  * truth during a cold start. Polls fast through canonical publication and
- * search preparation, then quietly once both are ready. */
-export function useDaemonStatus(catalog: CatalogPort): DaemonStatusFeed {
+ * search preparation, then quietly once both are ready. A connection change,
+ * or a new `asked` (the host knows the daemon's state moved: it granted
+ * consent), drops the wait and the ask in flight and asks again at once.
+ * After a new `asked`, an answer still awaiting consent is the grant not
+ * yet visible, not the user choosing: the room asks again every 100 ms, not
+ * at the consent pause's 2.5 s, until the phase moves on. */
+/** How many 100 ms re-asks a status refresh may make while the grant is unshown. */
+const BRISK_REASKS = 50;
+
+export function useDaemonStatus(catalog: CatalogPort, asked = 0): DaemonStatusFeed {
   const [connectionRevision, setConnectionRevision] = useState(0);
+  // The last `asked` whose move the daemon has shown.
+  const shown = useRef(0);
   useEffect(
     () => catalog.onConnectionChange?.(() => setConnectionRevision((value) => value + 1)),
     [catalog],
@@ -110,6 +138,10 @@ export function useDaemonStatus(catalog: CatalogPort): DaemonStatusFeed {
     let controller: AbortController | undefined;
     let timer: number | undefined;
     let deadline: number | undefined;
+    // Brisk re-asks after a refresh are bounded: 50 (about 5 s), then the
+    // ordinary consent pause, so a grant that never moves the phase costs
+    // nothing more than a cadence.
+    let briskLeft = BRISK_REASKS;
     const poll = async () => {
       const request = new AbortController();
       controller = request;
@@ -129,12 +161,19 @@ export function useDaemonStatus(catalog: CatalogPort): DaemonStatusFeed {
           receivedAt: Date.now(),
         });
         const phase = status.ingest?.phase;
+        if (phase !== "awaiting_consent") shown.current = asked;
+        // rosettad answers a grant a moment before its phase leaves
+        // awaiting_consent: re-ask briskly until it does.
+        const unshown = phase === "awaiting_consent" && shown.current !== asked && briskLeft > 0;
+        if (unshown) briskLeft -= 1;
         // Keep search visible after canonical publication. Audit/consent are
         // intentional pauses; an unanswered first request retries promptly.
         const paused = status.ingest?.run?.state === "paused" || status.ingest?.run?.state === "failed" ||
           phase === "metadata_ready" || phase === "awaiting_consent";
         const complete = status.canonicalReady && status.searchReadiness === "ready";
-        delay = complete ? 30_000 : paused ? 2_500 : 500;
+        // An unshown grant comes first: a daemon awaiting consent may still
+        // report a complete archive from before, and must not wait 30 s.
+        delay = unshown ? 100 : complete ? 30_000 : paused ? 2_500 : 500;
       } catch (error: unknown) {
         if (!cancelled) setFeed((previous) => ({
           ...previous,
@@ -154,20 +193,44 @@ export function useDaemonStatus(catalog: CatalogPort): DaemonStatusFeed {
       window.clearTimeout(deadline);
       window.clearTimeout(timer);
     };
-  }, [catalog, connectionRevision]);
+  }, [catalog, connectionRevision, asked]);
   return feed;
 }
 
+/** Project figures as they land, and the projects whose latest ask failed. */
+export interface ProjectFigures {
+  readonly stats: Map<string, ProjectStats>;
+  /** Each earns a retry (`figureRetryDelay`); empty when none failed. */
+  readonly failed: ReadonlySet<string>;
+}
+
+/** Which project to ask next: `first` (the selected project) is read at
+ * every ask, so a click mid-hydration jumps the queue; `order` (the list as
+ * drawn, `figureOrder`) is read once per round. */
+export interface FigurePriority {
+  readonly first: string | null;
+  readonly order: () => readonly string[];
+}
+
+const NO_FAILURES: ReadonlySet<string> = new Set();
+
 /** Per-project heatmaps and contributions. These are global derived reads,
  * so they begin only after the daemon's canonical publication gate. Four
- * workers hydrate the list progressively; unbounded Promise.all here once
- * launched two full-corpus queries per project and starved cold ingestion. */
+ * workers hydrate the list progressively — the selected project first, then
+ * the cards on screen, then the rest (`priority`) — and unbounded
+ * Promise.all here once launched two full-corpus queries per project and
+ * starved cold ingestion. A project that fails is asked again on its own,
+ * with backoff; the others wait for the quiet periodic refresh. */
 export function useProjectStats(
   catalog: CatalogPort,
   projectIds: string[],
   ready = false,
-): Map<string, ProjectStats> {
+  priority?: FigurePriority,
+): ProjectFigures {
   const [stats, setStats] = useState<Map<string, ProjectStats>>(new Map());
+  const [failed, setFailed] = useState<ReadonlySet<string>>(NO_FAILURES);
+  const priorityRef = useRef(priority);
+  priorityRef.current = priority;
   const key = projectIds.join("\n");
   useEffect(() => {
     let cancelled = false;
@@ -176,72 +239,84 @@ export function useProjectStats(
     const ids = key === "" ? [] : key.split("\n");
     if (!ready || ids.length === 0) {
       setStats(new Map());
+      setFailed(NO_FAILURES);
       return () => {
         cancelled = true;
         controller.abort();
       };
     }
-    async function loadAll() {
-      const sinceMs = getActivityGridStartTimestamp(Date.now());
-      const offsetMinutes = getViewerUtcOffsetMinutes();
+    const land = (answered: ReadonlyMap<string, ProjectStats>) => {
+      if (cancelled || answered.size === 0) return;
+      setStats((current) => {
+        const next = new Map(current);
+        for (const [id, figures] of answered) next.set(id, figures);
+        return next;
+      });
+    };
+    /** One ask of every target; resolves to the ones that failed. */
+    async function round(targets: readonly string[]): Promise<Set<string>> {
+      const span = { sinceMs: getActivityGridStartTimestamp(Date.now()), offsetMinutes: getViewerUtcOffsetMinutes() };
+      const missed = new Set<string>();
       // A host that answers every project at once is asked once.
       if (catalog.projectStatsBatch !== undefined) {
-        let missing = true;
         try {
-          const answer = await catalog.projectStatsBatch(ids, { sinceMs, offsetMinutes }, controller.signal);
-          missing = ids.some((id) => !answer.has(id));
-          if (!cancelled) {
-            setStats((current) => {
-              const next = new Map(current);
-              for (const id of ids) {
-                const figures = answer.get(id);
-                if (figures !== undefined) next.set(id, figures);
-              }
-              return next;
-            });
-          }
+          const answer = await catalog.projectStatsBatch([...targets], span, controller.signal);
+          for (const id of targets) if (!answer.has(id)) missed.add(id);
+          land(new Map(targets.flatMap((id) => {
+            const figures = answer.get(id);
+            return figures === undefined ? [] : [[id, figures] as const];
+          })));
         } catch {
           // as below: unfigured projects degrade honestly and earn a retry
+          for (const id of targets) missed.add(id);
         }
-        if (cancelled) return;
-        timer = window.setTimeout(loadAll, missing ? 8_000 : 5 * 60_000);
-        return;
+        return missed;
       }
-      const queue = [...ids];
-      let failed = false;
+      const left = new Set(targets);
+      const drawn = priorityRef.current?.order() ?? [];
+      const next = (): string | undefined => {
+        const first = priorityRef.current?.first ?? null;
+        if (first !== null && left.delete(first)) return first;
+        for (const id of drawn) if (left.delete(id)) return id;
+        const rest = left.values().next();
+        if (rest.done) return undefined;
+        left.delete(rest.value);
+        return rest.value;
+      };
       async function worker() {
         while (!cancelled) {
-          const id = queue.shift();
+          const id = next();
           if (id === undefined) return;
           try {
-            const figures = await catalog.projectStats(id, { sinceMs, offsetMinutes }, controller.signal);
-            if (!cancelled) {
-              setStats((current) => {
-                const next = new Map(current);
-                next.set(id, figures);
-                return next;
-              });
-            }
+            land(new Map([[id, await catalog.projectStats(id, span, controller.signal)]]));
           } catch {
             // an unfigured project degrades honestly — and earns a retry
-            failed = true;
+            missed.add(id);
           }
         }
       }
-      await Promise.all(Array.from({ length: Math.min(4, ids.length) }, () => worker()));
-      if (cancelled) return;
-      // A failed figure (a daemon mid-restart, a dropped socket) retries in
-      // seconds. Stable canonical figures need only a quiet periodic refresh.
-      timer = window.setTimeout(loadAll, failed ? 8_000 : 5 * 60_000);
+      await Promise.all(Array.from({ length: Math.min(4, targets.length) }, () => worker()));
+      return missed;
     }
-    loadAll();
+    async function load(targets: readonly string[], failures: number) {
+      const missed = await round(targets);
+      if (cancelled) return;
+      setFailed(missed.size === 0 ? NO_FAILURES : missed);
+      // A failed figure (a daemon mid-restart, a dropped socket) is asked
+      // again on its own, in seconds and then less often. Stable canonical
+      // figures need only a quiet periodic refresh of every project.
+      timer = missed.size > 0
+        ? window.setTimeout(() => load([...missed], failures + 1), figureRetryDelay(failures + 1))
+        : window.setTimeout(() => load(ids, 0), 5 * 60_000);
+    }
+    load(ids, 0);
     return () => {
       cancelled = true;
       controller.abort();
       window.clearTimeout(timer);
     };
   }, [catalog, key, ready]);
-  return stats;
+  return useMemo(() => ({ stats, failed }), [stats, failed]);
 }
 
 /** The selected project's usage decomposition — per-model days and the
@@ -701,11 +776,16 @@ export const SEARCH_LIMIT = 200;
  * while its successor is in flight — a list that blanks on every keystroke
  * reads as a search that keeps failing — and only the newest request may
  * land: a superseded one is aborted and its late result ignored.
+ *
+ * A change of `askAgain` re-asks an unchanged query. The room passes whether
+ * full text can answer, so the empty answer an unpublished index gave is
+ * replaced as soon as the index can answer.
  */
 export function useSearch(
   catalog: CatalogPort,
   query: string,
   facets: SearchFacets = {},
+  askAgain: string | number | boolean = 0,
 ): SearchFeed {
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -746,6 +826,6 @@ export function useSearch(
       clearTimeout(timer);
       controller.abort();
     };
-  }, [catalog, query, project, kind, agent]);
+  }, [catalog, query, project, kind, agent, askAgain]);
   return { query: query.trim(), response, error, searching };
 }

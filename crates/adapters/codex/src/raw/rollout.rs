@@ -225,6 +225,10 @@ pub struct SessionMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history_base: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub attached_thread: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_ordinal_exclusive: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_tools: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_history_start_ordinal: Option<u64>,

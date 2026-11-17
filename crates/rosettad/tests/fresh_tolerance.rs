@@ -17,9 +17,9 @@ use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{LedgerEntry, ScriptedEvents, scan_ledger};
 use rosetta_pipeline::progress::ColdProgressObserver;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, LiveOptions, LiveRunner, PollEvidence, SessionFile,
-    StreamedPreparer, StreamedRuntime, discover, expand_data_root, meta_ingest_inventory_into,
-    stream_closed_sources_into, streamed_setup,
+    BlockingEmit, ColdWalkOptions, IngestOptions, Instrument, LiveOptions, LiveRunner,
+    PollEvidence, SessionFile, StreamedPreparer, StreamedRuntime, discover, expand_data_root,
+    meta_ingest_inventory_into, stream_closed_sources_into, streamed_setup,
 };
 use rosetta_store::Store;
 use tempfile::TempDir;
@@ -701,12 +701,14 @@ fn a_transcript_deleted_between_metadata_and_capture_publishes_its_session_strea
         &opts,
         &instrument,
         None,
-        &mut |mut sources| {
+        None,
+        &ColdWalkOptions::default(),
+        &mut BlockingEmit(|_, mut sources| {
             preparer.prepare(&mut sources)?;
             writer
                 .apply(&mut canonical, sources, &instrument)
                 .map(|_| ())
-        },
+        }),
     )
     .unwrap();
     assert_eq!((report.files_missing, report.files_incomplete), (1, 1));

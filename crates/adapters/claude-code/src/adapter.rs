@@ -39,6 +39,14 @@ impl AgentAdapter for ClaudeCodeAdapter {
         Some(&[spec::TRANSCRIPT, spec::SUBAGENT_TRANSCRIPT])
     }
 
+    /// A transcript, a subagent transcript and their sidecars write only the
+    /// session the path and bounded metadata name, and every subagent's
+    /// metadata links it to its parent and root. No source is shared between
+    /// trees, so each root tree is complete once its own sources are.
+    fn cold_admission(&self) -> rosetta_adapter_support::ColdAdmission {
+        rosetta_adapter_support::ColdAdmission::RootTree
+    }
+
     fn normalizer_version(&self) -> u32 {
         // 28: exclusive usage buckets with 1-hour writes, the most final
         // streamed snapshot, iteration samples, no `<synthetic>` usage, and
@@ -59,7 +67,19 @@ impl AgentAdapter for ClaudeCodeAdapter {
         // 36: native API block positions survive responses split across files.
         // 37: unknown workflow journal events are soft drift, not unclean sources.
         // 38: bounded HTML recovery locators and links on later file deliveries.
-        38
+        // Still 38 after image members became recorded originals with WebP
+        // renditions made after import (2026-11-01): legacy bundle refs stay
+        // valid, so re-streaming every source is not worth it; a rebuild
+        // converts them (docs/ARCHITECTURE.md).
+        // 39 (2026-11-05, schema 30): a native publish keeps its description
+        // and counts the files-map members it did not keep; a files-map string
+        // is a source path resolved against `root`, never inline HTML.
+        // Still 39 after `SendUserFile` sent files became path-reference
+        // attachments and capture facts: a bump re-streams every source, and
+        // the tool row is otherwise unchanged. A row normalized earlier keeps
+        // no attachment until its source is next normalized or the projection
+        // is rebuilt (docs/ARCHITECTURE.md, "Mixed representations").
+        39
     }
 
     fn html_artifact_hints(

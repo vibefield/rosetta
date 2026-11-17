@@ -221,6 +221,7 @@ fn recovered(original: &str, bytes: Vec<u8>, from: String) -> CapturedDocument {
         captured_at: super::now(),
         status: Status::Captured,
         recovered_from: Some(from),
+        media: None,
         bytes,
     }
 }

@@ -343,7 +343,9 @@ fn fresh_ingest_resume_and_ledger_replay_keep_only_user_facing_sessions() {
     assert!(scanned.entries.iter().any(|entry| matches!(entry, LedgerEntry::Raw { source, payload, .. } if source.ledger_only && String::from_utf8_lossy(payload).contains("private-review-sentinel resumed"))));
     for entry in &scanned.entries {
         if let LedgerEntry::Meta { payload, .. } = entry {
-            let ops: Vec<IngestOp> = serde_json::from_str(payload).unwrap();
+            let ops: Vec<IngestOp> = rosetta_pipeline::LedgerMetadata::decode(payload)
+                .unwrap()
+                .ops;
             assert!(ops.iter().all(|op| !matches!(op, IngestOp::SessionMeta(s) if s.native_session_id.ends_with("guardian"))));
         }
     }
@@ -512,7 +514,9 @@ fn old_archives_rebuild_without_empty_review_headers_and_resume_capture() {
                 schema_version,
                 payload,
             } => {
-                let mut ops: Vec<IngestOp> = serde_json::from_str(&payload).unwrap();
+                let mut ops: Vec<IngestOp> = rosetta_pipeline::LedgerMetadata::decode(&payload)
+                    .unwrap()
+                    .ops;
                 ops.extend(internal_meta.clone());
                 old.append_meta(schema_version, &serde_json::to_string(&ops).unwrap())
                     .unwrap();

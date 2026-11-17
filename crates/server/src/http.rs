@@ -21,6 +21,7 @@ use axum::routing::get;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::json;
 
+use rosetta_core::rows::StreamState;
 use rosetta_protocol::{
     ApiError, BoostRequest, BoostResponse, CollaborationTimeline, CommandResponse,
     ContributionResponse, DayUsageResponse, DiscoveriesResponse, EnableRequest, EnableResponse,
@@ -32,7 +33,7 @@ use rosetta_protocol::{
 use rosetta_search::{
     Fts5SidecarSearch, SearchBackend, SearchError, SearchQuery, SearchState, TextQuery,
 };
-use rosetta_store::{StoreError, schema};
+use rosetta_store::{SharedCacheLocks, StoreError, schema};
 use rosetta_store::{assets, queries, timeline_meta};
 
 use crate::hub::Hub;
@@ -41,6 +42,9 @@ mod activity;
 mod artifacts;
 mod images;
 mod ingestions;
+mod shared_reads;
+
+pub use artifacts::ExportRoot;
 
 const DEFAULT_LIST_LIMIT: i64 = 100;
 const DEFAULT_SEARCH_LIMIT: i64 = 50;
@@ -79,6 +83,9 @@ pub struct AppState {
     /// Who may call (docs/AUTH.md): open by default, as the daemon always
     /// was; a bearer, grants and extra origins when the serve loop sets them.
     pub auth: Arc<crate::auth::AuthPolicy>,
+    /// Where the artifact export door may place a capture (`--export-root`,
+    /// RO-32). Absent, the door answers `not_ready`.
+    pub export_root: Option<Arc<ExportRoot>>,
 }
 
 pub trait RawCommandReader: Send + Sync {
@@ -103,6 +110,7 @@ impl AppState {
             raw_commands: None,
             enrolled: Arc::default(),
             auth: Arc::default(),
+            export_root: None,
         }
     }
 
@@ -121,6 +129,7 @@ impl AppState {
             raw_commands: None,
             enrolled: Arc::default(),
             auth: Arc::default(),
+            export_root: None,
         }
     }
 
@@ -134,6 +143,13 @@ impl AppState {
     /// Attach the access policy (the serve loop builds it from its flags).
     pub fn with_auth(mut self, auth: Arc<crate::auth::AuthPolicy>) -> Self {
         self.auth = auth;
+        self
+    }
+
+    /// Open the artifact export door under `root` (the serve loop builds it
+    /// from `--export-root` and has already admitted it).
+    pub fn with_export_root(mut self, root: ExportRoot) -> Self {
+        self.export_root = Some(Arc::new(root));
         self
     }
 
@@ -181,6 +197,8 @@ enum ProjectionTarget {
 /// disk. The keeper is never queried; its lifetime closes the handoff race.
 struct SharedMemoryTarget {
     uri: Arc<str>,
+    /// The generation's lock evidence, shared with its writer.
+    locks: Arc<SharedCacheLocks>,
     _keeper: Mutex<Connection>,
 }
 
@@ -188,12 +206,16 @@ struct SharedMemoryTarget {
 /// targets expose the same canonical tables and queries.
 pub struct ProjectionReader {
     target: RwLock<ProjectionTarget>,
+    /// The RAM generation's lock evidence, kept past publication so the
+    /// daemon can report the whole build's reader waits.
+    locks: Option<Arc<SharedCacheLocks>>,
 }
 
 impl ProjectionReader {
     pub fn file(path: PathBuf) -> Self {
         Self {
             target: RwLock::new(ProjectionTarget::File(Arc::new(path))),
+            locks: None,
         }
     }
 
@@ -203,14 +225,24 @@ impl ProjectionReader {
     pub fn shared_memory(uri: &str) -> Result<Self, String> {
         let keeper = open_shared_memory(uri)
             .map_err(|error| format!("attaching canonical RAM reader: {error}"))?;
+        let locks = SharedCacheLocks::for_uri(uri);
         Ok(Self {
             target: RwLock::new(ProjectionTarget::SharedMemory(Arc::new(
                 SharedMemoryTarget {
                     uri: Arc::from(uri),
+                    locks: locks.clone(),
                     _keeper: Mutex::new(keeper),
                 },
             ))),
+            locks: Some(locks),
         })
+    }
+
+    /// The RAM generation's lock evidence (its writer's session-lock waits,
+    /// its readers' prologue waits); `None` for a reader that never served
+    /// one.
+    pub fn shared_cache_locks(&self) -> Option<Arc<SharedCacheLocks>> {
+        self.locks.clone()
     }
 
     /// Future requests open the installed durable projection. Requests that
@@ -228,15 +260,19 @@ impl ProjectionReader {
         )
     }
 
-    fn open(&self) -> Result<Connection, Failure> {
+    /// A fresh connection to the current target, with the lock evidence
+    /// when that target is the shared RAM generation (whose readers follow
+    /// the lock discipline's prologue, `shared_reads`).
+    fn open(&self) -> Result<(Connection, Option<Arc<SharedCacheLocks>>), Failure> {
         let target = self
             .target
             .read()
             .expect("projection reader poisoned")
             .clone();
         match target {
-            ProjectionTarget::File(path) => open_read(&path),
+            ProjectionTarget::File(path) => Ok((open_read(&path)?, None)),
             ProjectionTarget::SharedMemory(memory) => open_shared_memory(&memory.uri)
+                .map(|conn| (conn, Some(memory.locks.clone())))
                 .map_err(|error| Failure::internal(format!("opening canonical RAM view: {error}"))),
         }
     }
@@ -323,6 +359,13 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/sessions/{id}/artifacts/{publication_id}/content",
             get(artifacts::content),
+        )
+        // The one write that reaches the disk (RO-32): it places one capture
+        // by its digest below --export-root. Bearer only, since no grant
+        // opens a POST, and under the origin guard like every write.
+        .route(
+            "/api/sessions/{id}/artifacts/{publication_id}/export",
+            axum::routing::post(artifacts::export).route_layer(origin_guard()),
         )
         .route("/ws/meta", get(crate::ws::meta).route_layer(origin_guard()))
         .route(
@@ -426,7 +469,7 @@ impl Failure {
         )
     }
 
-    fn not_ready(message: impl Into<String>) -> Self {
+    pub(crate) fn not_ready(message: impl Into<String>) -> Self {
         Self(
             StatusCode::SERVICE_UNAVAILABLE,
             ApiError {
@@ -435,6 +478,11 @@ impl Failure {
                 message: message.into(),
             },
         )
+    }
+
+    /// The error a client sees, without its HTTP status (a socket frame).
+    pub(crate) fn into_error(self) -> ApiError {
+        self.1
     }
 
     fn cursor_expired() -> Self {
@@ -470,11 +518,8 @@ where
     F: FnOnce(&Connection) -> Result<T, Failure> + Send + 'static,
 {
     tokio::task::spawn_blocking(move || {
-        let conn = projection.open()?;
         // Watermarks and their rows must come from the same SQLite snapshot.
-        conn.execute_batch("BEGIN DEFERRED")
-            .map_err(|error| store_err(error.into()))?;
-        read(&conn)
+        shared_reads::run(&projection, read)
     })
     .await
     .map_err(|error| Failure::internal(format!("read task failed: {error}")))?
@@ -512,19 +557,8 @@ async fn asset(
             return Err(Failure::bad_request("this asset is not an image"));
         }
         let variant = query.variant()?;
-        let cache = state.images.clone();
-        let permit = cache
-            .workers
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| Failure::internal("image worker closed"))?;
-        let response = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            cache.asset(&name, variant, query.retry.is_some_and(|v| v > 0))
-        })
-        .await
-        .map_err(|_| Failure::internal("image worker failed"))??;
+        let retry = query.retry.is_some_and(|v| v > 0);
+        let response = images::asset_rendition(state.images.clone(), name, variant, retry).await?;
         return Ok(images::conditional(response, &headers));
     }
     let db = state.db.clone();
@@ -598,8 +632,9 @@ fn plan_response(document: timeline_meta::PlanDocument) -> Response {
 /// Whether a session's source rows are still behind the cold admission
 /// barrier: while the canonical RAM projection is unpublished, a `Pending`
 /// session's streamed rows may already sit in SQLite, but nothing below its
-/// metadata is public until the runtime's readiness commit flips it.
-fn behind_admission(
+/// metadata is public until the readiness commit that admits it (its tree's,
+/// or its runtime's at close) flips it. One column, never the family rollup.
+pub(crate) fn behind_admission(
     conn: &Connection,
     session_id: &str,
     hide_pending: bool,
@@ -607,9 +642,9 @@ fn behind_admission(
     if !hide_pending {
         return Ok(false);
     }
-    Ok(queries::session(conn, session_id)
+    Ok(queries::session_stream_state(conn, session_id)
         .map_err(store_err)?
-        .is_some_and(|session| session.stream_state == rosetta_core::rows::StreamState::Pending))
+        .is_some_and(|state| state == StreamState::Pending))
 }
 
 async fn read_plan_revision(
@@ -763,6 +798,10 @@ fn asset_media_type(name: &str) -> Option<&'static str> {
         "jpg" => Some("image/jpeg"),
         "gif" => Some("image/gif"),
         "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "ico" => Some("image/x-icon"),
+        "mp4" => Some("video/mp4"),
+        "mov" => Some("video/quicktime"),
         "pdf" => Some("application/pdf"),
         "json" => Some("application/vnd.rosetta.canonical-document+json"),
         "txt" => Some("text/plain; charset=utf-8"),
@@ -787,24 +826,27 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
             canonical_ready: false,
             search: SearchState::building(),
             daemon,
+            artifacts_revision: None,
         });
     }
     let projection = with_read(state.projection.clone(), |conn| {
         let schema_version = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| Failure::internal(format!("{error}")))?;
-        let canonical_ready = if schema_version == schema::SCHEMA_VERSION {
-            queries::projection_state(conn)
+        let (canonical_ready, artifacts_revision) = if schema_version == schema::SCHEMA_VERSION {
+            let canonical_ready = queries::projection_state(conn)
                 .map_err(store_err)?
-                .canonical_ready
+                .canonical_ready;
+            let revision = rosetta_store::html_artifacts::revision(conn).map_err(store_err)?;
+            (canonical_ready, Some(revision))
         } else {
-            false
+            (false, None)
         };
-        Ok((schema_version, canonical_ready))
+        Ok((schema_version, canonical_ready, artifacts_revision))
     })
     .await;
     let response = match projection {
-        Ok((schema_version, canonical_ready)) => StatusResponse {
+        Ok((schema_version, canonical_ready, artifacts_revision)) => StatusResponse {
             protocol_version: PROTOCOL_VERSION,
             schema_version,
             canonical_ready: canonical_ready && state.projection.is_published(),
@@ -814,6 +856,7 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
                 SearchState::failed()
             },
             daemon,
+            artifacts_revision,
         },
         // No readable projection — a fresh install still cold-loading its
         // private file. Status is the app's connectivity truth and answers
@@ -824,6 +867,7 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
             canonical_ready: false,
             search: SearchState::failed(),
             daemon,
+            artifacts_revision: None,
         },
     };
     Json(response)
@@ -871,15 +915,17 @@ async fn boost(
     State(state): State<AppState>,
     Json(request): Json<BoostRequest>,
 ) -> Result<Json<BoostResponse>, Failure> {
+    // A malformed request is a 400 in every serve mode, drained or not.
+    if request.session_id.is_empty() {
+        return Err(Failure::bad_request("boost needs a session_id"));
+    }
     let Some(ledger) = state.boost.as_ref() else {
         // No backfill loop to reorder — nothing to do, honestly said.
         return Ok(Json(BoostResponse { queued: false }));
     };
-    if request.session_id.is_empty() {
-        return Err(Failure::bad_request("boost needs a session_id"));
-    }
-    ledger.push(&request.session_id);
-    Ok(Json(BoostResponse { queued: true }))
+    // A closed ledger's drainer is done: nothing will reorder, honestly said.
+    let queued = ledger.push(&request.session_id);
+    Ok(Json(BoostResponse { queued }))
 }
 
 async fn runtimes(State(state): State<AppState>) -> Json<RuntimesResponse> {
@@ -1006,7 +1052,7 @@ pub(crate) fn read_timeline_page(
     cursor: Option<&str>,
     hide_pending: bool,
 ) -> Result<TimelinePage, Failure> {
-    let Some(session) = queries::session(conn, id).map_err(store_err)? else {
+    let Some(state) = queries::session_stream_state(conn, id).map_err(store_err)? else {
         return Err(Failure::not_found(format!("no session {id}")));
     };
     let watermark = queries::session_watermark(conn, id).map_err(store_err)?;
@@ -1014,7 +1060,7 @@ pub(crate) fn read_timeline_page(
     // separate physical commits. Metadata remains immediately public,
     // but its payload is admitted only when the final readiness commit
     // changes Pending to Streaming/Indexed.
-    if hide_pending && session.stream_state == rosetta_core::rows::StreamState::Pending {
+    if hide_pending && state == StreamState::Pending {
         return Ok(TimelinePage {
             entries: Vec::new(),
             cursor: None,
@@ -1031,7 +1077,8 @@ pub(crate) fn read_timeline_page(
             Some(cursor.before)
         }
     };
-    let entries = queries::timeline_page(conn, id, before, limit).map_err(store_err)?;
+    let entries =
+        queries::timeline_page_visible(conn, id, before, limit, hide_pending).map_err(store_err)?;
     let cursor = if entries.len() as i64 == limit {
         entries.first().map(|oldest| {
             TimelineCursor {
@@ -1057,10 +1104,10 @@ async fn collaboration_timeline(
 ) -> Result<Json<CollaborationTimeline>, Failure> {
     let hide_pending = !state.projection.is_published();
     with_read(state.projection.clone(), move |conn| {
-        let Some(session) = queries::session(conn, &id).map_err(store_err)? else {
+        let Some(state) = queries::session_stream_state(conn, &id).map_err(store_err)? else {
             return Err(Failure::not_found(format!("no session {id}")));
         };
-        if hide_pending && session.stream_state == rosetta_core::rows::StreamState::Pending {
+        if hide_pending && state == StreamState::Pending {
             return Ok(Json(CollaborationTimeline {
                 entries: Vec::new(),
                 response_runtimes: Vec::new(),
@@ -1082,14 +1129,15 @@ async fn timeline_entry(
 ) -> Result<Json<TimelineEntryResponse>, Failure> {
     let hide_pending = !state.projection.is_published();
     with_read(state.projection.clone(), move |conn| {
-        let Some(session) = queries::session(conn, &session_id).map_err(store_err)? else {
+        let Some(state) = queries::session_stream_state(conn, &session_id).map_err(store_err)?
+        else {
             return Err(Failure::not_found(format!("no session {session_id}")));
         };
-        if hide_pending && session.stream_state == rosetta_core::rows::StreamState::Pending {
+        if hide_pending && state == StreamState::Pending {
             return Err(Failure::not_found("that timeline row is not available"));
         }
         let watermark = queries::session_watermark(conn, &session_id).map_err(store_err)?;
-        queries::timeline_entry(conn, &session_id, &timeline_id)
+        queries::timeline_entry_visible(conn, &session_id, &timeline_id, hide_pending)
             .map_err(store_err)?
             .map(|entry| Json(TimelineEntryResponse { entry, watermark }))
             .ok_or_else(|| Failure::not_found("that timeline row is not available"))
@@ -1103,8 +1151,9 @@ async fn report_work(
     State(state): State<AppState>,
     UrlPath((session_id, timeline_id)): UrlPath<(String, String)>,
 ) -> Result<Json<Vec<rosetta_core::TimelineEntry>>, Failure> {
+    let hide_pending = !state.projection.is_published();
     with_read(state.projection.clone(), move |conn| {
-        queries::report_work(conn, &session_id, &timeline_id)
+        queries::report_work(conn, &session_id, &timeline_id, hide_pending)
             .map_err(store_err)?
             .map(Json)
             .ok_or_else(|| Failure::not_found("that report has no available recorded work"))
@@ -1112,19 +1161,22 @@ async fn report_work(
     .await
 }
 
+/// A full command is read back from the raw ledger, so it honours the same
+/// per-session admission as the row that previews it: while a fresh build is
+/// unpublished an admitted session's command reads the staged ledger (the
+/// reader resolves that root), and a Pending one is not public yet.
 async fn command(
     State(state): State<AppState>,
     UrlPath((session_id, timeline_id)): UrlPath<(String, String)>,
 ) -> Result<Json<CommandResponse>, Failure> {
-    if !state.projection.is_published() {
-        return Err(Failure::not_ready(
-            "full commands are available after raw-ledger publication",
-        ));
-    }
+    let hide_pending = !state.projection.is_published();
     let source = with_read(state.projection.clone(), {
         let session_id = session_id.clone();
         let timeline_id = timeline_id.clone();
         move |conn| {
+            if behind_admission(conn, &session_id, hide_pending)? {
+                return Err(Failure::not_ready("this conversation is still importing"));
+            }
             queries::command_source(conn, &session_id, &timeline_id)
                 .map_err(store_err)?
                 .ok_or_else(|| Failure::not_found("no raw command source for this row"))
@@ -1138,9 +1190,15 @@ async fn command(
     let command = tokio::task::spawn_blocking(move || reader.read_command(&source))
         .await
         .map_err(|error| Failure::internal(format!("raw command task failed: {error}")))?
-        .map_err(Failure::internal)?
-        .ok_or_else(|| Failure::not_found("the raw command record is unavailable"))?;
-    Ok(Json(CommandResponse { command }))
+        .map_err(Failure::internal)?;
+    match command {
+        Some(command) => Ok(Json(CommandResponse { command })),
+        // The staged ledger's capture workers append behind the writer, so an
+        // admitted row's record can still be in flight; publication drains
+        // and fsyncs them all, after which absence is final.
+        None if !state.projection.is_published() => Err(Failure::not_ready("still saving · retry")),
+        None => Err(Failure::not_found("the raw command record is unavailable")),
+    }
 }
 
 // @atlas step search-query.handler
@@ -1284,8 +1342,11 @@ async fn day_usage(
 }
 
 /// The price catalog behind every cost figure, and the pricing version the
-/// open projection's rollup was priced with.
+/// open projection's rollup was priced with. Its coverage report reads the
+/// same `usage_bucket` rollup the other aggregates do, which an unpublished
+/// RAM build has not folded yet, so it shares their gate.
 async fn pricing(State(state): State<AppState>) -> Result<Json<PricingResponse>, Failure> {
+    require_canonical_aggregates(&state.projection)?;
     let (projection_version, unpriced) = with_read(state.projection.clone(), |conn| {
         let version = rosetta_store::pricing::stored_version(conn).map_err(store_err)?;
         // The coverage report: a model the catalog cannot price shows up here
@@ -1341,4 +1402,49 @@ async fn contribution(
     })
     .await?;
     Ok(Json(response))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::asset_media_type;
+
+    const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn recorded_video_members_are_served_under_their_container_type() {
+        assert_eq!(
+            asset_media_type(&format!("{DIGEST}.mp4")),
+            Some("video/mp4")
+        );
+        assert_eq!(
+            asset_media_type(&format!("{DIGEST}.mov")),
+            Some("video/quicktime")
+        );
+        for name in [
+            format!("{DIGEST}.webm"),
+            format!("{DIGEST}.m4v"),
+            format!("{DIGEST}.MP4"),
+            format!("{DIGEST}.mp4.mov"),
+            DIGEST.to_string(),
+            format!("{}.mp4", &DIGEST[1..]),
+            format!("{}.mp4", DIGEST.to_uppercase()),
+            format!("../{DIGEST}.mp4"),
+        ] {
+            assert_eq!(asset_media_type(&name), None, "{name}");
+        }
+    }
+
+    /// Every member type core can name is served under that exact type,
+    /// except HTML, which only the session artifact route serves.
+    #[test]
+    fn every_member_extension_maps_back_to_its_media_type() {
+        for (media_type, extension) in rosetta_core::assets::MEMBER_TYPES {
+            let served = asset_media_type(&format!("{DIGEST}.{extension}"));
+            if media_type == "text/html; charset=utf-8" {
+                assert_eq!(served, None, "generic asset URLs do not serve HTML");
+            } else {
+                assert_eq!(served, Some(media_type), "{extension}");
+            }
+        }
+    }
 }

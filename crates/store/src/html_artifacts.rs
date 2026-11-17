@@ -1,10 +1,13 @@
 //! The global HTML review library and its source-owned publication history.
 
+use std::collections::HashSet;
+
 use crate::StoreError;
 use rosetta_core::{
     html_artifacts::{
         HTML_MEDIA_TYPE, HtmlArtifactAvailability, HtmlArtifactContent, HtmlArtifactPublication,
     },
+    rows::StreamState,
     timeline::AssetRef,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -50,7 +53,14 @@ pub struct ArtifactPage {
 #[derive(Debug, Serialize, Deserialize)]
 struct Cursor {
     epoch: String,
+    /// The library revision (`projection_state.artifacts_revision`, schema
+    /// 30). It replaced `search_revision`, which moved with every new message
+    /// and so expired a walk while agents worked (RO-35).
     revision: i64,
+    /// Whether the page was read behind the cold admission barrier. Lifting
+    /// the barrier reveals rows without a revision step, so it expires too.
+    #[serde(default)]
+    hidden: bool,
     query: (
         Option<String>,
         Option<String>,
@@ -78,18 +88,21 @@ impl From<rusqlite::Error> for ListError {
     }
 }
 
+/// Upsert one publication. Returns the rows it changed: 0 when a replay
+/// restates the facts already held, so a live transaction steps the library
+/// revision only when the library moved.
 pub(crate) fn apply_publication(
     tx: &Transaction,
     row: &HtmlArtifactPublication,
     src: Option<i64>,
-) -> Result<(), StoreError> {
+) -> Result<u64, StoreError> {
     row.validate()
         .map_err(|message| StoreError::ProjectionInvalid {
             message: message.into(),
         })?;
-    tx.prepare_cached("INSERT INTO html_artifact
-        (id,artifact_id,session_id,timeline_id,title,filename,path,url,native_id,version,published_at,sort_at,source_offset,src_cursor)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+    let changed = tx.prepare_cached("INSERT INTO html_artifact
+        (id,artifact_id,session_id,timeline_id,title,filename,path,url,native_id,version,published_at,sort_at,source_offset,src_cursor,description,dropped_files)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
         ON CONFLICT(id) DO UPDATE SET artifact_id=excluded.artifact_id, title=excluded.title,
         url=excluded.url,native_id=excluded.native_id,version=excluded.version,
         published_at=excluded.published_at,sort_at=excluded.sort_at,
@@ -97,16 +110,24 @@ pub(crate) fn apply_publication(
         captured_at=CASE WHEN source_offset!=excluded.source_offset OR src_cursor IS NOT excluded.src_cursor THEN NULL ELSE captured_at END,
         recovered_from=CASE WHEN source_offset!=excluded.source_offset OR src_cursor IS NOT excluded.src_cursor THEN NULL ELSE recovered_from END,
         asset=CASE WHEN source_offset!=excluded.source_offset OR src_cursor IS NOT excluded.src_cursor THEN NULL ELSE asset END,
-        source_offset=excluded.source_offset,src_cursor=excluded.src_cursor")?
-        .execute(params![row.id,row.artifact_id,row.session_id,row.timeline_id,row.title,row.filename,row.path,row.url,row.native_id,row.version,row.published_at,row.published_at.unwrap_or(0),row.source_offset,src])?;
-    Ok(())
+        source_offset=excluded.source_offset,src_cursor=excluded.src_cursor,
+        description=excluded.description,dropped_files=excluded.dropped_files
+        WHERE artifact_id IS NOT excluded.artifact_id OR title IS NOT excluded.title
+        OR url IS NOT excluded.url OR native_id IS NOT excluded.native_id
+        OR version IS NOT excluded.version OR published_at IS NOT excluded.published_at
+        OR source_offset IS NOT excluded.source_offset OR src_cursor IS NOT excluded.src_cursor
+        OR description IS NOT excluded.description OR dropped_files IS NOT excluded.dropped_files")?
+        .execute(params![row.id,row.artifact_id,row.session_id,row.timeline_id,row.title,row.filename,row.path,row.url,row.native_id,row.version,row.published_at,row.published_at.unwrap_or(0),row.source_offset,src,row.description,row.dropped_files])?;
+    Ok(changed as u64)
 }
 
+/// Enrich the publications at one coordinate with an observation. Returns
+/// the rows whose capture changed: a replay of the same observation is 0.
 pub(crate) fn apply_content(
     tx: &Transaction,
     row: &HtmlArtifactContent,
     src: Option<i64>,
-) -> Result<(), StoreError> {
+) -> Result<u64, StoreError> {
     if row.recovered_from.as_ref().is_some_and(|from| {
         from.is_empty()
             || from.len() > 32768
@@ -139,12 +160,15 @@ pub(crate) fn apply_content(
         .to_owned();
     let asset = row.asset.as_ref().map(serde_json::to_string).transpose()?;
     // Coordinate + source ownership prevents one result/file from enriching a
-    // different publication or a replacement generation's rows.
-    tx.prepare_cached(
+    // different publication or a replacement generation's rows. A row that
+    // already holds this observation is left alone, so it counts no change.
+    let mut statement = tx.prepare_cached(
         "UPDATE html_artifact SET availability=?1,captured_at=?2,asset=?3,recovered_from=?8
-        WHERE session_id=?4 AND source_offset=?5 AND path IS ?6 AND src_cursor IS ?7",
-    )?
-    .execute(params![
+        WHERE session_id=?4 AND source_offset=?5 AND path IS ?6 AND src_cursor IS ?7
+        AND (availability IS NOT ?1 OR captured_at IS NOT ?2 OR asset IS NOT ?3
+            OR recovered_from IS NOT ?8)",
+    )?;
+    let changed = statement.execute(params![
         status,
         row.captured_at,
         asset,
@@ -154,7 +178,83 @@ pub(crate) fn apply_content(
         src,
         row.recovered_from
     ])?;
-    Ok(())
+    Ok(changed as u64)
+}
+
+/// One step of the library revision (RO-35). The store calls it once per
+/// writer transaction that changed what the library shows, in every mode: a
+/// publication or capture written or swept, or a readiness flip across
+/// Pending of a session that holds one ([`flip_moves`]). Two builds of one
+/// ledger may hold different values (the count follows their transactions);
+/// only a change of value means anything.
+pub(crate) fn step_revision(tx: &Transaction) -> Result<u64, StoreError> {
+    let revision: i64 = tx.query_row(
+        "UPDATE projection_state
+         SET artifacts_revision = artifacts_revision + 1
+         WHERE singleton = 1
+         RETURNING artifacts_revision",
+        [],
+        |row| row.get(0),
+    )?;
+    u64::try_from(revision).map_err(|_| StoreError::ProjectionInvalid {
+        message: format!("negative artifact library revision {revision}"),
+    })
+}
+
+/// The library revision: the list cursor's binding, `/api/status`'s
+/// `artifacts_revision`, and what `/ws/meta`'s `artifacts_changed` announces.
+pub fn revision(conn: &Connection) -> Result<u64, StoreError> {
+    let revision: i64 = conn.query_row(
+        "SELECT artifacts_revision FROM projection_state WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    u64::try_from(revision).map_err(|_| StoreError::ProjectionInvalid {
+        message: format!("negative artifact library revision {revision}"),
+    })
+}
+
+/// The sessions that hold a publication: the only ones whose readiness flip
+/// can move the library. One pass over the session index, so a batch flip
+/// checks each of its sessions in RAM and reads only a publisher's state.
+pub(crate) fn publishing_sessions(conn: &Connection) -> Result<HashSet<String>, StoreError> {
+    let mut statement = conn.prepare_cached("SELECT DISTINCT session_id FROM html_artifact")?;
+    let sessions = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    Ok(sessions)
+}
+
+/// Whether moving `session_id` to `next` crosses Pending while the session
+/// holds a publication: the readiness flip that changes what the library
+/// shows. The admission barrier hides a Pending session's publications, and
+/// every list leaves them out of version counts and links. Read before the
+/// flip is written.
+pub(crate) fn flip_moves(
+    conn: &Connection,
+    session_id: &str,
+    next: StreamState,
+) -> Result<bool, StoreError> {
+    Ok(conn
+        .prepare_cached(
+            "SELECT (s.stream_state = 'pending') != (?2 = 'pending')
+                AND EXISTS (SELECT 1 FROM html_artifact a WHERE a.session_id = s.id)
+             FROM session s WHERE s.id = ?1",
+        )?
+        .query_row(params![session_id, next.as_str()], |row| row.get(0))
+        .optional()?
+        .unwrap_or(false))
+}
+
+/// Whether a Pending session holds a publication: what lifting the admission
+/// barrier shows without a revision step, so the mirror announces it then.
+pub fn held_by_pending(conn: &Connection) -> Result<bool, StoreError> {
+    Ok(conn
+        .prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM html_artifact a JOIN session s ON s.id = a.session_id
+             WHERE s.stream_state = 'pending')",
+        )?
+        .query_row([], |row| row.get(0))?)
 }
 
 const COLUMNS: &str = "a.id,a.artifact_id,a.session_id,a.timeline_id,a.title,a.filename,a.path,
@@ -162,7 +262,8 @@ const COLUMNS: &str = "a.id,a.artifact_id,a.session_id,a.timeline_id,a.title,a.f
         WHERE u.artifact_id=a.artifact_id AND u.url IS NOT NULL AND us.stream_state!='pending'
         ORDER BY u.sort_at DESC,u.id DESC LIMIT 1)),a.native_id,a.version,a.published_at,a.source_offset,a.availability,a.captured_at,a.asset,r.kind,s.title,p.id,p.name,
     (SELECT count(*) FROM html_artifact versions JOIN session vs ON vs.id=versions.session_id
-     WHERE versions.artifact_id=a.artifact_id AND vs.stream_state!='pending'),a.recovered_from";
+     WHERE versions.artifact_id=a.artifact_id AND vs.stream_state!='pending'),a.recovered_from,
+    a.description,a.dropped_files";
 const JOINS: &str = "FROM html_artifact a JOIN session s ON s.id=a.session_id
     JOIN agent_runtime r ON r.id=s.runtime_id LEFT JOIN session root ON root.id=s.root_session_id
     LEFT JOIN project p ON p.id=root.project_id";
@@ -191,6 +292,8 @@ fn decode(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactEntry> {
             version: row.get(9)?,
             published_at: row.get(10)?,
             source_offset: row.get(11)?,
+            description: row.get(21)?,
+            dropped_files: row.get(22)?,
         },
         availability: serde_json::from_value(serde_json::Value::String(status))
             .map_err(|e| json_error(12, e))?,
@@ -228,7 +331,9 @@ pub fn list(
         .then(|| conn.unchecked_transaction())
         .transpose()?;
     let conn: &Connection = snapshot.as_deref().unwrap_or(conn);
-    let (epoch, revision, ready): (String,i64,bool) = conn.query_row("SELECT projection_epoch,search_revision,canonical_ready FROM projection_state WHERE singleton=1", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    // The library's own revision, never the search watermark: a message that
+    // touches no publication must not expire a walk (RO-35, schema 30).
+    let (epoch, revision, ready): (String,i64,bool) = conn.query_row("SELECT projection_epoch,artifacts_revision,canonical_ready FROM projection_state WHERE singleton=1", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
     let query = (
         request.q.clone(),
         request.agent.clone(),
@@ -245,7 +350,7 @@ pub fn list(
         if cursor.query != query {
             return Err(ListError::Invalid);
         }
-        if cursor.epoch != epoch || cursor.revision != revision {
+        if cursor.epoch != epoch || cursor.revision != revision || cursor.hidden != hide_pending {
             return Err(ListError::Expired);
         }
     }
@@ -282,6 +387,7 @@ pub fn list(
             serde_json::to_string(&Cursor {
                 epoch,
                 revision,
+                hidden: hide_pending,
                 query,
                 at: entry.publication.published_at.unwrap_or(0),
                 id: entry.publication.id.clone(),

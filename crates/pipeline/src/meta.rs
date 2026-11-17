@@ -22,11 +22,14 @@ mod exclusions;
 use exclusions::CwdAdmission;
 mod inventory;
 mod recheck;
+mod transcripts;
 pub use recheck::{AdmissionCheck, AdmissionSources};
 
 /// One source file the stream phase will tail, with the ids minted here.
 #[derive(Debug, Clone)]
 pub struct SessionFile {
+    /// RAM-only decoded source plan. Raw records remain self-contained in the ledger.
+    pub input: Option<rosetta_capture::input::InputSource>,
     /// Capture and checkpoint this source without admitting a public session.
     pub ledger_only: bool,
     pub relative_path: String,
@@ -43,11 +46,27 @@ pub struct SessionFile {
     /// Only these virtual tombstones may turn a Missing read into an empty
     /// authoritative generation; a racing ordinary read remains incomplete.
     pub source_missing: bool,
+    /// RAM only. A ledger-only source's parent (else root): the one family
+    /// link no row carries (a Codex guardian's usage lands on it).
+    pub tree_parent: Option<String>,
+    /// RAM only. A transcript's length at the skim's own fstat, the cut a
+    /// root-tree build reads it up to; `skim::Cut` says what has none.
+    pub cut_len: Option<u64>,
+    /// RAM only. The mtime (epoch ms) at that fstat, which root trees rank
+    /// by; `modified_ms` is the older census's. An encoded or composed input
+    /// can have this stamp without a cheaply known decoded `cut_len`.
+    pub cut_modified_ms: Option<i64>,
 }
 
 impl SessionFile {
     pub(crate) fn projected_session_id(&self) -> Option<String> {
         (!self.ledger_only).then(|| self.session_id.clone())
+    }
+
+    /// The bytes a root-tree cold build reads of this source: its metadata
+    /// cut where it has one, else its census size.
+    pub fn read_len(&self) -> u64 {
+        self.cut_len.unwrap_or(self.size)
     }
 }
 
@@ -82,6 +101,7 @@ pub struct MetaReport {
 
 #[derive(Debug, Default)]
 struct MetaOutput {
+    selections: BTreeMap<String, rosetta_adapter_support::transcripts::TranscriptSelection>,
     projects: Vec<ProjectRow>,
     /// First-merge order. Grows only through [`MetaOutput::merge_session`],
     /// which keeps `session_positions` in step.
@@ -183,14 +203,16 @@ pub fn meta_ingest_inventory_into(
                 runtime.discovered_at = 0;
             }
         }
-        let semantic = serde_json::to_vec(&semantic_ops).map_err(|error| {
-            PipelineError::Config(format!("serializing semantic meta key: {error}"))
-        })?;
+        let semantic = serde_json::to_vec(&crate::LedgerMetadata::new(semantic_ops, &files))
+            .map_err(|error| {
+                PipelineError::Config(format!("serializing semantic meta key: {error}"))
+            })?;
         let semantic_key = blake3::hash(&semantic).to_hex().to_string();
         instrument.ledger_write(ledger, |ledger| -> Result<(), PipelineError> {
-            let json = serde_json::to_string(&ops).map_err(|error| {
-                PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
-            })?;
+            let json = serde_json::to_string(&crate::LedgerMetadata::new(ops.clone(), &files))
+                .map_err(|error| {
+                    PipelineError::Config(format!("serializing meta ops for the ledger: {error}"))
+                })?;
             ledger.append_meta_checkpoint_if_changed(
                 crate::LEDGER_META_SCHEMA_VERSION,
                 &json,
@@ -240,14 +262,36 @@ pub(crate) fn plan_inventory(
     };
     report.walk_truncated = walk_truncated;
 
+    let mut seen = BTreeSet::new();
+    let inventory: Vec<_> = inventory
+        .iter()
+        .filter(|file| {
+            let key = adapter
+                .transcript_location(&file.relative_path)
+                .map_or_else(|| file.relative_path.clone(), |l| l.logical_path);
+            seen.insert(key)
+        })
+        .cloned()
+        .collect();
     inventory::read_inventory(
         adapter,
         runtime,
         root,
-        inventory,
+        &inventory,
         opts,
         instrument,
         threads,
+        &mut report,
+        &mut output,
+    )?;
+
+    transcripts::resolve(
+        adapter,
+        runtime,
+        root,
+        store,
+        &inventory,
+        opts,
         &mut report,
         &mut output,
     )?;
@@ -302,7 +346,8 @@ pub(crate) fn plan_inventory(
     // can exclude a previously projected source from metadata admission, but
     // a re-skim must not turn its existing cursor into a different source.
     // Preserve that legacy binding while continuing to capture its raw tail;
-    // newly discovered internal sources still have no projected session.
+    // newly discovered internal sources still have no projected session. A
+    // converted source keeps its `tree_parent`: no row of this pass links it.
     for file in files.iter_mut().filter(|file| file.ledger_only) {
         if rosetta_store::queries::cursor_state(store.conn(), &runtime.id, &file.relative_path)?
             .is_some_and(|cursor| cursor.session_id.as_deref() == Some(file.session_id.as_str()))
@@ -635,6 +680,8 @@ struct AdmitSource {
     driver: StreamDriver,
     size: u64,
     modified_ms: i64,
+    /// A skimmed transcript's metadata cut; `None` for snapshot members.
+    cut: Option<crate::skim::Cut>,
 }
 
 /// Mint canonical ids from native facts and stage the session, project, and
@@ -653,7 +700,15 @@ fn admit_identified(
     output.admission.observe(&runtime.id, &session_id, &skim);
 
     if skim.ledger_only {
+        // No row carries this source's family link, so the source does.
+        let tree_parent = skim
+            .parent_session_id
+            .as_deref()
+            .or(skim.root_session_id.as_deref())
+            .map(|native| ids::session_id(&runtime.id, native))
+            .filter(|parent| parent != &session_id);
         output.files.push(SessionFile {
+            input: None,
             ledger_only: true,
             relative_path: source.relative_path,
             stream_id: source.stream_id,
@@ -666,6 +721,9 @@ fn admit_identified(
             modified_ms: source.modified_ms,
             agent_version: skim.agent_version,
             source_missing: false,
+            tree_parent,
+            cut_len: source.cut.and_then(|cut| cut.len),
+            cut_modified_ms: source.cut.map(|cut| cut.modified_ms),
         });
         return;
     }
@@ -797,6 +855,7 @@ fn admit_identified(
     output.merge_session(row);
 
     output.files.push(SessionFile {
+        input: None,
         ledger_only: false,
         relative_path: source.relative_path,
         stream_id: source.stream_id,
@@ -809,6 +868,9 @@ fn admit_identified(
         modified_ms: source.modified_ms,
         agent_version: skim.agent_version,
         source_missing: false,
+        tree_parent: None,
+        cut_len: source.cut.and_then(|cut| cut.len),
+        cut_modified_ms: source.cut.map(|cut| cut.modified_ms),
     });
     if output.admission.is_empty() {
         instrument.add(
@@ -837,6 +899,7 @@ fn canonical_project_hint(runtime_id: &str, hint: ProjectHint) -> Option<Project
 /// (`<document-path>#<native-id>`); an unidentified skim is only counted.
 #[allow(clippy::too_many_arguments)]
 fn admit_skim(
+    adapter: &dyn AgentAdapter,
     runtime: &RuntimeRow,
     report: &mut MetaReport,
     output: &mut MetaOutput,
@@ -845,6 +908,7 @@ fn admit_skim(
     driver: StreamDriver,
     mut skim: SkimResult,
     member: bool,
+    cut: Option<crate::skim::Cut>,
     instrument: &Instrument,
 ) {
     let Some(native_session_id) = skim.session_id.clone() else {
@@ -867,6 +931,12 @@ fn admit_skim(
     } else {
         file.relative_path.clone()
     };
+    let location = (!member)
+        .then(|| adapter.transcript_location(&relative_path))
+        .flatten();
+    let relative_path = location
+        .as_ref()
+        .map_or(relative_path, |l| l.logical_path.clone());
     admit_identified(
         runtime,
         output,
@@ -878,91 +948,21 @@ fn admit_skim(
             driver,
             size: file.size,
             modified_ms: file.modified_ms,
+            cut,
         },
         skim,
         native_session_id,
         instrument,
     );
-}
-
-/// Meta admission for a `SqliteSnapshot` stream: enumerate the database's
-/// sessions via the adapter's declared plan and admit each as a VIRTUAL
-/// source (`<db-path>#<native-id>`) — its own cursor, its own generation
-/// swaps, its own ledger entries, exactly like a file.
-#[allow(clippy::too_many_arguments)]
-fn admit_database(
-    adapter: &dyn AgentAdapter,
-    runtime: &RuntimeRow,
-    root: &Path,
-    stream: &rosetta_adapter_support::StreamSpec,
-    driver: StreamDriver,
-    db_relative: &str,
-    size: u64,
-    modified_ms: i64,
-    report: &mut MetaReport,
-    output: &mut MetaOutput,
-    instrument: &Instrument,
-) -> Result<(), PipelineError> {
-    let Some(plan) = adapter.snapshot_plan(&stream.id) else {
-        return Err(PipelineError::Config(format!(
-            "{} drives stream {} as SqliteSnapshot but declares no snapshot plan",
-            adapter.kind(),
-            stream.id
-        )));
-    };
-    let outcome = instrument.time(Metric::SkimNanos, || {
-        rosetta_capture::snapshot_db(&root.join(db_relative))
-    })?;
-    let snapshot = match outcome {
-        rosetta_capture::SnapshotOutcome::Ready(snapshot) => snapshot,
-        // A racing writer or vanished db is the stream phase's problem.
-        rosetta_capture::SnapshotOutcome::Missing | rosetta_capture::SnapshotOutcome::Unstable => {
-            report.files_vanished += 1;
-            instrument.add(Metric::FilesVanished, 1);
-            return Ok(());
+    if let Some(location) = location
+        && let Some(file) = output.files.last_mut()
+    {
+        file.input = Some(location.source);
+        // Alternate physical encodings use the logical stream's normalizer.
+        if let Some(stream) = adapter.layout().matching_stream(&file.relative_path) {
+            file.stream_id = stream.id.clone();
         }
-    };
-    report.files_skimmed += 1;
-    instrument.add(Metric::FilesSkimmed, 1);
-
-    for row in snapshot.query_rows(&plan.sessions_sql, None)? {
-        let value: serde_json::Value = serde_json::from_str(&row).map_err(|error| {
-            PipelineError::Config(format!("sessions_sql row is not an object: {error}"))
-        })?;
-        let skim = adapter.snapshot_session(&stream.id, &value);
-        let Some(native) = skim.session_id.clone() else {
-            if output.admission.excludes_cwd(skim.cwd.as_deref()) {
-                continue;
-            }
-            report.files_unidentified += 1;
-            instrument.add(Metric::FilesUnidentified, 1);
-            continue;
-        };
-        let updated = skim.updated_at.unwrap_or(modified_ms);
-        admit_identified(
-            runtime,
-            output,
-            AdmitSource {
-                relative_path: format!("{db_relative}#{native}"),
-                stream_id: stream.id.clone(),
-                file_format: stream.file_format,
-                discipline: stream.discipline,
-                driver,
-                size,
-                modified_ms: updated,
-            },
-            skim,
-            native,
-            instrument,
-        );
     }
-
-    // A member no longer returned by sessions_sql keeps its last projected
-    // generation, exactly as a deleted JSONL transcript keeps its rows: an
-    // agent pruning its own store (Hermes 0.21.4 retains 90 days by default)
-    // must not erase Rosetta's history (product decision, 2026-09-24). The
-    // cursor simply sees no further activity.
-    Ok(())
 }
 
 #[cfg(test)]

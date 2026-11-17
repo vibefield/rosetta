@@ -1,14 +1,24 @@
 //! Materialization of content-addressed members of the canonical projection.
 //!
-//! SQLite stores only stable `/api/assets/<digest>.<ext>` references. Decoded
-//! media and oversized canonical text live in a content-addressed sibling directory. A file
-//! is durable before a live SQLite commit may expose its URL; private rebuilds
-//! defer file and directory barriers until their pre-publication gate.
+//! SQLite stores only stable `/api/assets/<digest>.<ext>` references. Recorded
+//! media (an image's verified original bytes) and oversized canonical text live
+//! in a content-addressed sibling directory. A file is durable before a live
+//! SQLite commit may expose its URL; private rebuilds defer file and directory
+//! barriers until their pre-publication gate.
+//!
+//! Projection ops never carry display renditions: those are a disposable cache
+//! derived after ingestion. Rows written before that switch may still name a
+//! legacy WebP bundle (a WebP member plus four WebP variant members); those
+//! member files stay valid references, but no new op writes one.
 
 mod image_gc;
+pub mod image_refs;
+mod place;
+pub mod renditions;
 pub use image_gc::prune_unreferenced_images;
+pub use place::{PlaceError, Placed, VerifiedMember, place_bytes};
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::Write;
@@ -35,6 +45,13 @@ pub fn asset_root(projection: &Path) -> PathBuf {
     let mut root: OsString = projection.as_os_str().to_owned();
     root.push(".assets");
     PathBuf::from(root)
+}
+
+/// Where a captured HTML page lives in the asset root: `<digest>.html`, the
+/// member a library entry's `asset` names. The content read and the export
+/// door both read it here and nowhere else.
+pub fn html_member_path(projection: &Path, digest: &str) -> PathBuf {
+    asset_root(projection).join(format!("{digest}.html"))
 }
 
 /// Resolve one already-committed canonical UTF-8 member for detached search.
@@ -87,6 +104,15 @@ pub(crate) struct AssetStore {
     root: Option<PathBuf>,
     pending_sync: BTreeSet<PathBuf>,
     root_created: bool,
+    /// Members this store wrote or hash-verified, by file name, with their
+    /// length. A repeated occurrence of the same bytes then costs one stat
+    /// instead of a re-read and re-hash. The stat still runs: a member pruned
+    /// since is written again, and one whose type or length changed is
+    /// re-verified (and refused if its bytes differ). Only a same-length
+    /// overwrite of a file this store already verified goes unnoticed, until
+    /// another store (a later process) verifies it; a first occurrence is
+    /// always written or fully hashed.
+    verified: BTreeMap<String, u64>,
 }
 
 impl AssetStore {
@@ -99,6 +125,7 @@ impl AssetStore {
             root: Some(root),
             pending_sync: BTreeSet::new(),
             root_created: false,
+            verified: BTreeMap::new(),
         }
     }
 
@@ -107,6 +134,7 @@ impl AssetStore {
             root: None,
             pending_sync: BTreeSet::new(),
             root_created: false,
+            verified: BTreeMap::new(),
         }
     }
 
@@ -138,28 +166,6 @@ impl AssetStore {
         stats: &mut AssetWriteStats,
     ) -> Result<(), StoreError> {
         validate_asset(asset)?;
-        let mut seen = BTreeSet::new();
-        for variant in &asset.image_variants {
-            if asset.media_type != "image/webp"
-                || variant.variant == rosetta_core::assets::ImageVariant::Full
-                || !seen.insert(variant.variant)
-                || !magic_matches("image/webp", &variant.bytes)
-            {
-                return Err(StoreError::AssetInvalid {
-                    message: "invalid image rendition bundle".into(),
-                });
-            }
-            let digest = blake3::hash(&variant.bytes).to_hex().to_string();
-            match self.materialize_member(
-                &format!("{digest}.webp"),
-                &variant.bytes,
-                &digest,
-                durable_now,
-            )? {
-                Materialized::Written => stats.files_written += 1,
-                Materialized::Reused => stats.files_reused += 1,
-            }
-        }
         let file_name = asset.file_name().ok_or_else(|| StoreError::AssetInvalid {
             message: format!(
                 "unsupported projection member media type {}",
@@ -202,8 +208,16 @@ impl AssetStore {
 
         let destination = root.join(file_name);
         match fs::symlink_metadata(&destination) {
+            Ok(metadata)
+                if metadata.file_type().is_file()
+                    && self.verified.get(file_name) == Some(&metadata.len()) =>
+            {
+                return Ok(Materialized::Reused);
+            }
             Ok(_) => {
                 verify_existing(&destination, bytes.len(), digest)?;
+                self.verified
+                    .insert(file_name.to_owned(), bytes.len() as u64);
                 return Ok(Materialized::Reused);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -221,10 +235,14 @@ impl AssetStore {
             Ok(_) => {}
             Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
                 verify_existing(&destination, bytes.len(), digest)?;
+                self.verified
+                    .insert(file_name.to_owned(), bytes.len() as u64);
                 return Ok(Materialized::Reused);
             }
             Err(error) => return Err(error.error.into()),
         }
+        self.verified
+            .insert(file_name.to_owned(), bytes.len() as u64);
 
         if durable_now {
             sync_directory(&root)?;
@@ -264,6 +282,15 @@ enum Materialized {
 }
 
 fn validate_asset(asset: &ProjectionAsset) -> Result<(), StoreError> {
+    if !asset.image_variants.is_empty() {
+        return Err(StoreError::AssetInvalid {
+            message: format!(
+                "projection asset {} carries image variants; display renditions are a \
+                 disposable cache, never a projection op",
+                asset.digest
+            ),
+        });
+    }
     if asset.bytes.is_empty() {
         return Err(StoreError::AssetInvalid {
             message: format!(
@@ -327,6 +354,11 @@ fn magic_matches(media_type: &str, bytes: &[u8]) -> bool {
         "image/jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
         "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
         "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
+        "image/bmp" => bytes.starts_with(b"BM"),
+        "image/x-icon" => bytes.starts_with(&[0, 0, 1, 0]),
+        "video/mp4" | "video/quicktime" => {
+            rosetta_media::video_media_type(bytes) == Some(media_type)
+        }
         "application/pdf" => bytes.starts_with(b"%PDF-"),
         "application/vnd.rosetta.canonical-document+json" => {
             serde_json::from_slice::<serde_json::Value>(bytes).is_ok()
@@ -354,8 +386,8 @@ fn sync_parent(path: &Path) -> Result<(), StoreError> {
 mod tests {
     use rosetta_core::{IngestOp, ProjectionAsset};
 
-    use super::{AssetStore, asset_root};
-    use crate::Batch;
+    use super::{AssetStore, asset_root, magic_matches};
+    use crate::{Batch, StoreError};
 
     fn png() -> ProjectionAsset {
         ProjectionAsset::new("image/png", b"\x89PNG\r\n\x1a\nbody".to_vec()).unwrap()
@@ -422,5 +454,211 @@ mod tests {
             std::fs::read(asset_root(&projection).join(asset.file_name().unwrap())).unwrap(),
             asset.bytes
         );
+    }
+
+    fn batch(asset: ProjectionAsset) -> Batch {
+        Batch {
+            ops: vec![IngestOp::ProjectionAsset { asset }],
+            ..Batch::default()
+        }
+    }
+
+    /// A member this store already verified is not re-read or re-hashed on its
+    /// next occurrence; one stat still notices a member that is gone.
+    #[test]
+    fn a_verified_member_is_trusted_by_its_store_until_it_disappears() {
+        let root = tempfile::tempdir().unwrap();
+        let projection = root.path().join("rosetta.db");
+        let asset = png();
+        let path = asset_root(&projection).join(asset.file_name().unwrap());
+        let mut store = AssetStore::for_projection(&projection);
+        assert_eq!(
+            store
+                .materialize_batch(&batch(asset.clone()), false)
+                .unwrap()
+                .files_written,
+            1
+        );
+        // Same length, other bytes: only a re-read could tell, and the store
+        // that verified the member does not re-read it.
+        std::fs::write(&path, b"same length!").unwrap();
+        assert_eq!(
+            store
+                .materialize_batch(&batch(asset.clone()), false)
+                .unwrap()
+                .files_reused,
+            1
+        );
+        assert!(
+            AssetStore::for_projection(&projection)
+                .materialize_batch(&batch(asset.clone()), false)
+                .is_err(),
+            "a store that never verified the member re-hashes it"
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            store
+                .materialize_batch(&batch(asset.clone()), false)
+                .unwrap()
+                .files_written,
+            1,
+            "a pruned member is written again, never trusted"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), asset.bytes);
+        store.finish_pending().unwrap();
+    }
+
+    #[test]
+    fn refuses_ops_that_carry_image_variants() {
+        let root = tempfile::tempdir().unwrap();
+        let projection = root.path().join("rosetta.db");
+        let webp = b"RIFF\x04\0\0\0WEBPVP8L".to_vec();
+        let mut bundle = ProjectionAsset::new("image/webp", webp.clone()).unwrap();
+        bundle.image_variants = rosetta_core::assets::ImageVariant::DERIVED
+            .into_iter()
+            .map(|variant| rosetta_core::assets::ImageVariantBytes {
+                variant,
+                bytes: webp.clone(),
+            })
+            .collect();
+        assert!(bundle.reference().validate().is_ok());
+        let error = AssetStore::for_projection(&projection)
+            .materialize_batch(&batch(bundle), true)
+            .unwrap_err();
+        assert!(error.to_string().contains("image variants"), "{error}");
+        assert!(!asset_root(&projection).exists(), "nothing is written");
+    }
+
+    #[test]
+    fn bmp_and_ico_are_recorded_image_members() {
+        let root = tempfile::tempdir().unwrap();
+        let projection = root.path().join("rosetta.db");
+        let mut store = AssetStore::for_projection(&projection);
+        for (media_type, bytes, extension) in [
+            ("image/bmp", b"BM bitmap".to_vec(), "bmp"),
+            ("image/x-icon", b"\0\0\x01\0icon".to_vec(), "ico"),
+        ] {
+            let asset = ProjectionAsset::new(media_type, bytes).unwrap();
+            assert!(asset.file_name().unwrap().ends_with(extension));
+            store
+                .materialize_batch(&batch(asset.clone()), true)
+                .unwrap();
+            assert_eq!(
+                std::fs::read(asset_root(&projection).join(asset.file_name().unwrap())).unwrap(),
+                asset.bytes
+            );
+            let mislabeled = ProjectionAsset::new(media_type, b"\x89PNG".to_vec()).unwrap();
+            assert!(store.materialize_batch(&batch(mislabeled), true).is_err());
+        }
+    }
+
+    /// A leading `ftyp` box with one compatible brand, then a `moov` header.
+    fn video(major: &[u8; 4], compatible: &[u8; 4]) -> Vec<u8> {
+        let mut bytes = 20_u32.to_be_bytes().to_vec();
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(major);
+        bytes.extend_from_slice(&[0, 0, 2, 0]);
+        bytes.extend_from_slice(compatible);
+        bytes.extend_from_slice(b"\0\0\0\x08moov");
+        bytes
+    }
+
+    #[test]
+    fn mp4_and_mov_are_recorded_video_members() {
+        let root = tempfile::tempdir().unwrap();
+        let projection = root.path().join("rosetta.db");
+        let mut store = AssetStore::for_projection(&projection);
+        let mp4 = video(b"isom", b"mp41");
+        let mov = video(b"qt  ", b"qt  ");
+        for (media_type, bytes, extension) in [
+            ("video/mp4", mp4.clone(), "mp4"),
+            ("video/quicktime", mov.clone(), "mov"),
+        ] {
+            let asset = ProjectionAsset::new(media_type, bytes).unwrap();
+            assert!(asset.file_name().unwrap().ends_with(extension));
+            let stats = store
+                .materialize_batch(&batch(asset.clone()), true)
+                .unwrap();
+            assert_eq!(stats.files_written, 1);
+            assert_eq!(
+                std::fs::read(asset_root(&projection).join(asset.file_name().unwrap())).unwrap(),
+                asset.bytes
+            );
+            // The in-memory store has no files but holds the same contract.
+            AssetStore::in_memory()
+                .materialize_batch(&batch(asset), true)
+                .unwrap();
+        }
+        // Wrong magic is refused before anything is written, on disk and in
+        // memory alike: another container, an image, an image-brand file.
+        let heic = video(b"heic", b"mif1");
+        let before = std::fs::read_dir(asset_root(&projection)).unwrap().count();
+        for (media_type, bytes) in [
+            ("video/mp4", mov),
+            ("video/quicktime", mp4),
+            ("video/mp4", b"\x89PNG\r\n\x1a\nbody".to_vec()),
+            ("video/mp4", heic),
+            ("video/quicktime", b"\0\0\0\x08wide".to_vec()),
+        ] {
+            let mislabeled = ProjectionAsset::new(media_type, bytes).unwrap();
+            for store in [&mut store, &mut AssetStore::in_memory()] {
+                let error = store
+                    .materialize_batch(&batch(mislabeled.clone()), true)
+                    .unwrap_err();
+                assert!(
+                    matches!(error, StoreError::AssetInvalid { .. }),
+                    "{media_type}: {error}"
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read_dir(asset_root(&projection)).unwrap().count(),
+            before
+        );
+    }
+
+    /// Every member type core can name has a signature this store accepts:
+    /// a supported asset can never be refused for lacking a magic arm.
+    #[test]
+    fn every_supported_member_type_passes_its_signature_check() {
+        let sample = |media_type: &str| -> Vec<u8> {
+            match media_type {
+                "image/png" => b"\x89PNG\r\n\x1a\nbody".to_vec(),
+                "image/jpeg" => b"\xff\xd8\xffbody".to_vec(),
+                "image/gif" => b"GIF89abody".to_vec(),
+                "image/webp" => b"RIFF\x04\0\0\0WEBPVP8L".to_vec(),
+                "image/bmp" => b"BM bitmap".to_vec(),
+                "image/x-icon" => b"\0\0\x01\0icon".to_vec(),
+                "video/mp4" => video(b"isom", b"mp41"),
+                "video/quicktime" => video(b"qt  ", b"qt  "),
+                "application/pdf" => b"%PDF-1.7 body".to_vec(),
+                "application/vnd.rosetta.canonical-document+json" => b"{\"blocks\":[]}".to_vec(),
+                "text/plain; charset=utf-8" => b"plain text".to_vec(),
+                "text/html; charset=utf-8" => b"<h1>html</h1>".to_vec(),
+                other => panic!("no sample for member type {other}: add one and its magic arm"),
+            }
+        };
+        let root = tempfile::tempdir().unwrap();
+        let projection = root.path().join("rosetta.db");
+        let mut store = AssetStore::for_projection(&projection);
+        for (media_type, extension) in rosetta_core::assets::MEMBER_TYPES {
+            assert_eq!(
+                ProjectionAsset::supported_extension(media_type),
+                Some(extension)
+            );
+            let bytes = sample(media_type);
+            assert!(magic_matches(media_type, &bytes), "{media_type}");
+            let asset = ProjectionAsset::new(media_type, bytes).unwrap();
+            store
+                .materialize_batch(&batch(asset.clone()), true)
+                .unwrap_or_else(|error| panic!("{media_type}: {error}"));
+            assert!(
+                asset_root(&projection)
+                    .join(format!("{}.{extension}", asset.digest))
+                    .is_file(),
+                "{media_type}"
+            );
+        }
+        assert!(!magic_matches("video/webm", &video(b"isom", b"mp41")));
     }
 }

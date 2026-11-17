@@ -245,6 +245,7 @@ async function run() {
     await mount('disconnected');
     await until(() => document.querySelector('.ah-empty strong')?.textContent === 'rosettad is not answering', 'disconnected title');
     assert.equal(await check(() => document.querySelector('.ah-empty [data-host-words]')?.textContent), 'The index is resting.');
+    assert.equal(await check(() => document.querySelector('.ah-empty[data-face]')?.dataset.face), 'not-answering', 'the face names itself (DOM contract)');
     // #27: a host that names no daemon to a person titles the face itself.
     await mount('disconnected-titled');
     await until(() => document.querySelector('.ah-empty strong')?.textContent === "History isn't answering", 'the host\'s disconnected title');
@@ -263,6 +264,7 @@ async function run() {
     await until(() => document.querySelector('[data-consent]'), 'the host\'s consent screen');
     await mount('consent-default');
     await until(() => document.querySelector('.ah-empty strong')?.textContent === 'Waiting for consent', 'the room\'s own consent line');
+    assert.equal(await check(() => document.querySelector('.ah-empty[data-face]')?.dataset.face), 'consent', 'the face names itself (DOM contract)');
 
     writeFileSync(path.join(temporary, 'room.png'), (await win.webContents.capturePage()).toPNG());
     assert.deepEqual(errors, []);

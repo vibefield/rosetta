@@ -1,3 +1,4 @@
+use rosetta_core::html_artifacts::HtmlArtifactPublication;
 use rosetta_core::rows::{
     PlanRow, ProjectRow, RuntimeRow, SessionRole, SessionRow, StreamState, TaskRow, TaskStatus,
     TokenSnapshot,
@@ -61,7 +62,7 @@ fn base_batch() -> Batch {
 
 #[test]
 fn html_artifacts_retain_a_known_url_in_the_library_and_session_index() {
-    use rosetta_core::html_artifacts::{HtmlArtifactPublication, identity};
+    use rosetta_core::html_artifacts::identity;
     use rosetta_store::html_artifacts::{ArtifactListRequest, list};
     use rosetta_store::timeline_meta::TimelineMetaArtifactSource;
 
@@ -81,6 +82,8 @@ fn html_artifacts_retain_a_known_url_in_the_library_and_session_index() {
         version: None,
         published_at: Some(100),
         source_offset: 100,
+        description: None,
+        dropped_files: None,
     };
     let latest = HtmlArtifactPublication {
         id: identity(&["second"]),
@@ -108,6 +111,223 @@ fn html_artifacts_retain_a_known_url_in_the_library_and_session_index() {
     assert!(matches!(&meta.artifacts[0].source,
         TimelineMetaArtifactSource::HtmlPublication { publication_id, url: Some(link), .. }
         if publication_id == &latest.id && link == url));
+}
+
+/// One publication of `name` in `s1`, at `at`.
+fn review_publication(name: &str, at: i64) -> HtmlArtifactPublication {
+    use rosetta_core::html_artifacts::identity;
+    HtmlArtifactPublication {
+        id: identity(&["publication", name]),
+        artifact_id: identity(&["artifact", name]),
+        session_id: "s1".into(),
+        timeline_id: name.into(),
+        title: name.into(),
+        filename: format!("{name}.html"),
+        path: Some(format!("/tmp/{name}.html")),
+        url: None,
+        native_id: None,
+        version: None,
+        published_at: Some(at),
+        source_offset: at as u64,
+        description: Some("Two checkout flows".into()),
+        dropped_files: Some(3),
+    }
+}
+
+fn apply_publication(store: &mut Store, row: &HtmlArtifactPublication) {
+    store
+        .apply(&Batch {
+            ops: vec![IngestOp::HtmlArtifact(row.clone())],
+            ..Batch::default()
+        })
+        .unwrap();
+}
+
+#[test]
+fn the_library_revision_steps_once_per_change_in_every_mode_and_never_on_a_replay() {
+    use rosetta_store::html_artifacts::{ArtifactListRequest, list, revision};
+
+    let publication = review_publication("review", 100);
+    let apply = apply_publication;
+
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    assert_eq!(
+        revision(store.conn()).unwrap(),
+        0,
+        "metadata is not the library"
+    );
+    apply(&mut store, &publication);
+    assert_eq!(revision(store.conn()).unwrap(), 1);
+    apply(&mut store, &publication);
+    assert_eq!(
+        revision(store.conn()).unwrap(),
+        1,
+        "a replay restates held facts"
+    );
+    let renamed = HtmlArtifactPublication {
+        description: None,
+        ..publication.clone()
+    };
+    apply(&mut store, &renamed);
+    assert_eq!(
+        revision(store.conn()).unwrap(),
+        2,
+        "a changed word moves the library"
+    );
+    let library = list(store.conn(), &ArtifactListRequest::default(), false).unwrap();
+    assert_eq!(library.entries[0].publication.description, None);
+    assert_eq!(library.entries[0].publication.dropped_files, Some(3));
+
+    // A cold build steps it too: its library is readable while it grows, and
+    // a cold replay restates held facts as a live one does.
+    let mut cold = Store::open_in_memory_for_rebuild().unwrap();
+    cold.apply(&base_batch()).unwrap();
+    assert_eq!(revision(cold.conn()).unwrap(), 0);
+    apply(&mut cold, &publication);
+    assert_eq!(revision(cold.conn()).unwrap(), 1);
+    apply(&mut cold, &publication);
+    assert_eq!(revision(cold.conn()).unwrap(), 1);
+}
+
+#[test]
+fn a_capture_that_lands_on_its_own_steps_the_library_once_and_its_replay_never() {
+    use rosetta_core::ProjectionAsset;
+    use rosetta_core::html_artifacts::{
+        HTML_MEDIA_TYPE, HtmlArtifactAvailability, HtmlArtifactContent,
+    };
+    use rosetta_store::html_artifacts::{ArtifactListRequest, list, revision};
+
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    let publication = review_publication("review", 100);
+    apply_publication(&mut store, &publication);
+    assert_eq!(revision(store.conn()).unwrap(), 1);
+
+    // The capture alone: no publication op rides with it.
+    let asset = ProjectionAsset::new(HTML_MEDIA_TYPE, b"<h1>Review</h1>".to_vec()).unwrap();
+    let capture = Batch {
+        ops: vec![
+            IngestOp::ProjectionAsset {
+                asset: asset.clone(),
+            },
+            IngestOp::HtmlArtifactContent(HtmlArtifactContent {
+                session_id: "s1".into(),
+                source_offset: publication.source_offset,
+                path: publication.path.clone(),
+                availability: HtmlArtifactAvailability::Captured,
+                captured_at: Some(150),
+                recovered_from: None,
+                asset: Some(asset.reference()),
+            }),
+        ],
+        ..Batch::default()
+    };
+    store.apply(&capture).unwrap();
+    assert_eq!(
+        revision(store.conn()).unwrap(),
+        2,
+        "a late capture moves the library"
+    );
+    store.apply(&capture).unwrap();
+    assert_eq!(
+        revision(store.conn()).unwrap(),
+        2,
+        "the same capture again moves nothing"
+    );
+    let library = list(store.conn(), &ArtifactListRequest::default(), false).unwrap();
+    assert_eq!(
+        library.entries[0].availability,
+        HtmlArtifactAvailability::Captured
+    );
+    assert_eq!(library.entries[0].captured_at, Some(150));
+}
+
+#[test]
+fn a_readiness_flip_steps_the_library_only_across_pending_and_only_for_a_publisher() {
+    use rosetta_store::html_artifacts::revision;
+
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    // An empty library: no flip moves it.
+    assert!(
+        store
+            .set_session_stream_state("s1", StreamState::Pending)
+            .unwrap()
+    );
+    assert!(
+        store
+            .set_session_stream_state("s1", StreamState::Streaming)
+            .unwrap()
+    );
+    assert_eq!(revision(store.conn()).unwrap(), 0);
+
+    apply_publication(&mut store, &review_publication("review", 100));
+    assert_eq!(revision(store.conn()).unwrap(), 1);
+    // Streaming to Indexed shows nothing new.
+    assert!(
+        store
+            .set_session_stream_state("s1", StreamState::Indexed)
+            .unwrap()
+    );
+    assert_eq!(revision(store.conn()).unwrap(), 1);
+    // Into Pending hides the publication; out of it shows it again. Each
+    // crossing steps once, by either entry point, and a no-op flip never.
+    assert!(
+        store
+            .set_session_stream_state("s1", StreamState::Pending)
+            .unwrap()
+    );
+    assert_eq!(revision(store.conn()).unwrap(), 2);
+    assert!(
+        !store
+            .set_session_stream_state("s1", StreamState::Pending)
+            .unwrap()
+    );
+    assert_eq!(revision(store.conn()).unwrap(), 2);
+    assert_eq!(
+        store
+            .set_session_stream_states(&[("s1".to_string(), StreamState::Indexed)])
+            .unwrap(),
+        1
+    );
+    assert_eq!(revision(store.conn()).unwrap(), 3);
+}
+
+#[test]
+fn a_cursor_read_behind_the_admission_barrier_expires_when_the_barrier_lifts() {
+    use rosetta_store::html_artifacts::{ArtifactListRequest, ListError, list};
+
+    let mut store = Store::open_in_memory().unwrap();
+    store.apply(&base_batch()).unwrap();
+    apply_publication(&mut store, &review_publication("older", 100));
+    apply_publication(&mut store, &review_publication("newer", 200));
+    let head = ArtifactListRequest {
+        limit: Some(1),
+        ..ArtifactListRequest::default()
+    };
+    let after = |cursor: Option<String>| ArtifactListRequest {
+        cursor,
+        ..head.clone()
+    };
+
+    let hidden = list(store.conn(), &head, true).unwrap();
+    assert_eq!(hidden.entries[0].publication.title, "newer");
+    let walk = after(hidden.next_cursor.clone());
+    assert!(walk.cursor.is_some());
+    // Behind the barrier the walk continues.
+    let rest = list(store.conn(), &walk, true).unwrap();
+    assert_eq!(rest.entries[0].publication.title, "older");
+    // Lifting the barrier shows rows without a revision step, so the cursor
+    // read behind it expires.
+    assert!(matches!(
+        list(store.conn(), &walk, false),
+        Err(ListError::Expired)
+    ));
+    // A cursor read after the lift walks on.
+    let published = list(store.conn(), &head, false).unwrap();
+    let rest = list(store.conn(), &after(published.next_cursor.clone()), false).unwrap();
+    assert_eq!(rest.entries[0].publication.title, "older");
 }
 
 fn workflow_child(id: &str, native_id: &str) -> SessionRow {

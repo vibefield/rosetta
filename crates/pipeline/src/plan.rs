@@ -162,6 +162,7 @@ mod tests {
 
     fn file(path: &str, session_id: &str, size: u64) -> SessionFile {
         SessionFile {
+            input: None,
             ledger_only: false,
             relative_path: path.into(),
             stream_id: "transcript".into(),
@@ -174,6 +175,9 @@ mod tests {
             modified_ms: 0,
             agent_version: None,
             source_missing: false,
+            tree_parent: None,
+            cut_len: None,
+            cut_modified_ms: None,
         }
     }
 

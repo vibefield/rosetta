@@ -11,8 +11,8 @@ use rosetta_core::{
     ToolStatus, ToolStatusFact, ToolUpdatePatch, ids,
 };
 use rosetta_search::{
-    Fts5SearchWorker, Fts5SidecarSearch, SearchAck, SearchBackend, SearchQuery, SearchReadiness,
-    TextQuery, synchronize_fts5_once,
+    FirstSync, Fts5SearchWorker, Fts5SidecarSearch, SearchAck, SearchBackend, SearchQuery,
+    SearchReadiness, TextQuery, synchronize_fts5_once,
 };
 use rosetta_store::queries::{self, SearchFilter};
 use rosetta_store::{Batch, Store};
@@ -567,6 +567,58 @@ fn background_worker_wakes_repairs_and_delivers_acknowledgements() {
     assert!(search.search(query("gamma")).unwrap().hits.is_empty());
     assert_eq!(search.search(query("worker wake")).unwrap().hits.len(), 1);
 
+    worker.stop();
+}
+
+/// The first-synchronization latch (the daemon's `search-ready` milestone)
+/// records a paused worker's first publication after its wake, without the
+/// watcher ever touching the worker.
+#[test]
+fn first_sync_reports_a_paused_workers_first_publication() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (path, _store) = canonical(&dir);
+    let search = Fts5SidecarSearch::new(&path);
+    let worker = Fts5SearchWorker::start_paused(search.clone());
+    let watch = worker.first_sync();
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(watch.get(), None, "a paused worker synchronizes nothing");
+    let woken = Instant::now();
+    worker.wake();
+    let FirstSync::Published(at) = watch.wait() else {
+        panic!("expected a publication, got {:?}", watch.get());
+    };
+    assert!(at >= woken);
+    assert_eq!(search.state().readiness, SearchReadiness::Ready);
+    wait_for_ack(&worker, None);
+    worker.stop();
+    assert_eq!(
+        watch.get(),
+        Some(FirstSync::Published(at)),
+        "the first outcome stays"
+    );
+}
+
+/// A worker stopped before its first wake, or one whose synchronization
+/// fails, settles the latch too: a waiter never outlives its worker.
+#[test]
+fn first_sync_reports_a_stop_before_the_wake_and_a_failure() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (path, _store) = canonical(&dir);
+    let worker = Fts5SearchWorker::start_paused(Fts5SidecarSearch::new(&path));
+    let watch = worker.first_sync();
+    worker.stop();
+    assert_eq!(watch.wait(), FirstSync::Stopped);
+
+    let missing = Fts5SidecarSearch::new(dir.path().join("absent/projection.sqlite"));
+    let worker = Fts5SearchWorker::start_paused(missing.clone());
+    let watch = worker.first_sync();
+    worker.wake();
+    assert!(
+        matches!(watch.wait(), FirstSync::Failed(_)),
+        "{:?}",
+        watch.get()
+    );
+    assert_eq!(missing.state().readiness, SearchReadiness::Failed);
     worker.stop();
 }
 

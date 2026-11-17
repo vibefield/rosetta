@@ -89,6 +89,12 @@ pub struct CodexState {
     /// configures the file.
     #[serde(default)]
     header_seen: bool,
+    #[serde(default)]
+    pub(crate) shared_history: bool,
+    #[serde(default)]
+    attached_thread: bool,
+    #[serde(default)]
+    pub(crate) origin_thread: Option<String>,
     /// Current execution cwd used only to resolve relative tool arguments.
     /// The canonical session cwd is selected independently during meta ingest.
     pub(crate) tool_cwd: Option<String>,
@@ -191,6 +197,13 @@ pub fn ingest_line(
         return LineOutcome::parsed(Vec::new());
     }
 
+    if state.shared_history
+        && state.attached_thread
+        && state.origin_thread != state.thread_id
+        && !matches!(record.payload, RolloutPayload::SessionMeta(_))
+    {
+        return LineOutcome::parsed(Vec::new());
+    }
     let mut ops = Vec::new();
     // Permissive parsing means novel fields land in the flatten maps instead of
     // failing the line — that is the whole point, but it must still be visible.
@@ -207,6 +220,14 @@ pub fn ingest_line(
     }
 
     let status = project(ctx, state, stream_id, &record, ts, &mut ops);
+    if state.shared_history && state.origin_thread != state.thread_id {
+        ops.retain(|op| {
+            !matches!(
+                op,
+                IngestOp::HtmlArtifact(_) | IngestOp::HtmlArtifactContent(_)
+            )
+        });
+    }
     LineOutcome { ops, status }
 }
 
@@ -311,8 +332,17 @@ fn session_meta(
     ts: Option<Ms>,
 ) {
     if state.header_seen {
+        if state.shared_history {
+            state.origin_thread = Some(meta.id.clone());
+        }
         return;
     }
+    state.attached_thread = meta.attached_thread.unwrap_or(false);
+    state.shared_history = meta
+        .history_base
+        .as_ref()
+        .is_some_and(|base| !base.is_null());
+    state.origin_thread = Some(meta.id.clone());
     state.header_seen = true;
     ctx.agent_version = Some(meta.cli_version.clone());
     state.thread_id = Some(meta.id.clone());

@@ -117,6 +117,14 @@ pub struct ClaudeCodeState {
     /// callback update the exact act after an `async_launched` receipt.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     notification_calls: BTreeMap<String, NotificationCallState>,
+    /// Result records carry no tool name. Remember `SendUserFile` opener ids
+    /// so a look-alike `attachments[]` payload from another tool can never
+    /// name a file to present. Oldest opener first, each id once, so the
+    /// bound drops by age. On the wire it is the array of ids it has been
+    /// since it was a set, so a checkpoint written then restores, with its
+    /// sorted order standing in for the ages it never recorded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    send_file_calls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,6 +203,22 @@ impl ClaudeCodeState {
 
     fn take_delegate_call(&mut self, tool_use_id: &str) -> bool {
         self.delegate_calls.remove(tool_use_id)
+    }
+
+    /// Remember an opener as the newest. Past 256 the oldest go: an opener
+    /// that old with no result was interrupted. An id seen again (a branch
+    /// replay repeats its opener) becomes the newest, once.
+    fn remember_send_file_call(&mut self, tool_use_id: &str) {
+        self.send_file_calls.retain(|id| id != tool_use_id);
+        self.send_file_calls.push(tool_use_id.to_owned());
+        let excess = self.send_file_calls.len().saturating_sub(256);
+        self.send_file_calls.drain(..excess);
+    }
+
+    fn take_send_file_call(&mut self, tool_use_id: &str) -> bool {
+        let remembered = self.send_file_calls.len();
+        self.send_file_calls.retain(|id| id != tool_use_id);
+        self.send_file_calls.len() != remembered
     }
 
     fn remember_file_change_call(&mut self, tool_use_id: &str) {
@@ -1026,6 +1050,9 @@ fn assistant_line(emit: &mut Emit, line: &AssistantLine) {
                     }
                     state.html_publications.insert(id.clone(), publication);
                 }
+                if name == "SendUserFile" {
+                    emit.remember_send_file_call(id);
+                }
                 // A native name is not enough to establish canonical
                 // delegation. In particular, an unpinned writer is projected
                 // as Unknown; remembering that opener as a delegate would make
@@ -1754,6 +1781,25 @@ impl<'a> Emit<'a> {
             .is_some_and(|state| state.take_delegate_call(tool_use_id))
     }
 
+    fn remember_send_file_call(&mut self, tool_use_id: &str) {
+        if let Some(state) = self
+            .ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+        {
+            state.remember_send_file_call(tool_use_id);
+        }
+    }
+
+    fn take_send_file_call(&mut self, tool_use_id: &str) -> bool {
+        self.ctx
+            .state
+            .as_mut()
+            .and_then(|state| state.downcast_mut::<ClaudeCodeState>())
+            .is_some_and(|state| state.take_send_file_call(tool_use_id))
+    }
+
     fn remember_file_change_call(&mut self, tool_use_id: &str) {
         if let Some(state) = self
             .ctx
@@ -2118,6 +2164,17 @@ impl<'a> Emit<'a> {
             result.is_error
         };
         let failed = effective_error == Some(true);
+        // Sent files: only a remembered `SendUserFile` opener, a result that
+        // did not fail, and a line whose `toolUseResult` is this result's.
+        if self.take_send_file_call(result.tool_use_id) && !failed && single_result {
+            crate::presented_media::push_sent_files(
+                self.ctx,
+                result.tool_use_id,
+                result.tool_use_result,
+                at,
+                &mut self.ops,
+            );
+        }
         let publication = self
             .ctx
             .state

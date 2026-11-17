@@ -87,8 +87,8 @@ export const guides = [
     render: ({ url }) => `
       ${s('two-gates', 'Two independent readiness gates', `<p><code>/api/status</code> exposes <code>canonical_ready</code> and <code>search.readiness</code>. The canonical projection can be readable while the detached search index is still building.</p>${table(['Surface', 'During a fresh cold start'], [
         ['Projects and sessions', 'Metadata appears as bounded runtime skims commit.'],
-        ['Timeline', 'A pending runtime exposes no partial payload. Rows become visible when its readiness commit admits the runtime.'],
-        ['Heatmap, usage, day usage, contribution', '503 with not_ready until canonical publication.'],
+        ['Timeline', 'A pending session exposes no partial payload. Claude Code and Codex make each conversation tree readable, newest first, once all of its files are imported; a tree another tree’s files reference, and every other agent’s sessions, become readable when that agent’s import completes. A resumed import makes sessions readable at publication. An admitted session never becomes pending again.'],
+        ['Heatmap, usage, day usage, contribution, pricing', '503 with not_ready until canonical publication.'],
         ['Search', '200 with building readiness and no hits until canonical publication; then the detached index builds.'],
       ])}`)}
       ${s('search-states', 'Read the search state with every result', table(['Readiness', 'Meaning for the reader'], [
@@ -117,6 +117,7 @@ export const guides = [
       ${s('error-shape', 'Service errors share an envelope', `${code('{\n  "error": {\n    "code": "cursor_expired",\n    "message": "the timeline was rewritten; refetch from the head"\n  }\n}', 'JSON')}${table(['Status / code', 'Recovery'], [
         ['400 / <code>bad_request</code>', 'Correct the request. Check query combinations, limits, and required bodies.'],
         ['404 / <code>not_found</code>', 'The requested session, row, or content is not available.'],
+        ['409 / <code>export_conflict</code>', 'A different file already stands where the export would place its page, or where its directory belongs. Choose another directory; nothing was written.'],
         ['410 / <code>cursor_expired</code>', 'Discard the former generation and refetch the latest timeline page.'],
         ['503 / <code>not_ready</code>', 'Wait for canonical publication before reading aggregates.'],
         ['500 / <code>internal</code>', 'Inspect the daemon error and retry only after addressing the underlying failure.'],

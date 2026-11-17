@@ -1,12 +1,20 @@
-// Image occurrences from canonical activity, independent of either fold level.
-// Every displayed image comes from recorded, optimized canonical members.
+// Image and video occurrences from canonical activity, independent of either
+// fold level. Every displayed image is a recorded canonical member: an original
+// or a complete legacy WebP bundle, drawn only through the daemon's renditions.
+// A video is gathered beside the images, in the same order, and never enters
+// an image path: no rendition, no gallery, no viewer (`VideoTile` plays it).
 import type { ResourceRef, TimelineEntry } from "@vibefield/rosetta-protocol";
 import { projectAction } from "./families";
 import type { PathFact } from "./families";
 import type { AttachmentFact, LedgerMember } from "./turns";
 import { readAttachments } from "./turns";
 import { resourceLabel, splitPath } from "./vocabulary";
-import { isOptimizedImageAsset } from "../image-media";
+import { isRecordedImageAsset } from "../image-media";
+
+/** What a run's rail gathers: recorded images, and the videos sent beside them. */
+export function isRailMedia(fact: Pick<AttachmentFact, "kind">): boolean {
+  return fact.kind === "image" || fact.kind === "video";
+}
 
 function resourcePath(resource: ResourceRef): PathFact {
   const label = resourceLabel(resource);
@@ -16,7 +24,7 @@ function resourcePath(resource: ResourceRef): PathFact {
 function rowImages(row: TimelineEntry): AttachmentFact[] {
   if (row.body.type !== "tool_use") return [];
   const { action, native } = row.body.tool;
-  const recorded = messageAttachments(row).filter(fact => fact.kind === "image");
+  const recorded = messageAttachments(row).filter(isRailMedia);
   if (!["artifact", "workflow", "structured_output", "external"].includes(action.type)) return recorded;
   const detail = projectAction(action, native, {}, { sessionId: row.session_id, timelineId: row.timeline_id }).detail;
   const paths = detail.kind === "paths" ? detail.paths
@@ -26,7 +34,7 @@ function rowImages(row: TimelineEntry): AttachmentFact[] {
     : [];
   return [...recorded, ...paths.flatMap((path, index) => {
     const resource = path.resource;
-    if (resource.type !== "asset" || !isOptimizedImageAsset(resource.asset)) return [];
+    if (resource.type !== "asset" || !isRecordedImageAsset(resource.asset)) return [];
     const asset = resource.asset;
     const key = `${row.session_id}:${row.timeline_id}:resource:${index}`;
     const ref = {
@@ -38,7 +46,8 @@ function rowImages(row: TimelineEntry): AttachmentFact[] {
   })];
 }
 
-/** Keep occurrences in transcript order, including repeated reads of one image. */
+/** Keep occurrences in transcript order, including repeated reads of one image
+ * and the videos among them. */
 export function activityImages(members: readonly LedgerMember[]): AttachmentFact[] {
   return members.flatMap(member => member.kind === "line" ? member.line.rows.flatMap(rowImages) : []);
 }
@@ -53,7 +62,8 @@ export function messageAttachments(row: TimelineEntry): AttachmentFact[] {
   }));
 }
 
-/** One rail for every image occurrence in the run, regardless of row type. */
+/** One rail for every image and video occurrence in the run, regardless of
+ * row type. */
 export function timelineImages(rows: readonly TimelineEntry[]): AttachmentFact[] {
   const seen = new Set<string>();
   return rows.flatMap(row => {
@@ -61,6 +71,6 @@ export function timelineImages(rows: readonly TimelineEntry[]): AttachmentFact[]
     if (seen.has(identity)) return [];
     seen.add(identity);
     return row.body.type === "tool_use" ? rowImages(row)
-      : messageAttachments(row).filter(fact => fact.kind === "image");
+      : messageAttachments(row).filter(isRailMedia);
   });
 }

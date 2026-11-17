@@ -38,8 +38,8 @@ pub use grant::GrantClaims;
 // The roll-call row travels with the gate that publishes it, so the daemon
 // binary needs no protocol dependency of its own.
 pub use health::{DaemonHealth, IngestCounterSource, IngestCounters, RuntimeIdentity, RuntimeTick};
-pub use http::{AppState, ProjectionReader, RawCommandReader, router};
+pub use http::{AppState, ExportRoot, ProjectionReader, RawCommandReader, router};
 pub use hub::{AbsorbReport, Hub, HubConfig, HubItem, Subscription};
 pub use rosetta_protocol::{
-    BackfillState, DiscoveryRow, IngestPhase, PROTOCOL_VERSION, RuntimeProvenance,
+    AdmissionCourse, BackfillState, DiscoveryRow, IngestPhase, PROTOCOL_VERSION, RuntimeProvenance,
 };

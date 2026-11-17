@@ -9,10 +9,94 @@ use rusqlite::{Connection, Transaction, params};
 
 use rosetta_core::fold::HOUR_MS;
 
-use crate::{BulkLoadStats, StoreError, schema};
+use crate::{
+    BulkLoadStats, CommitKind, Store, StoreError, StoreMode, lock_order, schema, search_sync,
+};
 
 fn elapsed_nanos(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+impl Store {
+    /// Canonicalize presentation ordinals, materialize every derived structure
+    /// for a private cold rebuild, build deferred indexes, analyze the finished
+    /// database, and validate it. Only after this succeeds is the store
+    /// switched to ordinary live semantics.
+    pub fn finish_bulk_load(&mut self) -> Result<BulkLoadStats, StoreError> {
+        if self.mode != StoreMode::Bulk {
+            return Err(StoreError::BulkLoadState {
+                message: "store is not in cold rebuild mode".to_string(),
+            });
+        }
+        if self.bulk_abandoned {
+            return Err(StoreError::BulkLoadState {
+                message: "cold rebuild contains an abandoned source generation".to_string(),
+            });
+        }
+        if let Some(locks) = &self.shared_readers {
+            locks.begin_finalize();
+        }
+        validate_complete(&self.conn, &self.retired_sources)?;
+        let _ = self.flush_bulk_reconciliation()?;
+        let mut stats = if self.shared_readers.is_some() {
+            self.finalize_beside_readers()?
+        } else {
+            let tx = self.conn.transaction()?;
+            let mut stats = finalize(&tx, self.bulk_ordinals_precomputed)?;
+            search_sync::mark_canonical_ready(&tx)?;
+            let started = Instant::now();
+            tx.commit()?;
+            stats.commit_nanos = elapsed_nanos(started);
+            self.committed(CommitKind::Finalize);
+            stats
+        };
+        enable_constraint_validation(&self.conn)?;
+        let started = Instant::now();
+        validate(&self.conn)?;
+        stats.validate_nanos = elapsed_nanos(started);
+        let started = Instant::now();
+        restore_live_pragmas(&self.conn)?;
+        stats.pragma_nanos = elapsed_nanos(started);
+        stats.asset_sync_nanos = self.assets.finish_pending()?;
+        self.mode = StoreMode::Live;
+        self.bulk_abandoned = false;
+        Ok(stats)
+    }
+
+    /// Finalization while readers are attached to the shared generation, in
+    /// two transactions where a private rebuild uses one: tx A refolds
+    /// under W1 like any writer transaction; tx B is DDL-first (W2) — the
+    /// read indexes, ANALYZE, and canonical readiness — and never takes W1,
+    /// because a reader parked at its prologue behind W1 still holds the
+    /// schema read lock that DDL must wait out. Readers between the two see
+    /// refolded rows without indexes; readiness lands only with tx B.
+    fn finalize_beside_readers(&mut self) -> Result<BulkLoadStats, StoreError> {
+        let locks = self.shared_readers.clone();
+        let locks = locks.as_deref();
+        let precomputed = self.bulk_ordinals_precomputed;
+        let mut tx_a = || -> Result<BulkLoadStats, StoreError> {
+            let (tx, _) = lock_order::writer_tx(&mut self.conn, locks, "finalize refold")?;
+            let mut stats = refold(&tx, precomputed)?;
+            let started = Instant::now();
+            tx.commit()?;
+            stats.commit_nanos = elapsed_nanos(started);
+            Ok(stats)
+        };
+        let mut stats = tx_a().map_err(|error| error.in_writer_tx(locks, "finalize refold"))?;
+        self.committed(CommitKind::Finalize);
+        let mut tx_b = || -> Result<u64, StoreError> {
+            let tx = lock_order::ddl_tx(&mut self.conn)?;
+            build_indexes(&tx, &mut stats)?;
+            search_sync::mark_canonical_ready(&tx)?;
+            let started = Instant::now();
+            tx.commit()?;
+            Ok(elapsed_nanos(started))
+        };
+        let commit = tx_b().map_err(|error| error.in_writer_tx(locks, "finalize indexes"))?;
+        self.committed(CommitKind::FinalizeIndexes);
+        stats.commit_nanos = stats.commit_nanos.saturating_add(commit);
+        Ok(stats)
+    }
 }
 
 pub(crate) fn prepare(conn: &Connection) -> Result<(), StoreError> {
@@ -95,7 +179,20 @@ pub(crate) fn validate_complete(
     Ok(())
 }
 
+/// Finalize in one transaction: [`refold`], then [`build_indexes`]. A
+/// projection with readers attached runs the two halves as separate
+/// transactions instead (`Store::finish_bulk_load`, lock discipline W2).
 pub(crate) fn finalize(
+    tx: &Transaction<'_>,
+    ordinals_precomputed: bool,
+) -> Result<BulkLoadStats, StoreError> {
+    let mut stats = refold(tx, ordinals_precomputed)?;
+    build_indexes(tx, &mut stats)?;
+    Ok(stats)
+}
+
+/// The data half of finalization: canonical ordinals and usage rollups.
+pub(crate) fn refold(
     tx: &Transaction<'_>,
     ordinals_precomputed: bool,
 ) -> Result<BulkLoadStats, StoreError> {
@@ -116,12 +213,20 @@ pub(crate) fn finalize(
     let started = Instant::now();
     with_sort_budget(tx, FOLD_SORT_BUDGET_KIB, || refold_usage_buckets(tx))?;
     stats.bucket_nanos = elapsed_nanos(started);
+    Ok(stats)
+}
 
+/// The schema half of finalization: the deferred read indexes, then
+/// ANALYZE. Its first statement is DDL, so it may open a DDL transaction.
+pub(crate) fn build_indexes(
+    tx: &Transaction<'_>,
+    stats: &mut BulkLoadStats,
+) -> Result<(), StoreError> {
     let started = Instant::now();
     tx.execute_batch(schema::BULK_CREATE_INDEXES)?;
     tx.execute_batch("ANALYZE;")?;
     stats.index_nanos = elapsed_nanos(started);
-    Ok(stats)
+    Ok(())
 }
 
 /// Memory for the cold fold's GROUP BY sort: every message row and usage

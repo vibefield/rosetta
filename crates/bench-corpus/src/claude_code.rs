@@ -72,6 +72,66 @@ pub fn generate(spec: &CorpusSpec, counts: &[u64], out_dir: &Path) -> io::Result
     Ok(report)
 }
 
+/// One transcript of a shaped snapshot ([`crate::shape`]), sized in BYTES
+/// rather than lines: a root session, or a subagent of one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShapedTranscript {
+    /// The root session's uuid: `sessionId` on every line, the subagent's too.
+    pub session_id: String,
+    /// A subagent's own id (`agentId`, `isSidechain: true`); `None` for a root.
+    pub agent_id: Option<String>,
+    pub cwd: String,
+    pub seed: u64,
+    /// The exact file size to write.
+    pub bytes: u64,
+    /// The file's mtime; every record is stamped before it.
+    pub mtime_ms: i64,
+}
+
+/// Write a [`ShapedTranscript`] to `path`, exactly `bytes` long, every record
+/// stamped before `mtime_ms` (the caller sets the mtime). Returns the bytes.
+///
+/// A record's stamp is fixed-width and no draw depends on the clock, so a
+/// session's span does not depend on its start: a first pass into a counting
+/// sink measures it, and the second starts `span + LEAD_MS` before the mtime.
+pub fn write_shaped(transcript: &ShapedTranscript, path: &Path) -> io::Result<u64> {
+    let span = {
+        let mut rng = Rng::new(transcript.seed);
+        let mut session = Session::shaped(&mut rng, transcript, 0);
+        let mut sink = LineSink::new(io::sink());
+        session.write_bytes(&mut sink, &mut rng, transcript.bytes)?;
+        session.clock_ms
+    };
+    let mut rng = Rng::new(transcript.seed);
+    let start = transcript.mtime_ms - span - SHAPED_LEAD_MS;
+    let mut session = Session::shaped(&mut rng, transcript, start);
+    let file = fs::File::create(path)?;
+    let mut sink = LineSink::new(BufWriter::with_capacity(256 * 1024, file));
+    session.write_bytes(&mut sink, &mut rng, transcript.bytes)?;
+    debug_assert!(session.clock_ms <= transcript.mtime_ms);
+    let (_, bytes) = sink.finish()?;
+    if bytes != transcript.bytes {
+        return Err(io::Error::other(format!(
+            "shaped transcript wrote {bytes} bytes, wanted {}",
+            transcript.bytes
+        )));
+    }
+    Ok(bytes)
+}
+
+/// The last record of a shaped transcript is stamped this long before its mtime.
+const SHAPED_LEAD_MS: i64 = 2_000;
+/// Full turns (tool rounds included) run while at least this much is left.
+const FULL_TURN_HEADROOM: u64 = 96 * 1024;
+/// Short turns run while at least this much is left; the closing marker's
+/// prompt echo is padded with synthetic words to land the exact size.
+const SHORT_TURN_HEADROOM: u64 = 6 * 1024;
+/// The smallest byte budget [`write_shaped`] always meets: a latch, one short
+/// turn and the leaf marker.
+pub const MIN_SHAPED_BYTES: u64 = 6 * 1024;
+/// The tool ratio of shaped transcripts (as `CorpusSpec`'s default).
+const SHAPED_TOOL_RATIO: f64 = 0.3;
+
 /// Everything a transcript stamps on every line, plus the walking state that
 /// makes a session a coherent conversation rather than a bag of records.
 struct Session {
@@ -84,6 +144,9 @@ struct Session {
     entrypoint: &'static str,
     effort: &'static str,
     permission_mode: &'static str,
+    /// A subagent transcript's own id (`agentId` on every line); `None` for a
+    /// main session.
+    agent_id: Option<String>,
     clock_ms: i64,
     /// The uuid of the previous timeline record — the `parentUuid` chain.
     parent: Option<String>,
@@ -109,6 +172,7 @@ impl Session {
             entrypoint: rng.pick(ENTRYPOINTS),
             effort: rng.pick(EFFORTS),
             permission_mode: rng.pick(PERMISSION_MODES),
+            agent_id: None,
             clock_ms: BASE_EPOCH_MS + rng.below(SPREAD_DAYS * MS_PER_DAY as u64) as i64,
             parent: None,
             leaf: String::new(),
@@ -118,6 +182,99 @@ impl Session {
             cache_read: 0,
             last_prompt: String::new(),
         }
+    }
+
+    /// A shaped session: identity from the plan, style from the seed.
+    fn shaped(rng: &mut Rng, transcript: &ShapedTranscript, start_ms: i64) -> Self {
+        Self {
+            id: transcript.session_id.clone(),
+            slug: synth::project_slug(&transcript.cwd),
+            cwd: transcript.cwd.clone(),
+            version: rng.pick(VERSIONS),
+            model: rng.pick(MODELS),
+            branch: rng.pick(BRANCHES),
+            entrypoint: rng.pick(ENTRYPOINTS),
+            effort: rng.pick(EFFORTS),
+            permission_mode: rng.pick(PERMISSION_MODES),
+            agent_id: transcript.agent_id.clone(),
+            clock_ms: start_ms,
+            parent: None,
+            leaf: String::new(),
+            turn: 0,
+            tool_seq: 0,
+            input_tokens: rng.range(1_200, 9_000),
+            cache_read: 0,
+            last_prompt: String::new(),
+        }
+    }
+
+    /// Emit exactly `target` bytes (>= [`MIN_SHAPED_BYTES`]): a latch, one
+    /// short turn, full turns while there is room, short turns, then the
+    /// `last-prompt` marker, its prompt echo padded to the exact size.
+    fn write_bytes<W: Write>(
+        &mut self,
+        sink: &mut LineSink<W>,
+        rng: &mut Rng,
+        target: u64,
+    ) -> io::Result<()> {
+        sink.write(&self.atis_latch(rng))?;
+        self.short_turn(sink, rng)?;
+        while sink.bytes() + FULL_TURN_HEADROOM < target {
+            self.full_turn(sink, rng)?;
+        }
+        while sink.bytes() + SHORT_TURN_HEADROOM < target {
+            self.short_turn(sink, rng)?;
+        }
+        let base = serde_json::to_string(&self.last_prompt()).map_err(io::Error::other)?;
+        let have = sink.bytes() + base.len() as u64 + 1;
+        if have > target {
+            return Err(io::Error::other(format!(
+                "a {target}-byte transcript cannot hold its closing marker ({have} bytes)"
+            )));
+        }
+        let mut marker = self.last_prompt();
+        marker["lastPrompt"] = json!(format!(
+            "{}{}",
+            self.last_prompt,
+            synth_padding((target - have) as usize)
+        ));
+        sink.write(&marker)
+    }
+
+    fn full_turn<W: Write>(&mut self, sink: &mut LineSink<W>, rng: &mut Rng) -> io::Result<()> {
+        let prompt_id = rng.uuid(4);
+        sink.write(&self.user_prompt(rng, &prompt_id))?;
+        if rng.chance(SHAPED_TOOL_RATIO) {
+            let mut round = 0;
+            while round < 4 && (round == 0 || rng.chance(0.45)) {
+                let (record, tool_id) = self.assistant_tool_use(rng);
+                let call_uuid = self.leaf.clone();
+                sink.write(&record)?;
+                sink.write(&self.tool_result(rng, &prompt_id, &tool_id, &call_uuid))?;
+                round += 1;
+            }
+        }
+        sink.write(&self.assistant_text(rng))?;
+        self.turn += 1;
+        if rng.chance(0.05) {
+            sink.write(&self.queue_operation(rng, "enqueue"))?;
+            sink.write(&self.queue_operation(rng, "dequeue"))?;
+        }
+        Ok(())
+    }
+
+    fn short_turn<W: Write>(&mut self, sink: &mut LineSink<W>, rng: &mut Rng) -> io::Result<()> {
+        let prompt_id = rng.uuid(4);
+        sink.write(&self.user_prompt_sized(rng, &prompt_id, 4, 24))?;
+        let text = synth::text(rng, "assistant response", self.turn, 8, 40);
+        let reply = self.assistant(
+            rng,
+            vec![json!({ "type": "text", "text": text })],
+            "end_turn",
+        );
+        sink.write(&reply)?;
+        self.turn += 1;
+        Ok(())
     }
 
     /// Emit exactly `budget` lines (>= [`crate::Agent::min_session_lines`]).
@@ -196,16 +353,20 @@ impl Session {
     /// Fields every `user`/`assistant` line carries (canonical: required on
     /// 100% of observed records).
     fn envelope(&self, timestamp: &str) -> Vec<(&'static str, Value)> {
-        vec![
+        let mut fields = vec![
             ("timestamp", json!(timestamp)),
-            ("isSidechain", json!(false)),
+            ("isSidechain", json!(self.agent_id.is_some())),
             ("userType", json!("external")),
             ("entrypoint", json!(self.entrypoint)),
             ("cwd", json!(self.cwd)),
             ("sessionId", json!(self.id)),
             ("version", json!(self.version)),
             ("gitBranch", json!(self.branch)),
-        ]
+        ];
+        if let Some(agent) = &self.agent_id {
+            fields.push(("agentId", json!(agent)));
+        }
+        fields
     }
 
     fn record(&self, base: Value, timestamp: &str) -> Value {
@@ -222,9 +383,13 @@ impl Session {
     }
 
     fn user_prompt(&mut self, rng: &mut Rng, prompt_id: &str) -> Value {
+        self.user_prompt_sized(rng, prompt_id, 6, 120)
+    }
+
+    fn user_prompt_sized(&mut self, rng: &mut Rng, prompt_id: &str, min: u64, max: u64) -> Value {
         let timestamp = self.tick(rng);
         let (parent, uuid) = self.link(rng);
-        let prompt = synth::text(rng, "prompt", self.turn, 6, 120);
+        let prompt = synth::text(rng, "prompt", self.turn, min, max);
         self.last_prompt = prompt.clone();
         self.record(
             json!({
@@ -438,6 +603,15 @@ impl Session {
             "sessionId": self.id,
         })
     }
+}
+
+/// Exactly `len` bytes of plain ASCII words (no JSON escaping), each piece
+/// led by a space so it reads as more of the echoed prompt.
+fn synth_padding(len: usize) -> String {
+    const PIECE: &str = " synthetic padding";
+    let mut out = PIECE.repeat(len / PIECE.len() + 1);
+    out.truncate(len);
+    out
 }
 
 #[cfg(test)]

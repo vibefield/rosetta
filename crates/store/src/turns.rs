@@ -59,17 +59,48 @@ pub fn turn_spans(
     until_ms: Ms,
     gap_ms: Ms,
 ) -> Result<Vec<TurnSpan>, StoreError> {
-    // One range seek per member on `message_activity_last`.
-    let mut stmt = conn.prepare_cached(
-        "WITH RECURSIVE family(id) AS (
+    turn_spans_visible(conn, root_id, since_ms, until_ms, gap_ms, false)
+}
+
+/// The tree's rows touching the window, every member walked.
+const FAMILY_ROWS: &str = "WITH RECURSIVE family(id) AS (
              SELECT id FROM session WHERE id = ?1
              UNION
              SELECT child.id FROM session child JOIN family ON child.parent_session_id = family.id
          )
          SELECT m.session_id, m.group_id, m.group_kind, m.activity_first_at, m.activity_last_at
          FROM family JOIN message m ON m.session_id = family.id
-         WHERE m.activity_last_at >= ?2 AND m.activity_first_at <= ?3",
-    )?;
+         WHERE m.activity_last_at >= ?2 AND m.activity_first_at <= ?3";
+
+/// [`FAMILY_ROWS`] behind the cold admission barrier: the walk neither starts
+/// at nor descends through a Pending session.
+const ADMITTED_FAMILY_ROWS: &str = "WITH RECURSIVE family(id) AS (
+             SELECT id FROM session WHERE id = ?1 AND stream_state != 'pending'
+             UNION
+             SELECT child.id FROM session child JOIN family ON child.parent_session_id = family.id
+             WHERE child.stream_state != 'pending'
+         )
+         SELECT m.session_id, m.group_id, m.group_kind, m.activity_first_at, m.activity_last_at
+         FROM family JOIN message m ON m.session_id = family.id
+         WHERE m.activity_last_at >= ?2 AND m.activity_first_at <= ?3";
+
+/// [`turn_spans`], with `hide_pending` applying the cold admission barrier to
+/// the tree walk, as the session's activity applies it: no Pending member, nor
+/// anything below one, contributes a turn while a fresh build is unpublished.
+pub fn turn_spans_visible(
+    conn: &Connection,
+    root_id: &str,
+    since_ms: Ms,
+    until_ms: Ms,
+    gap_ms: Ms,
+    hide_pending: bool,
+) -> Result<Vec<TurnSpan>, StoreError> {
+    // One range seek per member on `message_activity_last`.
+    let mut stmt = conn.prepare_cached(if hide_pending {
+        ADMITTED_FAMILY_ROWS
+    } else {
+        FAMILY_ROWS
+    })?;
     let mut turns: BTreeMap<(String, String), Turn> = BTreeMap::new();
     let mut rows = stmt.query(params![root_id, since_ms, until_ms])?;
     while let Some(row) = rows.next()? {

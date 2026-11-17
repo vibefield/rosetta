@@ -1,24 +1,29 @@
-use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use rosetta_capture::{Ledger, scan_ledger, sniff_segment};
 
 use super::*;
+use crate::maintenance_pace::budget_delay;
 
 #[test]
 fn budget_targets_ten_percent_without_banking_idle_time() {
     assert_eq!(
-        budget_delay(Duration::from_millis(5), Duration::from_millis(5)),
+        budget_delay(
+            Duration::from_millis(5),
+            Duration::from_millis(5),
+            CPU_PERCENT
+        ),
         Duration::from_millis(45),
     );
     assert_eq!(
-        budget_delay(Duration::from_millis(5), Duration::from_millis(80)),
+        budget_delay(
+            Duration::from_millis(5),
+            Duration::from_millis(80),
+            CPU_PERCENT
+        ),
         Duration::ZERO,
     );
-    let mut budget = Budget::new(Arc::new(AtomicBool::new(false)), || true);
-    budget.work = Duration::from_secs(1);
-    budget.reset_window();
-    assert_eq!(budget.work, Duration::ZERO);
 }
 
 #[test]
@@ -77,24 +82,4 @@ fn waits_for_readiness_preserves_live_segment_and_stops_while_waiting() {
     let started = Instant::now();
     drop(blocked);
     assert!(started.elapsed() < Duration::from_secs(2));
-}
-
-#[test]
-fn stop_interrupts_cpu_budget_wait() {
-    let stop = Arc::new(AtomicBool::new(false));
-    let worker_stop = stop.clone();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let worker_calls = calls.clone();
-    let (started_tx, started_rx) = mpsc::channel();
-    let worker = thread::spawn(move || {
-        let budget = Budget::new(worker_stop, || true);
-        started_tx.send(()).unwrap();
-        assert!(budget.wait(Duration::from_secs(60)).is_err());
-        worker_calls.fetch_add(1, Ordering::Release);
-    });
-    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    stop.store(true, Ordering::Release);
-    worker.thread().unpark();
-    worker.join().unwrap();
-    assert_eq!(calls.load(Ordering::Acquire), 1);
 }

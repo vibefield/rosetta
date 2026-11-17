@@ -37,7 +37,7 @@ mod read;
 mod verify;
 mod worker;
 
-pub use document::{CapturedDocument, DocumentCaptureStatus};
+pub use document::{CapturedDocument, DocumentCaptureStatus, MediaClaim};
 pub use frames::PrebuiltFrames;
 use frames::{frame_checksum, frame_head, seal_body};
 #[cfg(test)]
@@ -222,6 +222,12 @@ impl Ledger {
             write_stats: LedgerWriteStats::default(),
             async_backend: None,
         })
+    }
+
+    /// The directory this ledger's segments are written to: where a reader
+    /// of the same runtime finds what this writer has appended.
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// Snapshot segments that this writer can never append to again. The

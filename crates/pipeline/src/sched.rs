@@ -377,6 +377,7 @@ mod tests {
 
     fn file(session_id: &str) -> SessionFile {
         SessionFile {
+            input: None,
             ledger_only: false,
             relative_path: format!("{session_id}.jsonl"),
             stream_id: "transcript".into(),
@@ -389,6 +390,9 @@ mod tests {
             modified_ms: 1,
             agent_version: None,
             source_missing: false,
+            tree_parent: None,
+            cut_len: None,
+            cut_modified_ms: None,
         }
     }
 

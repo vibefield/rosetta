@@ -10,7 +10,7 @@ use axum::extract::{Query, State};
 use axum::response::Json;
 use rosetta_core::rows::{Ms, StreamState};
 use rosetta_protocol::{ActivityResponse, ActivitySession};
-use rosetta_store::turns::turn_spans;
+use rosetta_store::turns::turn_spans_visible;
 use serde::Deserialize;
 
 use super::{AppState, Failure, clamp_limit, now_ms, selector_list, store_err, with_read};
@@ -90,8 +90,11 @@ pub(super) async fn activity(
     let truncated = roots.len() > limit;
     roots.truncate(limit);
 
-    // A fresh daemon's Pending rows are not public until their runtime's
-    // readiness commit, exactly as the timeline route withholds them.
+    // A fresh daemon's Pending rows are not public until their tree's
+    // readiness commit, exactly as the timeline route withholds them: a
+    // Pending root's turns are withheld, and no admitted root's tree walk
+    // counts a Pending member (the mirror's activity bounds hold the same
+    // barrier, so a Pending root is normally not selected at all).
     let hide_pending = !state.projection.is_published();
     let sessions = with_read(state.projection.clone(), move |conn| {
         roots
@@ -101,7 +104,8 @@ pub(super) async fn activity(
                 let turns = if withheld {
                     Vec::new()
                 } else {
-                    turn_spans(conn, &session.id, since_ms, until_ms, gap_ms).map_err(store_err)?
+                    turn_spans_visible(conn, &session.id, since_ms, until_ms, gap_ms, hide_pending)
+                        .map_err(store_err)?
                 };
                 Ok(ActivitySession {
                     session,

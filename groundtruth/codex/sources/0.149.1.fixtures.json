@@ -3105,6 +3105,30 @@
       ]
     },
     {
+      "id": "rollout-compressed",
+      "glob": "sessions/*/*/*/rollout-*.jsonl.zst",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "Physical representation of rollout. rust-v0.167.2: plain wins when both exist; zstd offsets are decoded bytes; archive relocation preserves logical identity. Only exact jsonl/jsonl.zst suffixes are transcripts. Temporary migration, compression, and materialization files are excluded."
+    },
+    {
+      "id": "archived-rollout",
+      "glob": "archived_sessions/rollout-*.jsonl",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "Physical representation of rollout. rust-v0.167.2: plain wins when both exist; zstd offsets are decoded bytes; archive relocation preserves logical identity. Only exact jsonl/jsonl.zst suffixes are transcripts. Temporary migration, compression, and materialization files are excluded."
+    },
+    {
+      "id": "archived-rollout-compressed",
+      "glob": "archived_sessions/rollout-*.jsonl.zst",
+      "file_format": "jsonl",
+      "discipline": "append_only",
+      "evidence": "writer",
+      "notes": "Physical representation of rollout. rust-v0.167.2: plain wins when both exist; zstd offsets are decoded bytes; archive relocation preserves logical identity. Only exact jsonl/jsonl.zst suffixes are transcripts. Temporary migration, compression, and materialization files are excluded."
+    },
+    {
       "id": "state-db",
       "glob": "state_*.sqlite*",
       "file_format": "sqlite",

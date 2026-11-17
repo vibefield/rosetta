@@ -16,7 +16,7 @@
 import { useMemo } from "react";
 import type { SessionRow, TimelineEntry } from "@vibefield/rosetta-protocol";
 import type { DayEntry, DocumentOptions, Sitting, Turn } from "../../lib/transcript";
-import { dayList, documentTurns, sittings } from "../../lib/transcript";
+import { calendarDayKey, dayList, documentTurns, sittings } from "../../lib/transcript";
 import type { PlannedSitting } from "./document-plan";
 import { documentPlan } from "./document-plan";
 
@@ -120,6 +120,7 @@ export function useTranscriptModel(
   const cwd = session?.cwd ?? null;
   const sharedKey = [...(options.sharedCollaborationSessionIds ?? [])].sort().join("\u0000");
   const cutKey = [...(options.cutBefore ?? [])].sort().join("\u0000");
+  const day = calendarDayKey(now);
   return useMemo(() => {
     const sharedCollaborationSessionIds = new Set(
       sharedKey === "" ? [] : sharedKey.split("\u0000"),
@@ -128,8 +129,9 @@ export function useTranscriptModel(
       ...options,
       sharedCollaborationSessionIds,
     });
-    // `now` only names the day a stamp falls in; re-deriving the whole
-    // document on every clock tick would be a memo that never hits.
+    // `now` only names the day a stamp falls in, so the memo keys on that day:
+    // the document is re-derived when the viewer's day turns (a pill's words
+    // are the drawing's) and never on a clock tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, cwd, homeDirectory, sharedKey, cutKey]);
+  }, [rows, cwd, homeDirectory, sharedKey, cutKey, day]);
 }

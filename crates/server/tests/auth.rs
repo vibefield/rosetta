@@ -22,8 +22,8 @@ use rosetta_core::rows::{
 };
 use rosetta_core::timeline::{ReadTarget, ResourceRef};
 use rosetta_core::{
-    CorrelationDerivation, IngestOp, NativeToolRef, StatusBasis, ToolAction, ToolCorrelation,
-    ToolInteraction, ToolStatus, ToolStatusFact,
+    CorrelationDerivation, IngestOp, NativeToolRef, ProjectionAsset, StatusBasis, ToolAction,
+    ToolCorrelation, ToolInteraction, ToolStatus, ToolStatusFact,
 };
 use rosetta_search::{Fts5SidecarSearch, synchronize_fts5_once};
 use rosetta_server::auth::{GRANT_ASSET_ROUTE, GRANT_FILE_ROUTE, GRANT_SESSION_ROUTES};
@@ -458,6 +458,15 @@ async fn the_bearer_guards_every_rest_route_and_websocket() {
         };
         assert_eq!(right.status, expected, "{path}: {right:?}");
     }
+    // The export door (RO-32) answers to the bearer like every write.
+    let export = server
+        .request(
+            "POST",
+            &format!("/api/sessions/s1/artifacts/{}/export", "a".repeat(64)),
+            &[("content-type", "application/json")],
+        )
+        .await;
+    assert_eq!(export.refusal(), (401, Some("missing")));
     let search = server
         .get("/api/search?q=hello", &[("authorization", &bearer())])
         .await;
@@ -593,6 +602,14 @@ async fn an_allowed_origin_is_never_a_credential() {
         )
         .await;
     assert_eq!(write.status, 403);
+    let export = server
+        .request(
+            "POST",
+            &format!("/api/sessions/s1/artifacts/{}/export", "a".repeat(64)),
+            &[("origin", FOREIGN), ("authorization", &bearer())],
+        )
+        .await;
+    assert_eq!(export.status, 403, "the export door is a write");
     let preflight = server
         .request(
             "OPTIONS",
@@ -716,6 +733,19 @@ async fn a_grant_opens_its_own_session_and_nothing_else() {
         )
         .await;
     assert_eq!(write.refusal(), (401, Some("wrong-route")));
+    // The export door writes the disk (RO-32): bearer only, even for the
+    // grant's own session, which is the route's session.
+    let export = server
+        .request(
+            "POST",
+            &format!("/api/sessions/s1/artifacts/{}/export", "a".repeat(64)),
+            &[
+                ("authorization", &header),
+                ("content-type", "application/json"),
+            ],
+        )
+        .await;
+    assert_eq!(export.refusal(), (401, Some("wrong-route")));
     // A foreign page with a stolen grant: the Origin rule still refuses it.
     assert_eq!(
         server
@@ -814,6 +844,98 @@ async fn a_files_grant_reads_its_own_sessions_recorded_file_and_nothing_more() {
         .get(FILE_PATH, &[("origin", FOREIGN), ("authorization", &files)])
         .await;
     assert_eq!(foreign.status, 403, "{foreign:?}");
+}
+
+/// A sent video is a projection member like an image: the asset route a
+/// `read` grant opens (docs/AUTH.md §5.4) serves it, and holding the member's
+/// name widens nothing else.
+#[tokio::test]
+async fn a_read_grant_fetches_a_video_member_and_stays_inside_its_scope() {
+    let mut server = serve(policy()).await;
+    // A leading `ftyp` box (major brand `isom`, compatible `isom` `iso2`)
+    // and padding, in bytes a text reply carries unchanged.
+    let mut video = 24_u32.to_be_bytes().to_vec();
+    video.extend_from_slice(b"ftyp");
+    video.extend_from_slice(b"isom");
+    video.extend_from_slice(&[0, 0, 2, 0]);
+    video.extend_from_slice(b"isomiso2");
+    video.extend_from_slice(b"recorded video padding");
+    let asset = ProjectionAsset::new("video/mp4", video.clone()).unwrap();
+    let url = asset.url().unwrap();
+    assert!(url.ends_with(".mp4"), "{url}");
+    server
+        ._store
+        .apply(&Batch {
+            ops: vec![IngestOp::ProjectionAsset { asset }],
+            checkpoints: vec![],
+            source: None,
+        })
+        .unwrap();
+
+    let read = authorization(&grant_for("s1"));
+    let reply = server.get(&url, &[("authorization", &read)]).await;
+    assert_eq!(reply.status, 200, "{reply:?}");
+    assert_eq!(reply.header("x-rosetta-auth"), None);
+    assert_eq!(reply.header("content-type"), Some("video/mp4"));
+    assert_eq!(reply.header("x-content-type-options"), Some("nosniff"));
+    assert_eq!(reply.body.as_bytes(), video);
+    // Past the credential check, the handler still refuses to treat the
+    // member as an image.
+    let variant = server
+        .get(
+            &format!("{url}?image=tile&v=1"),
+            &[("authorization", &read)],
+        )
+        .await;
+    assert_eq!(variant.status, 400, "{variant:?}");
+    assert_eq!(variant.header("x-rosetta-auth"), None);
+    // The bearer reads the same bytes; no credential reads nothing.
+    let by_bearer = server.get(&url, &[("authorization", &bearer())]).await;
+    assert_eq!(by_bearer.status, 200, "{by_bearer:?}");
+    assert_eq!(by_bearer.body.as_bytes(), video);
+    assert_eq!(
+        server.get(&url, &[]).await.refusal(),
+        (401, Some("missing"))
+    );
+
+    // The same grant, outside its scope: the recorded-file read needs
+    // `files`, and the lists, search and the library need the bearer.
+    let file = server.get(FILE_PATH, &[("authorization", &read)]).await;
+    assert_eq!(file.refusal(), (401, Some("wrong-scope")));
+    for path in ["/api/sessions", "/api/search?q=video", "/api/artifacts"] {
+        let reply = server.get(path, &[("authorization", &read)]).await;
+        assert_eq!(reply.refusal(), (401, Some("wrong-route")), "{path}");
+    }
+
+    // A grant without `read` does not open the member; an expired or forged
+    // one does not either.
+    let files_only = grant::mint(
+        &KEY,
+        &GrantClaims {
+            scope: vec![SCOPE_FILES.into()],
+            ..GrantClaims::read("s1", "fieldd/w1", now_ms() + 60_000)
+        },
+    );
+    let expired = grant::mint(&KEY, &GrantClaims::read("s1", "fieldd/w1", now_ms() - 1));
+    let forged = grant::mint(
+        b"not the daemon's key, 32 bytes!!",
+        &GrantClaims::read("s1", "fieldd/w1", now_ms() + 60_000),
+    );
+    for (grant, reason) in [
+        (files_only, Refusal::WrongScope),
+        (expired, Refusal::Expired),
+        (forged, Refusal::BadSignature),
+    ] {
+        let reply = server
+            .get(&url, &[("authorization", &authorization(&grant))])
+            .await;
+        assert_eq!(
+            reply.refusal(),
+            (401, Some(reason.as_str())),
+            "{reason:?}: {reply:?}"
+        );
+        assert!(!reply.body.contains("ftyp"), "{reason:?}");
+    }
 }
 
 #[tokio::test]

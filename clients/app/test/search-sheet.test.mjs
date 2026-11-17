@@ -214,9 +214,15 @@ describe("countSentence / stateSentence", () => {
     assert.equal(stateSentence(base), "3 matches · 2 sessions · 1 project");
     assert.equal(stateSentence({ ...base, counts: { matches: 200, sessions: 9, projects: 3 } }), "first 200 matches · narrow the search to see the rest");
     assert.equal(stateSentence({ ...base, error: "boom" }), "search failed · boom");
-    assert.equal(stateSentence({ ...base, readiness: "building", progress: { documents_done: 8400, documents_total: 13700 } }), "indexing · 61% · 8,400 of 13,700 messages · results are partial");
-    assert.equal(stateSentence({ ...base, readiness: "building", canonicalReady: false }), "history is being imported");
-    assert.equal(stateSentence({ ...base, readiness: "failed" }), "search unavailable");
+    assert.equal(stateSentence({ ...base, readiness: "building", progress: { documents_done: 8400, documents_total: 13700 } }), "Full-text search is being built · 61% · showing title matches");
+    assert.equal(stateSentence({ ...base, readiness: "building" }), "Full-text search is being built · showing title matches");
+    assert.equal(stateSentence({ ...base, readiness: "building", progress: { documents_done: 0, documents_total: 0 } }), "Full-text search is being built · showing title matches");
+    assert.equal(stateSentence({ ...base, readiness: "building", query: "" }), "Full-text search is being built");
+    assert.equal(stateSentence({ ...base, readiness: "catching-up", progress: { documents_done: 8400, documents_total: 13700 } }), "indexing · 61% · 8,400 of 13,700 messages · results are partial");
+    assert.equal(stateSentence({ ...base, readiness: "building", canonicalReady: false }), "Titles only until the import finishes");
+    assert.equal(stateSentence({ ...base, readiness: "failed", canonicalReady: false }), "Titles only until the import finishes");
+    assert.equal(stateSentence({ ...base, readiness: null, canonicalReady: false, ingestPaused: true }), "Titles only until the import finishes");
+    assert.equal(stateSentence({ ...base, readiness: "failed" }), "Full-text search unavailable · showing title matches");
     assert.equal(stateSentence({ ...base, readiness: "catching-up" }), "search is catching up · results may be partial");
     assert.equal(stateSentence({ ...base, ingestPaused: true }), "transcript import paused · search covers what was read");
     assert.equal(stateSentence({ ...base, query: "" }), "");

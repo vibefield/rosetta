@@ -20,7 +20,7 @@ mod sidecar;
 mod worker;
 
 pub use sidecar::Fts5SidecarSearch;
-pub use worker::{Fts5SearchWorker, SearchAck, synchronize_fts5_once};
+pub use worker::{FirstSync, FirstSyncWatch, Fts5SearchWorker, SearchAck, synchronize_fts5_once};
 mod progress;
 pub use progress::{SearchBuildProgress, SearchBuildStage};
 

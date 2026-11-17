@@ -50,13 +50,11 @@ pub(crate) fn convert_color(
     Ok(())
 }
 
-pub(crate) fn resize(
-    source: &RgbaImage,
-    variant: ImageVariant,
-) -> Result<Cow<'_, RgbaImage>, MediaError> {
-    let (width, height) = source.dimensions();
+/// The size `resize` gives `variant` of a `(width, height)` source: a centred
+/// square crop for covers, otherwise a fit that never upscales.
+pub(crate) fn target_dimensions((width, height): (u32, u32), variant: ImageVariant) -> (u32, u32) {
     let edge = variant.edge();
-    let (target_width, target_height) = if variant.is_cover() {
+    if variant.is_cover() {
         let size = width.min(height).min(edge);
         (size, size)
     } else {
@@ -65,7 +63,15 @@ pub(crate) fn resize(
             (f64::from(width) * scale).round().max(1.0) as u32,
             (f64::from(height) * scale).round().max(1.0) as u32,
         )
-    };
+    }
+}
+
+pub(crate) fn resize(
+    source: &RgbaImage,
+    variant: ImageVariant,
+) -> Result<Cow<'_, RgbaImage>, MediaError> {
+    let (width, height) = source.dimensions();
+    let (target_width, target_height) = target_dimensions((width, height), variant);
     if (width, height) == (target_width, target_height) {
         return Ok(Cow::Borrowed(source));
     }

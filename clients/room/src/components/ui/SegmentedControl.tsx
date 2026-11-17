@@ -5,6 +5,8 @@ export interface SegmentedControlOption<Value extends string> {
   readonly label: ReactNode;
   readonly accessibleLabel?: string;
   readonly disabled?: boolean;
+  /** Why a disabled option waits, as its tooltip. */
+  readonly title?: string;
 }
 
 export interface SegmentedControlProps<Value extends string> {
@@ -37,6 +39,7 @@ export function SegmentedControl<Value extends string>({
             aria-label={option.accessibleLabel}
             aria-pressed={isSelected}
             disabled={option.disabled}
+            title={option.title}
             onClick={() => onValueChange(option.value)}
           >
             {option.label}

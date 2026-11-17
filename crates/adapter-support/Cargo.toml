@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rosetta-capture = { path = "../capture" }
 rosetta-media = { path = "../media" }
 base64 = { workspace = true }
 blake3 = { workspace = true }
@@ -13,3 +14,6 @@ time = { workspace = true }
 rosetta-core = { path = "../core" }
 pulldown-cmark.workspace = true
 percent-encoding.workspace = true
+
+[dev-dependencies]
+image.workspace = true

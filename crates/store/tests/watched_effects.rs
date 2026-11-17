@@ -153,6 +153,7 @@ fn shape(mutations: &[Mutation]) -> Vec<(&'static str, String)> {
             Mutation::Session(row) => ("session", row.id.clone()),
             Mutation::Project(row) => ("project", row.id.clone()),
             Mutation::Runtime(row) => ("runtime", row.id.clone()),
+            Mutation::ArtifactsChanged { .. } => ("artifacts", String::new()),
         })
         .collect()
 }

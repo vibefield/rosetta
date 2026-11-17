@@ -208,7 +208,10 @@ fn exclusion_removes_every_sibling_child_and_orphan_placeholder_before_journalin
     assert!(!raw_payloads(&h.ledger_dir).contains("excludedpayload"));
     for entry in scan_ledger(&h.ledger_dir).unwrap().entries {
         if let LedgerEntry::Meta { payload, .. } = entry {
-            for op in serde_json::from_str::<Vec<IngestOp>>(&payload).unwrap() {
+            for op in rosetta_pipeline::LedgerMetadata::decode(&payload)
+                .unwrap()
+                .ops
+            {
                 if let IngestOp::SessionMeta(row) = op {
                     assert_eq!(row.native_session_id, "allowed");
                 }

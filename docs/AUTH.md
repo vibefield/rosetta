@@ -48,6 +48,15 @@ present the token like any other client.
 A request with no `Origin` (every non-browser client) passes the Origin rule
 and answers to the credential check alone.
 
+*Correction (2026-11-05, MA-2a):* "the two writes" above is stale. The writes
+under the Origin rule are `/api/runtimes/enable`, `/api/ingest/boost`, the
+cold-run controls `/api/ingestions/{id}/pause` and `/resume` (since 2026-10-29),
+and the artifact export door
+`POST /api/sessions/{id}/artifacts/{publication_id}/export` (RO-32, protocol 30).
+The export door is the one write that reaches the disk: it places one captured
+page by its digest (a hard link from the asset store, or a verified copy) in a
+directory below `--export-root` and nowhere else (§5.4 for who may call it).
+
 ## 3. Credentials and carriers
 
 | Credential | `Authorization` header | WebSocket subprotocol pair |
@@ -170,10 +179,37 @@ someone decides otherwise. A grant opens, when `{id}` = `sid`:
 /api/sessions/{id}/timeline                       /api/sessions/{id}/plans/revisions/{revision}
 ```
 
+*Correction (2026-11-05, MA-2a):* the block above omits
+`/api/sessions/{id}/artifacts/{publication_id}/content`, the captured-HTML read,
+which `GRANT_SESSION_ROUTES` (`crates/server/src/auth.rs`, read 2026-11-05)
+opens. It is a read of captured bytes, so `"read"` opens it without `"files"`.
+
 It also opens `/api/assets/{name}`, the content-addressed transcript images.
 An asset URL is learned from a timeline, and its digest names bytes, not a
 session. The cost is that a grant holder who already knows an image's digest
 can confirm that the projection holds it.
+
+*Sent files (2026-11-12):* the members behind that route now include files an
+agent sent the user by path: images, and MP4 and QuickTime video
+(`<digest>.mp4`, `<digest>.mov`). The transcript holds only a path, a size and
+a type, so the daemon copied the bytes from its own disk into the ledger at
+capture: any absolute path a proven sent-file result names, when the file there
+has the recorded size and the declared type's signature. The path is opened
+exactly as recorded: one that holds a backslash or is not in normal form (a `.`
+or `..` segment, an empty segment, a trailing slash) is skipped, not rewritten,
+and `/dev` and `/proc` paths are refused before any open, in any letter case.
+A match of size and signature is not proof the
+file is the one that was sent. They are captured bytes, like captured HTML, so
+`"read"` opens them without `"files"`, and the asset route still compares no
+session: a holder who knows a member's digest can fetch it, whichever session
+sent it. A video is returned whole, with its own content type; the route has no
+Range support. A `<video src>` at this address plays but cannot seek in
+Chromium, so the History room reads the member's bytes over the same route
+(`readAsset`) and plays an object URL; rosetta's app offers the room no video
+address.
+`ROSETTA_PRESENTED_MEDIA=off` in the daemon's environment stops
+the capture (`docs/ARCHITECTURE.md`, "HTML review artifacts", *Sent media in
+the Document frame*); it removes nothing already captured.
 
 **With `"files"` beside `"read"`** it also opens, when `{id}` = `sid`,
 
@@ -199,8 +235,12 @@ only that a grant carries it.
 
 **A grant never opens** the lists (`/api/runtimes`, `/api/projects`,
 `/api/sessions`), search, `/ws/meta`, `/api/status`, `/api/discoveries`,
-`/api/pricing`, `/api/activity`, the project aggregates or the writes, whatever its scope.
-Those routes need the bearer.
+`/api/pricing`, `/api/activity`, the project aggregates, the artifact library
+(`/api/artifacts`) or the writes, whatever its scope. Those routes need the bearer.
+
+| Route | Credential | Why |
+|---|---|---|
+| `POST /api/sessions/{id}/artifacts/{publication_id}/export` (RO-32, 2026-11-05; by digest 2026-11-06) | bearer only; a grant is `wrong-route`, even for its own `sid` | It places one captured page by digest on the daemon's disk below `--export-root`. A grant reads recorded history; no scope makes it a writer, and `grant_reach` refuses every method but GET and HEAD before the allow-list is read. Without `--export-root` the route answers 503 `not_ready`. `rosettad serve` refuses to start with `--export-root` and no `--token-file`, so the door never opens on an open daemon, where any local process and any loopback page could call it. |
 
 ### 5.5 What v1 does not do
 

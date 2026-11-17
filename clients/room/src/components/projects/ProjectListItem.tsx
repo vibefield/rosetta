@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
-import type { ProjectBackfill, BackfillState } from "@vibefield/rosetta-protocol";
+import type { ProjectBackfill } from "@vibefield/rosetta-protocol";
 import { AgentBadges } from "../../lib/agents";
-import { progressBytes } from "../../lib/ingest-activity";
+import type { ConversationCount } from "../../lib/conversation-readiness";
 import { projectBackfillProgress } from "../../lib/ingest";
 import { lastActive, tildePath, tokenText } from "../../lib/format";
 import type { ProjectViewModel } from "../../lib/model";
@@ -55,11 +55,29 @@ export interface ProjectListItemProps {
   readonly currentTimestamp: number;
   /** Canonical publication is still pending, so aggregate figures wait. */
   readonly ingestActive: boolean;
-  readonly runtimeStates?: readonly BackfillState[] | undefined;
   /** This project's row in the daemon's per-project backfill fold; null
    * before the plan settles, and on a daemon too old to carry it. */
   readonly backfill: ProjectBackfill | null;
+  /** Its conversations (root sessions, no metadata-only placeholder) and how
+   * many are readable, from the catalog the lists draw; absent before the
+   * catalog names one. */
+  readonly conversations?: ConversationCount | null | undefined;
   readonly onProjectSelect: (projectId: string) => void;
+}
+
+/** What a cooking card says while the import runs, in the lists' unit. */
+export function importLabel(
+  conversations: ConversationCount | null | undefined,
+  backfill: ProjectBackfill | null,
+): string {
+  if (!conversations || conversations.total === 0) return "Waiting for conversations";
+  const { readable, total } = conversations;
+  const noun = total === 1 ? "conversation" : "conversations";
+  // Figures are cross-session scans, which wait for publication.
+  if (readable >= total) return total === 1 ? "Readable · figures after the import" : `All ${total.toLocaleString()} readable · figures after the import`;
+  // Nothing of it read yet: the board has streamed none of its bytes.
+  if (readable === 0 && (backfill === null || backfill.bytes_streamed === 0)) return "Not reached yet";
+  return `${readable.toLocaleString()} of ${total.toLocaleString()} ${noun} readable`;
 }
 
 export function ProjectListItem({
@@ -69,8 +87,8 @@ export function ProjectListItem({
   homeDirectory,
   currentTimestamp,
   ingestActive,
-  runtimeStates,
   backfill,
+  conversations,
   onProjectSelect,
 }: ProjectListItemProps) {
   // The cooking card: identity (name, path, agents) renders as itself from
@@ -81,17 +99,10 @@ export function ProjectListItem({
   const ingestFill = isCooking && backfill !== null
     ? projectBackfillProgress(backfill)
     : null;
+  // While the import runs the card counts what a reader can open, in the
+  // conversations the lists draw; after it, only the figures are waited for.
   const cookingLabel = isCooking
-    ? backfill !== null
-      ? backfill.sessions_done >= backfill.sessions_total
-        ? "Preparing activity summaries"
-        : runtimeStates?.includes("streaming")
-          ? ingestFill !== null
-            ? `Reading conversations · ${Math.floor(ingestFill * 100)}%`
-            : `Reading conversations · ${progressBytes(backfill.bytes_streamed)}`
-          : runtimeStates?.some((state) => state === "preparing" || state === "applying")
-            ? "Organizing conversations" : "Waiting for conversations"
-      : project.readiness === "ready" ? "Preparing activity summaries" : "Waiting for conversations"
+    ? ingestActive ? importLabel(conversations, backfill) : "Preparing activity summaries"
     : null;
   const lifetimeCost = project.lifetimeSpend.costMicroUsd ?? 0;
   const spendShare = maximumLifetimeCost > 0

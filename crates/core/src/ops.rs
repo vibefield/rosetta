@@ -32,6 +32,9 @@ pub enum IngestOp {
     HtmlArtifact(crate::html_artifacts::HtmlArtifactPublication),
     /// Captured bytes and availability for a publication's exact file locator.
     HtmlArtifactContent(crate::html_artifacts::HtmlArtifactContent),
+    /// A file the agent sent the user by path. A transient fact for the
+    /// capture seam and replay; the store applies nothing for it.
+    PresentedMedia(crate::presented_media::PresentedMedia),
     Runtime(RuntimeRow),
     Project(ProjectRow),
     /// Meta-phase upsert. Stream normalization never mutates session identity,

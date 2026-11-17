@@ -382,6 +382,15 @@
   color: var(--vf-text-faint); font-size: 9.5px; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.08em;
 }
+/* The import's date-free groups: a head that is a count, not a calendar day.
+   It keeps the day head's place and voice, so only the dashed rule above it
+   tells it apart from a date. */
+.ah-day[data-not-imported] {
+  margin-top: 10px;
+  background: linear-gradient(90deg, var(--vf-hairline) 50%, transparent 0) top left / 6px 1px repeat-x,
+    linear-gradient(var(--ah-plate) 72%, transparent);
+}
+.ah-session-list > .ah-day[data-not-imported]:first-child { margin-top: 0; }
 /* The session row answers the same four questions the ledger row does, in the
    same corners: state and title on the first line, the agent top-right, the
    facts in the middle, the branch bottom-left and the time bottom-right. */
@@ -410,6 +419,12 @@
 .ah-session-list-item__status[data-tone="red"] { background: var(--vf-red); }
 /* live is the one state that is still happening, so it also breathes */
 .ah-session-list-item__status[data-live] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--vf-green) 22%, transparent); }
+/* Not imported yet is no §2.5 state: a hollow, colourless ring, and its time
+   slot speaks in the same faint voice instead of claiming a time. */
+.ah-session-list-item[data-standing="not-imported"] .ah-session-list-item__status {
+  background: transparent; box-shadow: inset 0 0 0 1.5px var(--vf-text-faint);
+}
+.ah-session-list-item[data-standing="not-imported"] .ah-last { color: var(--vf-text-faint); font-style: italic; }
 
 .ah-session-list-item__header { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; min-height: 16px; }
 .ah-session-list-item__footer { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; min-width: 0; }
@@ -477,6 +492,24 @@
 .ah-newpill svg { flex: none; }
 .ah-newpill span { overflow: hidden; text-overflow: ellipsis; }
 .ah-newpill i { flex: none; width: 6px; height: 6px; border-radius: 999px; background: var(--vf-green); }
+
+/* A button at the side goes to the message before:
+   round glass on the island shadow and hairline, 16px in from the transcript
+   column's edge, its centre on the Latest pill's (that pill is 36px high, this
+   32). It fades over 200ms; hidden, it takes no press. */
+.tr-prompt-jump {
+  position: absolute; right: 16px; bottom: calc(var(--composer-h) + 28px); z-index: 6;
+  display: grid; place-items: center; width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--vf-hairline-strong); border-radius: 999px;
+  background: var(--vf-chrome-surface); backdrop-filter: blur(24px) saturate(1.25);
+  box-shadow: var(--vf-shadow-island);
+  color: var(--vf-text-primary);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity 200ms ease, background-color 160ms ease, visibility 0s linear 200ms;
+}
+.tr-prompt-jump[data-visible] { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+.tr-prompt-jump:hover { background: var(--vf-chrome-solid); }
+.tr-prompt-jump svg { flex: none; }
 .ah-tail-announcement {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;

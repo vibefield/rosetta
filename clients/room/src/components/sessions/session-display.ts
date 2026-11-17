@@ -9,7 +9,11 @@ export interface SessionStatus {
 export function getSessionStatus(
   session: SessionRow,
   duringBackfill = false,
+  /** A row the metadata pass made only for its children: no import will
+   * reach it, so nothing about it is cooking (`isMetadataOnly`). */
+  metadataOnly = false,
 ): SessionStatus {
+  if (metadataOnly) return { tone: null, isLive: false, label: "transcript not available" };
   switch (session.stream_state) {
     case "streaming":
       // This is ingestion completeness, never evidence of an active agent.
@@ -19,7 +23,13 @@ export function getSessionStatus(
         label: duringBackfill ? "indexing" : "history incomplete",
       };
     case "pending":
-      return { tone: "orange", isLive: false, label: "not yet indexed" };
+      // Newest trees import first: while the import runs, an older one is
+      // simply not reached yet. That is no trouble, so it takes no hue: the
+      // row draws a hollow dot (`data-standing`). Orange stays for a row
+      // the finished import never reached.
+      return duringBackfill
+        ? { tone: null, isLive: false, label: "not imported yet" }
+        : { tone: "orange", isLive: false, label: "not yet indexed" };
     default:
       return { tone: null, isLive: false, label: "history indexed" };
   }

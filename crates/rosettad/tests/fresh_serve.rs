@@ -237,6 +237,231 @@ fn fresh_serve_publishes_metadata_then_installs_valid_projection() {
     assert!(db.with_extension("ledger").is_dir());
 }
 
+/// The first `milestone: <name>` line whose fields include every `with`
+/// pair: its position in `stdout` and its `elapsed_s`.
+fn milestone(stdout: &str, name: &str, with: &[&str]) -> (usize, f64) {
+    stdout
+        .lines()
+        .enumerate()
+        .find_map(|(index, line)| {
+            let rest = line.strip_prefix("milestone: ")?.strip_prefix(name)?;
+            let fields = rest.split_whitespace().collect::<Vec<_>>();
+            if !(rest.is_empty() || rest.starts_with(' '))
+                || !with.iter().all(|pair| fields.contains(pair))
+            {
+                return None;
+            }
+            let elapsed = fields
+                .iter()
+                .find_map(|field| field.strip_prefix("elapsed_s="))?
+                .parse()
+                .ok()?;
+            Some((index, elapsed))
+        })
+        .unwrap_or_else(|| panic!("no milestone {name} {with:?}:\n{stdout}"))
+}
+
+fn set_modified(path: &Path, modified: std::time::SystemTime) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+}
+
+/// Set every file's modification time under `root`.
+fn age_tree(root: &Path, modified: std::time::SystemTime) {
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            age_tree(&path, modified);
+        } else {
+            set_modified(&path, modified);
+        }
+    }
+}
+
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The transcripts of two fixtures in one home: basic-chat's written now,
+/// resume's three days ago.
+fn two_session_home(home: &Path) {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../groundtruth/claude-code/fixtures/2.1.241");
+    let claude = home.join(".claude");
+    copy_tree(&fixtures.join("basic-chat/claude-config"), &claude);
+    let resume = fixtures.join("resume/claude-config/projects");
+    copy_tree(&resume, &claude.join("projects"));
+    let now = std::time::SystemTime::now();
+    age_tree(&claude, now);
+    let relative = find_project_jsonl(&resume);
+    let relative = relative.strip_prefix(&resume).unwrap();
+    set_modified(&claude.join("projects").join(relative), now - 3 * DAY);
+}
+
+/// Measurement is behaviour-neutral stdout (docs/ARCHITECTURE.md, cold-build
+/// measurement): per-runtime metadata and admission milestones, first and
+/// recent readiness in order before canonical readiness, and a census that
+/// carries structure only.
+#[test]
+fn fresh_serve_reports_readiness_milestones_in_order_and_a_structure_only_census() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    two_session_home(&home);
+    let db = temp.path().join("archive/rosetta.db");
+    let stdout = assert_success(&run_serve(&home, &db));
+
+    let metadata = milestone(&stdout, "runtime-metadata-public", &["agent=claude-code"]);
+    let complete = milestone(&stdout, "first-session-complete", &[]);
+    let admitted = milestone(&stdout, "runtime-readable", &["sessions=2"]);
+    let first = milestone(&stdout, "first-readable", &[]);
+    let day = milestone(
+        &stdout,
+        "recent-ready",
+        &["horizon=24h", "horizon_sessions=1"],
+    );
+    let week = milestone(
+        &stdout,
+        "recent-ready",
+        &["horizon=7d", "horizon_sessions=2"],
+    );
+    // Root trees (Claude Code admits per tree): two single-session trees,
+    // three days apart, none over 64 MiB, each ready at its own flip.
+    let relative: [(&str, &[&str]); 5] = [
+        (
+            "recent-ready",
+            &["horizon=24h@newest", "horizon_sessions=1"],
+        ),
+        ("recent-ready", &["horizon=7d@newest", "horizon_sessions=2"]),
+        ("newest-trees-ready", &["n=2"]),
+        ("small-recent-ready", &["horizon=24h@newest", "trees=1"]),
+        ("small-recent-ready", &["horizon=7d@newest", "trees=2"]),
+    ];
+    let relative = relative.map(|(name, with)| milestone(&stdout, name, with));
+    assert!(
+        !stdout.contains("milestone: newest-giant-ready"),
+        "{stdout}"
+    );
+    let canonical = milestone(&stdout, "canonical-ready", &[]);
+    for ready in relative {
+        assert!(first.0 < ready.0 && ready.0 < admitted.0, "{stdout}");
+    }
+    let peak = milestone(&stdout, "memory-peak", &[]);
+    let order = [
+        metadata, complete, first, day, week, admitted, canonical, peak,
+    ];
+    for pair in order.windows(2) {
+        assert!(
+            pair[0].0 < pair[1].0 && pair[0].1 <= pair[1].1,
+            "{pair:?}\n{stdout}"
+        );
+    }
+    let (usage, line) = stdout
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.starts_with("usage-copies: dropped="))
+        .expect("usage-copies line");
+    assert!(usage > canonical.0, "{stdout}");
+    for field in [
+        " displaced=",
+        " owned=",
+        " unclaimed_usage=",
+        " displaced_visible=",
+        " owner_bytes=",
+    ] {
+        assert!(line.contains(field), "{field}: {line}");
+    }
+
+    let census = stdout
+        .lines()
+        .filter(|line| line.starts_with("census: "))
+        .collect::<Vec<_>>();
+    assert_eq!(census.len(), 1, "{stdout}");
+    let census = census[0];
+    for field in [
+        "files=2 ",
+        " le1h=1/",
+        " le30d=2/",
+        " older=0/0 ",
+        // Transcripts are their own files: nothing is shared.
+        " shared=0/0 ",
+        " sessions=2 ",
+        " roots=2 ",
+    ] {
+        assert!(census.contains(field), "{field}: {census}");
+    }
+    // Structure only: every value is a number, a number list, a runtime id
+    // or the agent kind, and only a tally (`files/bytes`) has a slash.
+    for field in census.trim_start_matches("census: ").split_whitespace() {
+        let (key, value) = field.split_once('=').expect("key=value fields");
+        assert!(!field.contains('\\'), "{field}: {census}");
+        match key {
+            "agent" => assert_eq!(value, "claude-code"),
+            "runtime" => assert!(value.bytes().all(|b| b.is_ascii_hexdigit())),
+            "le1h" | "le24h" | "le7d" | "le30d" | "older" | "shared" => {
+                let tally = value.split('/').collect::<Vec<_>>();
+                assert!(tally.len() == 2 && tally.iter().all(|n| n.parse::<u64>().is_ok()));
+            }
+            _ => assert!(
+                value.split(',').all(|n| n.parse::<u64>().is_ok()),
+                "{field}: {census}"
+            ),
+        }
+    }
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let mut ids = conn
+        .prepare("SELECT id, native_session_id, root_session_id, project_id FROM session")
+        .unwrap()
+        .query_map([], |row| {
+            Ok([
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+            ])
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .concat();
+    ids.retain(|id| !id.is_empty());
+    assert!(ids.len() >= 6, "two sessions' identities: {ids:?}");
+    for id in ids {
+        assert!(!census.contains(&id), "{id} leaked: {census}");
+    }
+}
+
+/// A horizon holding no session is decided at the first admission.
+#[test]
+fn a_horizon_without_recent_sessions_is_ready_at_the_first_admission() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    two_session_home(&home);
+    age_tree(
+        &home.join(".claude/projects"),
+        std::time::SystemTime::now() - 40 * DAY,
+    );
+    let db = temp.path().join("archive/rosetta.db");
+    let stdout = assert_success(&run_serve(&home, &db));
+
+    let first = milestone(&stdout, "first-readable", &[]);
+    for horizon in ["horizon=24h", "horizon=7d"] {
+        let ready = milestone(&stdout, "recent-ready", &[horizon, "horizon_sessions=0"]);
+        assert!(ready.0 > first.0, "{stdout}");
+    }
+    // Measured from the newest session instead, both are still recent.
+    for horizon in ["horizon=24h@newest", "horizon=7d@newest"] {
+        let ready = milestone(&stdout, "recent-ready", &[horizon, "horizon_sessions=2"]);
+        assert!(ready.0 > first.0, "{stdout}");
+    }
+    let census = stdout
+        .lines()
+        .find(|line| line.starts_with("census: "))
+        .expect("census line");
+    assert!(census.contains(" le30d=0/0 older=2/"), "{census}");
+}
+
 #[test]
 fn interrupted_first_serve_is_preserved_and_restarted_through_ram() {
     let temp = tempfile::tempdir().unwrap();
@@ -536,360 +761,8 @@ fn scalar(db: &Path, sql: &str) -> Option<String> {
         .ok()
 }
 
-/// A transcript caught mid-append at a fresh start — its file ends inside a
-/// tool result its writer has not finished — no longer fails the start: the
-/// clean prefix publishes with its session held Streaming, and once the
-/// writer finishes, the live runner reads only the growth. The published
-/// projection then holds exactly the rows a start over the finished file
-/// publishes, and the raw ledger holds every record once, in one sealed
-/// generation.
-#[test]
-fn a_transcript_caught_mid_append_publishes_and_the_live_runner_finishes_it() {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../groundtruth/claude-code/fixtures/2.1.241/tool-use/claude-config");
-    let temp = tempfile::tempdir().unwrap();
+#[path = "fresh_serve/live_handoff.rs"]
+mod live_handoff;
 
-    // The transcript, cut inside the tool result.
-    let home = temp.path().join("live");
-    let claude = home.join(".claude");
-    copy_tree(&fixture, &claude);
-    let transcript = find_project_jsonl(&claude.join("projects"));
-    let text = std::fs::read(&transcript).unwrap();
-    let result = text
-        .windows(br#""type":"tool_result""#.len())
-        .position(|window| window == br#""type":"tool_result""#)
-        .expect("the fixture holds a tool result");
-    std::fs::write(&transcript, &text[..result]).unwrap();
-    let cut_at = std::fs::metadata(&transcript).unwrap().modified().unwrap();
-    let suffix = text[result..].to_vec();
-    let native = transcript
-        .file_stem()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    let db = temp.path().join("live/rosetta.db");
-
-    let mut child = Command::new(env!("CARGO_BIN_EXE_rosettad"))
-        .args([
-            "serve",
-            "--db",
-            db.to_str().unwrap(),
-            "--home",
-            home.to_str().unwrap(),
-            "--agent",
-            "claude-code",
-            "--addr",
-            "127.0.0.1:0",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let mut child = ChildGuard(child);
-    let (sender, receiver) = mpsc::channel();
-    let errors = sender.clone();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let _ = sender.send(line);
-        }
-    });
-    std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            let _ = errors.send(format!("stderr: {line}"));
-        }
-    });
-    let mut log = Vec::new();
-    loop {
-        let line = receiver
-            .recv_timeout(Duration::from_secs(60))
-            .unwrap_or_else(|_| panic!("no canonical-ready:\n{}", log.join("\n")));
-        let ready = line.contains("milestone: canonical-ready");
-        log.push(line);
-        if ready {
-            break;
-        }
-    }
-
-    // Published with the unfinished record left out: the prefix is active
-    // (one generation, no staged one) and the session is Streaming.
-    let state = format!("SELECT stream_state FROM session WHERE native_session_id = '{native}'");
-    assert_eq!(scalar(&db, &state).as_deref(), Some("streaming"), "{log:?}");
-    let generations = scalar(
-        &db,
-        "SELECT active_generation || '/' || highest_generation FROM ingest_cursor
-         WHERE path LIKE '%.jsonl'",
-    );
-    assert_eq!(generations.as_deref(), Some("1/1"));
-    let published: i64 = scalar(&db, "SELECT CAST(COUNT(*) AS TEXT) FROM message")
-        .unwrap()
-        .parse()
-        .unwrap();
-    assert!(published > 0);
-
-    // The writer finishes the record and the session. FSEvents may be
-    // suppressed in a sandbox; the 30-second stat poll must converge anyway.
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&transcript)
-        .unwrap();
-    file.write_all(&suffix).unwrap();
-    file.sync_data().unwrap();
-    drop(file);
-    let deadline = Instant::now() + Duration::from_secs(45);
-    while scalar(&db, &state).as_deref() != Some("indexed") {
-        assert_eq!(child.0.try_wait().unwrap(), None, "daemon exited early");
-        assert!(
-            Instant::now() < deadline,
-            "the live runner never finished it"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    child.0.kill().unwrap();
-    child.0.wait().unwrap();
-
-    // The reference: a fresh start over the finished transcript as it would
-    // have stood at the start — modified when the cut one was, since a
-    // session's `updated_at` starts from the mtime its metadata skim reads.
-    let whole_home = temp.path().join("whole");
-    copy_tree(&fixture, &whole_home.join(".claude"));
-    let whole_transcript = find_project_jsonl(&whole_home.join(".claude/projects"));
-    std::fs::File::options()
-        .write(true)
-        .open(&whole_transcript)
-        .unwrap()
-        .set_modified(cut_at)
-        .unwrap();
-    let whole_db = temp.path().join("whole/rosetta.db");
-    assert_success(&run_serve(&whole_home, &whole_db));
-    let whole = canonical_rows(&whole_db);
-    assert!(published < whole["message"].len() as i64);
-    let live = canonical_rows(&db);
-    for (table, rows) in &whole {
-        assert_eq!(&live[table], rows, "{table}");
-    }
-
-    // Every record reached the ledger once, in the one generation its seal
-    // closed at the cut: the growth was appended, the prefix never replayed.
-    let scan = scan_ledger(&db.with_extension("ledger").join("claude-code")).unwrap();
-    let mut offsets = Vec::new();
-    let mut seals = Vec::new();
-    for entry in scan.entries {
-        match entry {
-            LedgerEntry::Raw {
-                source,
-                generation,
-                start_offset,
-                ..
-            } if source.relative_path.ends_with(".jsonl") => {
-                offsets.push((generation, start_offset));
-            }
-            LedgerEntry::GenerationComplete {
-                source,
-                generation,
-                normalized_clean,
-                ..
-            } if source.relative_path.ends_with(".jsonl") => {
-                seals.push((generation, normalized_clean));
-            }
-            _ => {}
-        }
-    }
-    let lines = text.split(|byte| *byte == b'\n').count() - 1;
-    let mut unique = offsets.clone();
-    unique.dedup();
-    assert_eq!(unique, offsets, "no record was framed twice");
-    assert_eq!(offsets.len(), lines);
-    assert!(offsets.iter().all(|(generation, _)| *generation == 1));
-    assert_eq!(seals, [(1, true)]);
-}
-
-/// A record over the 32 MiB projection limit no longer fails a fresh start:
-/// it is captured into the raw ledger whole, projects one drift fact, and its
-/// session is published Indexed.
-#[test]
-fn a_record_over_the_projection_limit_publishes_as_a_drift_fact() {
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    let claude = home.join(".claude");
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../groundtruth/claude-code/fixtures/2.1.241/basic-chat/claude-config");
-    copy_tree(&fixture, &claude);
-    let transcript = find_project_jsonl(&claude.join("projects"));
-    let native = transcript
-        .file_stem()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    let huge = format!(
-        "{{\"type\":\"user\",\"attachment\":\"{}\"}}\n",
-        "q".repeat(33 * 1024 * 1024)
-    );
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(&transcript)
-        .unwrap()
-        .write_all(huge.as_bytes())
-        .unwrap();
-    let db = temp.path().join("archive/rosetta.db");
-
-    let stdout = assert_success(&run_serve(&home, &db));
-    let prepared = stdout
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .find(|event| event["event"] == "stream-prepared")
-        .expect("a stream-prepared event");
-    assert_eq!(
-        (&prepared["quarantined"], &prepared["oversized"]),
-        (&serde_json::json!(1), &serde_json::json!(0)),
-        "{prepared}"
-    );
-    let state = format!("SELECT stream_state FROM session WHERE native_session_id = '{native}'");
-    assert_eq!(scalar(&db, &state).as_deref(), Some("indexed"));
-    assert_eq!(
-        scalar(
-            &db,
-            "SELECT error_code FROM drift_agg WHERE error_code = 'over_projection_limit'"
-        )
-        .as_deref(),
-        Some("over_projection_limit")
-    );
-    let scan = scan_ledger(&db.with_extension("ledger").join("claude-code")).unwrap();
-    assert!(scan.entries.iter().any(|entry| matches!(
-        entry,
-        LedgerEntry::Raw { payload, .. } if payload.len() == huge.len() - 1
-    )));
-}
-
-#[test]
-fn warm_daemon_append_reaches_sqlite_raw_ledger_and_websocket() {
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    let claude = home.join(".claude");
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../groundtruth/claude-code/fixtures/2.1.241/basic-chat/claude-config");
-    copy_tree(&fixture, &claude);
-    let db = temp.path().join("archive/rosetta.db");
-    assert_success(&run_serve(&home, &db));
-
-    let mut child = Command::new(env!("CARGO_BIN_EXE_rosettad"))
-        .args([
-            "serve",
-            "--db",
-            db.to_str().unwrap(),
-            "--home",
-            home.to_str().unwrap(),
-            "--agent",
-            "claude-code",
-            "--addr",
-            "127.0.0.1:0",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let mut child = ChildGuard(child);
-    let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let _ = sender.send(line);
-        }
-    });
-    let origin = loop {
-        let line = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
-        if let Some(origin) = line
-            .split_whitespace()
-            .find(|word| word.starts_with("http://"))
-        {
-            break origin.to_string();
-        }
-    };
-
-    let runtime_ledger = db.with_extension("ledger").join("claude-code");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !runtime_ledger.join(".meta-head").is_file() {
-        assert!(
-            Instant::now() < deadline,
-            "warm watcher/meta setup timed out"
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    std::thread::sleep(Duration::from_millis(100));
-    let transcript = find_project_jsonl(&claude.join("projects"));
-    let native = transcript.file_stem().unwrap().to_string_lossy();
-    let conn = rusqlite::Connection::open(&db).unwrap();
-    let session_id: String = conn
-        .query_row(
-            "SELECT id FROM session WHERE native_session_id = ?1",
-            [native.as_ref()],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let before: i64 = conn
-        .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
-        .unwrap();
-    drop(conn);
-
-    let mut socket = websocket_session(&origin, &session_id);
-    let hello = read_ws_text(&mut socket);
-    let snapshot = read_ws_text(&mut socket);
-    assert!(hello.contains("\"frame\":\"hello\""), "{hello}");
-    assert!(
-        snapshot.contains("\"frame\":\"timeline_snapshot\""),
-        "{snapshot}"
-    );
-
-    let sentinel = "quetzalcoatl daemon websocket append";
-    let line = serde_json::json!({
-        "type": "user",
-        "sessionId": native,
-        "uuid": "00000000-0000-4000-8000-000000009999",
-        "parentUuid": null,
-        "isSidechain": false,
-        "userType": "external",
-        "timestamp": "2026-08-31T20:00:00.000Z",
-        "cwd": "/tmp/rosetta-live-test",
-        "gitBranch": "main",
-        "version": "2.1.241",
-        "message": {"role": "user", "content": sentinel},
-    });
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&transcript)
-        .unwrap();
-    writeln!(file, "{line}").unwrap();
-    file.sync_data().unwrap();
-
-    // CI/sandbox filesystems may suppress FSEvents. The daemon's mandatory
-    // 30-second stat-poll lane must still converge end to end.
-    let deadline = Instant::now() + Duration::from_secs(40);
-    loop {
-        assert_eq!(
-            child.0.try_wait().unwrap(),
-            None,
-            "warm daemon exited early"
-        );
-        let count = rusqlite::Connection::open(&db)
-            .and_then(|conn| conn.query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0)))
-            .unwrap_or(before);
-        if count == before + 1 {
-            break;
-        }
-        assert!(Instant::now() < deadline, "live SQLite append timed out");
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    let mutation = read_ws_text(&mut socket);
-    assert!(mutation.contains("\"frame\":\"mutation\""), "{mutation}");
-    assert!(mutation.contains(sentinel), "{mutation}");
-    let scan = scan_ledger(&runtime_ledger).unwrap();
-    assert!(scan.entries.iter().any(|entry| matches!(
-        entry,
-        LedgerEntry::Raw { payload, .. }
-            if String::from_utf8_lossy(payload).contains(sentinel)
-    )));
-
-    child.0.kill().unwrap();
-    child.0.wait().unwrap();
-}
+#[path = "fresh_serve/measure_lines.rs"]
+mod measure_lines;

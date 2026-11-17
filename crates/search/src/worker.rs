@@ -7,11 +7,11 @@
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rosetta_core::timeline::SearchLane;
 use rosetta_store::queries::{self, ProjectionState, SearchDocument};
@@ -445,10 +445,83 @@ pub fn synchronize_fts5_once(
     }))
 }
 
+/// The first outcome of a worker's synchronization: measurement only (the
+/// daemon's `search-ready` milestone on the fresh RAM path). A paused
+/// worker's first synchronization runs after its first wake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirstSync {
+    /// At this instant a synchronization had left a generation of the
+    /// canonical epoch selected: searches answer from it from then on.
+    Published(Instant),
+    /// At this instant a synchronization failed (the worker retries, and
+    /// readiness reads `failed` meanwhile).
+    Failed(Instant),
+    /// The worker stopped, or its thread ended, before either.
+    Stopped,
+}
+
+#[derive(Debug, Default)]
+struct FirstSyncCell {
+    outcome: Mutex<Option<FirstSync>>,
+    settled: Condvar,
+}
+
+impl FirstSyncCell {
+    /// Record `outcome` unless one is recorded already.
+    fn settle(&self, outcome: FirstSync) {
+        let mut slot = self.outcome.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(outcome);
+            self.settled.notify_all();
+        }
+    }
+}
+
+/// Settles [`FirstSync::Stopped`] however the worker thread ends, a panic
+/// included, so a waiter never outlives its worker.
+struct StoppedOnExit(Arc<FirstSyncCell>);
+
+impl Drop for StoppedOnExit {
+    fn drop(&mut self) {
+        self.0.settle(FirstSync::Stopped);
+    }
+}
+
+/// A handle on a worker's [`FirstSync`]; it never touches the worker.
+#[derive(Debug, Clone)]
+pub struct FirstSyncWatch(Arc<FirstSyncCell>);
+
+impl FirstSyncWatch {
+    /// Block until the worker's first synchronization outcome, or its end.
+    pub fn wait(&self) -> FirstSync {
+        let slot = self
+            .0
+            .outcome
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let slot = self
+            .0
+            .settled
+            .wait_while(slot, |slot| slot.is_none())
+            .unwrap_or_else(PoisonError::into_inner);
+        slot.expect("settled above")
+    }
+
+    /// The outcome, if one is recorded.
+    pub fn get(&self) -> Option<FirstSync> {
+        *self
+            .0
+            .outcome
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 pub struct Fts5SearchWorker {
     stop: Arc<AtomicBool>,
     wake: SyncSender<()>,
     acknowledgements: Receiver<SearchAck>,
+    first: Arc<FirstSyncCell>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -470,9 +543,13 @@ impl Fts5SearchWorker {
         let (wake, commands) = std::sync::mpsc::sync_channel(1);
         let (acknowledgements_tx, acknowledgements) = std::sync::mpsc::sync_channel(8);
         let thread_stop = stop.clone();
+        let first = Arc::new(FirstSyncCell::default());
+        let thread_first = StoppedOnExit(Arc::clone(&first));
         let thread = std::thread::Builder::new()
             .name("rosetta-search".into())
             .spawn(move || {
+                let first = thread_first;
+                let mut first_settled = false;
                 let mut last_ack = None;
                 if paused {
                     let _ = commands.recv();
@@ -481,6 +558,10 @@ impl Fts5SearchWorker {
                     match synchronize_fts5_once(&search, &thread_stop) {
                         Ok(ack) => {
                             search.set_worker_error(None);
+                            if ack.is_some() && !first_settled {
+                                first.0.settle(FirstSync::Published(Instant::now()));
+                                first_settled = true;
+                            }
                             if ack != last_ack {
                                 let delivered = if let Some(candidate) = ack.clone() {
                                     match acknowledgements_tx.try_send(candidate) {
@@ -499,6 +580,10 @@ impl Fts5SearchWorker {
                         Err(_) if thread_stop.load(Ordering::SeqCst) => break,
                         Err(error) => {
                             search.set_worker_error(Some(error.to_string()));
+                            if !first_settled {
+                                first.0.settle(FirstSync::Failed(Instant::now()));
+                                first_settled = true;
+                            }
                             last_ack = None;
                         }
                     }
@@ -510,8 +595,15 @@ impl Fts5SearchWorker {
             stop,
             wake,
             acknowledgements,
+            first,
             thread: Some(thread),
         }
+    }
+
+    /// Watch this worker's first synchronization outcome without touching
+    /// the worker (measurement only).
+    pub fn first_sync(&self) -> FirstSyncWatch {
+        FirstSyncWatch(Arc::clone(&self.first))
     }
 
     pub fn wake(&self) {

@@ -21,6 +21,7 @@ mod envelope;
 mod html_artifacts;
 mod html_recovery;
 pub mod normalize;
+mod presented_media;
 pub mod raw;
 pub mod spec;
 pub mod time;

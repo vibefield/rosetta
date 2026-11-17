@@ -15,7 +15,8 @@ pub const IMAGE_ASSET_URL_PREFIX: &str = "/api/assets/";
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectionAsset {
-    /// Lowercase BLAKE3 hex of the materialized (possibly transcoded) bytes.
+    /// Lowercase BLAKE3 hex of the member bytes: the recorded original for
+    /// an image, never a transcoding of it.
     pub digest: String,
     /// Verified media type from the closed projection-member allowlist.
     pub media_type: String,
@@ -23,7 +24,10 @@ pub struct ProjectionAsset {
     /// substrate.
     #[serde(skip, default)]
     pub bytes: Vec<u8>,
-    /// Disposable display variants, generated from the same source pixels.
+    /// A legacy WebP bundle's display variants, generated from the same
+    /// source pixels. Only the live-file image cache still builds one; the
+    /// store refuses a projection op that carries them, because display
+    /// renditions are a disposable cache derived after ingestion.
     #[serde(skip, default)]
     pub image_variants: Vec<ImageVariantBytes>,
 }
@@ -114,18 +118,29 @@ impl fmt::Debug for ProjectionAsset {
     }
 }
 
+/// The closed projection-member allowlist: each media type with the file
+/// extension its member is stored and served under. One table, so the store's
+/// signature check and the server's extension map can be held to it.
+pub const MEMBER_TYPES: [(&str, &str); 12] = [
+    ("image/png", "png"),
+    ("image/jpeg", "jpg"),
+    ("image/gif", "gif"),
+    ("image/webp", "webp"),
+    ("image/bmp", "bmp"),
+    ("image/x-icon", "ico"),
+    ("video/mp4", "mp4"),
+    ("video/quicktime", "mov"),
+    ("application/pdf", "pdf"),
+    ("application/vnd.rosetta.canonical-document+json", "json"),
+    ("text/plain; charset=utf-8", "txt"),
+    ("text/html; charset=utf-8", "html"),
+];
+
 fn extension(media_type: &str) -> Option<&'static str> {
-    match media_type {
-        "image/png" => Some("png"),
-        "image/jpeg" => Some("jpg"),
-        "image/gif" => Some("gif"),
-        "image/webp" => Some("webp"),
-        "application/pdf" => Some("pdf"),
-        "application/vnd.rosetta.canonical-document+json" => Some("json"),
-        "text/plain; charset=utf-8" => Some("txt"),
-        "text/html; charset=utf-8" => Some("html"),
-        _ => None,
-    }
+    MEMBER_TYPES
+        .iter()
+        .find(|(known, _)| *known == media_type)
+        .map(|(_, extension)| *extension)
 }
 
 /// Compatibility name for callers that specifically construct image
@@ -182,6 +197,110 @@ mod tests {
         assert!(invalid.validate().is_err());
         image.media_type = "image/png".into();
         assert!(image.reference().validate().is_err());
+    }
+
+    /// Rows normalized before display renditions became a cache name legacy
+    /// WebP bundles; newer rows name the recorded original, in any of the six
+    /// image encodings. Both are valid references, side by side.
+    #[test]
+    fn recorded_originals_and_legacy_bundles_are_both_valid_image_references() {
+        use crate::timeline::{AttachmentKind, AttachmentRef, AttachmentSource};
+        let attachment = |asset: &ProjectionAsset| {
+            let reference = asset.reference();
+            let mut attachment = AttachmentRef::new(
+                "image",
+                AttachmentKind::Image,
+                AttachmentSource::Asset {
+                    asset: reference.clone(),
+                },
+            );
+            attachment.media_type = Some(reference.media_type);
+            attachment.byte_len = Some(reference.byte_len);
+            attachment
+        };
+        let mut bundle =
+            ProjectionAsset::new("image/webp", b"RIFF\0\0\0\0WEBPfull".to_vec()).unwrap();
+        bundle.image_variants = super::ImageVariant::DERIVED
+            .into_iter()
+            .map(|variant| super::ImageVariantBytes {
+                variant,
+                bytes: format!("RIFF\0\0\0\0WEBP{}", variant.name()).into_bytes(),
+            })
+            .collect();
+        attachment(&bundle).validate().unwrap();
+        for (media_type, extension, bytes) in [
+            ("image/png", "png", &b"\x89PNG\r\n\x1a\n"[..]),
+            ("image/jpeg", "jpg", b"\xff\xd8\xff"),
+            ("image/gif", "gif", b"GIF89a"),
+            ("image/webp", "webp", b"RIFF\0\0\0\0WEBP"),
+            ("image/bmp", "bmp", b"BM"),
+            ("image/x-icon", "ico", b"\0\0\x01\0"),
+        ] {
+            let original = ProjectionAsset::new(media_type, bytes.to_vec()).unwrap();
+            let reference = original.reference();
+            assert!(reference.url.ends_with(&format!(".{extension}")));
+            assert_eq!(reference.image_variants, None);
+            attachment(&original).validate().unwrap();
+            let mut recoded = original.clone();
+            recoded.image_variants = bundle.image_variants.clone();
+            assert_eq!(
+                recoded.reference().validate().is_ok(),
+                media_type == "image/webp",
+                "only a WebP base may carry a rendition bundle"
+            );
+        }
+    }
+
+    #[test]
+    fn recorded_video_members_are_named_by_container() {
+        for (media_type, extension) in [("video/mp4", "mp4"), ("video/quicktime", "mov")] {
+            assert_eq!(
+                ProjectionAsset::supported_extension(media_type),
+                Some(extension)
+            );
+            let asset = ProjectionAsset::new(media_type, b"video bytes".to_vec()).unwrap();
+            assert!(asset.url().unwrap().ends_with(&format!(".{extension}")));
+            let reference = asset.reference();
+            assert_eq!(reference.image_variants, None);
+            reference.validate().unwrap();
+        }
+        assert_eq!(ProjectionAsset::supported_extension("video/webm"), None);
+    }
+
+    #[test]
+    fn the_member_table_names_each_type_and_extension_once() {
+        use std::collections::BTreeSet;
+        let types: BTreeSet<_> = super::MEMBER_TYPES.iter().map(|(t, _)| *t).collect();
+        let extensions: BTreeSet<_> = super::MEMBER_TYPES.iter().map(|(_, e)| *e).collect();
+        assert_eq!(types.len(), super::MEMBER_TYPES.len());
+        assert_eq!(extensions.len(), super::MEMBER_TYPES.len());
+        for (media_type, extension) in super::MEMBER_TYPES {
+            assert_eq!(
+                ProjectionAsset::supported_extension(media_type),
+                Some(extension)
+            );
+        }
+        // The types as they were before recorded video, extension for extension.
+        for (media_type, extension) in [
+            ("image/png", "png"),
+            ("image/jpeg", "jpg"),
+            ("image/gif", "gif"),
+            ("image/webp", "webp"),
+            ("image/bmp", "bmp"),
+            ("image/x-icon", "ico"),
+            ("application/pdf", "pdf"),
+            ("application/vnd.rosetta.canonical-document+json", "json"),
+            ("text/plain; charset=utf-8", "txt"),
+            ("text/html; charset=utf-8", "html"),
+        ] {
+            assert_eq!(
+                ProjectionAsset::supported_extension(media_type),
+                Some(extension)
+            );
+        }
+        for unsupported in ["", "image/svg+xml", "IMAGE/PNG", "text/plain", "video/webm"] {
+            assert_eq!(ProjectionAsset::supported_extension(unsupported), None);
+        }
     }
 
     #[test]

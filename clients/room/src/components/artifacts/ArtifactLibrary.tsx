@@ -26,7 +26,9 @@ export function ArtifactGlyph() {
   return <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.35" aria-hidden="true"><rect x="3.5" y="2.5" width="12" height="11" rx="2" /><path d="M12 15.5H4a2 2 0 0 1-2-2V6M7 6.5 5.5 8 7 9.5m5-3L13.5 8 12 9.5" /></svg>;
 }
 
-function useArtifacts(port: LibraryPort, request: ArtifactListRequest) {
+/** `published` (canonical readiness) asks again when it turns true, so a
+ * list loaded during the import does not keep saying it is in progress. */
+function useArtifacts(port: LibraryPort, request: ArtifactListRequest, published: boolean) {
   const [page, setPage] = useState<ArtifactPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,7 +45,7 @@ function useArtifacts(port: LibraryPort, request: ArtifactListRequest) {
       }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     }, request.q ? 180 : 0);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [port, key, refresh]);
+  }, [port, key, refresh, published]);
   return { page, error, loading, refresh: () => setRefresh((n) => n + 1) };
 }
 
@@ -139,13 +141,15 @@ function ArtifactThumbnail({ entry, port, active }: { readonly entry: ArtifactEn
   </span>;
 }
 
-export function ArtifactLibrary({ open, onClose, returnFocus, onOpenSession, agents, projects }: {
+export function ArtifactLibrary({ open, onClose, returnFocus, onOpenSession, agents, projects, canonicalReady = false }: {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly returnFocus: () => void;
   readonly onOpenSession: (sessionId: string, timelineId: string) => void;
   readonly agents: readonly string[];
   readonly projects: readonly { id: string; name: string }[];
+  /** The archive is published: an open library loads its list again. */
+  readonly canonicalReady?: boolean;
 }) {
   const { catalog } = useRoom();
   const container = useRoomPortal();
@@ -156,16 +160,17 @@ export function ArtifactLibrary({ open, onClose, returnFocus, onOpenSession, age
       <Dialog.Overlay className="ah-layer ah-sheet__backdrop" />
       <Dialog.Content className="ah-layer ah-artifacts" aria-describedby="ah-artifacts-description" onCloseAutoFocus={(event) => { event.preventDefault(); returnFocus(); }}>
         <div className="ah-artifacts__head"><ArtifactGlyph /><div><Dialog.Title>Artifacts</Dialog.Title><Dialog.Description id="ah-artifacts-description">HTML reviews and designs from your agent sessions</Dialog.Description></div><Dialog.Close className="ah-artifacts__close" aria-label="Close artifacts">×</Dialog.Close></div>
-        {open && <LibraryContents port={catalog.artifacts} agents={agents} projects={projects} onOpenSession={(entry) => { onClose(); onOpenSession(entry.publication.session_id, entry.publication.timeline_id); }} />}
+        {open && <LibraryContents port={catalog.artifacts} agents={agents} projects={projects} published={canonicalReady} onOpenSession={(entry) => { onClose(); onOpenSession(entry.publication.session_id, entry.publication.timeline_id); }} />}
       </Dialog.Content>
     </Dialog.Portal>
   </Dialog.Root>;
 }
 
-function LibraryContents({ port, agents, projects, onOpenSession }: {
+function LibraryContents({ port, agents, projects, published, onOpenSession }: {
   readonly port: LibraryPort;
   readonly agents: readonly string[];
   readonly projects: readonly { id: string; name: string }[];
+  readonly published: boolean;
   readonly onOpenSession: (entry: ArtifactEntry) => void;
 }) {
   const [q, setQ] = useState("");
@@ -176,7 +181,7 @@ function LibraryContents({ port, agents, projects, onOpenSession }: {
   const cache = useMemo(() => new ArtifactContentCache(), [port]);
   const selectedButton = useRef<HTMLButtonElement | null>(null);
   const request: ArtifactListRequest = { q: history ? null : q || null, agent: history ? null : agent || null, project: history ? null : project || null, artifact_id: history?.publication.artifact_id ?? null, limit: 100, cursor: null };
-  const feed = useArtifacts(port, request);
+  const feed = useArtifacts(port, request, published);
   const filterKey = JSON.stringify(request);
   useEffect(() => { setSelected(null); }, [filterKey]);
   return <>

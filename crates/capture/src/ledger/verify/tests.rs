@@ -4,9 +4,12 @@ use std::io::Write;
 use tempfile::TempDir;
 
 use super::*;
+use crate::ledger::read::tests::{
+    CLIP_BYTES, HTML_BYTES, RAW_PAYLOAD_BYTES, STATUSES, html, media, write_document_segment,
+};
 use crate::ledger::{
-    CHECKSUM_BYTES, Ledger, TAG_DEFINE, TAG_GENERATION_COMPLETE, TAG_META_VERSIONED, TAG_RAW,
-    serde_encode,
+    CHECKSUM_BYTES, CapturedDocument, DocumentCaptureStatus, Ledger, TAG_DEFINE,
+    TAG_GENERATION_COMPLETE, TAG_META_VERSIONED, TAG_RAW, serde_encode,
 };
 use crate::segment::{MAGIC_PLAIN, SegmentCodec};
 use crate::{RecompressOutcome, recompress_segment};
@@ -67,8 +70,8 @@ fn frame(out: &mut Vec<u8>, tag: u8, body: &[u8]) {
     out.extend_from_slice(&hasher.finalize().as_bytes()[..CHECKSUM_BYTES]);
 }
 
-fn define(out: &mut Vec<u8>, id: u32, source: &SourceDef) {
-    let body = serde_encode(&[
+fn define(id: u32, source: &SourceDef) -> Vec<u8> {
+    serde_encode(&[
         ("ledger_only", "false"),
         ("file_id", &id.to_string()),
         ("relative_path", &source.relative_path),
@@ -79,34 +82,49 @@ fn define(out: &mut Vec<u8>, id: u32, source: &SourceDef) {
             "agent_version",
             source.agent_version.as_deref().unwrap_or(""),
         ),
-    ]);
-    frame(out, TAG_DEFINE, body.as_bytes());
+    ])
+    .into_bytes()
 }
 
-/// The same entry stream, hand-framed into one plain segment with the given
-/// file ids and one `TAG_RAW` frame per record.
-fn write_by_hand(dir: &Path, ids: [u32; 2]) {
-    std::fs::create_dir_all(dir).unwrap();
-    let mut out = MAGIC_PLAIN.to_vec();
+/// The same entry stream as tagged frame bodies, with the given file ids and
+/// one `TAG_RAW` frame per record: a meta batch, then per source its define,
+/// twenty records and its seal.
+fn hand_frames(ids: [u32; 2]) -> Vec<(u8, Vec<u8>)> {
+    let mut frames = Vec::new();
     let mut meta = 7_u32.to_be_bytes().to_vec();
     meta.extend_from_slice(META.as_bytes());
-    frame(&mut out, TAG_META_VERSIONED, &meta);
+    frames.push((TAG_META_VERSIONED, meta));
     for (id, path) in ids.into_iter().zip(["a.jsonl", "b.jsonl"]) {
-        define(&mut out, id, &source(path));
+        frames.push((TAG_DEFINE, define(id, &source(path))));
         for index in 0..20_u64 {
             let mut body = id.to_be_bytes().to_vec();
             body.extend_from_slice(&1_u64.to_be_bytes());
             body.extend_from_slice(&(index * 100).to_be_bytes());
             body.extend_from_slice(&record(index));
-            frame(&mut out, TAG_RAW, &body);
+            frames.push((TAG_RAW, body));
         }
         let mut seal = id.to_be_bytes().to_vec();
         seal.extend_from_slice(&1_u64.to_be_bytes());
         seal.extend_from_slice(&3_u32.to_be_bytes());
         seal.push(1);
-        frame(&mut out, TAG_GENERATION_COMPLETE, &seal);
+        frames.push((TAG_GENERATION_COMPLETE, seal));
+    }
+    frames
+}
+
+/// `frames` as one plain segment.
+fn write_frames(dir: &Path, frames: &[(u8, Vec<u8>)]) {
+    std::fs::create_dir_all(dir).unwrap();
+    let mut out = MAGIC_PLAIN.to_vec();
+    for (tag, body) in frames {
+        frame(&mut out, *tag, body);
     }
     std::fs::write(dir.join("00000000.rledger"), out).unwrap();
+}
+
+/// The same entry stream, hand-framed into one plain segment.
+fn write_by_hand(dir: &Path, ids: [u32; 2]) {
+    write_frames(dir, &hand_frames(ids));
 }
 
 #[test]
@@ -147,8 +165,7 @@ fn the_entry_digest_ignores_containers_segments_ids_and_packing() {
                 raw_payload_bytes: (0..20).map(|index| record(index).len() as u64).sum::<u64>() * 2,
                 seals: 2,
                 metas: 1,
-                documents: 0,
-                document_bytes: 0,
+                ..EntryTally::default()
             }
         );
         assert_eq!(
@@ -309,6 +326,7 @@ fn an_absent_ledger_verifies_empty() {
     assert!(report.segments.is_empty());
     assert_eq!(report.tally, EntryTally::default());
     assert_eq!(report.entry_digest, EntryDigest::new().finish());
+    assert_eq!(report.source_set_digest, blake3::Hasher::new().finalize());
     assert_eq!(report.index_digest, None);
 }
 
@@ -342,10 +360,12 @@ fn metadata_and_captured_content_have_separate_digests() {
     assert_ne!(rediscovered.entry_digest, first.entry_digest);
     assert_ne!(rediscovered.meta_digest, first.meta_digest);
     assert_eq!(rediscovered.source_digest, first.source_digest);
+    assert_eq!(rediscovered.source_set_digest, first.source_set_digest);
     // Other captured bytes: only the source entries differ.
     assert_ne!(changed.entry_digest, first.entry_digest);
     assert_eq!(changed.meta_digest, first.meta_digest);
     assert_ne!(changed.source_digest, first.source_digest);
+    assert_ne!(changed.source_set_digest, first.source_set_digest);
 
     let mut digest = EntryDigest::new();
     assert_eq!(digest.finish(), digest.source_digest());
@@ -355,4 +375,579 @@ fn metadata_and_captured_content_have_separate_digests() {
     });
     assert_eq!(digest.source_digest(), EntryDigest::new().source_digest());
     assert_eq!(digest.meta_digest(), digest.finish());
+}
+
+/// A small stream of every entry kind over two sources, one ledger-only and
+/// unversioned.
+fn pinned_entries() -> Vec<LedgerEntry> {
+    let raw = |path: &str, offset: u64, payload: &[u8]| LedgerEntry::Raw {
+        source: source(path),
+        generation: 1,
+        start_offset: offset,
+        payload: payload.to_vec(),
+    };
+    let mut unversioned = source("b.jsonl");
+    unversioned.agent_version = None;
+    unversioned.ledger_only = true;
+    vec![
+        LedgerEntry::Meta {
+            schema_version: 7,
+            payload: META.to_string(),
+        },
+        raw("a.jsonl", 0, b"first"),
+        LedgerEntry::Raw {
+            source: unversioned.clone(),
+            generation: 2,
+            start_offset: 5,
+            payload: b"guardian".to_vec(),
+        },
+        LedgerEntry::Document {
+            source: source("a.jsonl"),
+            generation: 1,
+            start_offset: 0,
+            document: CapturedDocument {
+                path: "/fixture/doc.html".to_string(),
+                captured_at: 1_790_000_000_000,
+                status: DocumentCaptureStatus::Captured,
+                recovered_from: None,
+                media: None,
+                bytes: b"<p>doc</p>".to_vec(),
+            },
+        },
+        raw("a.jsonl", 6, b"second"),
+        LedgerEntry::GenerationComplete {
+            source: unversioned,
+            generation: 2,
+            normalizer_version: 3,
+            normalized_clean: false,
+        },
+        LedgerEntry::GenerationComplete {
+            source: source("a.jsonl"),
+            generation: 1,
+            normalizer_version: 3,
+            normalized_clean: true,
+        },
+    ]
+}
+
+fn digest_of(entries: &[LedgerEntry]) -> EntryDigest {
+    let mut digest = EntryDigest::new();
+    for entry in entries {
+        digest.update(entry);
+    }
+    digest
+}
+
+/// The digests two builds are compared by keep their encoding (R1 I5): the
+/// entry, source and meta values predate the per-source digests, which left
+/// them unchanged. They predate the media claim too: the pinned stream holds
+/// an HTML document frame, and a ledger with no media frame keeps every one
+/// of these values.
+#[test]
+fn the_entry_source_and_meta_digests_keep_their_encoding() {
+    let digest = digest_of(&pinned_entries());
+    assert_eq!(digest.tally().documents, 1);
+    assert_eq!(digest.tally().media_frames(), 0);
+    assert_eq!(
+        digest.finish().to_hex().as_str(),
+        "343b655e37d643f938846ec3606af5054cebcc8d42761e2e5526b7d83cd01e47"
+    );
+    assert_eq!(
+        digest.source_digest().to_hex().as_str(),
+        "3921b10e72a6d110ab0866beeb9d65a494770c7563f1e9fd271899adae76498d"
+    );
+    assert_eq!(
+        digest.meta_digest().to_hex().as_str(),
+        "6e9673199abe8ff6c6218b14130ac3df42ea591d6f01c72b4a8f60f560b5aa91"
+    );
+    assert_eq!(
+        digest.source_set_digest().to_hex().as_str(),
+        "528d2fb8c50677c77d9d874047f86a6d1655354f7a54003e2b4e4bd194f8f914"
+    );
+}
+
+/// The source set digest is exactly the per-source encodings folded in path
+/// order: one source alone is its own encoding, under its path.
+#[test]
+fn a_single_source_set_digest_folds_that_sources_encoding() {
+    let entries = pinned_entries();
+    let only_a = entries
+        .iter()
+        .filter(|entry| match entry {
+            LedgerEntry::Raw { source, .. }
+            | LedgerEntry::Document { source, .. }
+            | LedgerEntry::GenerationComplete { source, .. } => source.relative_path == "a.jsonl",
+            LedgerEntry::Meta { .. } => false,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let digest = digest_of(&only_a);
+    let mut folded = blake3::Hasher::new();
+    folded.update(&7_u64.to_be_bytes());
+    folded.update(b"a.jsonl");
+    folded.update(digest.source_digest().as_bytes());
+    assert_eq!(digest.source_set_digest(), folded.finalize());
+}
+
+/// Two ledgers holding the same per-source entries, interleaved differently
+/// (as two root-tree walks may frame them): the source set digest agrees
+/// where the order-sensitive digests cannot.
+#[test]
+fn source_set_digest_ignores_source_order() {
+    let temp = TempDir::new().unwrap();
+    // b first, then a: each source's first appearance differs between the
+    // two ledgers, so folding in insertion order would disagree.
+    let write = |name: &str, order: &[(&str, u64)]| {
+        let dir = temp.path().join(name);
+        let mut ledger = Ledger::open(&dir).unwrap();
+        ledger.append_meta(7, META).unwrap();
+        for (path, index) in order {
+            ledger
+                .append_raw(&source(path), 1, [(index * 100, record(*index))])
+                .unwrap();
+            if *index == 3 {
+                ledger
+                    .complete_generation(&source(path), 1, 3, true)
+                    .unwrap();
+            }
+        }
+        ledger.flush().unwrap();
+        drop(ledger);
+        verify(&dir).unwrap()
+    };
+    let grouped = write(
+        "grouped",
+        &[
+            ("a.jsonl", 0),
+            ("a.jsonl", 1),
+            ("a.jsonl", 2),
+            ("a.jsonl", 3),
+            ("b.jsonl", 0),
+            ("b.jsonl", 1),
+            ("b.jsonl", 2),
+            ("b.jsonl", 3),
+        ],
+    );
+    let interleaved = write(
+        "interleaved",
+        &[
+            ("b.jsonl", 0),
+            ("a.jsonl", 0),
+            ("b.jsonl", 1),
+            ("b.jsonl", 2),
+            ("a.jsonl", 1),
+            ("a.jsonl", 2),
+            ("b.jsonl", 3),
+            ("a.jsonl", 3),
+        ],
+    );
+    assert_eq!(grouped.tally, interleaved.tally);
+    assert_eq!(grouped.source_set_digest, interleaved.source_set_digest);
+    assert_ne!(grouped.entry_digest, interleaved.entry_digest);
+    assert_ne!(grouped.source_digest, interleaved.source_digest);
+    assert_eq!(grouped.meta_digest, interleaved.meta_digest);
+}
+
+#[test]
+fn source_set_digest_sees_order_within_a_source() {
+    let raw = |path: &str, index: u64| LedgerEntry::Raw {
+        source: source(path),
+        generation: 1,
+        start_offset: index * 100,
+        payload: record(index),
+    };
+    let ordered = digest_of(&[raw("a.jsonl", 0), raw("a.jsonl", 1), raw("b.jsonl", 0)]);
+    let swapped = digest_of(&[raw("a.jsonl", 1), raw("a.jsonl", 0), raw("b.jsonl", 0)]);
+    assert_eq!(ordered.tally(), swapped.tally());
+    assert_ne!(ordered.source_set_digest(), swapped.source_set_digest());
+    // The same entries with the other source moved still agree.
+    let moved = digest_of(&[raw("b.jsonl", 0), raw("a.jsonl", 0), raw("a.jsonl", 1)]);
+    assert_eq!(ordered.source_set_digest(), moved.source_set_digest());
+}
+
+#[test]
+fn source_set_digest_ignores_document_captured_at() {
+    let document = |captured_at: i64| LedgerEntry::Document {
+        source: source("a.jsonl"),
+        generation: 1,
+        start_offset: 0,
+        document: CapturedDocument {
+            path: "/fixture/review.html".to_string(),
+            captured_at,
+            status: DocumentCaptureStatus::Captured,
+            recovered_from: None,
+            media: None,
+            bytes: b"<p>review</p>".to_vec(),
+        },
+    };
+    let first = digest_of(&[document(1_790_000_000_000)]);
+    let later = digest_of(&[document(1_790_000_009_999)]);
+    assert_ne!(first.finish(), later.finish());
+    assert_eq!(first.source_digest(), later.source_digest());
+    assert_eq!(first.source_set_digest(), later.source_set_digest());
+    // Its content still counts.
+    let mut other = document(1_790_000_000_000);
+    if let LedgerEntry::Document { document, .. } = &mut other {
+        document.bytes = b"<p>other</p>".to_vec();
+    }
+    assert_ne!(
+        digest_of(&[other]).source_set_digest(),
+        first.source_set_digest()
+    );
+}
+
+/// Ignoring the order sources interleave in must not hide a lost or repeated
+/// frame: dropping or duplicating one raw or seal frame changes the digest,
+/// while moving one source's frames ahead of another's does not.
+#[test]
+fn source_set_digest_sees_a_dropped_or_duplicated_frame() {
+    let temp = TempDir::new().unwrap();
+    let frames = hand_frames([0, 1]);
+    let digest = |name: &str, frames: &[(u8, Vec<u8>)]| {
+        let dir = temp.path().join(name);
+        write_frames(&dir, frames);
+        let report = verify(&dir).unwrap();
+        assert_eq!(report.torn_segments(), 0, "{name}");
+        report
+    };
+    let base = digest("base", &frames);
+    // Frame 0 is the meta batch, 1 a's define, 2..22 its records, 22 its
+    // seal, 23 b's define, 24..44 its records, 44 its seal.
+    assert_eq!(frames.len(), 45);
+    assert_eq!(frames[22].0, TAG_GENERATION_COMPLETE);
+
+    let mut b_first = frames[23..].to_vec();
+    b_first.insert(0, frames[0].clone());
+    b_first.extend_from_slice(&frames[1..23]);
+    let reordered = digest("reordered", &b_first);
+    assert_eq!(reordered.source_set_digest, base.source_set_digest);
+    assert_ne!(reordered.source_digest, base.source_digest);
+
+    let mut dropped = frames.clone();
+    dropped.remove(30);
+    let dropped = digest("dropped", &dropped);
+    assert_eq!(dropped.tally.raw_records, base.tally.raw_records - 1);
+    assert_ne!(dropped.source_set_digest, base.source_set_digest);
+
+    let mut duplicated = frames.clone();
+    duplicated.insert(6, frames[5].clone());
+    let duplicated = digest("duplicated", &duplicated);
+    assert_eq!(duplicated.tally.raw_records, base.tally.raw_records + 1);
+    assert_ne!(duplicated.source_set_digest, base.source_set_digest);
+
+    let mut resealed = frames.clone();
+    resealed.insert(23, frames[22].clone());
+    let resealed = digest("resealed", &resealed);
+    assert_eq!(resealed.tally.seals, base.tally.seals + 1);
+    assert_ne!(resealed.source_set_digest, base.source_set_digest);
+
+    let mut unsealed = frames.clone();
+    unsealed.remove(44);
+    let unsealed = digest("unsealed", &unsealed);
+    assert_eq!(unsealed.tally.seals, base.tally.seals - 1);
+    assert_ne!(unsealed.source_set_digest, base.source_set_digest);
+
+    // Moving the runs does not mask a repeat: b's last record again, after
+    // a's run.
+    let mut both = b_first.clone();
+    both.push(frames[43].clone());
+    assert_ne!(
+        digest("moved-and-duplicated", &both).source_set_digest,
+        base.source_set_digest
+    );
+
+    // An altered frame: one payload byte of one of b's records (the body is
+    // file id, generation and offset, then the record), and a seal's
+    // `normalized_clean` flag. Each frame is re-checksummed, so each reads
+    // clean.
+    let mut altered = frames.clone();
+    let body = &mut altered[30].1;
+    let at = body.len() - 2;
+    body[at] ^= 1;
+    let altered = digest("altered", &altered);
+    assert_eq!(altered.tally, base.tally);
+    assert_ne!(altered.source_set_digest, base.source_set_digest);
+    let mut unclean = frames.clone();
+    *unclean[22].1.last_mut().unwrap() = 0;
+    let unclean = digest("unclean", &unclean);
+    assert_eq!(unclean.tally, base.tally);
+    assert_ne!(unclean.source_set_digest, base.source_set_digest);
+
+    // Two of b's records swapped: the same entries, reordered within their
+    // source, after the runs moved too.
+    let mut swapped = b_first.clone();
+    let (first, second) = (
+        swapped
+            .iter()
+            .position(|frame| *frame == frames[30])
+            .unwrap(),
+        swapped
+            .iter()
+            .position(|frame| *frame == frames[31])
+            .unwrap(),
+    );
+    swapped.swap(first, second);
+    let swapped = digest("swapped-within-b", &swapped);
+    assert_eq!(swapped.tally, base.tally);
+    assert_ne!(swapped.source_set_digest, base.source_set_digest);
+}
+
+/// A segment holding document frames used to verify torn at its first one.
+/// Now it verifies clean in every container, with what became of each sent
+/// file counted by status.
+#[test]
+fn a_segment_with_document_frames_verifies_clean() {
+    let temp = TempDir::new().unwrap();
+    let expected = EntryTally {
+        entries: 14,
+        raw_records: 3,
+        raw_payload_bytes: RAW_PAYLOAD_BYTES,
+        documents: 8,
+        document_bytes: HTML_BYTES * 2 + CLIP_BYTES * 2,
+        seals: 2,
+        metas: 1,
+        media_captured: 2,
+        media_captured_bytes: CLIP_BYTES * 2,
+        media_missing: 1,
+        media_too_large: 1,
+        media_unsupported: 1,
+        media_changed_during_read: 1,
+    };
+    let mut digests = Vec::new();
+    for (name, codec) in [
+        ("plain", SegmentCodec::Plain),
+        ("frames", SegmentCodec::default()),
+        ("stream", SegmentCodec::zstd(3)),
+    ] {
+        let dir = temp.path().join(name);
+        let path = write_document_segment(&dir, codec);
+        let report = verify(&dir).unwrap();
+        assert_eq!(report.torn_segments(), 0, "{name}");
+        assert_eq!(report.segments.len(), 1, "{name}");
+        let segment = &report.segments[0];
+        assert!(segment.clean, "{name}");
+        assert_eq!(segment.compressed, Some(codec.is_compressed()), "{name}");
+        assert_eq!(segment.entries, 14, "{name}");
+        assert_eq!(report.tally, expected, "{name}");
+        assert_eq!(report.tally.media_frames(), 6, "{name}");
+        if !codec.is_compressed() {
+            let file = std::fs::metadata(&path).unwrap().len();
+            assert_eq!(segment.decoded_bytes, file - MAGIC_PLAIN.len() as u64);
+        }
+        digests.push((
+            report.entry_digest,
+            report.source_digest,
+            report.source_set_digest,
+        ));
+    }
+    assert_eq!(digests[0], digests[1]);
+    assert_eq!(digests[0], digests[2]);
+
+    // Recompressed, the same evidence: nothing about the entries moved.
+    let dir = temp.path().join("plain");
+    let before = verify(&dir).unwrap();
+    let outcome =
+        recompress_segment(&before.segments[0].path, SegmentCodec::default(), false).unwrap();
+    assert!(
+        matches!(outcome, RecompressOutcome::Rewritten { .. }),
+        "{outcome:?}"
+    );
+    let after = verify(&dir).unwrap();
+    assert_eq!(after.segments[0].compressed, Some(true));
+    assert_eq!(after.torn_segments(), 0);
+    assert_eq!(after.tally, before.tally);
+    assert_eq!(after.entry_digest, before.entry_digest);
+    assert_eq!(after.source_set_digest, before.source_set_digest);
+    assert_eq!(after.frame_digest(), before.frame_digest());
+}
+
+fn document_entry(document: CapturedDocument) -> LedgerEntry {
+    LedgerEntry::Document {
+        source: source("a.jsonl"),
+        generation: 1,
+        start_offset: 6,
+        document,
+    }
+}
+
+#[test]
+fn the_tally_counts_media_frames_by_status() {
+    let base = EntryTally {
+        entries: 1,
+        documents: 1,
+        ..EntryTally::default()
+    };
+    let expected = [
+        EntryTally {
+            document_bytes: 9,
+            media_captured: 1,
+            media_captured_bytes: 9,
+            ..base
+        },
+        EntryTally {
+            media_missing: 1,
+            ..base
+        },
+        EntryTally {
+            media_too_large: 1,
+            ..base
+        },
+        EntryTally {
+            media_unsupported: 1,
+            ..base
+        },
+        EntryTally {
+            media_changed_during_read: 1,
+            ..base
+        },
+    ];
+    let mut all = EntryDigest::new();
+    for (status, expected) in STATUSES.into_iter().zip(expected) {
+        let entry = document_entry(media(status, "video/mp4", 9));
+        let tally = digest_of(std::slice::from_ref(&entry)).tally();
+        assert_eq!(tally, expected, "{status:?}");
+        assert_eq!(tally.media_frames(), 1, "{status:?}");
+        all.update(&entry);
+    }
+    // An HTML document, captured or not, is no media frame.
+    let mut missing = html(None);
+    missing.status = DocumentCaptureStatus::Missing;
+    missing.bytes.clear();
+    for document in [html(None), html(Some("/archive/review.html")), missing] {
+        let entry = document_entry(document);
+        let tally = digest_of(std::slice::from_ref(&entry)).tally();
+        assert_eq!(tally.documents, 1);
+        assert_eq!(tally.media_frames(), 0);
+        assert_eq!(tally.media_captured_bytes, 0);
+        all.update(&entry);
+    }
+    assert_eq!(
+        all.tally(),
+        EntryTally {
+            entries: 8,
+            documents: 8,
+            document_bytes: 9 + HTML_BYTES * 2,
+            media_captured: 1,
+            media_captured_bytes: 9,
+            media_missing: 1,
+            media_too_large: 1,
+            media_unsupported: 1,
+            media_changed_during_read: 1,
+            ..EntryTally::default()
+        }
+    );
+    assert_eq!(all.tally().media_frames(), 5);
+}
+
+/// The media claim is source content. It reaches the digests only through a
+/// frame that carries one, so the HTML-only stream pinned above keeps its
+/// values; a media frame changes its own source's digest and no other's.
+#[test]
+fn the_media_claim_feeds_the_source_digests() {
+    let with = |document: CapturedDocument| {
+        let mut entries = pinned_entries();
+        entries.push(document_entry(document));
+        digest_of(&entries)
+    };
+    let source_digest = |digest: &EntryDigest, path: &str| digest.per_source[path].finalize();
+    let every = |digest: &EntryDigest| {
+        [
+            digest.finish(),
+            digest.source_digest(),
+            digest.source_set_digest(),
+            source_digest(digest, "a.jsonl"),
+        ]
+    };
+    // Every digest that sees source a differs; source b's and the metadata's do not.
+    let differ = |left: &EntryDigest, right: &EntryDigest, what: &str| {
+        for (left, right) in every(left).into_iter().zip(every(right)) {
+            assert_ne!(left, right, "{what}");
+        }
+        assert_eq!(
+            source_digest(left, "b.jsonl"),
+            source_digest(right, "b.jsonl"),
+            "{what}"
+        );
+        assert_eq!(left.meta_digest(), right.meta_digest(), "{what}");
+    };
+
+    let html_only = digest_of(&pinned_entries());
+    let missing = with(media(DocumentCaptureStatus::Missing, "video/mp4", 77));
+    differ(&missing, &html_only, "a media frame");
+
+    // Two streams that differ only in the claim: its size, then its type.
+    let longer = with(media(DocumentCaptureStatus::Missing, "video/mp4", 78));
+    assert_eq!(missing.tally(), longer.tally());
+    differ(&missing, &longer, "expected_len");
+    let quicktime = with(media(DocumentCaptureStatus::Missing, "video/quicktime", 77));
+    assert_eq!(missing.tally(), quicktime.tally());
+    differ(&missing, &quicktime, "media_type");
+    // A neighbouring split of type and size is not the same claim.
+    let unsupported = |media_type: &str, expected_len: u64| {
+        with(media(
+            DocumentCaptureStatus::Unsupported,
+            media_type,
+            expected_len,
+        ))
+    };
+    differ(
+        &unsupported("video/mp4", u64::from_be_bytes(*b"0\0\0\0\0\0\0\x01")),
+        &unsupported("video/mp40", 1),
+        "the boundary between type and size",
+    );
+
+    // The same path, status and bytes with and without a claim.
+    let mut bare = media(DocumentCaptureStatus::Captured, "video/mp4", 9);
+    let claimed = with(bare.clone());
+    bare.media = None;
+    let unclaimed = with(bare);
+    differ(&claimed, &unclaimed, "the claim itself");
+    assert_eq!(claimed.tally().media_frames(), 1);
+    assert_eq!(unclaimed.tally().media_frames(), 0);
+
+    // The observation time stays run-dependent: only the entry digest sees it.
+    let mut observed_later = media(DocumentCaptureStatus::Missing, "video/mp4", 77);
+    observed_later.captured_at += 9_999;
+    let later = with(observed_later);
+    assert_ne!(later.finish(), missing.finish());
+    assert_eq!(later.source_digest(), missing.source_digest());
+    assert_eq!(later.source_set_digest(), missing.source_set_digest());
+
+    // Through real ledgers: only the media frame's `expected_len` differs.
+    let temp = TempDir::new().unwrap();
+    let write = |name: &str, expected_len: Option<u64>| {
+        let dir = temp.path().join(name);
+        let mut ledger = Ledger::open(&dir).unwrap();
+        ledger.append_meta(7, META).unwrap();
+        for path in ["a.jsonl", "b.jsonl"] {
+            let source = source(path);
+            ledger.append_raw(&source, 1, [(0, record(0))]).unwrap();
+            if path == "a.jsonl" {
+                ledger.append_document(&source, 1, 0, html(None)).unwrap();
+                if let Some(expected_len) = expected_len {
+                    let document =
+                        media(DocumentCaptureStatus::TooLarge, "video/mp4", expected_len);
+                    ledger.append_document(&source, 1, 0, document).unwrap();
+                }
+            }
+            ledger.complete_generation(&source, 1, 3, true).unwrap();
+        }
+        ledger.flush().unwrap();
+        drop(ledger);
+        let report = verify(&dir).unwrap();
+        assert_eq!(report.torn_segments(), 0, "{name}");
+        report
+    };
+    let html_ledger = write("html", None);
+    let first = write("first", Some(70 * 1024 * 1024));
+    let second = write("second", Some(70 * 1024 * 1024 + 1));
+    assert_eq!(first.tally, second.tally);
+    assert_eq!(first.tally.media_too_large, 1);
+    assert_eq!(html_ledger.tally.media_frames(), 0);
+    for other in [&second, &html_ledger] {
+        assert_ne!(first.entry_digest, other.entry_digest);
+        assert_ne!(first.source_digest, other.source_digest);
+        assert_ne!(first.source_set_digest, other.source_set_digest);
+        assert_eq!(first.meta_digest, other.meta_digest);
+    }
 }

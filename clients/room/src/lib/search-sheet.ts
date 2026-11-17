@@ -13,6 +13,7 @@ import type {
   SearchResultsViewModel,
   SessionSearchResult,
 } from "./search-results";
+import type { TitleMatch, TitleMatches } from "./title-search";
 
 /* ── filters — the chips over the list, mapped 1:1 onto the API ────────── */
 
@@ -305,20 +306,28 @@ export interface SheetStateInput {
  * The one sentence in the sheet's foot. Degraded is Tuesday here (design
  * record §09): a building index says so with a number, an error says what
  * happened, and a full page says it is the first page.
+ *
+ * Until publication full text answers nothing, so the foot says what the
+ * sheet searches instead. After it, a building or failed index serves no
+ * hits either (crates/search/src/sidecar.rs `serves_hits`): the foot says
+ * so and that titles stand in, never "partial" over zero hits, and a
+ * percentage only from the index's own document count.
  */
 export function stateSentence(input: SheetStateInput): string {
   if (input.error !== null) return `search failed · ${input.error}`;
+  if (input.canonicalReady === false) return "Titles only until the import finishes";
   if (input.ingestPaused) return "transcript import paused · search covers what was read";
   if (input.readiness !== null && input.readiness !== "ready") {
-    if (input.readiness === "failed") {
-      return input.canonicalReady ? "search unavailable" : "history is being imported";
-    }
-    if (input.progress !== null && input.progress.documents_total > 0) {
-      const pct = Math.floor((100 * input.progress.documents_done) / input.progress.documents_total);
-      return `indexing · ${pct}% · ${input.progress.documents_done.toLocaleString("en-US")} of ${input.progress.documents_total.toLocaleString("en-US")} messages · results are partial`;
-    }
+    const titles = input.query.trim() === "" ? "" : " · showing title matches";
+    if (input.readiness === "failed") return `Full-text search unavailable${titles}`;
+    const pct = input.progress !== null && input.progress.documents_total > 0
+      ? Math.floor((100 * input.progress.documents_done) / input.progress.documents_total)
+      : null;
     if (input.readiness === "building") {
-      return input.canonicalReady ? "search is being prepared" : "history is being imported";
+      return `Full-text search is being built${pct === null ? "" : ` · ${pct}%`}${titles}`;
+    }
+    if (pct !== null) {
+      return `indexing · ${pct}% · ${input.progress!.documents_done.toLocaleString("en-US")} of ${input.progress!.documents_total.toLocaleString("en-US")} messages · results are partial`;
     }
     return `search is ${input.readiness.replace("-", " ")} · results may be partial`;
   }
@@ -327,6 +336,67 @@ export function stateSentence(input: SheetStateInput): string {
   return input.counts.matches >= input.limit
     ? `first ${input.limit} matches · narrow the search to see the rest`
     : sentence;
+}
+
+export interface SheetMeterInput {
+  readonly readiness: SearchReadiness | null;
+  readonly progress: { documents_done: number; documents_total: number } | null;
+  readonly canonicalReady: boolean | null;
+  readonly ingestPaused: boolean;
+}
+
+/**
+ * The foot's meter: a fraction fills it, `null` sweeps it, `undefined` draws
+ * none. An index with a document count fills it — the only amount anyone
+ * knows. Work under way without one sweeps. Nothing is drawn while nothing
+ * moves: the import paused, or an index that failed (the daemon reports no
+ * progress for it), unless the projection is still being imported — then
+ * the import is what moves, as the foot's sentence says.
+ */
+export function sheetMeter(input: SheetMeterInput): number | null | undefined {
+  const { readiness, progress } = input;
+  if (readiness === null || readiness === "ready") return undefined;
+  if (readiness !== "failed" && progress !== null && progress.documents_total > 0) {
+    return progress.documents_done / progress.documents_total;
+  }
+  if (input.ingestPaused) return undefined;
+  return readiness === "failed" && input.canonicalReady !== false ? undefined : null;
+}
+
+/* ── titles, while full text cannot answer ─────────────────────────────── */
+
+/**
+ * The title matches the list shows, or null for the ordinary list: only for
+ * a query, only while the room offers titles, and only when full text gave
+ * no hits — real hits always win.
+ */
+export function shownTitleMatches(
+  query: string,
+  titles: TitleMatches | null,
+  hitLines: number,
+): readonly TitleMatch[] | null {
+  return query.trim() !== "" && titles !== null && hitLines === 0 ? titles.matches : null;
+}
+
+/** The title row the cursor was on, under the query it was on it for. */
+export interface HeldTitleCursor {
+  readonly query: string;
+  readonly id: string | null;
+}
+
+/**
+ * Where the cursor goes when the title list changes. Titles re-rank under an
+ * unchanged query while an import lands activity and new rows, so the cursor
+ * stays on its thread while that thread is still listed; otherwise it is -1
+ * and the first row takes it.
+ */
+export function keptTitleCursor(
+  matches: readonly TitleMatch[] | null,
+  held: HeldTitleCursor,
+  query: string,
+): number {
+  if (matches === null || held.id === null || held.query !== query) return -1;
+  return matches.findIndex((match) => match.id === held.id);
 }
 
 /* ── what was searched before ──────────────────────────────────────────── */

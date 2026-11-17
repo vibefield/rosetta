@@ -14,6 +14,16 @@ use rosetta_core::{EvidenceOrder, IngestOp, SourceIdentity};
 
 use crate::GroundTruthDoc;
 
+pub use rosetta_capture::input::{InputCandidate, InputEncoding, InputSource};
+
+/// Physical representations of one logical transcript. Paths are relative
+/// to the runtime root; the stable key survives compression and relocation.
+#[derive(Debug, Clone)]
+pub struct TranscriptLocation {
+    pub logical_path: String,
+    pub source: InputSource,
+}
+
 /// A stream parser the generic pipeline knows how to frame. Layout inventory
 /// is intentionally broader than this list: an adapter must opt a stream into
 /// normalization instead of every matching file being treated as a transcript.
@@ -32,6 +42,28 @@ pub enum StreamDriver {
     /// result row through `ingest_line` as a `{"query": name, "row": {...}}`
     /// JSON record — adapters never see a database handle.
     SqliteSnapshot,
+}
+
+/// The unit in which a fresh cold build makes an adapter's imported sessions
+/// readable before the whole runtime is published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColdAdmission {
+    /// The whole runtime at once, after its last source: the path-order walk
+    /// and runtime-granular admission every adapter had before R1.
+    #[default]
+    Runtime,
+    /// Each root tree as soon as its last source closes. A root tree is one
+    /// connected component of the runtime's bounded metadata links: a
+    /// session's parent, its root when that differs from itself, and the
+    /// parent of a ledger-only internal source.
+    ///
+    /// Declaring this is a promise about the adapter's normalization (R1
+    /// invariant I7): every op a source emits names only sessions of that
+    /// source's own tree, and a source shared by several trees (a physical
+    /// snapshot database read as virtual members) emits no ops at all. A tree
+    /// can then be complete, and safe to show, while sources of other trees
+    /// are still being read.
+    RootTree,
 }
 
 /// Declarative extraction plan for a [`StreamDriver::SqliteSnapshot`] stream.
@@ -234,6 +266,40 @@ impl NormalizeCtx {
 /// One implementation per agent. Object-safe: the pipeline holds a registry
 /// of `&'static dyn AgentAdapter`.
 pub trait AgentAdapter: Send + Sync {
+    /// Native position of a range's final record; capture remains format-blind.
+    fn transcript_record_index(&self, _record: &[u8]) -> Option<u64> {
+        None
+    }
+
+    fn transcript_header(
+        &self,
+        _path: &str,
+        _first: &[u8],
+    ) -> Result<Option<crate::transcripts::TranscriptHeader>, String> {
+        Ok(None)
+    }
+
+    /// A promise that snapshot records emit no canonical operations. Such
+    /// shared metadata sources can precede independently publishable trees.
+    fn snapshot_is_metadata_only(&self, stream: &str) -> bool {
+        self.snapshot_plan(stream)
+            .is_some_and(|plan| plan.record_queries.is_empty())
+    }
+
+    fn transcript_selection(
+        &self,
+        _stream: &str,
+        _row: &serde_json::Value,
+    ) -> Option<crate::transcripts::TranscriptSelection> {
+        None
+    }
+
+    /// Opt in to representation-independent, decoded-byte capture. Native
+    /// naming rules stay in the adapter; capture only opens declared paths.
+    fn transcript_location(&self, _path: &str) -> Option<TranscriptLocation> {
+        None
+    }
+
     /// Agent kind, e.g. "claude-code".
     fn kind(&self) -> &'static str;
 
@@ -259,6 +325,15 @@ pub trait AgentAdapter: Send + Sync {
     /// content-only identity, role, and admission facts are still unknown.
     fn census_session_streams(&self) -> Option<&'static [&'static str]> {
         None
+    }
+
+    /// The unit in which a fresh cold build admits this adapter's sessions.
+    /// The default keeps the runtime-granular admission. An adapter opts into
+    /// [`ColdAdmission::RootTree`] only with evidence that its normalization
+    /// keeps the closure promise that variant documents; each adapter is
+    /// widened on its own evidence, never as a group.
+    fn cold_admission(&self) -> ColdAdmission {
+        ColdAdmission::Runtime
     }
 
     /// Bump whenever normalized output or adapter checkpoint semantics change.

@@ -11,6 +11,30 @@ evidence = "fixture"
 notes = "Session rollouts under YYYY/MM/DD: the complete event stream. Top-level types (0.149.1): session_meta, event_msg, response_item, world_state, turn_context. Pinned writer evidence adds custom_tool_call/custom_tool_call_output to the fixture-backed response items. token_count carries CUMULATIVE total_token_usage, not per-message deltas. Roles include 'developer'. Can embed compaction history and grow large."
 
 [[streams]]
+id = "rollout-compressed"
+glob = "sessions/*/*/*/rollout-*.jsonl.zst"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "writer"
+notes = "Physical representation of rollout. rust-v0.167.2: plain wins when both exist; zstd offsets are decoded bytes; archive relocation preserves logical identity. Only exact jsonl/jsonl.zst suffixes are transcripts. Temporary migration, compression, and materialization files are excluded."
+
+[[streams]]
+id = "archived-rollout"
+glob = "archived_sessions/rollout-*.jsonl"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "writer"
+notes = "Physical representation of rollout. rust-v0.167.2: plain wins when both exist; zstd offsets are decoded bytes; archive relocation preserves logical identity. Only exact jsonl/jsonl.zst suffixes are transcripts. Temporary migration, compression, and materialization files are excluded."
+
+[[streams]]
+id = "archived-rollout-compressed"
+glob = "archived_sessions/rollout-*.jsonl.zst"
+file_format = "jsonl"
+discipline = "append_only"
+evidence = "writer"
+notes = "Physical representation of rollout. rust-v0.167.2: plain wins when both exist; zstd offsets are decoded bytes; archive relocation preserves logical identity. Only exact jsonl/jsonl.zst suffixes are transcripts. Temporary migration, compression, and materialization files are excluded."
+
+[[streams]]
 id = "state-db"
 glob = "state_*.sqlite*"
 file_format = "sqlite"

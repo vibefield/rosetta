@@ -224,8 +224,9 @@ fn file_edit(timeline: &str) -> IngestOp {
 /// Every lifecycle shape one session can carry, split over its two sources:
 /// a duplicate opener whose later copy wins from the second source, an
 /// undated opener, matched and unmatched updates, usage absorbed into a dated
-/// tool row, usage left for an undated one and for an agent row (one with an
-/// ownership identity), and a file edit on a tool row.
+/// tool row (carrying an ownership identity the fold never claims), usage
+/// left for an undated one and for an agent row (one with an ownership
+/// identity), and a file edit on a tool row.
 fn lifecycle_sources() -> [(&'static str, Vec<IngestOp>); 2] {
     [
         (
@@ -243,7 +244,7 @@ fn lifecycle_sources() -> [(&'static str, Vec<IngestOp>); 2] {
                 update("call-b", 4, "failed", Some(30)),
                 tool_opener("tool-a", "call-a", 0, Some(11), "repeated"),
                 update("call-z", 6, "succeeded", Some(40)),
-                usage("tool-a", 50, 7, None),
+                usage("tool-a", 50, 7, Some("msg-2:req-2")),
                 usage("tool-b", 51, 8, None),
                 usage("reply", 52, 9, Some("msg-1:req-1")),
                 file_edit("tool-a"),
@@ -290,18 +291,21 @@ fn lifecycle_rows(store: &Store) -> Vec<String> {
     rows
 }
 
-fn totals(applied: &ApplyStats, admitted: &ApplyStats) -> (u64, u64, u64, u64, u64) {
+type Totals = (u64, u64, u64, u64, u64, u64);
+
+fn totals(applied: &ApplyStats, admitted: &ApplyStats) -> Totals {
     (
         applied.messages_inserted + admitted.messages_inserted,
         applied.tool_results_merged + admitted.tool_results_merged,
         applied.tool_results_unmatched + admitted.tool_results_unmatched,
         applied.usage_applied + admitted.usage_applied,
         applied.profile.bulk_tool_rows_reconciled + admitted.profile.bulk_tool_rows_reconciled,
+        applied.usage_identities_unclaimed + admitted.usage_identities_unclaimed,
     )
 }
 
 /// The admission fold's projection of `lifecycle_sources`.
-fn folded() -> (Store, (u64, u64, u64, u64, u64)) {
+fn folded() -> (Store, Totals) {
     let mut store = cold_store();
     let mut state = ColdReconciliation::default();
     let batches = lifecycle_sources()
@@ -327,6 +331,9 @@ fn withheld(store: &Store) -> Vec<(Batch, WithheldFacts)> {
 #[test]
 fn a_session_resolved_before_admission_writes_what_the_admission_fold_writes() {
     let (folded, folded_totals) = folded();
+    // Only the dated tool row's usage folds past the owner index; the agent
+    // row's identity is claimed on the ordinary tail path.
+    assert_eq!(folded_totals.5, 1);
 
     let mut early = cold_store();
     let mut state = ColdReconciliation::default();

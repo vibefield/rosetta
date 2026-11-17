@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   ACTIVITY_QUIET_MS as quiet, activityDay, advanceActivityOrder,
-  compareActivityRanks, compareOrderedSessions,
+  compareActivityRanks, compareOrderedSessions, compareProjectOrder,
 } from '../../room/src/lib/activity-order.ts';
 
 const now = new Date(2026, 9, 2, 12).getTime();
@@ -154,4 +154,25 @@ test('calendar boundaries keep day groups contiguous without re-sorting ongoing 
   const together = [session('a', next + 1), session('b', next)];
   assert.deepEqual(ids(together, step(order, together, next + 1)), ['a', 'b']);
   assert.notEqual(activityDay(late), activityDay(next));
+});
+
+test('while bootstrapping, unranked projects follow their newest root source, never ahead of recorded activity', () => {
+  const root = (id, project, updated, at = null) => ({ ...session(id, at, project), updated_at: updated, stream_state: at === null ? 'pending' : 'indexed' });
+  const rows = [
+    root('a1', 'a', now - 9_000), root('b1', 'b', now - 1_000), root('b2', 'b', now - 50_000),
+    root('c1', 'c', now - 1_000), root('r1', 'r', now - 99_000, now - 99_000),
+    root('child', 'z', now, null),
+  ];
+  rows.at(-1).parent_session_id = 'a1';
+  const order = (bootstrapping) => {
+    const built = step(null, rows, now, { bootstrapping, live: false });
+    return [...built.projects.keys()].sort((x, y) => compareProjectOrder(built, x, y, x, y));
+  };
+  // The ranked project first; then newest root source (a child's does not count), then id.
+  assert.deepEqual(order(true), ['r', 'b', 'c', 'a']);
+  // Activity alone, then id, once the import publishes.
+  assert.deepEqual(order(false), ['r', 'a', 'b', 'c']);
+  // An order built without source times keeps the id fallback.
+  const bare = { ...step(null, rows, now, { bootstrapping: true }), sourceAt: undefined };
+  assert.deepEqual([...bare.projects.keys()].sort((x, y) => compareProjectOrder(bare, x, y, x, y)), ['r', 'a', 'b', 'c']);
 });

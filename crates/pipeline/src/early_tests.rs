@@ -11,6 +11,7 @@ use crate::live::PollEvidence;
 
 fn file(path: &str, session_id: &str) -> SessionFile {
     SessionFile {
+        input: None,
         ledger_only: false,
         relative_path: path.into(),
         stream_id: "transcript".into(),
@@ -23,6 +24,9 @@ fn file(path: &str, session_id: &str) -> SessionFile {
         modified_ms: 1,
         agent_version: None,
         source_missing: false,
+        tree_parent: None,
+        cut_len: None,
+        cut_modified_ms: None,
     }
 }
 
@@ -51,6 +55,8 @@ fn closed(path: &str, session_id: &str, ops: Vec<IngestOp>) -> ClosedSource {
         complete: true,
         payload_bytes: 1,
         prepared: None,
+        lane: crate::closed::LaneId::Path,
+        capture: crate::capture::CaptureClock::default(),
     }
 }
 
@@ -107,7 +113,7 @@ fn prepared(sources: &[ClosedSource]) -> Vec<(bool, usize, usize)> {
             let prepared = source.prepared.as_ref().expect("prepared");
             (
                 prepared.withheld,
-                prepared.resolved.len(),
+                prepared.to_resolve.len(),
                 prepared.released.len(),
             )
         })
@@ -253,6 +259,7 @@ fn without_early_tools_every_fact_stays_in_its_batch() {
 /// thread never becomes a canonical session.
 fn ledger_only_file(path: &str, session_id: &str) -> SessionFile {
     SessionFile {
+        input: None,
         ledger_only: true,
         ..file(path, session_id)
     }

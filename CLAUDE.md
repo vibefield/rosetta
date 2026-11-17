@@ -88,9 +88,17 @@ through `Hub::absorb_meta`, and that runtime's producer starts capturing at once
 and top-level sessions are immediately public while payload ingestion continues and no
 runtime's capture waits for a later runtime's skim. Adapters stream, ledger, and normalize in
 parallel through private RAM planners, handing each source to the sole canonical writer as a
-closed source (terminal generation, final checkpoint) in path order as soon as nothing can
-supersede it — a session is held only while a restart's sibling heal could still replace its
-transcripts — under a 256 MiB in-flight budget. Every capture pass is a private-build pass
+closed source (terminal generation, final checkpoint) as soon as nothing can supersede it — a
+session is held only while a restart's sibling heal could still replace its transcripts — under
+a 256 MiB in-flight budget (64 MiB for the small-tree lanes, 192 MiB shared, each with a drain
+ticket). Root-tree adapters (Claude Code, Codex; `ColdAdmission::RootTree`) walk newest root
+trees first: the physical files several trees read (a Codex `state_N.sqlite`) first, then a
+small-tree lane (largest source ≤ 64 MiB) and one big-tree lane, each its own pool runtime with
+fair head grants; their fresh JSONL passes read each transcript only to its metadata cut (the
+skim's length), and the live runner lands later growth as append growth. The writer applies
+every item in transactions of at most 16 MiB, round-robin over lanes, and writes a completed
+session's tool rows, resolved on the writer, in the same bounded slices. Every other adapter
+keeps the path walk. Every capture pass is a private-build pass
 (`IngestOptions::private_build`): a generation ends wherever the file stops it, by the
 end-of-file rules. A source caught mid-append ends at its last complete record (the live runner
 lands the rest as append growth); one that vanishes or keeps changing ends at the last record
@@ -99,30 +107,57 @@ a snapshot or document one included — activates its parseable rows. Each holds
 Streaming, as a live pass does. One capture pool shared by every runtime (a
 worker per core but one by default; `--capture-workers 0` restores one producer reading its
 runtime's files in turn) reads, normalizes and frames the fresh JSONL sources a batch at a
-time ahead of each producer, which becomes its runtime's sequencer and commits them strictly
-in path order, so ledger bytes, planner and closed sources equal the serial walk's for any
-worker count; look-ahead is byte-bounded and parks rather than blocks. On its way out, each
-producer's `StreamedPreparer` ranks final ordinals and withholds each session's
-tool/usage/file-edit facts until the session's last roster source; a session no other source
-crossed is folded right there (the admission fold's own code) and its resolved tool rows
-travel with that source, while a crossed session's facts go back unresolved. The writer lands
-those final rows — and the resolved tool rows, each written once — in the canonical RAM
-generation while capture continues; whatever is left collects into that runtime's own RAM
-fold, never another's. It admits only a complete runtime: at its producer's close the
-fold writes each remaining tool row once, and only its final readiness commit (the Pending
-flip) makes the canonical timeline visible through the ordinary REST/WS queries — every
-payload read route honours Pending. Per-file imperfections the live path absorbs no longer
+time ahead of each producer, which becomes its runtime's sequencer. For runtime-admission
+adapters it commits strictly in path order, so ledger bytes, planner and closed sources equal
+the serial walk's for any worker count. For root-tree adapters it takes one event at a time from
+whichever lane is ready, and the physical frame order and message rowids may vary between runs
+(decision U-2, 2026-11-02). On any walk, as already at 3ca7410, so may which runtime's block of
+cursor ids comes first: it follows which runtime checkpoints first. These do not vary: per-source
+ledger content (`sourceSetDigest`), cursor ids within each runtime and ledger file ids (path
+rank), the logical projection, ranked search, and whether the build publishes. A source that
+names a session of another lane's tree fails the build closed.
+`--experiment-cold-admission runtime` reproduces the path walk byte for byte. Look-ahead is
+byte-bounded (a reserved slice for each small-tree lane; a running step counts what it may still
+read) and parks rather than blocks. On macOS the daemon maps every allocation over 2 MiB on its
+own, so the capture buffers it frees leave the footprint at once (`rosettad::large_alloc`). On a
+pooled root-tree walk emission never blocks the sequencer: a lane whose writer budget is full
+holds its one prepared emission and pauses alone. On its way out, each producer's
+`StreamedPreparer` ranks final ordinals and withholds each session's tool/usage/file-edit facts
+until the session's last roster source; a session no other source crossed hands them to the
+writer with that source, which resolves them (the admission fold's own code) and writes each
+tool row once, while a crossed session's facts go back unresolved. The writer lands those final
+rows in the canonical RAM generation while capture continues; whatever is left collects into
+that runtime's own RAM fold (partitioned per root tree for a root-tree adapter), never
+another's. For a root-tree adapter it admits each closure-proven root tree as soon as its last
+source commits (no source crosses between it and another tree, none of its sources abandoned):
+one writer transaction folds that tree's remaining tool rows, renumbers its sessions and flips
+them out of Pending last, at most once per 100 ms after the first. Bound and tainted trees, and
+every runtime-admission adapter, are admitted at the producer's close. Flipped trees are never
+retracted; every payload read route honours Pending (a full command checks its own session and
+reads the staged ledger before publication; the metadata mirror withholds a Pending session's
+activity until publication). Per-file imperfections the live path absorbs no longer
 refuse a fresh or resumed start (2026-09-28): files that vanished, are unidentified, or are not
 yet sessions (unidentified, and no delimiter ends their first record yet: `files_unfinished`)
 wait for live admission; sources missing or unstable at capture and malformed records publish
 Streaming; one `tolerated per-file imperfections (…)` stdout line per runtime and profile
-counters report them. A truncated walk, a checkpoint conflict, a record past the raw frame
-limit, a resumed start's vanished interrupted source, and bug-shaped close errors still refuse;
+counters report them; a resumed start's interrupted source whose file is gone ends at the last
+staged record, sealed and activated like a fresh source that vanished, and is counted `missing`,
+so the archive stays rebuildable (2026-11-01). A truncated walk, a checkpoint conflict, a
+record past the raw frame limit, an interrupted source whose identity changed, and bug-shaped
+close errors still refuse;
 finite `ingest`, `watch` and the disk `ColdEngine` keep the strict gate. No runtime is
 retained whole in RAM. Open session subscriptions receive one resync barrier; parser
-fragments and reconciliation state are never public. This is deliberately runtime-granular:
-cross-file relations cannot expose a half-reconciled session merely to manufacture finer UI
-progress. Finite `ingest` keeps the retained closed-runtime path.
+fragments and reconciliation state are never public. Admission is per closure-proven tree only
+where the adapter declares the closure promise (`AgentAdapter::cold_admission`) and the
+cross-tree state converges in any order (usage owners, drift sample); a fork copy's visible
+per-row usage badge may therefore empty once, when its older origin lands later (decision U-1,
+2026-11-02: counted as `usage_displaced_visible`, the session resynced, no wire flag). Elsewhere it
+stays runtime-granular: cross-file relations cannot expose a half-reconciled session merely to
+manufacture finer UI progress. Shared-cache readers and the writer follow one lock order
+(writer: `session` first; DDL transactions DDL-first; readers: a `session` read first), so no
+SQLITE_LOCKED can park the build; finalization on the shared generation is two transactions
+(refold, then DDL-first indexes and readiness). Finite `ingest` keeps the retained
+closed-runtime path.
 
 After every runtime closes, the daemon performs set-based finalization and full validation in
 RAM, drains and fsyncs the staged raw ledger, backs the canonical database up to a
@@ -131,7 +166,8 @@ from RAM to disk before releasing the RAM generation. Detached search remains ex
 Building and does not start until that switch; it wakes right after it, before any runner's
 catch-up, whose commits become ordinary revision-stamped repairs. Watchers are armed before metadata, and their
 queued suffixes flow into the ordinary live runner after publication. Cross-session aggregates
-(heatmap, usage decomposition, and contribution) return protocol-v7 `not_ready` while the reader
+(heatmap, usage decomposition, and contribution) and the `/api/pricing` coverage report return
+protocol-v7 `not_ready` while the reader
 targets shared RAM; this prevents presentation scans from contending with the sole canonical
 writer. The renderer waits for `canonical_ready` and hydrates project aggregates with bounded
 concurrency after publication. An existing complete projection is live immediately: watchers arm
@@ -142,7 +178,10 @@ in RAM: seeded from the cold writer's final checkpoints on a fresh start, otherw
 row once, and forgotten whenever the runner streams that source.
 `--stop-after-meta` and legacy incomplete disk projections retain the disk-progressive `ColdEngine` path: its four lanes
 (live ▸ boost ▸ starter ▸ completion), slice budget, boost queue, and scoped row effects remain
-the recovery/audit topology. Finite `ingest` and explicit `rebuild` remain private, validated,
+the recovery/audit topology. Only a legacy incomplete projection's `ColdEngine` run attaches and
+drains (and, when its loop ends, closes) the boost queue; every other serve mode, the
+`--stop-after-meta` metadata audit included, attaches none, so `/api/ingest/boost` answers
+`queued: false` (2026-11-01). Finite `ingest` and explicit `rebuild` remain private, validated,
 atomic publication paths and never slice. An idle daemon
 appends nothing to the raw ledger: the rotating audit verifies a file's committed
 content chain (tail checkpoint v2 — a resumable byte fold; pre-chain checkpoints are
@@ -169,15 +208,30 @@ falls back to whole-file handling. Dirty sources converge on live-growth semanti
 every cold path: a dirty FIRST generation activates its parseable rows with the session
 held Streaming (never Indexed) — identical sliced, unsliced, or rebuilt — while dirty
 replacements still abandon outside a private build. `milestone:` stdout lines feed the sweep
-harness.
+harness. A fresh RAM build also prints, as measurement only, per-runtime metadata and admission
+milestones, first-session-complete (an optimistic lower bound for a session-granular flip),
+first-readable and recent-ready (24 h, 7 d) milestones; newest-10-trees, newest-giant and
+small-tree recent-ready milestones, with horizons both from the census cut and `@newest`
+(measured back from the newest roster entry, so frozen corpora are stable as they age); per-lane
+service delay; a `walk:` line per runtime (with a structure-only `walk-plan` event under
+`--json --profile`); one structure-only `census:`
+line per roster, a 1 s memory trace with `milestone: memory-peak`, and `usage-copies:` counters at
+canonical readiness; `--json --profile` adds the lock waits as a `shared-cache-locks` stage
+profile (docs/ARCHITECTURE.md, "Cold-build measurement").
 Interrupted disk-progressive work is durable and resumable. Interrupted fresh RAM work never
 installs an incomplete canonical database; it retains a named `<ledger>.staged` generation with a
-fsynced manifest binding projection, ledger, enrollment, and runtime roots. The next plain `serve`
+fsynced manifest binding projection, ledger, enrollment, and runtime roots; a stop (SIGINT,
+ctrl-c) syncs that staged ledger within 5 s before exiting, as a pause does. The next plain `serve`
 replays sealed evidence into fresh canonical RAM, ignores raw-only tails, reserves their generation
 in RAM so source retries allocate strictly above it, finishes from the current source inventory
 (with the same private-build passes and the same tolerance as a fresh start), and publishes the
-same generation. The recovery marker survives ledger promotion and is removed only
-after SQLite installation. The app does not pass `--restart-incomplete`; that flag remains an
+same generation. That RAM is the read target, but a resume reconciles once at the end and
+finalization renumbers its ordinals, so replay and catch-up withhold every readiness decision:
+each session stays Pending (listed, no payload) until finalization and the publication fence,
+then one commit applies them just before the backup that is installed — nothing is readable
+until a cross-launch resume publishes, and its progress board counts no session done before
+then (2026-11-01). The recovery marker survives ledger promotion and is
+removed only after SQLite installation. The app does not pass `--restart-incomplete`; that flag remains an
 explicit legacy archive/restart operation for old incomplete projection sets. A complete projection
 is never moved. `npm run dev -w @vibefield/rosetta-agent-history` builds `rosettad --release` and
 passes that exact binary to Electron; mtime-based debug/release selection is forbidden.
@@ -186,7 +240,8 @@ Projection schema 13 keeps user-facing canonical rows, rollups, and joins in SQL
 production FTS5 lives in a disposable detached sidecar. The asynchronous
 worker, `projection_state`, and coalesced `search_dirty` consumer landed together; epoch,
 revision, acknowledgement, crash, and repair tests prevent stale or cross-projection hits.
-Verified inline image bytes are decoded once into immutable `<projection>.assets/` members;
+Verified inline image bytes are stored once, as their recorded bytes, in immutable
+`<projection>.assets/` members (WebP display renditions beside them are a disposable cache);
 SQLite retains only relocatable `/api/assets/<digest>.<ext>` references and the raw ledger
 remains lossless.
 Each session now carries exactly one adapter-selected primary cwd and one optional project link
@@ -219,6 +274,8 @@ tools/groundtruth/         LAYER 1 dev tools (stdlib Python): fixture farm,
                            mock model, census, schema merge, HTML render,
                            boundary/artifact checks
 tools/ingest-bench/        local Electron cold-ingest profiler + read-only DB inspector
+tools/r1-bench/            the R1 frozen-pair kit (snapshot check, digests, ranked suite)
+tools/ui-bench/            on-screen readiness runs of the real app over a frozen snapshot
 atlas/                     graded design intent (*.atlas); see "Atlas" below
 crates/                    all Rust crates
   adapter-support/         permissive parser + replay-test primitives
@@ -306,5 +363,6 @@ a package README with a checked `see "file#slug"`. Authoring guide: the `atlas` 
   `rosettad ledger compact --db PATH [--ledger DIR] [--level N] [--long] [--force] [--dry-run] [--json]`.
 - Ledger evidence (read-only; per-segment decoded digests plus an entry digest that ignores
   containers, segment boundaries, file ids and batch packing, split into source and meta
-  digests because metadata carries discovery times):
+  digests because metadata carries discovery times, plus an order-insensitive `sourceSetDigest`
+  (per-source content folded in path order), the equality gate for root-tree runtimes):
   `rosettad ledger verify --db PATH | --ledger DIR [--json]`.

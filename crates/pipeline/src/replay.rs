@@ -32,6 +32,8 @@ use crate::stream::{merge_stats, over_projection_limit, quarantined_record};
 
 mod admission;
 use admission::{AdmissionScan, ReplayAdmission};
+mod stopped;
+pub use stopped::{StoppedSource, activate_stopped_source};
 
 /// Rebuild-only controls. The live path keeps its independently bounded
 /// scheduler; these knobs let a private, unpublished rebuild spend more RAM
@@ -62,6 +64,12 @@ pub struct RebuildOptions {
     /// cancelled replay has touched only a disposable RAM projection; the
     /// named staged ledger remains the next boot's source.
     pub cancel: Option<Arc<AtomicBool>>,
+    /// Resume-only: compute every replayed session's readiness into
+    /// [`RebuildReport::session_health`] instead of committing it. A resumed
+    /// serve replays into the canonical RAM generation readers already
+    /// target, before its cross-file reconciliation and finalization; each
+    /// session it touches must stay Pending until those rows are final.
+    pub withhold_session_health: bool,
 }
 
 impl Default for RebuildOptions {
@@ -74,6 +82,7 @@ impl Default for RebuildOptions {
             prefetch_ledger: false,
             allow_unsealed_sources: false,
             cancel: None,
+            withhold_session_health: false,
         }
     }
 }
@@ -98,6 +107,7 @@ struct ElectionCache {
     only_dirty: HashSet<String>,
     unsealed: BTreeMap<String, (u64, SourceDef)>,
     admission: ReplayAdmission,
+    required_sources: Vec<crate::meta_journal::SourceRequirement>,
 }
 
 struct ElectionState {
@@ -107,6 +117,7 @@ struct ElectionState {
     only_dirty: HashSet<String>,
     unsealed: BTreeMap<String, (u64, SourceDef)>,
     admission: ReplayAdmission,
+    required_sources: Vec<crate::meta_journal::SourceRequirement>,
 }
 
 fn segment_stamps(ledger_dir: &Path) -> Result<Vec<SegmentStamp>, PipelineError> {
@@ -153,7 +164,7 @@ fn load_election_cache(
 ) -> Option<ElectionState> {
     let payload = std::fs::read(path).ok()?;
     let cache: ElectionCache = serde_json::from_slice(&payload).ok()?;
-    if cache.schema != 3
+    if cache.schema != 4
         || cache.normalizer_version != normalizer_version
         || cache.segments != segments
     {
@@ -170,6 +181,7 @@ fn load_election_cache(
         only_dirty: cache.only_dirty,
         unsealed: cache.unsealed,
         admission: cache.admission,
+        required_sources: cache.required_sources,
     })
 }
 
@@ -191,7 +203,7 @@ fn save_election_cache(
         })?;
     }
     let cache = ElectionCache {
-        schema: 3,
+        schema: 4,
         normalizer_version,
         segments,
         visit_segments: state.visit.segments,
@@ -202,6 +214,7 @@ fn save_election_cache(
         only_dirty: state.only_dirty.clone(),
         unsealed: state.unsealed.clone(),
         admission: state.admission.clone(),
+        required_sources: state.required_sources.clone(),
     };
     let payload = serde_json::to_vec(&cache).map_err(|error| {
         PipelineError::Config(format!(
@@ -385,6 +398,9 @@ pub struct RebuildReport {
     /// Resume callers use this only as an in-memory generation fence before
     /// rereading the source; it is never canonical application data.
     pub unsealed_sources: BTreeMap<String, (u64, SourceDef)>,
+    /// The readiness each replayed session would have been given, filled only
+    /// under [`RebuildOptions::withhold_session_health`]; its caller commits it.
+    pub session_health: BTreeMap<String, StreamState>,
     pub stats: ApplyStats,
 }
 
@@ -399,6 +415,7 @@ struct FileReplay {
     last_offset: Option<u64>,
     generation_clean: bool,
     activated: bool,
+    slots: crate::presented_media::Slots,
 }
 
 struct PreparedFile {
@@ -621,6 +638,7 @@ pub fn rebuild_runtime_with_options(
         let mut latest_seals: BTreeMap<String, (u64, SourceDef, bool)> = BTreeMap::new();
         let mut raw_generations: BTreeMap<(String, u64), SourceDef> = BTreeMap::new();
         let mut admission = AdmissionScan::default();
+        let mut required_sources = Vec::new();
         let visit = visit_election::<PipelineError, _>(ledger_dir, instrument, |entry| {
             if options
                 .cancel
@@ -665,7 +683,16 @@ pub fn rebuild_runtime_with_options(
                         *slot = (generation, source);
                     }
                 }
-                LedgerEntry::Meta { .. } | LedgerEntry::Document { .. } => {}
+                LedgerEntry::Meta {
+                    schema_version,
+                    payload,
+                } => {
+                    if schema_version == crate::LEDGER_META_SCHEMA_VERSION {
+                        required_sources =
+                            crate::LedgerMetadata::decode(&payload)?.required_sources;
+                    }
+                }
+                LedgerEntry::Document { .. } => {}
             }
             Ok(())
         })?;
@@ -713,6 +740,7 @@ pub fn rebuild_runtime_with_options(
             latest_seals,
             only_dirty,
             unsealed,
+            required_sources,
         };
         if let (Some(path), Some(segments)) =
             (options.election_cache.as_deref(), cache_segments.clone())
@@ -728,6 +756,7 @@ pub fn rebuild_runtime_with_options(
         only_dirty,
         unsealed,
         admission,
+        required_sources,
     } = election;
     report.segments = first.segments;
     report.torn_segments = first.torn_segments;
@@ -764,18 +793,25 @@ pub fn rebuild_runtime_with_options(
                 schema_version,
                 payload,
             } => {
-                if !matches!(schema_version, 0 | crate::LEDGER_META_SCHEMA_VERSION) {
+                if !matches!(schema_version, 0 | 2 | crate::LEDGER_META_SCHEMA_VERSION) {
                     return Err(PipelineError::Config(format!(
                         "unsupported ledger meta schema version {schema_version}"
                     )));
                 }
-                let mut ops: Vec<IngestOp> = serde_json::from_str(&payload).map_err(|error| {
-                    PipelineError::Config(format!("undecodable meta batch in ledger: {error}"))
-                })?;
+                let mut ops = crate::LedgerMetadata::decode(&payload)?.ops;
                 admission.filter_meta(&mut ops);
-                for op in &ops {
+                for op in &mut ops {
                     if let IngestOp::SessionMeta(row) = op {
                         sessions_seen.insert(row.id.clone());
+                        if options.withhold_session_health {
+                            // A journaled state is a decision too (an older
+                            // resume journaled what it had committed): it is
+                            // withheld like replay's own, never applied.
+                            match std::mem::replace(&mut row.stream_state, StreamState::Pending) {
+                                StreamState::Pending => report.session_health.remove(&row.id),
+                                state => report.session_health.insert(row.id.clone(), state),
+                            };
+                        }
                     }
                 }
                 report.meta_batches += 1;
@@ -845,45 +881,17 @@ pub fn rebuild_runtime_with_options(
                 let file = files
                     .get_mut(&source.relative_path)
                     .expect("inserted above");
-
-                if file
-                    .last_offset
-                    .is_some_and(|previous| start_offset <= previous)
-                {
-                    report.duplicate_records_skipped += 1;
+                if !stopped::project_raw(
+                    adapter,
+                    runtime,
+                    file,
+                    &source,
+                    start_offset,
+                    &payload,
+                    &mut report,
+                    instrument,
+                ) {
                     return Ok(());
-                }
-                file.last_offset = Some(start_offset);
-                file.ctx.agent_version = source.agent_version.clone();
-
-                report.raw_records += 1;
-                instrument.add(Metric::RecordsFramed, 1);
-                file.ctx.src_offset = Some(start_offset as i64);
-                if over_projection_limit(adapter, &file.source.stream_id, &payload) {
-                    report.quarantined += 1;
-                    instrument.add(Metric::RecordsQuarantined, 1);
-                    file.ops.push(quarantined_record(
-                        &runtime.id,
-                        file.ctx.agent_version.as_deref(),
-                        &file.source.stream_id,
-                        file.ctx.src_cursor,
-                        start_offset,
-                    ));
-                } else {
-                    let outcome = instrument.time(Metric::NormalizeNanos, || {
-                        adapter
-                            .ingest_line(&mut file.ctx, &file.source.stream_id, &payload)
-                            .into_projection()
-                    });
-                    match &outcome.status {
-                        LineStatus::Parsed => report.parsed += 1,
-                        LineStatus::UnknownType => report.unknown += 1,
-                        LineStatus::HardError { .. } => {
-                            file.generation_clean = false;
-                            report.hard_errors += 1;
-                        }
-                    }
-                    file.ops.extend(outcome.ops);
                 }
                 if file.ops.len() >= options.chunk_ops {
                     let mode = if file.activated {
@@ -917,10 +925,11 @@ pub fn rebuild_runtime_with_options(
                     && !already_projected.contains(&source.relative_path)
                     && let Some(file) = files.get_mut(&source.relative_path)
                 {
-                    crate::html_artifacts::project(
+                    crate::presented_media::project_document(
                         &source.session_id,
                         start_offset,
                         &document,
+                        &mut file.slots,
                         &mut file.ops,
                     );
                 }
@@ -1044,6 +1053,7 @@ pub fn rebuild_runtime_with_options(
     // sessions whose every sealed source is currently clean are Indexed.
     // Meta-only sessions are absent from this map and retain Pending.
     let mut session_health: BTreeMap<String, bool> = BTreeMap::new();
+    let required_present = latest_seals.keys().cloned().collect();
     for (path, (_, source, known_unclean)) in latest_seals {
         let clean = if known_unclean {
             false
@@ -1059,13 +1069,22 @@ pub fn rebuild_runtime_with_options(
             .and_modify(|healthy| *healthy &= clean)
             .or_insert(clean);
     }
+    crate::meta_journal::apply_requirements(
+        &required_sources,
+        &required_present,
+        &mut session_health,
+    );
     for (session_id, clean) in session_health {
         let next = if clean {
             StreamState::Indexed
         } else {
             StreamState::Streaming
         };
-        store.set_session_stream_state(&session_id, next)?;
+        if options.withhold_session_health {
+            report.session_health.insert(session_id, next);
+        } else {
+            store.set_session_stream_state(&session_id, next)?;
+        }
     }
 
     Ok(report)
@@ -1107,6 +1126,7 @@ pub fn prepare_runtime(
         last_offset: Option<u64>,
         generation_clean: bool,
         sealed: bool,
+        slots: crate::presented_media::Slots,
     }
 
     let mut report = RebuildReport {
@@ -1128,14 +1148,12 @@ pub fn prepare_runtime(
                 schema_version,
                 payload,
             } => {
-                if !matches!(schema_version, 0 | crate::LEDGER_META_SCHEMA_VERSION) {
+                if !matches!(schema_version, 0 | 2 | crate::LEDGER_META_SCHEMA_VERSION) {
                     return Err(PipelineError::Config(format!(
                         "unsupported ledger meta schema version {schema_version}"
                     )));
                 }
-                let mut ops = serde_json::from_str(&payload).map_err(|error| {
-                    PipelineError::Config(format!("undecodable meta batch in ledger: {error}"))
-                })?;
+                let mut ops = crate::LedgerMetadata::decode(&payload)?.ops;
                 election.admission.filter_meta(&mut ops);
                 meta_ops.push(ops);
                 report.meta_batches += 1;
@@ -1171,6 +1189,7 @@ pub fn prepare_runtime(
                             last_offset: None,
                             generation_clean: true,
                             sealed: false,
+                            slots: Default::default(),
                         },
                     );
                     report.files += 1;
@@ -1215,6 +1234,7 @@ pub fn prepare_runtime(
                         report.hard_errors += 1;
                     }
                 }
+                file.slots.note(&outcome.ops);
                 file.ops.extend(outcome.ops);
             }
             LedgerEntry::Document {
@@ -1230,10 +1250,11 @@ pub fn prepare_runtime(
                         .is_some_and(|(elected, _)| generation == *elected)
                     && let Some(file) = files.get_mut(&source.relative_path)
                 {
-                    crate::html_artifacts::project(
+                    crate::presented_media::project_document(
                         &source.session_id,
                         start_offset,
                         &document,
+                        &mut file.slots,
                         &mut file.ops,
                     );
                 }
@@ -1267,6 +1288,7 @@ pub fn prepare_runtime(
                             last_offset: None,
                             generation_clean: true,
                             sealed: true,
+                            slots: Default::default(),
                         },
                     );
                     report.files += 1;
@@ -1320,6 +1342,7 @@ pub fn prepare_runtime(
                 .map_err(PipelineError::Config)?,
             snapshot_stamp: None,
             snapshot_revision: None,
+            reframing: false,
         }
         .encode();
         let activate =
@@ -1340,6 +1363,7 @@ pub fn prepare_runtime(
         .iter()
         .map(|file| (file.source.relative_path.as_str(), file))
         .collect::<BTreeMap<_, _>>();
+    let required_present = election.latest_seals.keys().cloned().collect();
     for (path, (generation, source, known_unclean)) in election.latest_seals {
         let clean = !known_unclean
             && prepared_by_path.get(path.as_str()).is_some_and(|file| {
@@ -1351,6 +1375,11 @@ pub fn prepare_runtime(
             .or_insert(clean);
     }
 
+    crate::meta_journal::apply_requirements(
+        &election.required_sources,
+        &required_present,
+        &mut session_health,
+    );
     Ok(PreparedRuntime {
         report,
         meta_ops,
@@ -1809,6 +1838,7 @@ fn open_file(
         last_offset: None,
         generation_clean: true,
         activated: false,
+        slots: Default::default(),
     })
 }
 
@@ -1849,6 +1879,7 @@ fn flush_chunk(
                 .map_err(PipelineError::Config)?,
             snapshot_stamp: None,
             snapshot_revision: None,
+            reframing: false,
         }
         .encode();
         let update = CheckpointUpdate {

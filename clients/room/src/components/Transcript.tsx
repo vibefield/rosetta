@@ -39,8 +39,10 @@ import { DayMenu, markStuckPills } from "./transcript/DayPill";
 import { TranscriptDocument } from "./transcript/Document";
 import { TranscriptLoading } from "./transcript/TranscriptLoading";
 import { useTranscriptModel } from "./transcript/document-model";
+import { useViewerDay } from "./transcript/viewer-day";
 import { useFoldPreference } from "./transcript/fold-preference";
 import { MessageViewerContext } from "./transcript/MessagePreview";
+import { PromptJump } from "./transcript/PromptJump";
 import { ThreadNavigationContext } from "./transcript/thread-navigation";
 import { handleForMessage, messageFileSource } from "./transcript/message-file-source";
 import type { FullMessage } from "./transcript/message-file-source";
@@ -74,6 +76,8 @@ import type { RoomHeadActs } from "../host-inputs";
 import { HostAct } from "./HostAct";
 import { activityCuts } from "./transcript/activity-plan";
 import { ReadingSessionProvider, useRoom } from "../room-context";
+import { NOT_IMPORTED_LABEL, importStanding } from "../lib/import-state";
+import type { ImportCourse } from "../lib/import-state";
 
 export type { ThreadFocus } from "./transcript/thread-index";
 
@@ -106,6 +110,10 @@ export interface TranscriptColumnProps {
   readonly session: SessionRow | null;
   /** The cold backfill is running — threaded to every watermark. */
   readonly duringBackfill: boolean;
+  /** When the running import opens a session it has not reached. */
+  readonly importCourse?: ImportCourse | undefined;
+  /** The session's agent, as a `runtime-close` promise names it. */
+  readonly importAgent?: string | undefined;
   /** Full metadata topology. Only roots are navigable, but descendants are
    * needed here to build the embedded thread tree. */
   readonly sessions: readonly SessionRow[];
@@ -148,6 +156,8 @@ export function TranscriptColumn(props: TranscriptColumnProps) {
 function SessionTranscript({
   session,
   duringBackfill,
+  importCourse,
+  importAgent,
   sessions,
   project,
   feed,
@@ -165,7 +175,7 @@ function SessionTranscript({
   reader = false,
   headActs = null,
 }: TranscriptColumnProps) {
-  const { sessions: leases, host } = useRoom();
+  const { sessions: leases, host, assets } = useRoom();
   const listBrowsers = useMemo(() => host?.browsers?.bind(host), [host]);
   const openInBrowser = useMemo(
     () => (host === null ? null : (name: string, bytes: Uint8Array, browserId?: string) => host.openInBrowser(name, bytes, browserId)),
@@ -195,7 +205,9 @@ function SessionTranscript({
   const targetIsMeta = requestedTimelineId === null && metaFocus !== null;
 
   const cuts = useMemo(() => activityCuts(feed.rows, feed.watermark), [feed.rows, feed.watermark]);
-  const model = useTranscriptModel(feed.rows, session, homeDirectory, Date.now(), { cutBefore: cuts.cutBefore });
+  // The viewer's day, re-read at midnight and on focus: a pill's words are the drawing's.
+  const viewerDay = useViewerDay();
+  const model = useTranscriptModel(feed.rows, session, homeDirectory, viewerDay.now, { cutBefore: cuts.cutBefore });
   const opening = useTranscriptOpening(feed.snapshotReady, focus !== null || metaFocus !== null);
   const loading = session !== null && opening.visible;
   useEffect(() => {
@@ -301,7 +313,7 @@ function SessionTranscript({
       }
     }
     openMetaFile(
-      () => handleForTimelineMetaArtifact(leases, session.id, artifact),
+      () => handleForTimelineMetaArtifact(leases, assets, session.id, artifact),
       "Could not open that recorded artifact",
     );
   };
@@ -432,8 +444,13 @@ function SessionTranscript({
     markStuckPills(scrollRef.current);
   }, [model.plan]);
 
+  // A session the import has not reached has no messages to count and no
+  // activity to range over yet: the head says so instead.
+  const notImported = session !== null &&
+    importStanding(session, duringBackfill, (index.childrenByParent.get(session.id)?.length ?? 0) > 0) === "not-imported";
   const range = (() => {
     if (!session) return "";
+    if (notImported) return NOT_IMPORTED_LABEL;
     if (!session.activity) return "Activity time unknown";
     return `${clockShort(session.activity.first_at)} → ${clockShort(session.activity.last_at)}`;
   })();
@@ -477,7 +494,7 @@ function SessionTranscript({
           <ColumnHeading
             name={getSessionTitle(session)}
             tint={project?.tint ?? null}
-            count={loading ? null : feed.rows.length}
+            count={loading || notImported ? null : feed.rows.length}
             countTitle={`${feed.rows.length} messages loaded`}
           />
         )}
@@ -517,7 +534,7 @@ function SessionTranscript({
           )}
         </span>
       </header>}
-      <div className="tr-stage" data-ready={!loading || undefined}>
+      <div className="tr-stage" data-ready={!loading || undefined} data-session-key={session?.id}>
       <div className="tr-surface" inert={loading} aria-hidden={loading || undefined}>
       {!reader && session !== null && feed.timelineMeta !== null && (
         <TimelineMeta
@@ -551,6 +568,8 @@ function SessionTranscript({
                 model={model}
                 feed={feed}
                 duringBackfill={duringBackfill}
+                importCourse={importCourse}
+                importAgent={importAgent}
                 index={index}
                 focus={focus}
                 highlightedTimelineId={highlightedTimelineId}
@@ -631,6 +650,16 @@ function SessionTranscript({
           <span>{tail.unseen > 0 ? `${tail.unseen} new ${tail.unseen === 1 ? "message" : "messages"}` : "Latest"}</span>
           {tail.unseen > 0 && <i aria-hidden="true" />}
         </button>
+      )}
+      {session !== null && (
+        // A button at the side goes to the message before.
+        <PromptJump
+          scrollRef={scrollRef}
+          earlier={feed.earlier.kind}
+          layoutKey={model.plan}
+          onLeaveTail={tail.pause}
+          hidden={loading}
+        />
       )}
       {!reader && <span className="ah-tail-announcement" role="status" aria-live="polite" aria-atomic="true">
         {tail.away && tail.unseen > 0

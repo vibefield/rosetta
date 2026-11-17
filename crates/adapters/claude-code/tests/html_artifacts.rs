@@ -130,6 +130,17 @@ fn a_later_delivery_link_keeps_native_identity_across_checkpoint_without_claimin
     delivery["message"]["content"] =
         json!([{"type":"text","text":"[Review the design](review.html)"}]);
     let delivered = ingest(&mut ctx, delivery).pop().unwrap();
+    assert_eq!(published.description, None, "the request carried none");
+    assert_eq!(
+        published.dropped_files,
+        Some(0),
+        "a file_path publish names no files map"
+    );
+    assert_eq!(
+        (delivered.description.as_deref(), delivered.dropped_files),
+        (None, None),
+        "a link records no publish request: both are unknown"
+    );
     assert_ne!(published.id, delivered.id);
     assert_eq!(published.artifact_id, delivered.artifact_id);
     assert_eq!(published.native_id, delivered.native_id);
@@ -164,8 +175,10 @@ fn native_files_map_uses_typed_source_paths_and_send_user_file_requires_success(
             Some("review.html"),
         ),
         (
+            // A string value is a source path, as the tool's schema says
+            // (corrected 2026-11-05: normalizer 38 read it as inline HTML).
             json!({"action":"publish","files":{"index.html":"literal-content.html"}}),
-            Some("index.html"),
+            Some("literal-content.html"),
         ),
         (
             json!({"action":"publish","files":{"one.html":{"from":"one.html"},"two.html":{"from":"two.html"}}}),
@@ -188,18 +201,122 @@ fn native_files_map_uses_typed_source_paths_and_send_user_file_requires_success(
         assert!(ingest(&mut ctx, opener).is_empty());
         let mut reply = result(failed);
         reply.as_object_mut().unwrap().remove("toolUseResult");
-        assert_eq!(ingest(&mut ctx, reply).len(), usize::from(!failed));
+        let rows = ingest(&mut ctx, reply);
+        assert_eq!(rows.len(), usize::from(!failed));
+        for row in rows {
+            assert_eq!((row.description, row.dropped_files), (None, None));
+        }
     }
 }
 
 #[test]
-fn inline_html_is_preserved_as_content_after_success_and_checkpoint() {
-    for failed in [false, true] {
+fn a_files_map_string_is_a_source_path_resolved_against_root_and_never_content() {
+    // The Artifact tool documents `files` as {"published/path": "source/path" |
+    // {from, contentType} | {artifact, path} | null} and `root` as the base its
+    // relative sources resolve against (the RO-34a probe, 2026-11-05).
+    for (input, expected_path, dropped) in [
+        (
+            json!({"action":"publish","files":{"index.html":"build/review.html"}}),
+            Some("/work/build/review.html"),
+            Some(0),
+        ),
+        (
+            json!({"action":"publish","root":"site","files":{
+                "index.html":"review.html","app.js":"app.js","style.css":{"from":"style.css"}}}),
+            Some("/work/site/review.html"),
+            Some(2),
+        ),
+        (
+            json!({"action":"publish","root":"/abs/site/","files":{
+                "index.html":{"from":"review.html"},"gone.png":null}}),
+            Some("/abs/site/review.html"),
+            Some(0),
+        ),
+        (
+            json!({"action":"publish","root":"site","files":{"index.html":"/elsewhere/review.html"}}),
+            Some("/elsewhere/review.html"),
+            Some(0),
+        ),
+        (
+            json!({"action":"publish","file_path":"review.html","files":{
+                "app.js":"app.js","data.json":{"from":"data.json"},"logo.svg":{"artifact":"https://claude.ai/artifact/x","path":"logo.svg"}}}),
+            Some("/work/review.html"),
+            Some(3),
+        ),
+        (
+            json!({"action":"publish","files":{"one.html":"one.html","two.html":"two.html"}}),
+            None,
+            None,
+        ),
+    ] {
+        for resume in [false, true] {
+            let mut ctx = NormalizeCtx::new("runtime", "session");
+            ctx.state = ClaudeCodeAdapter.init_state();
+            let mut opener = request("publish", "unused.html");
+            opener["message"]["content"][0]["input"] = input.clone();
+            assert!(ingest(&mut ctx, opener).is_empty());
+            if resume {
+                let checkpoint = ClaudeCodeAdapter
+                    .checkpoint_state(ctx.state.as_deref())
+                    .unwrap();
+                ctx.state = ClaudeCodeAdapter
+                    .restore_state(checkpoint.as_ref())
+                    .unwrap();
+            }
+            let output = ClaudeCodeAdapter.ingest_line(
+                &mut ctx,
+                "transcript",
+                &serde_json::to_vec(&result(false)).unwrap(),
+            );
+            assert!(
+                !output.ops.iter().any(|op| matches!(
+                    op,
+                    IngestOp::ProjectionAsset { .. } | IngestOp::HtmlArtifactContent(_)
+                )),
+                "a source path is never captured as the request's own content: {input}"
+            );
+            let rows: Vec<_> = output
+                .ops
+                .into_iter()
+                .filter_map(|op| match op {
+                    IngestOp::HtmlArtifact(row) => Some(row),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                rows.first().and_then(|row| row.path.as_deref()),
+                expected_path,
+                "{input}"
+            );
+            assert_eq!(
+                rows.first().and_then(|row| row.dropped_files),
+                dropped,
+                "{input}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_native_publish_keeps_its_description_trimmed_and_bounded() {
+    use rosetta_core::html_artifacts::HTML_DESCRIPTION_MAX_BYTES;
+    for (description, expected) in [
+        (
+            json!("  Compare the two checkout flows \n"),
+            Some("Compare the two checkout flows".to_owned()),
+        ),
+        (
+            json!("é".repeat(3000)),
+            Some("é".repeat(HTML_DESCRIPTION_MAX_BYTES / 2)),
+        ),
+        (json!("   "), None),
+        (json!("a\u{0}b"), None),
+        (json!(42), None),
+    ] {
         let mut ctx = NormalizeCtx::new("runtime", "session");
         ctx.state = ClaudeCodeAdapter.init_state();
-        let mut opener = request("publish", "unused.html");
-        opener["message"]["content"][0]["input"] =
-            json!({"action":"publish","files":{"index.html":"literal-content.html"}});
+        let mut opener = request("publish", "review.html");
+        opener["message"]["content"][0]["input"]["description"] = description.clone();
         assert!(ingest(&mut ctx, opener).is_empty());
         let checkpoint = ClaudeCodeAdapter
             .checkpoint_state(ctx.state.as_deref())
@@ -207,24 +324,8 @@ fn inline_html_is_preserved_as_content_after_success_and_checkpoint() {
         ctx.state = ClaudeCodeAdapter
             .restore_state(checkpoint.as_ref())
             .unwrap();
-        let output = ClaudeCodeAdapter.ingest_line(
-            &mut ctx,
-            "transcript",
-            &serde_json::to_vec(&result(failed)).unwrap(),
-        );
-        let bytes = output.ops.iter().find_map(|op| match op {
-            IngestOp::ProjectionAsset { asset } => Some(asset.bytes.as_slice()),
-            _ => None,
-        });
-        if failed {
-            assert_eq!(bytes, None);
-            continue;
-        }
-        assert_eq!(
-            bytes,
-            Some(b"literal-content.html".as_slice()),
-            "inline text must never be treated as a filesystem path"
-        );
-        assert!(output.ops.iter().any(|op| matches!(op,IngestOp::HtmlArtifactContent(row) if row.path.is_none() && row.captured_at.is_none())));
+        let row = ingest(&mut ctx, result(false)).pop().unwrap();
+        assert_eq!(row.description, expected, "{description}");
+        assert_eq!(row.validate(), Ok(()));
     }
 }

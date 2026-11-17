@@ -48,6 +48,10 @@ impl AgentAdapter for GrokAdapter {
         // 11: turns carry their `modelCalls` request count.
         // 12: image members are WebP with bounded display renditions.
         // 13: recorded tool images use durable optimized attachment members.
+        // Still 13 after image members became recorded originals with WebP
+        // renditions made after import (2026-11-01): legacy bundle refs stay
+        // valid, so re-streaming every source is not worth it; a rebuild
+        // converts them (docs/ARCHITECTURE.md).
         13
     }
 

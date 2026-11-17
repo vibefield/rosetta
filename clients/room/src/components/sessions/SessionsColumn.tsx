@@ -28,6 +28,8 @@ export interface SessionsColumnProps {
   readonly isWorktreeVisible: boolean | null;
   readonly onToggleWorktree: () => void;
   readonly onSessionSelect: (session: SessionRow) => void;
+  /** Ids some session names as its parent, across every project. */
+  readonly parentIds?: ReadonlySet<string> | undefined;
   /** R5: the host's acts after the head's own, and its card under the head. */
   readonly hostActs?: readonly RoomAct[] | null | undefined;
   readonly hostCard?: ReactNode;
@@ -46,6 +48,7 @@ export function SessionsColumn({
   isWorktreeVisible,
   onToggleWorktree,
   onSessionSelect,
+  parentIds,
   hostActs = null,
   hostCard = null,
 }: SessionsColumnProps) {
@@ -110,6 +113,7 @@ export function SessionsColumn({
               : undefined
           }
           onSessionSelect={onSessionSelect}
+          parentIds={parentIds}
           sections={sections}
         />
       </div>

@@ -76,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -85,6 +85,17 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/rust
       - run: cargo test --workspace --all-features --locked
+
+  swift:
+    name: Swift client
+    # The Swift client's rows read the protocol crate's wire golden from the checkout (clients/swift/README.md).
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: swift test
 
   npm:
     name: npm packages and app
@@ -114,11 +125,15 @@ jobs:
         # The hosted runner cannot use Chromium's unconfigured SUID helper.
         # This flag applies only to this local fixture on the disposable CI VM.
         run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' npm run test:room-host -w @vibefield/rosetta-agent-history -- --no-sandbox
+      - name: Characterize the cold import in Electron
+        # Step-driven and timing-free (ux:M5); scale 0.25 still sends the
+        # metadata burst through the hub's resync + snapshot path.
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' npm run test:cold-import -w @vibefield/rosetta-agent-history -- --no-sandbox --scale=0.25
 
   check:
     name: CI passed
     if: always()
-    needs: [workflows, groundtruth, quality, test, npm]
+    needs: [workflows, groundtruth, quality, test, swift, npm]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

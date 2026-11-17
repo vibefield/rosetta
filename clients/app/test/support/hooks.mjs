@@ -5,6 +5,7 @@ import * as head from "../../../room/src/lib/transcript/head-state.ts";
 import * as historyWindow from "../../../room/src/lib/transcript/history-window.ts";
 import { createSessionLeases } from "../../../room/src/lib/session-leases.ts";
 import { catalogStatusOf } from "../../../room/src/lib/catalog-status.ts";
+import * as figureOrder from "../../../room/src/lib/figure-order.ts";
 
 // The hooks that read one session's body take the room's session leases; the
 // rest take the catalog. A fake client stands in for both, as rosetta's app
@@ -21,7 +22,13 @@ export function dataHooks(client) {
     status: { value: (signal) => client.status(signal).then(catalogStatusOf) },
   });
   let active;
+  // Transitions run at once here; the count says which updates asked for one.
+  let transitions = 0;
   const react = {
+    startTransition(scope) {
+      transitions += 1;
+      scope();
+    },
     useState(initial) {
       const runtime = active;
       const slot = runtime.slot(() => ({
@@ -69,6 +76,7 @@ export function dataHooks(client) {
     "./model": { getActivityGridStartTimestamp: () => 0, getViewerUtcOffsetMinutes: () => 0 },
     "./transcript/head-state": head,
     "./transcript/history-window": historyWindow,
+    "./figure-order": figureOrder,
   };
   const source = fs.readFileSync(
     new URL("../../../room/src/lib/hooks.ts", import.meta.url),
@@ -98,6 +106,9 @@ export function dataHooks(client) {
     };
     return {
       renders,
+      get transitions() {
+        return transitions;
+      },
       render(...next) {
         if (next.length) args = next;
         let turns = 0;
