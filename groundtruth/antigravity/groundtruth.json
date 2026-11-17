@@ -1,7 +1,7 @@
 {
   "format": "rosetta-groundtruth/1",
   "agent": "antigravity",
-  "agent_version": "1.1.20",
+  "agent_version": "1.4.12",
   "evidence": "writer",
   "generator": "tools.groundtruth canonical 2",
   "data_root": "~/.gemini/antigravity-cli",
@@ -15,6 +15,14 @@
       "writer_version": "1.2.9"
     },
     {
+      "generator": "writer-binary agy 1.4.12 (darwin_arm64 release asset agy_cli_mac_arm64.tar.gz, executable sha256 34423fc9b0af3841e7646aa72a2d40ffeab8218b22d1cb99eac7355f9eba31e3, --version 1.4.12 in a disposable home) embedded uncompressed FileDescriptorProtos, extracted 2026-11-04 without executing the binary by puppeteer packages/surface/vendors/antigravity/census/extract-writer.py (protobuf 7.36.2; offsets and hashes in references/antigravity@1.4.12/extraction.json): third_party/jetski/cortex_pb/cortex.proto (CortexStepMetadata, CortexStepGeneratorMetadata, ChatModelMetadata, RetryInfo; descriptor sha256 da744c4a5c398581560b190a316d8654ff4db0ec0a9dfb7408b8f54675a69469) and third_party/jetski/codeium_common_pb/codeium_common.proto (ModelUsageStats; descriptor sha256 482b9040e9501e805e80aaf6830a61001cb634d6da12def6cdb13519d51fcb19), plus google/protobuf/timestamp.proto (descriptor sha256 677ffd2bf8f2b78cd407039ddf76d8033df80f0a885e23a793c99298b926895f); no store, credential or terms screen touched; schema only, no payloads",
+      "agent_version": "1.4.12",
+      "evidence": "writer",
+      "path": "sources/1.4.12.writer.json",
+      "sha256": "585d9df79839bbab98725fe1357d01d58607c84107a72b930ebfd0c5d9cfcd18",
+      "writer_version": "1.4.12"
+    },
+    {
       "generator": "tools.groundtruth farm 1",
       "agent_version": "1.1.20",
       "evidence": "fixture",
@@ -26,7 +34,7 @@
       "agent_version": "1.4.12",
       "evidence": "fixture",
       "path": "sources/1.4.12.fixtures.json",
-      "sha256": "3828e6e31872ae536610f68e845e97b0d6d67553bc0a75858b167547621344a5"
+      "sha256": "ebcaffa244d4e058bbf87e8955a36470bc8a7dd44e3f78a0cf6173e3ca37ad96"
     },
     {
       "generator": "tools.groundtruth census 2",
@@ -1166,13 +1174,13 @@
                     "shape": {
                       "kind": "object",
                       "fields": {
-                        "seconds#1": {
+                        "nanos#2": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": false
                         },
-                        "nanos#2": {
+                        "seconds#1": {
                           "shape": {
                             "kind": "number"
                           },
@@ -1192,13 +1200,13 @@
                     "shape": {
                       "kind": "object",
                       "fields": {
-                        "seconds#1": {
+                        "nanos#2": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": false
                         },
-                        "nanos#2": {
+                        "seconds#1": {
                           "shape": {
                             "kind": "number"
                           },
@@ -1224,13 +1232,13 @@
                     "shape": {
                       "kind": "object",
                       "fields": {
-                        "seconds#1": {
+                        "nanos#2": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": false
                         },
-                        "nanos#2": {
+                        "seconds#1": {
                           "shape": {
                             "kind": "number"
                           },
@@ -1268,13 +1276,13 @@
                     "shape": {
                       "kind": "object",
                       "fields": {
-                        "seconds#1": {
+                        "nanos#2": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": false
                         },
-                        "nanos#2": {
+                        "seconds#1": {
                           "shape": {
                             "kind": "number"
                           },
@@ -1672,13 +1680,13 @@
                     "shape": {
                       "kind": "object",
                       "fields": {
-                        "seconds#1": {
+                        "nanos#2": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": false
                         },
-                        "nanos#2": {
+                        "seconds#1": {
                           "shape": {
                             "kind": "number"
                           },
@@ -1743,13 +1751,13 @@
                     "shape": {
                       "kind": "object",
                       "fields": {
-                        "seconds#1": {
+                        "nanos#2": {
                           "shape": {
                             "kind": "number"
                           },
                           "required": false
                         },
-                        "nanos#2": {
+                        "seconds#1": {
                           "shape": {
                             "kind": "number"
                           },
@@ -1947,13 +1955,13 @@
               "shape": {
                 "kind": "object",
                 "fields": {
-                  "seconds#1": {
+                  "nanos#2": {
                     "shape": {
                       "kind": "number"
                     },
                     "required": false
                   },
-                  "nanos#2": {
+                  "seconds#1": {
                     "shape": {
                       "kind": "number"
                     },
