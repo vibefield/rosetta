@@ -11,7 +11,7 @@
       "agent_version": "1.1.20",
       "evidence": "writer",
       "path": "sources/1.2.9.writer.json",
-      "sha256": "d4137781dfbaab616c1867eae6c3b02540ae696c020a4735194bcc5fff55abd0",
+      "sha256": "aca6945d92bc8ba492f99552ab0d7c9aae19e2ee730bf7a581906ebb38ff526a",
       "writer_version": "1.2.9"
     },
     {
@@ -19,7 +19,7 @@
       "agent_version": "1.4.12",
       "evidence": "writer",
       "path": "sources/1.4.12.writer.json",
-      "sha256": "585d9df79839bbab98725fe1357d01d58607c84107a72b930ebfd0c5d9cfcd18",
+      "sha256": "4176e6bd344e03c8e14c92b851e55058bbae5fdf17a27258f049f6ad46cf5dca",
       "writer_version": "1.4.12"
     },
     {
@@ -34,7 +34,7 @@
       "agent_version": "1.4.12",
       "evidence": "fixture",
       "path": "sources/1.4.12.fixtures.json",
-      "sha256": "ebcaffa244d4e058bbf87e8955a36470bc8a7dd44e3f78a0cf6173e3ca37ad96"
+      "sha256": "6efb4739f71554a27022266a7c4c5410697ff3712f9b81e6e7009b4535c8dca1"
     },
     {
       "generator": "tools.groundtruth census 2",
@@ -60,7 +60,7 @@
       "file_format": "sqlite",
       "discipline": "database",
       "evidence": "writer",
-      "notes": "Durable conversation store. One WAL-mode SQLite file per conversation UUID plus -wal/-shm. Schema dump identity is conversations.db (UUID filenames collapsed). Tables: steps (blob payloads), trajectory_meta, gen_metadata, executor_metadata, parent_references, trajectory_metadata_blob, battle_mode_infos. Schema dump: sources/<version>.sqlite-schema.sql. USAGE SOURCE, snapshot-driven (the transcript JSONL carries no token counts): trajectory_meta.cascade_id is the brain conversation UUID (session identity; one cascade per store). steps.metadata is protobuf exa.cortex_pb.CortexStepMetadata: created_at#1 (google.protobuf.Timestamp), model_usage#9 (exa.codeium_common_pb.ModelUsageStats: input_tokens#2 excludes cache reads; output_tokens#3 = thinking_output_tokens#9 + response_output_tokens#10; cache_write_tokens#4 deprecated and always 0; cache_read_tokens#5; service_tier#13 string, empty so far; model#1 and api_provider#6 enums whose names are placeholders), generator_model#11 (Model enum), retry_infos#28 (attempts; 1 on checkpoint steps, 0 on planner steps). gen_metadata.data is exa.cortex_pb.CortexStepGeneratorMetadata: step_indices#2 names the steps the generation wrote; chat_model#1 (exa.cortex_pb.ChatModelMetadata) carries usage#4 = the sum of retry_infos#17 attempts, response_model#19 = the only served-model string on disk (absent from the mock farm), model_display_name#21; model_cost#5, credit_cost#13 and consumed_credits#18 are plan credits, not USD. Steps that no generation names (CHECKPOINT summarizer calls) have usage but no model string. Field numbers and names come from the agy 1.2.9 FileDescriptorSet (sources/1.2.9.writer.json, facet protobuf); they decode every 1.1.20 fixture blob and the 2026-09-23 organic census with zero unknown fields. Payload columns (step_payload, executor_metadata, trajectory_metadata_blob) are never read.",
+      "notes": "Durable conversation store. One WAL-mode SQLite file per conversation UUID plus -wal/-shm. Schema dump identity is conversations.db (UUID filenames collapsed). Tables: steps (blob payloads), trajectory_meta, gen_metadata, executor_metadata, parent_references, trajectory_metadata_blob, battle_mode_infos. Schema dump: sources/<version>.sqlite-schema.sql. USAGE SOURCE, snapshot-driven (the 1.1.20 transcript JSONL carries no token counts; from 1.4.12 every PLANNER_RESPONSE also carries input_tokens, cache_read_tokens and output_tokens): trajectory_meta.cascade_id is the brain conversation UUID (session identity; one cascade per store). steps.metadata is protobuf exa.cortex_pb.CortexStepMetadata: created_at#1 (google.protobuf.Timestamp), model_usage#9 (exa.codeium_common_pb.ModelUsageStats: input_tokens#2 excludes cache reads; output_tokens#3 = thinking_output_tokens#9 + response_output_tokens#10; cache_write_tokens#4 deprecated and always 0; cache_read_tokens#5; service_tier#13 string, empty so far; model#1 and api_provider#6 enums whose names are placeholders), generator_model#11 (Model enum), retry_infos#28 (attempts; 1 on checkpoint steps, 0 on planner steps). gen_metadata.data is exa.cortex_pb.CortexStepGeneratorMetadata: step_indices#2 names the steps the generation wrote; chat_model#1 (exa.cortex_pb.ChatModelMetadata) carries usage#4 = the sum of retry_infos#17 attempts, response_model#19 = the only served-model string on disk (absent from the 1.1.20 mock farm; in the 1.4.12 usage farm it holds gemini-3.1-pro-preview, the model the agent requested, which the mock echoes as modelVersion, so mock echo and request model cannot be told apart and a native capture is still owed), model_display_name#21; model_cost#5, credit_cost#13 and consumed_credits#18 are plan credits, not USD. Steps that no generation names (CHECKPOINT summarizer calls) have usage but no model string (seen in 1.1.20; 1.4.12 print mode writes no CHECKPOINT step). Field numbers and names come from the agy 1.2.9 FileDescriptorSet (sources/1.2.9.writer.json, facet protobuf); they decode every 1.1.20 fixture blob and the 2026-09-23 organic census with zero unknown fields. The agy 1.4.12 extraction (sources/1.4.12.writer.json) declares the same six messages field for field; their binding to these columns is not re-proven on 1.4.12 blobs. Payload columns (step_payload, executor_metadata, trajectory_metadata_blob) are never read.",
       "discriminator": "table",
       "facets": [
         {
