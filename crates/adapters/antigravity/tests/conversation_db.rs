@@ -155,35 +155,86 @@ fn every_row_decodes_without_drift() {
     );
 }
 
-/// The audit's hand count of the 1.1.20 corpus: five planner steps and three
-/// checkpoint steps carry usage, every one 128 in / 32 out from the mock,
-/// dated by its own step, with no model string (the mock reports none) and
-/// therefore unpriced. Nothing else in the stores is usage.
+/// One expected usage sample: the step it is keyed by, its own date, and its
+/// `(input, output, thinking, cache_read)` tokens.
+type Sample = (u32, i64, (i64, i64, i64, i64));
+/// A store's expected served model and samples, keyed by `(version, scenario)`.
+type HandCount = BTreeMap<(&'static str, &'static str), (Option<&'static str>, Vec<Sample>)>;
+
+/// The audit's hand count, per writer version.
+///
+/// 1.1.20: five planner steps and three checkpoint steps carry usage, every
+/// one 128 in / 32 out from the mock, with no model string (the mock reported
+/// none) and therefore unpriced.
+///
+/// 1.4.12: no checkpoint steps; every planner step carries usage and every
+/// generation names the served model `gemini-3.1-pro-preview`. The `usage`
+/// scenario's mock reports distinct non-zero cache reads and thinking tokens.
+///
+/// Nothing else in the stores is usage.
 #[test]
 fn usage_samples_match_the_fixture_evidence() {
-    let expected: BTreeMap<&str, Vec<(u32, i64)>> = BTreeMap::from([
+    const MOCK: (i64, i64, i64, i64) = (128, 32, 0, 0);
+    let expected: HandCount = BTreeMap::from([
         (
-            "basic-chat",
-            vec![(1, 1_787_634_643_900), (2, 1_787_634_643_907)],
+            ("1.1.20", "basic-chat"),
+            (
+                None,
+                vec![(1, 1_787_634_643_900, MOCK), (2, 1_787_634_643_907, MOCK)],
+            ),
         ),
         (
-            "resume",
-            vec![
-                (1, 1_787_634_645_416),
-                (2, 1_787_634_645_422),
-                (5, 1_787_634_646_027),
-            ],
+            ("1.1.20", "resume"),
+            (
+                None,
+                vec![
+                    (1, 1_787_634_645_416, MOCK),
+                    (2, 1_787_634_645_422, MOCK),
+                    (5, 1_787_634_646_027, MOCK),
+                ],
+            ),
         ),
         (
-            "tool-use",
-            vec![
-                (1, 1_787_634_644_612),
-                (3, 1_787_634_644_627),
-                (4, 1_787_634_644_629),
-            ],
+            ("1.1.20", "tool-use"),
+            (
+                None,
+                vec![
+                    (1, 1_787_634_644_612, MOCK),
+                    (3, 1_787_634_644_627, MOCK),
+                    (4, 1_787_634_644_629, MOCK),
+                ],
+            ),
+        ),
+        (
+            ("1.4.12", "basic-chat"),
+            (Some(SERVED_1_4_12), vec![(1, 1_793_818_671_124, MOCK)]),
+        ),
+        (
+            ("1.4.12", "resume"),
+            (
+                Some(SERVED_1_4_12),
+                vec![(1, 1_793_818_672_365, MOCK), (4, 1_793_818_672_868, MOCK)],
+            ),
+        ),
+        (
+            ("1.4.12", "tool-use"),
+            (
+                Some(SERVED_1_4_12),
+                vec![(1, 1_793_818_671_755, MOCK), (3, 1_793_818_671_785, MOCK)],
+            ),
+        ),
+        (
+            ("1.4.12", "usage"),
+            (
+                Some(SERVED_1_4_12),
+                vec![
+                    (1, 1_793_818_673_452, (1009, 197, 211, 5003)),
+                    (3, 1_793_818_673_487, (1109, 207, 221, 6003)),
+                ],
+            ),
         ),
     ]);
-    let mut total = 0;
+    let mut seen = 0;
     for (version, scenario, db) in conversation_dbs() {
         let store = framed(&db);
         let (ops, unhealthy) = normalize(&store);
@@ -193,10 +244,13 @@ fn usage_samples_match_the_fixture_evidence() {
             &store.native_session_id,
         );
         let samples = samples(&ops);
-        let want = &expected[scenario.as_str()];
+        let (model, want) = expected
+            .get(&(version.as_str(), scenario.as_str()))
+            .unwrap_or_else(|| panic!("{version}/{scenario}: no hand count"));
         assert_eq!(samples.len(), want.len(), "{version}/{scenario}");
-        total += samples.len();
-        for (sample, (step, ts)) in samples.iter().zip(want) {
+        seen += 1;
+        for (sample, (step, ts, (input, output, thinking, cache_read))) in samples.iter().zip(want)
+        {
             assert_eq!(sample.session_id, session);
             assert_eq!(
                 sample.key,
@@ -204,12 +258,32 @@ fn usage_samples_match_the_fixture_evidence() {
                 "{version}/{scenario} step {step}"
             );
             assert_eq!(sample.ts, *ts, "{version}/{scenario} step {step}");
-            assert_eq!(sample.model, None, "the mock never reports a model string");
+            assert_eq!(
+                sample.model.as_deref(),
+                *model,
+                "{version}/{scenario} step {step}"
+            );
             let tokens = &sample.tokens;
-            assert_eq!(tokens.input, Some(128));
-            assert_eq!(tokens.output, Some(32));
-            assert_eq!(tokens.thinking, Some(0));
-            assert_eq!(tokens.cache_read, Some(0));
+            assert_eq!(
+                tokens.input,
+                Some(*input),
+                "{version}/{scenario} step {step}"
+            );
+            assert_eq!(
+                tokens.output,
+                Some(*output),
+                "{version}/{scenario} step {step}"
+            );
+            assert_eq!(
+                tokens.thinking,
+                Some(*thinking),
+                "{version}/{scenario} step {step}"
+            );
+            assert_eq!(
+                tokens.cache_read,
+                Some(*cache_read),
+                "{version}/{scenario} step {step}"
+            );
             assert_eq!(tokens.cache_write, Some(0));
             assert_eq!(tokens.cache_write_1h, None);
             assert_eq!(tokens.service_tier, None);
@@ -221,7 +295,78 @@ fn usage_samples_match_the_fixture_evidence() {
             "{version}/{scenario}: the stream emits usage samples only, got {ops:?}"
         );
     }
-    assert_eq!(total, 8);
+    assert_eq!(
+        seen,
+        expected.len(),
+        "every hand-counted store is committed"
+    );
+}
+
+const SERVED_1_4_12: &str = "gemini-3.1-pro-preview";
+
+/// 1.4.12 also writes each request's tokens on its transcript planner step.
+/// They are the very request the store's step sample describes — same step
+/// index, `input_tokens` and `cache_read_tokens` equal, transcript
+/// `output_tokens` = thinking + response — which is why the transcript copy
+/// stays unprojected: the store is the one usage source.
+#[test]
+fn writer_1_4_12_planner_tokens_restate_the_store_samples() {
+    let mut compared = 0;
+    for (version, scenario, db) in conversation_dbs() {
+        let store = framed(&db);
+        let transcript = db
+            .parent()
+            .and_then(Path::parent)
+            .unwrap()
+            .join("brain")
+            .join(&store.native_session_id)
+            .join(".system_generated/logs/transcript.jsonl");
+        let mut planner = BTreeMap::new();
+        for line in std::fs::read_to_string(&transcript).unwrap().lines() {
+            let record: serde_json::Value = serde_json::from_str(line).unwrap();
+            if record["type"] == "PLANNER_RESPONSE" && record.get("input_tokens").is_some() {
+                planner.insert(record["step_index"].as_u64().unwrap(), record);
+            }
+        }
+        if version == "1.1.20" {
+            assert!(
+                planner.is_empty(),
+                "{version}/{scenario}: 1.1.20 planner steps carry no tokens"
+            );
+            continue;
+        }
+        let (ops, _) = normalize(&store);
+        let samples = samples(&ops);
+        assert_eq!(samples.len(), planner.len(), "{version}/{scenario}");
+        let session = &samples[0].session_id;
+        for (step, record) in &planner {
+            let sample = samples
+                .iter()
+                .find(|sample| {
+                    sample.key == ids::usage_id(session, &format!("conversation-db:step#{step}"))
+                })
+                .unwrap_or_else(|| panic!("{version}/{scenario}: no store sample for step {step}"));
+            let tokens = &sample.tokens;
+            let field = |name: &str| record[name].as_i64().unwrap();
+            assert_eq!(
+                tokens.input,
+                Some(field("input_tokens")),
+                "{version}/{scenario} step {step}"
+            );
+            assert_eq!(
+                tokens.cache_read,
+                Some(field("cache_read_tokens")),
+                "{version}/{scenario} step {step}"
+            );
+            assert_eq!(
+                tokens.output.unwrap() + tokens.thinking.unwrap(),
+                field("output_tokens"),
+                "{version}/{scenario} step {step}"
+            );
+            compared += 1;
+        }
+    }
+    assert_eq!(compared, 7);
 }
 
 /// The request grain reproduces the generation grain: summing the samples of
@@ -291,7 +436,8 @@ fn step_samples_sum_to_their_generation() {
             generations += 1;
         }
     }
-    assert_eq!(generations, 5);
+    // 1.1.20: five generations; 1.4.12: one per planner step, seven.
+    assert_eq!(generations, 12);
 }
 
 #[test]

@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::raw::transcript::{
-    ErrorMessageLine, KnownRecord, ListDirectoryLine, PlannerResponseLine, RunCommandLine,
-    ViewFileLine,
+    ErrorMessageLine, GenericLine, KnownRecord, ListDirectoryLine, PlannerResponseLine,
+    RunCommandLine, ViewFileLine,
 };
 use crate::raw::{ParsedLine, parse_line};
 use crate::spec;
@@ -43,6 +43,17 @@ const INVALID_RECORD: &str = "<invalid-json>";
 #[serde(deny_unknown_fields)]
 pub struct AntigravityState {
     pending_tools: Vec<PendingTool>,
+    /// A planner step proved the 1.4.12 writer (request token counts or the
+    /// `CommandLine` argument). Only that writer reports results as GENERIC;
+    /// before it, GENERIC is model prose.
+    #[serde(default, skip_serializing_if = "is_false")]
+    generic_results: bool,
+    /// Calls of the latest planner step that a GENERIC step may still answer,
+    /// in request order. The writer records a step's results before the next
+    /// planner step or prompt, so either one closes the window; a call left in
+    /// it stays pending for a typed result only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    generic_window: Vec<String>,
     /// `steps.idx` → the served model string of the generation that wrote
     /// that step, `None` when the generation recorded no model string.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -56,15 +67,47 @@ struct PendingTool {
     name: String,
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 impl AntigravityState {
     fn push(&mut self, tool_id: String, name: String) {
+        if self.generic_results {
+            self.generic_window.push(tool_id.clone());
+        }
         self.pending_tools.push(PendingTool { tool_id, name });
+    }
+
+    /// The oldest call of the latest planner step that is still pending, in a
+    /// journal that has proven the 1.4.12 writer.
+    fn take_generic(&mut self) -> Option<PendingTool> {
+        if !self.generic_results {
+            return None;
+        }
+        while !self.generic_window.is_empty() {
+            let tool_id = self.generic_window.remove(0);
+            if let Some(index) = self
+                .pending_tools
+                .iter()
+                .position(|pending| pending.tool_id == tool_id)
+            {
+                return Some(self.pending_tools.remove(index));
+            }
+        }
+        None
     }
 
     /// Typed result records select the oldest pending call with the matching
     /// name. `ERROR_MESSAGE` has no tool-name field, so it selects the oldest
-    /// pending call regardless of name. Both rules use only native stream order.
+    /// pending call regardless of name. Both rules use only native stream
+    /// order. `GENERIC` is narrower; see [`Self::take_generic`].
     fn take(&mut self, expected_name: Option<&str>) -> Option<String> {
+        self.take_pending(expected_name)
+            .map(|pending| pending.tool_id)
+    }
+
+    fn take_pending(&mut self, expected_name: Option<&str>) -> Option<PendingTool> {
         let index = match expected_name {
             Some(name) => self
                 .pending_tools
@@ -72,7 +115,7 @@ impl AntigravityState {
                 .position(|pending| pending.name == name)?,
             None => (!self.pending_tools.is_empty()).then_some(0)?,
         };
-        Some(self.pending_tools.remove(index).tool_id)
+        Some(self.pending_tools.remove(index))
     }
 }
 
@@ -129,6 +172,7 @@ fn normalize(
 
     let status = match record {
         KnownRecord::UserInput(line) => {
+            state.generic_window.clear();
             let mut row = emit.row(line.step_index, "user", MessageKind::User, at);
             row.content = Some(line.content.clone());
             emit.message(row);
@@ -159,18 +203,7 @@ fn normalize(
             emit.message(row);
             LineStatus::Parsed
         }
-        KnownRecord::Generic(line) => {
-            let message_kind = match line.source.as_str() {
-                "MODEL" => MessageKind::Agent,
-                "USER" => MessageKind::User,
-                _ => MessageKind::System,
-            };
-            let mut row = emit.row(line.step_index, "generic", message_kind, at);
-            row.subtype = Some("GENERIC".to_owned());
-            row.content = Some(line.content.clone());
-            emit.message(row);
-            LineStatus::Parsed
-        }
+        KnownRecord::Generic(line) => generic(&mut emit, state, line, at),
         // Declared and intentionally unprojected: this record carries only the
         // common envelope and no content in the canonical ground truth.
         KnownRecord::ConversationHistory(_) => LineStatus::Parsed,
@@ -195,6 +228,10 @@ fn planner_response(
     }
 
     let calls = line.tool_calls.as_deref().unwrap_or_default();
+    if proves_generic_results(line) {
+        state.generic_results = true;
+    }
+    state.generic_window.clear();
     for (index, call) in calls.iter().enumerate() {
         let discriminator = tool_discriminator(line.step_index, index);
         let mut row = emit.row_with_discriminator(&discriminator, MessageKind::ToolUse, at);
@@ -309,6 +346,70 @@ fn error_message(
     )
 }
 
+/// The 1.4.12 writer marks: request token counts on the planner step, or
+/// run_command's renamed `CommandLine` argument. No 1.1.x record carries either.
+fn proves_generic_results(line: &PlannerResponseLine) -> bool {
+    line.input_tokens.is_some()
+        || line.cache_read_tokens.is_some()
+        || line.output_tokens.is_some()
+        || line.tool_calls.iter().flatten().any(|call| {
+            call.args
+                .as_object()
+                .is_some_and(|args| args.contains_key("CommandLine"))
+        })
+}
+
+/// In a journal that has proven the 1.4.12 writer, a `GENERIC` step is the
+/// result of the oldest still-pending call of the latest planner step.
+/// Evidence (fixtures/1.4.12 tool-use and usage): the writer replaced the
+/// typed `RUN_COMMAND` record with `GENERIC`, at the step index the headless
+/// stream reports as `step_type=tool, tool_name=run_command`, right after the
+/// planner step that requested it. The record names no tool, so only stream
+/// order joins it. Otherwise — an older writer, or no call of the latest
+/// planner step left — it stays model prose (the census shape).
+///
+/// The record carries no `exit_code`. Its only outcome fact is the writer's
+/// own `Command exited with code N.` line, read for `run_command` alone; any
+/// other tool, or a command without that line, keeps the terminal-record
+/// policy (a completed result is a success). The farm has only captured
+/// code 0; a non-zero code reads as a failure by the same line.
+fn generic(
+    emit: &mut Emit<'_>,
+    state: &mut AntigravityState,
+    line: &GenericLine,
+    at: Option<Ms>,
+) -> LineStatus {
+    let Some(pending) = state.take_generic() else {
+        let message_kind = match line.source.as_str() {
+            "MODEL" => MessageKind::Agent,
+            "USER" => MessageKind::User,
+            _ => MessageKind::System,
+        };
+        let mut row = emit.row(line.step_index, "generic", message_kind, at);
+        row.subtype = Some("GENERIC".to_owned());
+        row.content = Some(line.content.clone());
+        emit.message(row);
+        return LineStatus::Parsed;
+    };
+    let is_error = (pending.name == "run_command")
+        .then(|| command_exit_code(&line.content))
+        .flatten()
+        .map(|code| code != 0);
+    emit_tool_update(emit, pending.tool_id, Some(&line.content), is_error, at);
+    LineStatus::Parsed
+}
+
+/// `Command exited with code N.` as a whole line of a 1.4.12 command result.
+fn command_exit_code(content: &str) -> Option<i64> {
+    content.lines().find_map(|line| {
+        line.trim_end()
+            .strip_prefix("Command exited with code ")?
+            .strip_suffix('.')?
+            .parse()
+            .ok()
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn tool_result(
     emit: &mut Emit<'_>,
@@ -326,6 +427,17 @@ fn tool_result(
             code: ORPHAN_TOOL_RESULT.to_owned(),
         };
     };
+    emit_tool_update(emit, tool_id, result.as_deref(), is_error, at);
+    LineStatus::Parsed
+}
+
+fn emit_tool_update(
+    emit: &mut Emit<'_>,
+    tool_id: String,
+    result: Option<&str>,
+    is_error: Option<bool>,
+    at: Option<Ms>,
+) {
     emit.ops.push(IngestOp::ToolUpdate {
         session_id: emit.session_id.clone(),
         correlation_key: tool_id,
@@ -335,11 +447,10 @@ fn tool_result(
             true,
             rosetta_core::StatusBasis::NativeTerminalRecord,
             at,
-            result.as_deref(),
+            result,
         )),
         at,
     });
-    LineStatus::Parsed
 }
 
 fn tool_discriminator(step_index: u64, call_index: usize) -> String {
@@ -390,7 +501,9 @@ impl<'a> Emit<'a> {
             uuid: None,
             parent_uuid: None,
             ts,
-            // No model, effort, or usage fields exist in this stream.
+            // No model or effort fields exist in this stream. 1.4.12 planner
+            // steps carry token counts, but usage is owned by the
+            // conversation store (`crate::usage`) and is never duplicated here.
             model: None,
             effort: None,
             content: None,
@@ -582,6 +695,174 @@ mod tests {
             }
             other => panic!("expected one tool result, got {other:?}"),
         }
+    }
+
+    fn generic_result_status(content: &str, tool: &str, args: Value) -> rosetta_core::ToolStatus {
+        let mut ctx = context();
+        let _ = ingest(
+            &mut ctx,
+            json!({
+                "step_index": 1,
+                "source": "MODEL",
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-04T18:57:51Z",
+                "input_tokens": 128,
+                "cache_read_tokens": 0,
+                "output_tokens": 32,
+                "tool_calls": [{"name": tool, "args": args}]
+            }),
+        );
+        let result = ingest(
+            &mut ctx,
+            json!({
+                "step_index": 2,
+                "source": "MODEL",
+                "type": "GENERIC",
+                "status": "DONE",
+                "created_at": "2026-11-04T18:57:51Z",
+                "content": content
+            }),
+        );
+        assert_eq!(result.status, LineStatus::Parsed);
+        match result.ops.as_slice() {
+            [
+                IngestOp::ToolUpdate {
+                    correlation_key,
+                    patch,
+                    ..
+                },
+            ] => {
+                assert_eq!(correlation_key, "step#1:tool#0");
+                patch.status.expect("terminal status").value
+            }
+            other => panic!("expected one tool result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn writer_1_4_12_generic_step_is_the_pending_command_result() {
+        // fixtures/1.4.12/tool-use step 2, verbatim.
+        let content = "Created At: 2026-11-04T10:57:51-08:00\nCompleted At: 2026-11-04T10:57:51-08:00\nCommand exited with code 0.\n\nCommand output:\nrosetta-mock\r\n";
+        let args = json!({"CommandLine": "\"echo rosetta-mock\"", "WaitMsBeforeAsync": "5000"});
+        assert_eq!(
+            generic_result_status(content, "run_command", args.clone()),
+            rosetta_core::ToolStatus::Succeeded
+        );
+        let failed = content.replace("code 0.", "code 2.");
+        assert_eq!(
+            generic_result_status(&failed, "run_command", args),
+            rosetta_core::ToolStatus::Failed
+        );
+        // The exit line is a command fact only; another tool's result keeps
+        // the terminal-record policy.
+        assert_eq!(
+            generic_result_status(&failed, "view_file", json!({"AbsolutePath": "/fixture"})),
+            rosetta_core::ToolStatus::Succeeded
+        );
+    }
+
+    fn planner(step: u64, tokens: bool, calls: Value) -> Value {
+        let mut value = json!({
+            "step_index": step,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "created_at": "2026-11-04T18:57:51Z",
+            "tool_calls": calls
+        });
+        if tokens {
+            value["input_tokens"] = json!(128);
+            value["cache_read_tokens"] = json!(0);
+            value["output_tokens"] = json!(32);
+        }
+        value
+    }
+
+    fn generic_step(step: u64, content: &str) -> Value {
+        json!({
+            "step_index": step,
+            "source": "MODEL",
+            "type": "GENERIC",
+            "status": "DONE",
+            "created_at": "2026-11-04T18:57:51Z",
+            "content": content
+        })
+    }
+
+    fn user_input(step: u64) -> Value {
+        json!({
+            "step_index": step,
+            "source": "USER_EXPLICIT",
+            "type": "USER_INPUT",
+            "status": "DONE",
+            "created_at": "2026-11-04T18:57:51Z",
+            "content": "next"
+        })
+    }
+
+    fn is_prose(outcome: &rosetta_adapter_support::LineOutcome) -> bool {
+        matches!(
+            outcome.ops.as_slice(),
+            [IngestOp::Message(row)] if matches!(row.body, TimelineBody::Agent { .. })
+        )
+    }
+
+    fn joined_key(outcome: &rosetta_adapter_support::LineOutcome) -> Option<&str> {
+        match outcome.ops.as_slice() {
+            [
+                IngestOp::ToolUpdate {
+                    correlation_key, ..
+                },
+            ] => Some(correlation_key),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn generic_never_answers_a_call_from_an_earlier_turn() {
+        let mut ctx = context();
+        let view = json!([{"name": "view_file", "args": {"AbsolutePath": "\"/a\""}}]);
+        let _ = ingest(&mut ctx, planner(1, true, view));
+        let _ = ingest(&mut ctx, user_input(2));
+        let outcome = ingest(&mut ctx, generic_step(3, "prose after the prompt"));
+        assert!(is_prose(&outcome), "{:?}", outcome.ops);
+    }
+
+    #[test]
+    fn generic_answers_only_the_latest_planner_step() {
+        let mut ctx = context();
+        let write = json!([{"name": "write_to_file", "args": {"TargetFile": "\"/a\""}}]);
+        let run = json!([{"name": "run_command", "args": {"CommandLine": "\"ls\""}}]);
+        let _ = ingest(&mut ctx, planner(1, true, write));
+        let _ = ingest(&mut ctx, planner(2, true, run));
+        let outcome = ingest(&mut ctx, generic_step(3, "Command exited with code 0."));
+        assert_eq!(joined_key(&outcome), Some("step#2:tool#0"));
+        let outcome = ingest(&mut ctx, generic_step(4, "later prose"));
+        assert!(is_prose(&outcome), "{:?}", outcome.ops);
+    }
+
+    #[test]
+    fn generic_stays_prose_before_the_1_4_12_writer_is_proven() {
+        let mut ctx = context();
+        let run = json!([{"name": "run_command", "args": {"commandLine": "ls"}}]);
+        let _ = ingest(&mut ctx, planner(1, false, run));
+        let outcome = ingest(&mut ctx, generic_step(2, "organic prose"));
+        assert!(is_prose(&outcome), "{:?}", outcome.ops);
+        // The 1.1.x typed result still joins the call.
+        let outcome = ingest(
+            &mut ctx,
+            json!({
+                "step_index": 3,
+                "source": "MODEL",
+                "type": "RUN_COMMAND",
+                "status": "DONE",
+                "created_at": "2026-11-04T18:57:51Z",
+                "exit_code": 0,
+                "content": "ok"
+            }),
+        );
+        assert_eq!(joined_key(&outcome), Some("step#1:tool#0"));
     }
 
     #[test]

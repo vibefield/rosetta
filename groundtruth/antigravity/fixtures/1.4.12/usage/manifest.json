@@ -1,0 +1,97 @@
+{
+  "agent": "antigravity",
+  "agent_version": "1.4.12",
+  "scenario": "usage",
+  "generator": "tools.groundtruth farm 1",
+  "mock_dialect": "gemini-generatecontent",
+  "files": [
+    {
+      "path": "antigravity-cli/brain/5a1e341c-fec5-4c81-ae83-b1ff1a67e8cc/.system_generated/logs/chunks/transcript/00000000.jsonl",
+      "bytes": 1446
+    },
+    {
+      "path": "antigravity-cli/brain/5a1e341c-fec5-4c81-ae83-b1ff1a67e8cc/.system_generated/logs/chunks/transcript_full/00000000.jsonl",
+      "bytes": 1436
+    },
+    {
+      "path": "antigravity-cli/brain/5a1e341c-fec5-4c81-ae83-b1ff1a67e8cc/.system_generated/logs/transcript.jsonl",
+      "bytes": 1446
+    },
+    {
+      "path": "antigravity-cli/brain/5a1e341c-fec5-4c81-ae83-b1ff1a67e8cc/.system_generated/logs/transcript_full.jsonl",
+      "bytes": 1436
+    },
+    {
+      "path": "antigravity-cli/brain/5a1e341c-fec5-4c81-ae83-b1ff1a67e8cc/.system_generated/steps/2/output.txt",
+      "bytes": 58
+    },
+    {
+      "path": "antigravity-cli/cache/default_project_id.txt",
+      "bytes": 19
+    },
+    {
+      "path": "antigravity-cli/cache/last_conversations.json",
+      "bytes": 57
+    },
+    {
+      "path": "antigravity-cli/cache/onboarding.json",
+      "bytes": 113
+    },
+    {
+      "path": "antigravity-cli/conversation_summaries.db",
+      "bytes": 20480
+    },
+    {
+      "path": "antigravity-cli/conversation_summaries.db-shm",
+      "bytes": 32768
+    },
+    {
+      "path": "antigravity-cli/conversation_summaries.db-wal",
+      "bytes": 0
+    },
+    {
+      "path": "antigravity-cli/conversations/5a1e341c-fec5-4c81-ae83-b1ff1a67e8cc.db",
+      "bytes": 425984
+    },
+    {
+      "path": "antigravity-cli/conversations/5a1e341c-fec5-4c81-ae83-b1ff1a67e8cc.db-shm",
+      "bytes": 32768
+    },
+    {
+      "path": "antigravity-cli/conversations/5a1e341c-fec5-4c81-ae83-b1ff1a67e8cc.db-wal",
+      "bytes": 0
+    },
+    {
+      "path": "antigravity-cli/installation_id",
+      "bytes": 36
+    },
+    {
+      "path": "antigravity-cli/jetbox_summaries_proto.pb",
+      "bytes": 453
+    },
+    {
+      "path": "antigravity-cli/jetski_state.pbtxt",
+      "bytes": 518
+    },
+    {
+      "path": "antigravity-cli/settings.json",
+      "bytes": 70
+    },
+    {
+      "path": "provenance.json",
+      "bytes": 721
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "stdout.jsonl",
+      "bytes": 3103
+    },
+    {
+      "path": "withheld.json",
+      "bytes": 275
+    }
+  ]
+}

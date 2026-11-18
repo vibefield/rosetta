@@ -1,0 +1,188 @@
+[
+  {
+    "op": "message",
+    "timeline_id": "115fb91588c4604d1933b5d8279a20124d9ddcdf110ba27a4e99927ca2c9e1dc",
+    "session_id": "6bd27c1e864bfdc39f3580baf99fdc595e11c7eaebf31695868f56a83baa0e59",
+    "ordinal": 0,
+    "group": {
+      "id": "115fb91588c4604d1933b5d8279a20124d9ddcdf110ba27a4e99927ca2c9e1dc",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1793818672000,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "<USER_REQUEST>\nReply with a short greeting.\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-11-04T10:57:52-08:00.\n</ADDITIONAL_METADATA>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from None to Gemini 3.1 Pro (Low). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.\n</USER_SETTINGS_CHANGE>"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 1,
+      "src_offset": 0
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "2dc8274b1d150803870ebfd3e3664f9efa33e5e3806a5718c0cb0ae22fbcbbe3",
+    "session_id": "6bd27c1e864bfdc39f3580baf99fdc595e11c7eaebf31695868f56a83baa0e59",
+    "ordinal": 1,
+    "group": {
+      "id": "2dc8274b1d150803870ebfd3e3664f9efa33e5e3806a5718c0cb0ae22fbcbbe3",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1793818672000,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 2,
+      "src_offset": 581
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "afc176a43a952121735f5fe891039e3b5b9d7bdd562afdb16e14b575b426f34d",
+    "session_id": "6bd27c1e864bfdc39f3580baf99fdc595e11c7eaebf31695868f56a83baa0e59",
+    "ordinal": 2,
+    "group": {
+      "id": "afc176a43a952121735f5fe891039e3b5b9d7bdd562afdb16e14b575b426f34d",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1793818672000,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "<USER_REQUEST>\nContinue: say goodbye.\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-11-04T10:57:52-08:00.\n</ADDITIONAL_METADATA>"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 3,
+      "src_offset": 838
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "805d354349eaa37e3eeff72e7d34193a8a8d9b8bba0586f4317472903a83e25d",
+    "session_id": "6bd27c1e864bfdc39f3580baf99fdc595e11c7eaebf31695868f56a83baa0e59",
+    "ordinal": 4,
+    "group": {
+      "id": "805d354349eaa37e3eeff72e7d34193a8a8d9b8bba0586f4317472903a83e25d",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1793818672000,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "Hello from rosetta mockmodel. This is a deterministic scripted response."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 5,
+      "src_offset": 1770
+    }
+  }
+]

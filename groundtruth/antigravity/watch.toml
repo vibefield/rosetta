@@ -5,7 +5,8 @@
 status = "captured"
 known_gaps = [
   "IDE persistence is a separate Tier D surface; implicit protobuf and several maintenance streams remain observed/research only.",
-  "The conversation store's protobuf grammar (steps.metadata, gen_metadata.data) is declared from the installed agy 1.2.9 descriptor set, not from a 1.2.9 fixture farm; the mock reports no served-model string, cache reads, or thinking tokens, so response_model#19 and a non-zero cache/thinking split await a native usage-scenario capture.",
+  "The conversation store's protobuf grammar (steps.metadata, gen_metadata.data) is declared from descriptor sets, not decoded into fixture facets: the installed agy 1.2.9 set and the pinned 1.4.12 darwin_arm64 executable's embedded set (sources/1.4.12.writer.json), whose six messages match field for field; the column-to-message bindings are carried from 1.2.9, not re-proven on 1.4.12 blobs. The 1.4.12 usage farm records non-zero cache reads and thinking-inclusive output tokens (transcript PLANNER_RESPONSE); response_model#19 holds a string there (gemini-3.1-pro-preview on both of the adapter's 1.4.12 usage replay rows), but it is the model the agent requested, which the mock echoes as modelVersion, so a native served-model string still awaits a native usage-scenario capture. The store's thinking/response split has no published observed counts, and every token figure is the mock's, not a native model's.",
+  "1.4.12 fixtures are print-mode only and every command exits 0 (basic-chat, tool-use, resume, usage); a non-zero command exit (a GENERIC step reading Command exited with code N.) has not been farmed, and native-TUI journals are not a farm surface.",
 ]
 
 [agent]
@@ -17,8 +18,8 @@ tier = "B"
 [release]
 channel = "github-releases"              # GitHub mirrors the Cloud Run manifest pin
 id = "google-antigravity/antigravity-cli"
-surveyed = "1.1.20"                      # 2026-08-25 GitHub latest + darwin_arm64 manifest
-pinned = "1.1.20"                        # fixtures + schemas committed for this version
+surveyed = "1.4.12"                      # farmed target (darwin_arm64 exe sha256 34423fc9...); newer upstream (>=1.5.0) not surveyed
+pinned = "1.4.12"                        # fixtures + schemas committed for this version
 changelog = "https://github.com/google-antigravity/antigravity-cli/blob/main/CHANGELOG.md"
 # Authoritative latest-version probe (install.sh):
 # https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<uname>_<arch>.json

@@ -48,6 +48,12 @@ def wants_usage(request: dict[str, Any]) -> bool:
     return USAGE_MARKER in _compact(request)
 GREETING = "Hello from rosetta mockmodel. This is a deterministic scripted response."
 TOOL_DONE = "The tool ran successfully and printed: rosetta-mock. Scenario complete."
+# `[use-tool-fail]` (Gemini dialect only): the shell call runs a command that
+# exits 3, so a fixture shows how the agent records a failed command. It runs in
+# a child `sh` so an agent that keeps one shell session open does not lose it.
+TOOL_FAIL_MARKER = "[use-tool-fail]"
+FAILING_COMMAND = "sh -c 'exit 3'"
+TOOL_FAILED = "The command failed with a non-zero exit code. Scenario complete."
 
 
 def _compact(value: Any) -> str:
@@ -1072,7 +1078,12 @@ def _gemini_tool_names(request: dict[str, Any]) -> list[str]:
     return names
 
 
-def _gemini_declared_arguments(request: dict[str, Any], name: str) -> dict[str, Any] | None:
+def _gemini_declared_arguments(
+    request: dict[str, Any],
+    name: str,
+    command_line: str = "echo rosetta-mock",
+    summary: str = "Echo command check",
+) -> dict[str, Any] | None:
     """Arguments that satisfy the shell tool's own declared JSON schema.
 
     Antigravity 1.4.x declares `run_command` with `parametersJsonSchema`
@@ -1102,7 +1113,7 @@ def _gemini_declared_arguments(request: dict[str, Any], name: str) -> dict[str, 
             )
             if command is None:
                 return None
-            arguments: dict[str, Any] = {command: "echo rosetta-mock"}
+            arguments: dict[str, Any] = {command: command_line}
             for key in required:
                 if key in arguments or not isinstance(properties.get(key), dict):
                     continue
@@ -1114,39 +1125,49 @@ def _gemini_declared_arguments(request: dict[str, Any], name: str) -> dict[str, 
                 elif kind == "boolean":
                     arguments[key] = False
                 else:
-                    arguments[key] = "Echo command check"
+                    arguments[key] = summary
             return arguments
     return None
 
 
+def _gemini_shell_call(
+    request: dict[str, Any], command_line: str, summary: str
+) -> tuple[str, Any, Any]:
+    names = _gemini_tool_names(request)
+    preferred = ("run_command", "run_terminal_cmd", "shell", "bash", "exec_command")
+    name = next(
+        (
+            candidate
+            for wanted in preferred
+            for candidate in names
+            if candidate.lower() == wanted
+        ),
+        names[0] if names else "run_command",
+    )
+    lowered = name.lower()
+    declared = _gemini_declared_arguments(request, name, command_line, summary)
+    if declared is not None:
+        arguments: dict[str, Any] = declared
+    elif lowered == "run_command":
+        arguments = {"commandLine": command_line}
+    elif lowered in {"bash", "shell", "execute", "run_terminal_cmd"}:
+        arguments = {"command": command_line}
+    elif lowered == "list_dir":
+        arguments = {"DirectoryPath": "."}
+    else:
+        arguments = {}
+    return ("function_call", name, arguments)
+
+
 def _gemini_script(request: dict[str, Any]) -> tuple[str, Any, Any]:
+    texts = _gemini_texts(request)
+    failing = any(TOOL_FAIL_MARKER in text for text in texts)
     if _gemini_has_function_response(request):
-        return ("text", TOOL_DONE, None)
-    if any("[use-tool]" in text for text in _gemini_texts(request)):
-        names = _gemini_tool_names(request)
-        preferred = ("run_command", "run_terminal_cmd", "shell", "bash", "exec_command")
-        name = next(
-            (
-                candidate
-                for wanted in preferred
-                for candidate in names
-                if candidate.lower() == wanted
-            ),
-            names[0] if names else "run_command",
-        )
-        lowered = name.lower()
-        declared = _gemini_declared_arguments(request, name)
-        if declared is not None:
-            arguments: dict[str, Any] = declared
-        elif lowered == "run_command":
-            arguments = {"commandLine": "echo rosetta-mock"}
-        elif lowered in {"bash", "shell", "execute", "run_terminal_cmd"}:
-            arguments = {"command": "echo rosetta-mock"}
-        elif lowered == "list_dir":
-            arguments = {"DirectoryPath": "."}
-        else:
-            arguments = {}
-        return ("function_call", name, arguments)
+        return ("text", TOOL_FAILED if failing else TOOL_DONE, None)
+    if failing:
+        return _gemini_shell_call(request, FAILING_COMMAND, "Failing command check")
+    if any("[use-tool]" in text for text in texts):
+        return _gemini_shell_call(request, "echo rosetta-mock", "Echo command check")
     return ("text", GREETING, None)
 
 

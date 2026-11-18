@@ -1,0 +1,192 @@
+[
+  {
+    "op": "message",
+    "timeline_id": "a410802e5cb85259c159ef078072118c3eba2973a838555ddd7963bb8247a34a",
+    "session_id": "bdc1c89d63d9c931b2241a94df58033615b04720d2644e30188143edb770f9d6",
+    "ordinal": 0,
+    "group": {
+      "id": "a410802e5cb85259c159ef078072118c3eba2973a838555ddd7963bb8247a34a",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1793818671000,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "user",
+      "text": {
+        "type": "inline",
+        "text": "<USER_REQUEST>\nRun the echo command now. [use-tool]\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-11-04T10:57:51-08:00.\n</ADDITIONAL_METADATA>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from None to Gemini 3.1 Pro (Low). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.\n</USER_SETTINGS_CHANGE>"
+      },
+      "attachments": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 1,
+      "src_offset": 0
+    }
+  },
+  {
+    "op": "message",
+    "timeline_id": "6655138e80ef9d12aeaea705c09332ca4f2e80616a1500c29c6b34bbb566cc34",
+    "session_id": "bdc1c89d63d9c931b2241a94df58033615b04720d2644e30188143edb770f9d6",
+    "ordinal": 1,
+    "group": {
+      "id": "6655138e80ef9d12aeaea705c09332ca4f2e80616a1500c29c6b34bbb566cc34",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1793818671000,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "tool_use",
+      "tool": {
+        "correlation": {
+          "key": "step#1:tool#0",
+          "derivation": "positional"
+        },
+        "native": {
+          "id": null,
+          "namespace": null,
+          "name": "run_command",
+          "provider": null
+        },
+        "status": {
+          "value": "pending",
+          "basis": "request_observed"
+        },
+        "action": {
+          "type": "shell",
+          "command": {
+            "type": "inline",
+            "text": "echo rosetta-mock"
+          },
+          "cwd": null,
+          "timeout_ms": null,
+          "background": false,
+          "outcome": null
+        },
+        "failure": null,
+        "timing": null
+      }
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 2,
+      "src_offset": 589
+    }
+  },
+  {
+    "op": "tool_update",
+    "session_id": "bdc1c89d63d9c931b2241a94df58033615b04720d2644e30188143edb770f9d6",
+    "correlation_key": "step#1:tool#0",
+    "evidence": {
+      "source_identity": "direct:4ea86e71f5dbe774ce4e3e2ff4892bfa1e041916fca708868f08a4cb615feda7/bdc1c89d63d9c931b2241a94df58033615b04720d2644e30188143edb770f9d6",
+      "generation": 0,
+      "record_offset": 912,
+      "mutation_index": 0
+    },
+    "patch": {
+      "native_id": null,
+      "request": null,
+      "outcome": null,
+      "status": {
+        "value": "succeeded",
+        "basis": "native_terminal_record"
+      },
+      "failure": null,
+      "timing": {
+        "started_at": null,
+        "completed_at": 1793818671000,
+        "duration_ms": null
+      }
+    },
+    "at": 1793818671000
+  },
+  {
+    "op": "message",
+    "timeline_id": "e0e47cf850485538cf7d7db9ef661da1bc365b0c853fca84c7ce07663a450366",
+    "session_id": "bdc1c89d63d9c931b2241a94df58033615b04720d2644e30188143edb770f9d6",
+    "ordinal": 2,
+    "group": {
+      "id": "e0e47cf850485538cf7d7db9ef661da1bc365b0c853fca84c7ce07663a450366",
+      "kind": "synthetic",
+      "derivation": "synthetic"
+    },
+    "response": null,
+    "block_index": null,
+    "native_id": null,
+    "parent_native_id": null,
+    "at": 1793818671000,
+    "model": null,
+    "effort": null,
+    "body": {
+      "type": "agent",
+      "text": {
+        "type": "inline",
+        "text": "The tool ran successfully and printed: rosetta-mock. Scenario complete."
+      },
+      "attachments": [],
+      "citations": []
+    },
+    "parent_tool_native_id": null,
+    "usage": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "thinking": null,
+      "cache_write_1h": null,
+      "web_searches": null,
+      "service_tier": null,
+      "route": null,
+      "billed_pico_usd": null,
+      "scope": "request",
+      "requests": null
+    },
+    "provenance": {
+      "agent_version": null,
+      "src_cursor": 4,
+      "src_offset": 1172
+    }
+  }
+]
