@@ -12,7 +12,7 @@
     "check": "node --check src/main.js && node --check src/preload.js && node --check src/lib/jsonl-audit.js && node --check scripts/profile-cold-start.js && node --check src/renderer/meta-tree.js && node --check src/renderer/app.js"
   },
   "devDependencies": {
-    "electron": "44.0.0"
+    "electron": "44.9.1"
   },
   "engines": {
     "node": ">=24"
