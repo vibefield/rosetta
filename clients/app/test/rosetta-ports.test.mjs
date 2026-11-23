@@ -13,11 +13,25 @@ test("a daemon status reads as the room's catalog status, missing blocks as abse
   }), {
     canonicalReady: true, searchReadiness: "ready",
     searchProgress: { stage: "documents", documents_done: 1, documents_total: 2 },
-    ingest, startedAt: 5, uptimeMs: 9,
+    ingest, startedAt: 5, uptimeMs: 9, storage: null, memory: null, runtimes: [],
   });
   assert.deepEqual(catalogStatusOf({ canonical_ready: false, search: { readiness: "building" }, daemon: null }), {
     canonicalReady: false, searchReadiness: "building", searchProgress: null, ingest: null, startedAt: null, uptimeMs: 0,
+    storage: null, memory: null, runtimes: [],
   });
+});
+
+test("the daemon's space, memory and live counters ride the catalog status for the import's sign", () => {
+  const storage = { record_bytes: 1, archive_bytes: 2, search_bytes: 3, media_bytes: 4, measured_at: 5 };
+  const memory = { footprint_bytes: 6, archive_bytes: null };
+  const live = [{ kind: "codex", runtime_id: "rt1", label: null, ticks: 1, events: 0, polls: 1, rescans: 0,
+    admissions: 0, live_rows: 0, last_activity_ms: null }];
+  const status = catalogStatusOf({
+    canonical_ready: true, search: { readiness: "ready" },
+    daemon: { started_at: 5, uptime_ms: 9, ingest: { phase: "live", runtimes: [], projects: [] }, runtimes: live,
+      storage, memory },
+  });
+  assert.deepEqual([status.storage, status.memory, status.runtimes], [storage, memory, live]);
 });
 
 test("the catalog folds a project's heat and contribution into one read over the window", async () => {

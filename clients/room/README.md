@@ -297,6 +297,32 @@ The callbacks are called while the room renders, so a host keeps them cheap.
     gone; a load that failed keeps its own face and Try again.
   - **nothing sweeps beside the mark**: a meter that knows no amount draws
     nothing (a veil keeps its words), and one that knows still fills.
+- **`importSign`** → `RoomImportSign` (R11, 0.1.9) — the host draws the
+  import's sign in its own chrome (VibeField: a circle beside its search, its
+  panel under it). `onSign(sign)` hears the import whenever its words or
+  figures change, and null as the room goes or while there is nothing to sign
+  (before the index answers, and while it waits for consent). Keep the object
+  stable for the room's life. With it the projects column draws no import
+  card; the cold start's hold before the first project stays the room's.
+  `ImportSign` is plain data, read from the same step the card draws:
+  - `tone` — `working`, `paused` (a pause, a scan that stopped at its census,
+    or a service that does not answer), `attention` (`attention: "import"`
+    when the run failed, `"search"` when search did), `done` ("Search ready",
+    while the card would show it) and `rest`: after the import the sign stays,
+    "Up to date", with what is kept;
+  - `step` (1–4) and its own `fraction` — a percentage names its step, never
+    an invented whole; while reading, the fraction counts the agents whose
+    size is known and the step's line names the ones whose size is not;
+  - `eyebrow`, `title`, `count`, `detail`, `horizon`, `footer`, `elapsed` and
+    `label` (the sign's accessible name), in the card's words;
+  - `steps` — each step's state, what it opens ("Open any conversation") and
+    its figure, the current one's lines under it;
+  - `agents` — each runtime's caption, figure and meter, and when it last
+    brought anything in once it is imported;
+  - `space` — the record kept for good, the archive (in memory while the
+    import builds it), search and media on disk, and the index's memory in
+    use, from `DaemonStatus.storage` and `.memory` (null from an index that
+    does not say).
 
   Absent: every wait is the room's own, as rosetta's app shows it.
 

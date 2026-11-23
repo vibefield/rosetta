@@ -368,7 +368,14 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
     } else {
         ColdControl::open(&db, &public_ledgers, warm_live, stop.clone())?
     };
-    let mut health = DaemonHealth::new(now_ms());
+    // The parts the daemon keeps on disk and the memory it holds, for the
+    // status's `storage` and `memory`: walked only while a client asks, and
+    // never on a request's thread (`footprint.rs`).
+    let footprint = crate::footprint::FootprintMeter::start(
+        crate::footprint::FootprintPaths::serve(&db, &public_ledgers, cold_temp.as_deref()),
+        projection_reader.clone(),
+    );
+    let mut health = DaemonHealth::new(now_ms()).with_footprint(footprint.source());
     if let Some(control) = &control {
         health = health.with_ingestion(control.clone());
     }

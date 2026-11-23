@@ -4337,3 +4337,28 @@ Twenty quiet polls took 9.86/10.32 ms and started zero capture passes. Corpus
 creation/compression was excluded. This small warm-filesystem measurement is
 not an estimate for a full user archive or long shared prefixes. Reproduce with
 `cargo test --release -p rosetta-pipeline --test codex_storage frozen_representation_benchmark -- --ignored --nocapture`.
+
+### The daemon's footprint, and the room's import sign (2026-11-23)
+
+`/api/status` carries two additive blocks on `daemon`, unknown from older daemons.
+`storage` is what the daemon keeps on this machine, in bytes allocated on disk
+(what `du` counts, each inode once, links never followed): `record_bytes` (the raw
+ledger, a fresh build's `.staged` generation with it — the one part kept for good),
+`archive_bytes` (the projection, its journal and a cold build's private copy while
+publication writes it; zero while the RAM generation holds the archive),
+`search_bytes` (`<projection>.search`), `media_bytes` (`<projection>.assets`) and
+`measured_at`. `memory` is the process footprint (`ri_phys_footprint`, the resident
+size elsewhere) and, while the canonical reader still serves the RAM generation,
+`archive_bytes`: SQLite's allocator, that generation's pages with the caches beside
+them. A status read never walks a directory (`rosettad/src/footprint.rs`): it takes
+the last walk and, when that is due, wakes one utility-QoS thread. A walk waits at
+least 5 s and at most 60 s behind the last, and never more than fifty times its own
+duration, so walking costs at most 2% of one thread; nobody asking means no walk.
+
+The room's R11 host input (`importSign`) hands a host that draws the import's sign
+in its own chrome the room's reading of it as plain data (`ImportSign`: tone, step,
+the step's own fraction, the card's words, each step and agent, the space). With
+it the projects column draws no card. While reading, the step's fraction counts
+the agents whose size is known and names the ones whose size is not (a database or
+document store reports none, a resumed build none at all), where it used to draw no
+fraction when any one was unknown.

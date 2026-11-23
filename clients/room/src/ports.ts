@@ -8,6 +8,8 @@ import type {
   ArtifactPage,
   CollaborationSubscriptionHandlers,
   CommandResponse,
+  DaemonMemory,
+  DaemonStorage,
   DayUsageResponse,
   ImageVariant,
   IngestProgress,
@@ -15,6 +17,7 @@ import type {
   IngestionCommand,
   MetaSubscriptionHandlers,
   RosettaClient,
+  RuntimeIngestStatus,
   SearchBuildProgress,
   SearchReadiness,
   SearchResponse,
@@ -41,6 +44,15 @@ export interface CatalogStatus {
   readonly ingest: IngestProgress | null;
   readonly startedAt: number | null;
   readonly uptimeMs: number;
+  /** What the index keeps on this machine, part by part, and the memory it
+   * holds (rosetta 0.1.9): the import sign's space (R11). Absent, or null,
+   * from an index that does not say: the sign then says nothing of space. */
+  readonly storage?: DaemonStorage | null | undefined;
+  readonly memory?: DaemonMemory | null | undefined;
+  /** Each watched runtime's live counters since the index started, which
+   * the sign reads after the import (when each agent last brought something
+   * in). Absent: none. */
+  readonly runtimes?: readonly RuntimeIngestStatus[] | undefined;
 }
 
 /** The window the figures are folded over: since when, in which timezone. */

@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use rosetta_core::rows::Ms;
 use rosetta_protocol::{
-    AdmissionCourse, BackfillState, DaemonStatus, IngestPhase, IngestProgress, ProjectBackfill,
-    RuntimeBackfill, RuntimeIngestStatus,
+    AdmissionCourse, BackfillState, DaemonMemory, DaemonStatus, DaemonStorage, IngestPhase,
+    IngestProgress, ProjectBackfill, RuntimeBackfill, RuntimeIngestStatus,
 };
 
 use crate::hub::Hub;
@@ -28,6 +28,18 @@ pub struct IngestCounters {
 }
 
 pub type IngestCounterSource = Arc<dyn Fn() -> IngestCounters + Send + Sync>;
+
+/// What the daemon keeps on this machine and holds in memory, as its own
+/// measurer last saw them (2026-11-23). The serve loop installs the source;
+/// a status read calls it, so it must answer at once from what it holds and
+/// never walk a directory on the caller's thread.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Footprint {
+    pub storage: Option<DaemonStorage>,
+    pub memory: Option<DaemonMemory>,
+}
+
+pub type FootprintSource = Arc<dyn Fn() -> Footprint + Send + Sync>;
 
 /// How the serve loop names a runtime to the health surface. Entries are keyed
 /// by the canonical runtime id (2026-09-12): a supervisor may enroll several
@@ -110,6 +122,7 @@ struct RuntimeEntry {
 pub struct DaemonHealth {
     started_at_ms: Ms,
     control: Option<Arc<dyn crate::ingestion::IngestionControl>>,
+    footprint: Option<FootprintSource>,
     /// Keyed by runtime id.
     runtimes: Mutex<BTreeMap<String, RuntimeEntry>>,
     ingest: Mutex<IngestState>,
@@ -120,6 +133,7 @@ impl DaemonHealth {
         Self {
             started_at_ms: now_ms,
             control: None,
+            footprint: None,
             runtimes: Mutex::new(BTreeMap::new()),
             ingest: Mutex::new(IngestState {
                 phase: IngestPhase::Discovering,
@@ -133,6 +147,13 @@ impl DaemonHealth {
 
     pub fn with_ingestion(mut self, control: Arc<dyn crate::ingestion::IngestionControl>) -> Self {
         self.control = Some(control);
+        self
+    }
+
+    /// The daemon's own measurer: every snapshot reads `storage` and `memory`
+    /// from it. Without one both stay null.
+    pub fn with_footprint(mut self, source: FootprintSource) -> Self {
+        self.footprint = Some(source);
         self
     }
 
@@ -387,6 +408,11 @@ impl DaemonHealth {
     }
 
     pub fn snapshot(&self, hub: &Hub, now_ms: Ms) -> DaemonStatus {
+        let footprint = self
+            .footprint
+            .as_ref()
+            .map(|source| source())
+            .unwrap_or_default();
         let runtimes = self.runtimes.lock().expect("health state poisoned");
         DaemonStatus {
             started_at: self.started_at_ms,
@@ -408,6 +434,8 @@ impl DaemonHealth {
                 .collect(),
             hub: hub.status(),
             ingest: self.ingest_progress(),
+            storage: footprint.storage,
+            memory: footprint.memory,
         }
     }
 }
@@ -777,5 +805,38 @@ mod tests {
             health.snapshot(&hub, 2_500).ingest.projects[0].bytes_streamed,
             400
         );
+    }
+
+    #[test]
+    fn the_footprint_rides_every_snapshot_and_is_null_without_a_measurer() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let hub = Hub::new(HubConfig::default(), 1);
+        let bare = DaemonHealth::new(1_000).snapshot(&hub, 2_000);
+        assert_eq!((bare.storage, bare.memory), (None, None));
+
+        // The source answers from what it holds, once per snapshot.
+        let asked = Arc::new(AtomicU64::new(0));
+        let counter = asked.clone();
+        let health = DaemonHealth::new(1_000).with_footprint(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Footprint {
+                storage: Some(DaemonStorage {
+                    record_bytes: 10,
+                    archive_bytes: 20,
+                    search_bytes: 30,
+                    media_bytes: 40,
+                    measured_at: 1_500,
+                }),
+                memory: Some(DaemonMemory {
+                    footprint_bytes: 50,
+                    archive_bytes: None,
+                }),
+            }
+        }));
+        let status = health.snapshot(&hub, 2_000);
+        assert_eq!(status.storage.map(|s| s.record_bytes), Some(10));
+        assert_eq!(status.memory.map(|m| m.footprint_bytes), Some(50));
+        health.snapshot(&hub, 3_000);
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
     }
 }

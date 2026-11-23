@@ -22,15 +22,16 @@ use rosetta_protocol::{
 };
 use rosetta_protocol::{
     ApiError, BackfillState, BoostRequest, BoostResponse, CollaborationTimeline, CommandResponse,
-    ContributionResponse, ContributionRow, DaemonStatus, DiscoveriesResponse, DiscoveryRow,
-    EnableRequest, EnableResponse, ErrorCode, HeatmapDay, HeatmapResponse, HourTotal, HubStatus,
-    IngestPhase, IngestProgress, ModelDay, Mutation, PROTOCOL_VERSION, ProjectBackfill, ProjectRow,
-    ProjectsResponse, ResponseRuntime, RuntimeBackfill, RuntimeIngestStatus, RuntimeProvenance,
-    RuntimeRow, RuntimesResponse, SearchHit, SearchReadiness, SearchRequest, SearchResponse,
-    SearchState, ServerFrame, SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp,
-    StatusResponse, StreamState, TimelineEntryResponse, TimelineMeta, TimelineMetaArtifact,
-    TimelineMetaArtifactSource, TimelineMetaPlan, TimelineMetaPlanSource, TimelineMetaTask,
-    TimelineMetaWorkflow, TimelinePage, TokenSnapshot, UsageResponse,
+    ContributionResponse, ContributionRow, DaemonMemory, DaemonStatus, DaemonStorage,
+    DiscoveriesResponse, DiscoveryRow, EnableRequest, EnableResponse, ErrorCode, HeatmapDay,
+    HeatmapResponse, HourTotal, HubStatus, IngestPhase, IngestProgress, ModelDay, Mutation,
+    PROTOCOL_VERSION, ProjectBackfill, ProjectRow, ProjectsResponse, ResponseRuntime,
+    RuntimeBackfill, RuntimeIngestStatus, RuntimeProvenance, RuntimeRow, RuntimesResponse,
+    SearchHit, SearchReadiness, SearchRequest, SearchResponse, SearchState, ServerFrame,
+    SessionResponse, SessionRole, SessionRow, SessionsResponse, Stamp, StatusResponse, StreamState,
+    TimelineEntryResponse, TimelineMeta, TimelineMetaArtifact, TimelineMetaArtifactSource,
+    TimelineMetaPlan, TimelineMetaPlanSource, TimelineMetaTask, TimelineMetaWorkflow, TimelinePage,
+    TokenSnapshot, UsageResponse,
 };
 use rosetta_protocol::{
     ArtifactEntry, ArtifactExportRequest, ArtifactExportResponse, ArtifactListRequest,
@@ -569,6 +570,17 @@ fn exemplars() -> serde_json::Value {
                     },
                 ],
             },
+            storage: Some(DaemonStorage {
+                record_bytes: 3_700_000_000,
+                archive_bytes: 0,
+                search_bytes: 0,
+                media_bytes: 342_000_000,
+                measured_at: 59_000,
+            }),
+            memory: Some(DaemonMemory {
+                footprint_bytes: 2_410_000_000,
+                archive_bytes: Some(2_090_000_000),
+            }),
         }),
         artifacts_revision: Some(7),
     };
@@ -1087,4 +1099,51 @@ fn the_admission_course_is_additive_and_unknown_from_an_older_daemon() {
             row
         );
     }
+}
+
+/// The storage and memory blocks (2026-11-23) are additive: an older
+/// daemon's status parses with both unknown, never zero, and a daemon that has
+/// not measured yet says null rather than an empty disk.
+#[test]
+fn the_storage_and_memory_blocks_are_additive_and_unknown_from_an_older_daemon() {
+    let legacy = serde_json::json!({
+        "started_at": 1_000, "uptime_ms": 5_000, "runtimes": [],
+        "hub": serde_json::to_value(HubStatus::default()).unwrap(),
+        "ingest": {"phase": "live", "runtimes": [], "projects": []},
+    });
+    let mut status: DaemonStatus = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(
+        (status.storage, status.memory),
+        (None, None),
+        "an older daemon measures nothing"
+    );
+
+    let storage = DaemonStorage {
+        record_bytes: 1,
+        archive_bytes: 2,
+        search_bytes: 3,
+        media_bytes: 0,
+        measured_at: 4_000,
+    };
+    let on_disk = DaemonMemory {
+        footprint_bytes: 9,
+        archive_bytes: None,
+    };
+    for (storage, memory) in [(None, None), (Some(storage), Some(on_disk))] {
+        status.storage = storage;
+        status.memory = memory;
+        let wire = serde_json::to_value(&status).unwrap();
+        assert_eq!(wire["storage"], serde_json::json!(storage));
+        assert_eq!(wire["memory"], serde_json::json!(memory));
+        assert_eq!(
+            serde_json::from_value::<DaemonStatus>(wire).unwrap(),
+            status
+        );
+    }
+    let wire = serde_json::to_value(on_disk).unwrap();
+    assert_eq!(
+        wire["archive_bytes"],
+        serde_json::Value::Null,
+        "an archive on disk holds no memory of its own"
+    );
 }

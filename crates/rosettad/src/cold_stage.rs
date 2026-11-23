@@ -398,7 +398,7 @@ fn write_manifest(root: &Path, manifest: &Manifest) -> Result<(), String> {
     sync_directory(root)
 }
 
-fn staged_path(destination: &Path) -> Result<PathBuf, String> {
+pub(crate) fn staged_path(destination: &Path) -> Result<PathBuf, String> {
     let parent = artifact_parent(destination);
     Ok(parent.join(format!("{}.staged", file_name(destination, "ledger")?)))
 }

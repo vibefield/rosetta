@@ -49,9 +49,14 @@ test("metadata uses live discovery counters even before project rows arrive", ()
 });
 
 test("unknown snapshot sizes and empty archives are indeterminate, and growing sources clamp", () => {
-  for (const runtimes of [[runtime({ bytes_total: 0 })], [runtime(), runtime({ bytes_total: 0 })]]) {
-    assert.equal(activityPhase(feed({ ingest: { phase: "backfilling", projects: [], runtimes } })).fraction, null);
-  }
+  assert.equal(activityPhase(feed({ ingest: { phase: "backfilling", projects: [],
+    runtimes: [runtime({ bytes_total: 0 })] } })).fraction, null);
+  // A size the index knows still draws its fraction beside one it does not
+  // (2026-11-23): the step counts the known sizes and names the rest.
+  const mixed = activityPhase(feed({ ingest: { phase: "backfilling", projects: [],
+    runtimes: [runtime(), runtime({ kind: "antigravity", bytes_total: 0 })] } }));
+  assert.equal(mixed.fraction, .4);
+  assert.deepEqual(mixed.unsized, ["Antigravity"]);
   assert.equal(activityPhase(feed({ ingest: { phase: "backfilling", projects: [], runtimes: [runtime({ bytes_streamed: 2_000_000 })] } })).fraction, 1);
   assert.equal(progressBytes(0), "0 B");
   assert.equal(progressDuration(-100), "0s");
