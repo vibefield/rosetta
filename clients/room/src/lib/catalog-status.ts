@@ -13,5 +13,8 @@ export function catalogStatusOf(status: StatusResponse): CatalogStatus {
     ingest: status.daemon?.ingest ?? null,
     startedAt: status.daemon?.started_at ?? null,
     uptimeMs: status.daemon?.uptime_ms ?? 0,
+    storage: status.daemon?.storage ?? null,
+    memory: status.daemon?.memory ?? null,
+    runtimes: status.daemon?.runtimes ?? [],
   };
 }

@@ -26,6 +26,7 @@ export type {
   RoomFolders,
   RoomHeadActs,
   RoomHostInputs,
+  RoomImportSign,
   RoomMenu,
   RoomMenuGroup,
   RoomMenuItem,
@@ -37,6 +38,16 @@ export type {
   RoomWaitMark,
   RoomWaitPlace,
 } from "./host-inputs";
+
+/** R11 — the import as the room hands it to a host that draws its sign. */
+export type {
+  ImportSign,
+  ImportSignAgent,
+  ImportSignPart,
+  ImportSignSpace,
+  ImportSignStep,
+  ImportSignTone,
+} from "./lib/import-sign";
 
 /** The reader (PK3): one session's transcript, read-only, at a line. */
 export { TranscriptReader } from "./TranscriptReader";

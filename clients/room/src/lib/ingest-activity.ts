@@ -1,4 +1,8 @@
-import type { IngestProgress, RuntimeBackfill, SearchBuildProgress, SearchReadiness } from "@vibefield/rosetta-protocol";
+import type {
+  DaemonMemory, DaemonStorage, IngestProgress, RuntimeBackfill, RuntimeIngestStatus, SearchBuildProgress,
+  SearchReadiness,
+} from "@vibefield/rosetta-protocol";
+import { agentLabel } from "./agents";
 import type { ConversationCount, ConversationHorizons, ConversationReadiness } from "./conversation-readiness";
 
 export interface ActivityFeed {
@@ -18,6 +22,12 @@ export interface ActivityFeed {
   /** The readable conversations, folded from the pushed catalog in the same
    * render as the rows (`ConversationFold`); absent counts nothing. */
   readonly conversations?: ConversationReadiness | null;
+  /** What the index keeps on this machine and the memory it holds (rosetta
+   * 0.1.9, `DaemonStatus.storage`, `.memory`); absent, or null, unknown. */
+  readonly storage?: DaemonStorage | null;
+  readonly memory?: DaemonMemory | null;
+  /** Each watched runtime's live counters (`DaemonStatus.runtimes`). */
+  readonly live?: readonly RuntimeIngestStatus[];
 }
 
 export interface ActivityPhase {
@@ -40,6 +50,10 @@ export interface ActivityPhase {
   readonly spoken?: string;
   /** The recency line under the meter (`horizonLine`); absent: none. */
   readonly horizon?: Horizon | null;
+  /** Reading only: the agents whose size the index does not know (a
+   * database or document store, or every agent of a resumed build). The
+   * step's fraction counts the sizes it knows; these are named beside it. */
+  readonly unsized?: readonly string[];
 }
 
 export interface Horizon {
@@ -69,6 +83,35 @@ export function progressDuration(ms: number): string {
 }
 
 const plural = (n: number, noun: string) => `${noun}${n === 1 ? "" : "s"}`;
+
+/** A runtime as the room names it: its enrollment label, else its agent's. */
+export const runtimeName = (row: { readonly kind: string; readonly label?: string | null }) =>
+  row.label ?? agentLabel(row.kind);
+
+/** Reading's meter: the bytes read of the agents whose size is known, their
+ * size, and the names of the agents still reading whose size is not. */
+export function readingSizes(runtimes: readonly RuntimeBackfill[]): {
+  readonly read: number; readonly total: number; readonly unsized: readonly string[];
+} {
+  let read = 0;
+  let total = 0;
+  const unsized: string[] = [];
+  for (const row of runtimes) {
+    if (row.bytes_total > 0) {
+      read += Math.min(row.bytes_streamed, row.bytes_total);
+      total += row.bytes_total;
+    } else if (row.sessions_total > 0 && row.state !== "done") unsized.push(runtimeName(row));
+  }
+  return { read, total, unsized };
+}
+
+/** "Antigravity's size not known yet", "Antigravity and Kimi: sizes not known yet". */
+export function unsizedText(names: readonly string[]): string {
+  if (names.length === 1) return `${names[0]}'s size not known yet`;
+  const list = names.length === 2 ? `${names[0]} and ${names[1]}`
+    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `${list}: sizes not known yet`;
+}
 
 /** "412 of 1,139 conversations readable". */
 export function readableText({ readable, total }: ConversationCount): string {
@@ -214,8 +257,12 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
     const horizon = counted === null || feed.resumed ? null : horizonLine(counted.horizons);
     if (runtimes.some((row) => row.state === "streaming")) {
       const current = runtimes.reduce((sum, row) => sum + row.bytes_streamed, 0);
-      const total = runtimes.some((row) => row.bytes_total === 0 && row.sessions_total > 0) ? 0
-        : runtimes.reduce((sum, row) => sum + row.bytes_total, 0);
+      // A percentage names its step, never an invented whole: the fraction
+      // counts the agents whose size is known, and names the rest (a
+      // database or document store reports none; a resumed build none at
+      // all, and then no fraction is drawn).
+      const sized = readingSizes(runtimes);
+      const unsized = sized.unsized.length > 0 ? sized.unsized : undefined;
       return {
         ...base, key: "reading", step: 2,
         // Newest trees import first and each opens as it closes. A
@@ -226,8 +273,10 @@ export function activityPhase(feed: ActivityFeed): ActivityPhase | null {
         detail: feed.resumed
           ? "Conversations you can open now stay open. The rest, and any you start now, appear when the import finishes."
           : `Older history fills in while you browse. ${BORN_DURING_IMPORT}`,
-        amount: `${progressBytes(current)} processed`, current, total, unit: "bytes",
-        fraction: fraction(current, total),
+        amount: `${progressBytes(current)} processed${unsized === undefined ? "" : ` · ${unsizedText(unsized)}`}`,
+        current, total: sized.total, unit: "bytes",
+        fraction: fraction(sized.read, sized.total),
+        ...(unsized === undefined ? {} : { unsized }),
       };
     }
     // Reading is over and the agents are closing. A conversation no source
@@ -288,7 +337,10 @@ export function runtimeActivity(row: RuntimeBackfill, restoring = false): { labe
   switch (row.state) {
     case "queued": return { label: row.sessions_total ? "Waiting to read" : "Waiting to scan", fraction: null };
     case "skimming": return { label: `${number(row.sessions_total)} sessions found`, fraction: fraction(row.files_skimmed, row.files_total) };
-    case "streaming": return { label: `${progressBytes(row.bytes_streamed)} processed`, fraction: fraction(row.bytes_streamed, row.bytes_total) };
+    case "streaming": return {
+      label: `${progressBytes(row.bytes_streamed)} processed${row.bytes_total > 0 ? "" : " · size not known yet"}`,
+      fraction: fraction(row.bytes_streamed, row.bytes_total),
+    };
     case "preparing": return { label: "Organizing conversations", fraction: null };
     case "applying": return { label: "Making conversations available", fraction: null };
     case "done": return { label: "Ready to browse", fraction: 1 };

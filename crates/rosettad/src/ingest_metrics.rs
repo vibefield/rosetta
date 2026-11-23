@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use crate::bench;
 
 mod memory;
-pub(crate) use memory::MemorySampler;
+pub(crate) use memory::{MemorySampler, Sample as MemorySample};
 mod recency;
 use recency::{NewestHorizon, TreeMilestones};
 mod serve_lines;

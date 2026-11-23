@@ -5,12 +5,15 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState } fr
 import type {
   ApiError,
   CollaborationTimeline,
+  DaemonMemory,
+  DaemonStorage,
   IngestProgress,
   MetaState,
   SearchReadiness,
   SearchBuildProgress,
   SearchResponse,
   ResponseRuntime,
+  RuntimeIngestStatus,
   SubscriptionStatus,
   TimelineEntry,
   TimelineMeta,
@@ -101,6 +104,11 @@ export interface DaemonStatusFeed {
   readonly startedAt: number | null;
   readonly uptimeMs: number;
   readonly receivedAt: number | null;
+  /** The index's space and memory, and its live counters (`CatalogStatus`):
+   * null, or empty, until an answer carries them. */
+  readonly storage?: DaemonStorage | null;
+  readonly memory?: DaemonMemory | null;
+  readonly live?: readonly RuntimeIngestStatus[];
 }
 
 /** The daemon's status surface. It answers from the daemon's first breath —
@@ -159,6 +167,9 @@ export function useDaemonStatus(catalog: CatalogPort, asked = 0): DaemonStatusFe
           startedAt: status.startedAt,
           uptimeMs: status.uptimeMs,
           receivedAt: Date.now(),
+          storage: status.storage ?? null,
+          memory: status.memory ?? null,
+          live: status.runtimes ?? [],
         });
         const phase = status.ingest?.phase;
         if (phase !== "awaiting_consent") shown.current = asked;

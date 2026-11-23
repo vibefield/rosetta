@@ -92,6 +92,7 @@ mod cold_stage;
 mod cold_stream;
 mod engine;
 mod enroll;
+mod footprint;
 mod image_renditions;
 mod ingest_metrics;
 mod ingestion_control;

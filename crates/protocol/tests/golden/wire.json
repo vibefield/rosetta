@@ -1663,6 +1663,10 @@
           }
         ]
       },
+      "memory": {
+        "archive_bytes": 2090000000,
+        "footprint_bytes": 2410000000
+      },
       "runtimes": [
         {
           "admissions": 2,
@@ -1690,6 +1694,13 @@
         }
       ],
       "started_at": 1000,
+      "storage": {
+        "archive_bytes": 0,
+        "measured_at": 59000,
+        "media_bytes": 342000000,
+        "record_bytes": 3700000000,
+        "search_bytes": 0
+      },
       "uptime_ms": 60000
     },
     "protocol_version": 30,

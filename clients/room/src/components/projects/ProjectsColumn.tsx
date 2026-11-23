@@ -39,6 +39,9 @@ export interface ProjectsColumnProps {
   /** The daemon's cold-start block; null on a daemon too old to carry it. */
   readonly ingest: IngestProgress | null;
   readonly activity: IngestActivity | null;
+  /** Whether the import card stands here: false while the host draws the
+   * import's sign in its own chrome (R11). */
+  readonly importCard?: boolean;
   /** The room's fold of readable conversations, from the rows it draws. */
   readonly conversations?: ConversationReadiness | undefined;
   readonly onProjectSelect: (projectId: string) => void;
@@ -54,6 +57,7 @@ export function ProjectsColumn({
   currentTimestamp,
   ingest,
   activity,
+  importCard = true,
   conversations,
   onProjectSelect,
 }: ProjectsColumnProps) {
@@ -118,9 +122,11 @@ export function ProjectsColumn({
       ) : (
         <ListSummaryHeader label="Projects" count={projects.length} singularNoun="project" />
       )}
-      <IngestStatusFold activity={activity}>
-        <IngestStatus activity={activity} />
-      </IngestStatusFold>
+      {importCard && (
+        <IngestStatusFold activity={activity}>
+          <IngestStatus activity={activity} />
+        </IngestStatusFold>
+      )}
       <ListToolbar>
         {projectFilters !== undefined && projectFilters.length > 0 && <FilterChips filters={projectFilters} />}
         <SegmentedControl

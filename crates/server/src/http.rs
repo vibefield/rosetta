@@ -253,7 +253,9 @@ impl ProjectionReader {
             ProjectionTarget::File(Arc::new(path));
     }
 
-    pub(crate) fn is_published(&self) -> bool {
+    /// Whether requests read the durable projection on disk (a RAM cold
+    /// build's generation is not published until its file is installed).
+    pub fn is_published(&self) -> bool {
         matches!(
             &*self.target.read().expect("projection reader poisoned"),
             ProjectionTarget::File(_)

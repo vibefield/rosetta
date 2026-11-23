@@ -50,6 +50,7 @@ import {
   useTimeline,
 } from "./lib/hooks";
 import { useIngestActivity } from "./lib/use-ingest-activity";
+import { useImportSign } from "./lib/use-import-sign";
 import { useStandingHold } from "./lib/use-standing-hold";
 import { ConversationFold } from "./lib/conversation-readiness";
 import { isAwaitingConsent, isIngestActive } from "./lib/ingest";
@@ -333,6 +334,7 @@ function RoomBody({
     sessionActs: hostSessionActs,
     folders: hostFoldersOf,
     waitMark,
+    importSign: hostImportSign,
   } = useHostInputs();
   const overlayOpen = useRoomOverlayOpen();
   // The room's root, where a host's menus are drawn over every column.
@@ -359,6 +361,10 @@ function RoomBody({
     [conversationFold, meta, nowMs],
   );
   const activity = useIngestActivity(daemonStatus, conversations);
+  // R11 — the host draws the import's sign: the room hands it the import,
+  // read from the same activity the card would draw, whenever its words or
+  // figures change, and null as the room goes.
+  useImportSign(hostImportSign, daemonStatus, conversations, activity);
   const activityOrder = useActivityOrder(
     meta, snapshotVersion, metaStatus === "live" && canonicalReady === true && !ingestActive,
     canonicalReady !== true || ingestActive, nowMs,
@@ -867,6 +873,7 @@ function RoomBody({
               currentTimestamp={nowMs}
               ingest={ingest}
               activity={activity}
+              importCard={hostImportSign === undefined}
               conversations={conversations}
               onProjectSelect={(id) => {
                 setProjectId(id);

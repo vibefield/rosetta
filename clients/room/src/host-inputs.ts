@@ -11,6 +11,7 @@
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
 import type { SessionRow } from "@vibefield/rosetta-protocol";
+import type { ImportSign } from "./lib/import-sign";
 
 /* ── the room's popover rows, as a host fills them ──────────────────────── */
 
@@ -256,6 +257,20 @@ export interface RoomWaitMark {
   readonly carried?: boolean | undefined;
 }
 
+/* ── R11: the import's sign in the host's chrome ───────────────────────── */
+
+/** R11 — the host draws the import's sign in its own chrome (VibeField: a
+ * circle beside its search, its panel under it), so the projects column draws
+ * no import card. The room hands the host the import as it moves
+ * (`ImportSign`: plain words, figures and fractions), and null while there is
+ * none to sign — before the index answers, and while it waits for consent.
+ * After the import the sign stays, at rest. The cold start's hold before the
+ * first project stays the room's. Absent: the card, as rosetta's app shows it. */
+export interface RoomImportSign {
+  /** Called when the sign's content changes, and with null as the room goes. */
+  readonly onSign: (sign: ImportSign | null) => void;
+}
+
 /* ── everything, as `HistoryRoomProps` carries it ───────────────────────── */
 
 export interface RoomHostInputs {
@@ -292,6 +307,8 @@ export interface RoomHostInputs {
   readonly repositoryUrl?: ((projectId: string) => string | null | undefined) | undefined;
   /** R10 — the mark the room's waits wear (`RoomWaitMark`). */
   readonly waitMark?: RoomWaitMark | undefined;
+  /** R11 — the import's sign, drawn by the host (`RoomImportSign`). */
+  readonly importSign?: RoomImportSign | undefined;
 }
 
 /** Only the host's inputs, picked out of the room's props. */
@@ -311,6 +328,7 @@ export function hostInputsOf(props: RoomHostInputs): RoomHostInputs {
     sessionFilters: props.sessionFilters,
     repositoryUrl: props.repositoryUrl,
     waitMark: props.waitMark,
+    importSign: props.importSign,
   };
 }
 

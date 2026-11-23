@@ -223,6 +223,61 @@ pub struct DaemonStatus {
     /// Cold-start progress. Answers from process start, so the app can
     /// render honest meters before the projection is even readable.
     pub ingest: IngestProgress,
+    /// What the daemon keeps on this machine, part by part (2026-11-23):
+    /// the record it keeps for good and what it rebuilds from it. Null until
+    /// its first measurement lands and from a serve path that measures
+    /// nothing; older daemons omit the field, which means unknown.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub storage: Option<DaemonStorage>,
+    /// The daemon process's own memory (2026-11-23). Null where the platform
+    /// says nothing; older daemons omit the field, which means unknown.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub memory: Option<DaemonMemory>,
+}
+
+/// The daemon's files on this machine, by part, in bytes allocated on disk
+/// (what `du` counts). Measured by a background walk, at most every few
+/// seconds and only while a client asks; `measured_at` says when, so a
+/// figure is never presented fresher than it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct DaemonStorage {
+    /// The raw ledger: every source as rosetta read it, compressed. The one
+    /// part kept for good — everything below is rebuilt from it. A cold
+    /// build's staged generation counts while it is written.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub record_bytes: u64,
+    /// The canonical projection on disk: the SQLite file, its journal, and a
+    /// cold build's copy while publication writes it. Zero while a cold build
+    /// holds the archive in memory ([`DaemonMemory::archive_bytes`]).
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub archive_bytes: u64,
+    /// The detached search index (`<projection>.search`).
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub search_bytes: u64,
+    /// The asset members (`<projection>.assets`): images and files agents
+    /// sent, their display renditions, captured pages.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub media_bytes: u64,
+    /// Unix milliseconds when the walk that measured these finished.
+    pub measured_at: Ms,
+}
+
+/// The daemon process's memory, read when the status is asked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct DaemonMemory {
+    /// The process's physical footprint, what Activity Monitor shows (the
+    /// resident size where the platform keeps no footprint).
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub footprint_bytes: u64,
+    /// What SQLite holds in this process while a cold build keeps the archive
+    /// in memory: that generation's pages, with the page caches beside them.
+    /// Null once the archive is on disk.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub archive_bytes: Option<u64>,
 }
 
 /// Where the daemon's ingest is in its life. `AwaitingConsent` means the
