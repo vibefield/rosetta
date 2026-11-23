@@ -4,9 +4,11 @@
 //! A status read never walks a directory. It takes the last walk's figures and,
 //! when they are older than the walk's own pace allows, wakes one utility-QoS
 //! thread to walk again; the walk runs only while someone asks, so an idle
-//! daemon measures nothing. A walk waits at least [`MIN_INTERVAL`] and at most
-//! [`MAX_INTERVAL`] behind the last, and never takes more than a fiftieth of
-//! the time between walks. Memory is a few system calls, read at each ask.
+//! daemon measures nothing. A walk waits fifty times its own duration behind
+//! the last, within [`MIN_INTERVAL`] and [`MAX_INTERVAL`], so a walk of up to
+//! 1.2 s takes at most a fiftieth of the time between walks (a longer one
+//! waits the most and takes more). Memory is a few system calls, read at each
+//! ask.
 //!
 //! The parts are rosetta's own layout: the record (the raw ledger, a fresh
 //! build's staged generation with it), the archive (the projection file, its
@@ -31,7 +33,8 @@ use crate::ingest_metrics::MemorySample;
 pub(crate) const MIN_INTERVAL: Duration = Duration::from_secs(5);
 pub(crate) const MAX_INTERVAL: Duration = Duration::from_secs(60);
 /// The waits a walk's own duration buys: one that took 200 ms is followed by
-/// at least 10 s, so walking costs at most 2% of one thread.
+/// 10 s, so walking costs at most 2% of one thread while a walk takes up to
+/// 1.2 s; past that the wait stops at [`MAX_INTERVAL`].
 const PACE: u32 = 50;
 
 /// Where each part lives.
