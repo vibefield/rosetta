@@ -4351,9 +4351,10 @@ publication writes it; zero while the RAM generation holds the archive),
 size elsewhere) and, while the canonical reader still serves the RAM generation,
 `archive_bytes`: SQLite's allocator, that generation's pages with the caches beside
 them. A status read never walks a directory (`rosettad/src/footprint.rs`): it takes
-the last walk and, when that is due, wakes one utility-QoS thread. A walk waits at
-least 5 s and at most 60 s behind the last, and never more than fifty times its own
-duration, so walking costs at most 2% of one thread; nobody asking means no walk.
+the last walk and, when that is due, wakes one utility-QoS thread. A walk waits
+fifty times its own duration behind the last, never less than 5 s nor more than
+60 s, so a walk of up to 1.2 s costs at most 2% of one thread (a longer one waits
+60 s and costs more); nobody asking means no walk.
 
 The room's R11 host input (`importSign`) hands a host that draws the import's sign
 in its own chrome the room's reading of it as plain data (`ImportSign`: tone, step,
