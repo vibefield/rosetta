@@ -27,12 +27,14 @@ use crate::PipelineError;
 use crate::checkpoint::{PIPE_CHECKPOINT_VERSION, PipeCheckpoint};
 use crate::instrument::{Instrument, Metric};
 use crate::meta::SessionFile;
+use crate::snapshot::SnapshotRevision;
 use crate::stream::StreamReport;
 use crate::stream::{merge_stats, over_projection_limit, quarantined_record};
 
 mod admission;
 use admission::{AdmissionScan, ReplayAdmission};
 mod resume_prefix;
+mod reused_generation;
 pub use resume_prefix::RestoredPrefixes;
 mod stopped;
 pub use stopped::{StoppedSource, activate_stopped_source};
@@ -99,6 +101,7 @@ struct SegmentStamp {
 #[derive(Debug, Serialize, Deserialize)]
 struct ElectionCache {
     schema: u32,
+    replacements: reused_generation::Boundaries,
     normalizer_version: u32,
     segments: Vec<SegmentStamp>,
     visit_segments: usize,
@@ -114,6 +117,7 @@ struct ElectionCache {
 
 struct ElectionState {
     visit: LedgerVisit,
+    replacements: reused_generation::Boundaries,
     surviving: BTreeMap<String, (u64, SourceDef)>,
     latest_seals: BTreeMap<String, (u64, SourceDef, bool)>,
     only_dirty: HashSet<String>,
@@ -166,7 +170,7 @@ fn load_election_cache(
 ) -> Option<ElectionState> {
     let payload = std::fs::read(path).ok()?;
     let cache: ElectionCache = serde_json::from_slice(&payload).ok()?;
-    if cache.schema != 4
+    if cache.schema != 5
         || cache.normalizer_version != normalizer_version
         || cache.segments != segments
     {
@@ -179,6 +183,7 @@ fn load_election_cache(
             entries: cache.visit_entries,
         },
         surviving: cache.surviving,
+        replacements: cache.replacements,
         latest_seals: cache.latest_seals,
         only_dirty: cache.only_dirty,
         unsealed: cache.unsealed,
@@ -205,7 +210,8 @@ fn save_election_cache(
         })?;
     }
     let cache = ElectionCache {
-        schema: 4,
+        schema: 5,
+        replacements: state.replacements.clone(),
         normalizer_version,
         segments,
         visit_segments: state.visit.segments,
@@ -419,6 +425,7 @@ struct FileReplay {
     last_offset: Option<u64>,
     generation_clean: bool,
     activated: bool,
+    snapshot: Option<Box<SnapshotRevision>>,
     slots: crate::presented_media::Slots,
 }
 
@@ -643,7 +650,10 @@ pub fn rebuild_runtime_with_options(
         let mut raw_generations: BTreeMap<(String, u64), SourceDef> = BTreeMap::new();
         let mut admission = AdmissionScan::default();
         let mut required_sources = Vec::new();
+        let mut retries = reused_generation::RetryScan::default();
+        let mut position = 0;
         let visit = visit_election::<PipelineError, _>(ledger_dir, instrument, |entry| {
+            position += 1;
             if options
                 .cancel
                 .as_ref()
@@ -658,7 +668,16 @@ pub fn rebuild_runtime_with_options(
                     start_offset,
                     payload,
                 } => {
-                    admission.observe(adapter, &source, generation, start_offset, &payload);
+                    if start_offset == 0 {
+                        retries.observe_opening(
+                            &mut admission,
+                            adapter,
+                            &source,
+                            generation,
+                            &payload,
+                            position,
+                        );
+                    }
                     raw_generations
                         .entry((source.relative_path.clone(), generation))
                         .or_insert(source);
@@ -671,6 +690,7 @@ pub fn rebuild_runtime_with_options(
                 } => {
                     let known_unclean =
                         normalizer_version == adapter.normalizer_version() && !normalized_clean;
+                    retries.observe_seal(&mut admission, &source, generation, normalized_clean);
                     let latest = latest_seals
                         .entry(source.relative_path.clone())
                         .or_insert_with(|| (generation, source.clone(), known_unclean));
@@ -738,6 +758,7 @@ pub fn rebuild_runtime_with_options(
         }
         let admission = admission.finish(&surviving);
         let state = ElectionState {
+            replacements: retries.replacements,
             admission,
             visit,
             surviving,
@@ -755,6 +776,7 @@ pub fn rebuild_runtime_with_options(
     };
     let ElectionState {
         visit: first,
+        replacements,
         surviving,
         latest_seals,
         only_dirty,
@@ -784,6 +806,7 @@ pub fn rebuild_runtime_with_options(
     let mut already_projected: HashSet<String> = HashSet::new();
     let mut files: BTreeMap<String, FileReplay> = BTreeMap::new();
 
+    let mut position = 0;
     let mut replay_entry = |entry| {
         if options
             .cancel
@@ -791,6 +814,11 @@ pub fn rebuild_runtime_with_options(
             .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
         {
             return Err(PipelineError::Cancelled);
+        }
+        position += 1;
+        if replacements.skips(&entry, position) {
+            report.stale_records_skipped += u64::from(matches!(entry, LedgerEntry::Raw { .. }));
+            return Ok(());
         }
         match entry {
             LedgerEntry::Meta {
@@ -897,7 +925,7 @@ pub fn rebuild_runtime_with_options(
                 ) {
                     return Ok(());
                 }
-                if options.allow_unsealed_sources {
+                if options.allow_unsealed_sources && file.snapshot.is_none() {
                     report.restored_prefixes.record(
                         &source.relative_path,
                         file.generation,
@@ -1066,7 +1094,20 @@ pub fn rebuild_runtime_with_options(
     // Meta-only sessions are absent from this map and retain Pending.
     let mut session_health: BTreeMap<String, bool> = BTreeMap::new();
     let required_present = latest_seals.keys().cloned().collect();
-    for (path, (_, source, known_unclean)) in latest_seals {
+    for (path, (latest_generation, source, known_unclean)) in latest_seals {
+        // Election chooses what is safe to project. Allocation must also
+        // remember rejected seals and interrupted raw generations, even
+        // when the source is absent today and returns in a later run.
+        let floor = report
+            .unsealed_sources
+            .get(&path)
+            .map_or(latest_generation, |(raw, _)| latest_generation.max(*raw));
+        if surviving
+            .get(&path)
+            .is_some_and(|(elected, _)| floor > *elected)
+        {
+            crate::reserve_retired_generation(adapter, runtime, store, &source, floor, instrument)?;
+        }
         let clean = if known_unclean {
             false
         } else if already_projected.contains(&path) {
@@ -1138,6 +1179,7 @@ pub fn prepare_runtime(
         last_offset: Option<u64>,
         generation_clean: bool,
         sealed: bool,
+        snapshot: Option<Box<SnapshotRevision>>,
         slots: crate::presented_media::Slots,
     }
 
@@ -1150,11 +1192,17 @@ pub fn prepare_runtime(
     let mut meta_ops = Vec::new();
     let mut files: BTreeMap<String, PreparingFile> = BTreeMap::new();
     let surviving = &election.surviving;
-    let replay = |entry: LedgerEntry,
-                  files: &mut BTreeMap<String, PreparingFile>,
-                  report: &mut RebuildReport,
-                  meta_ops: &mut Vec<Vec<IngestOp>>|
+    let mut position = 0;
+    let mut replay = |entry: LedgerEntry,
+                      files: &mut BTreeMap<String, PreparingFile>,
+                      report: &mut RebuildReport,
+                      meta_ops: &mut Vec<Vec<IngestOp>>|
      -> Result<(), PipelineError> {
+        position += 1;
+        if election.replacements.skips(&entry, position) {
+            report.stale_records_skipped += u64::from(matches!(entry, LedgerEntry::Raw { .. }));
+            return Ok(());
+        }
         match entry {
             LedgerEntry::Meta {
                 schema_version,
@@ -1201,6 +1249,7 @@ pub fn prepare_runtime(
                             last_offset: None,
                             generation_clean: true,
                             sealed: false,
+                            snapshot: SnapshotRevision::for_stream(adapter, &source.stream_id),
                             slots: Default::default(),
                         },
                     );
@@ -1217,6 +1266,9 @@ pub fn prepare_runtime(
                     return Ok(());
                 }
                 file.last_offset = Some(start_offset);
+                if let Some(snapshot) = &mut file.snapshot {
+                    snapshot.push(&payload);
+                }
                 file.ctx.agent_version = source.agent_version;
                 file.ctx.src_offset = Some(start_offset as i64);
                 report.raw_records += 1;
@@ -1300,6 +1352,7 @@ pub fn prepare_runtime(
                             last_offset: None,
                             generation_clean: true,
                             sealed: true,
+                            snapshot: SnapshotRevision::for_stream(adapter, &source.stream_id),
                             slots: Default::default(),
                         },
                     );
@@ -1330,7 +1383,7 @@ pub fn prepare_runtime(
     }
 
     let mut prepared_files = Vec::with_capacity(files.len());
-    for (_, file) in files {
+    for (path, file) in files {
         if !file.sealed {
             return Err(PipelineError::Config(format!(
                 "elected source {} has no complete-generation marker",
@@ -1343,7 +1396,12 @@ pub fn prepare_runtime(
             session_id: file.source.session_id.clone(),
             stream_id: file.source.stream_id.clone(),
             normalizer_version: adapter.normalizer_version(),
-            source_generation: file.generation,
+            source_generation: election.latest_seals[&path].0.max(
+                election
+                    .unsealed
+                    .get(&path)
+                    .map_or(0, |(generation, _)| *generation),
+            ),
             next_source_sequence: file.ops.len() as u64,
             generation_clean: file.generation_clean,
             next_ordinal: file.ctx.next_ordinal,
@@ -1353,7 +1411,7 @@ pub fn prepare_runtime(
                 .checkpoint_state(file.ctx.state.as_deref())
                 .map_err(PipelineError::Config)?,
             snapshot_stamp: None,
-            snapshot_revision: None,
+            snapshot_revision: file.snapshot.as_ref().map(|snapshot| snapshot.digest()),
             reframing: false,
         }
         .encode();
@@ -1850,6 +1908,7 @@ fn open_file(
         last_offset: None,
         generation_clean: true,
         activated: false,
+        snapshot: SnapshotRevision::for_stream(adapter, &source.stream_id),
         slots: Default::default(),
     })
 }
@@ -1890,7 +1949,7 @@ fn flush_chunk(
                 .checkpoint_state(file.ctx.state.as_deref())
                 .map_err(PipelineError::Config)?,
             snapshot_stamp: None,
-            snapshot_revision: None,
+            snapshot_revision: file.snapshot.as_ref().map(|snapshot| snapshot.digest()),
             reframing: false,
         }
         .encode();

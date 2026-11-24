@@ -2,12 +2,12 @@
 //! The ledger knows record positions and payloads, but not native file identity
 //! or line endings. The ordinary tailer supplies those only after verification.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use rosetta_adapter_support::{AgentAdapter, StreamDriver};
 use rosetta_capture::{TailCheckpoint, TailItem, TailRead, Tailer, Transition};
-use rosetta_core::rows::RuntimeRow;
+use rosetta_core::rows::{RuntimeRow, StreamState};
 use rosetta_store::{Batch, CheckpointUpdate, Store, queries};
 
 use crate::{IngestOptions, Instrument, Metric, PipeCheckpoint, PipelineError, SessionFile};
@@ -61,78 +61,183 @@ impl RestoredPrefixes {
         opts: &IngestOptions,
         instrument: &Instrument,
     ) -> Result<crate::StreamReport, PipelineError> {
+        self.bind_positions(
+            adapter, runtime, root, roster, store, opts, instrument, None,
+        )
+    }
+
+    /// Catch up all current sources after ledger replay. If any JSONL member
+    /// of a multi-source session changed, apply its members once in the
+    /// fresh import's path order. This also restores the winning value when
+    /// two transcripts contain different versions of the same message.
+    #[allow(clippy::too_many_arguments)]
+    pub fn catch_up(
+        self,
+        adapter: &dyn AgentAdapter,
+        runtime: &RuntimeRow,
+        root: &Path,
+        roster: &mut Vec<SessionFile>,
+        store: &mut Store,
+        opts: &IngestOptions,
+        instrument: &Instrument,
+        ledger: &mut rosetta_capture::Ledger,
+        withheld: &mut BTreeMap<String, StreamState>,
+    ) -> Result<crate::StreamReport, PipelineError> {
+        *roster = crate::order_runtime_roster(std::mem::take(roster));
+        let mut replay_sessions = BTreeSet::new();
+        let verified = self.bind_positions(
+            adapter,
+            runtime,
+            root,
+            roster,
+            store,
+            opts,
+            instrument,
+            Some(&mut replay_sessions),
+        )?;
+        let mut report = crate::stream::stream_backfill_inner(
+            adapter,
+            runtime,
+            root,
+            store,
+            roster,
+            opts,
+            instrument,
+            Some(ledger),
+            crate::stream::Readiness::Withhold {
+                decisions: withheld,
+                replay_sessions: &replay_sessions,
+            },
+        )?;
+        report.merge_from(&verified);
+        Ok(report)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bind_positions(
+        self,
+        adapter: &dyn AgentAdapter,
+        runtime: &RuntimeRow,
+        root: &Path,
+        roster: &[SessionFile],
+        store: &mut Store,
+        opts: &IngestOptions,
+        instrument: &Instrument,
+        mut replay_sessions: Option<&mut BTreeSet<String>>,
+    ) -> Result<crate::StreamReport, PipelineError> {
         let mut verified = crate::StreamReport::default();
+        let mut credits = Vec::new();
         let tailer = Tailer::new(opts.tail.clone())?;
-        for file in roster {
-            opts.check_cancelled()?;
-            let Some(prefix) = self.0.get(&file.relative_path) else {
-                continue;
-            };
-            if file.driver != StreamDriver::JsonLines {
-                continue;
-            }
-            let Some(cursor) =
-                queries::cursor_state(store.conn(), &runtime.id, &file.relative_path)?
-            else {
-                continue;
-            };
-            let Some(mut checkpoint) = PipeCheckpoint::decode(&cursor.checkpoint) else {
-                continue;
-            };
-            if cursor.active_generation != prefix.generation
-                || checkpoint.source_generation != prefix.generation
-                || checkpoint.normalizer_version != adapter.normalizer_version()
-                || checkpoint.session_id != file.session_id
-                || checkpoint.stream_id != file.stream_id
-                || checkpoint.tail.is_some()
+        for group in roster.chunk_by(|left, right| left.session_id == right.session_id) {
+            let mut changed = false;
+            let mut sources = 0;
+            credits.clear();
+            for file in group
+                .iter()
+                .filter(|file| file.driver == StreamDriver::JsonLines)
             {
+                opts.check_cancelled()?;
+                sources += 1;
+                let Some(prefix) = self.0.get(&file.relative_path) else {
+                    changed |= file.size != 0;
+                    continue;
+                };
+                if let Some(offset) = prefix.bind(
+                    adapter, runtime, root, file, store, &tailer, opts, instrument,
+                )? {
+                    changed |= file.cut_len.unwrap_or(file.size) > offset;
+                    credits.push((file, prefix));
+                } else {
+                    changed = true;
+                }
+            }
+            if changed
+                && sources > 1
+                && let Some(replay) = replay_sessions.as_deref_mut()
+            {
+                replay.insert(group[0].session_id.clone());
                 continue;
             }
-            match prefix.verify(root, file, &tailer, opts, instrument)? {
-                Some((tail, stamp)) => {
-                    checkpoint.tail = Some(tail.encode_hex());
-                    checkpoint.snapshot_stamp = stamp;
-                    verified.payload_bytes += prefix.payload_bytes;
-                    verified.records += prefix.records;
-                    instrument.add(Metric::PayloadBytes, prefix.payload_bytes);
-                    instrument.add(Metric::RecordsFramed, prefix.records);
-                    if let Some(progress) = &opts.progress {
-                        progress.source_bytes(file, prefix.payload_bytes);
-                    }
-                }
-                None => {
-                    // The projected generation stays active until its replacement
-                    // is complete. A fresh cursor above a live generation makes
-                    // the normal writer stage, activate and sweep the old rows.
-                    checkpoint = PipeCheckpoint::fresh(
-                        &file.session_id,
-                        &file.stream_id,
-                        adapter.normalizer_version(),
-                    );
+            // Credit a settled session immediately. A family scheduled for a
+            // full reread will report its own bytes and records during capture.
+            for &(file, prefix) in &credits {
+                verified.payload_bytes += prefix.payload_bytes;
+                verified.records += prefix.records;
+                instrument.add(Metric::PayloadBytes, prefix.payload_bytes);
+                instrument.add(Metric::RecordsFramed, prefix.records);
+                if let Some(progress) = &opts.progress {
+                    progress.source_bytes(file, prefix.payload_bytes);
                 }
             }
-            instrument.apply(
-                store,
-                &Batch {
-                    ops: vec![],
-                    source: None,
-                    checkpoints: vec![CheckpointUpdate {
-                        runtime_id: runtime.id.clone(),
-                        stream: file.stream_id.clone(),
-                        path: file.relative_path.clone(),
-                        session_id: file.projected_session_id(),
-                        expected: Some(cursor.checkpoint),
-                        next: checkpoint.encode(),
-                        updated_at: None,
-                    }],
-                },
-            )?;
         }
         Ok(verified)
     }
 }
 
 impl Prefix {
+    #[allow(clippy::too_many_arguments)]
+    fn bind(
+        &self,
+        adapter: &dyn AgentAdapter,
+        runtime: &RuntimeRow,
+        root: &Path,
+        file: &SessionFile,
+        store: &mut Store,
+        tailer: &Tailer,
+        opts: &IngestOptions,
+        instrument: &Instrument,
+    ) -> Result<Option<u64>, PipelineError> {
+        let Some(cursor) = queries::cursor_state(store.conn(), &runtime.id, &file.relative_path)?
+        else {
+            return Ok(None);
+        };
+        let Some(mut checkpoint) = PipeCheckpoint::decode(&cursor.checkpoint) else {
+            return Ok(None);
+        };
+        if cursor.active_generation != self.generation
+            || checkpoint.source_generation != self.generation
+            || checkpoint.normalizer_version != adapter.normalizer_version()
+            || checkpoint.session_id != file.session_id
+            || checkpoint.stream_id != file.stream_id
+            || checkpoint.tail.is_some()
+        {
+            return Ok(None);
+        }
+        let offset = match self.verify(root, file, tailer, opts, instrument)? {
+            Some((tail, stamp)) => {
+                checkpoint.tail = Some(tail.encode_hex());
+                checkpoint.snapshot_stamp = stamp;
+                Some(tail.committed_offset)
+            }
+            None => {
+                // Keep the old rows visible until the replacement activates.
+                checkpoint = PipeCheckpoint::fresh(
+                    &file.session_id,
+                    &file.stream_id,
+                    adapter.normalizer_version(),
+                );
+                None
+            }
+        };
+        instrument.apply(
+            store,
+            &Batch {
+                ops: vec![],
+                source: None,
+                checkpoints: vec![CheckpointUpdate {
+                    runtime_id: runtime.id.clone(),
+                    stream: file.stream_id.clone(),
+                    path: file.relative_path.clone(),
+                    session_id: file.projected_session_id(),
+                    expected: Some(cursor.checkpoint),
+                    next: checkpoint.encode(),
+                    updated_at: None,
+                }],
+            },
+        )?;
+        Ok(offset)
+    }
+
     fn verify(
         &self,
         root: &Path,

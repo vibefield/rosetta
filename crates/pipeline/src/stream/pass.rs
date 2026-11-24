@@ -542,6 +542,16 @@ impl IngestPass {
         self.cut_before_first_record =
             batch.cut_applied && !batch.more_available && batch.checkpoint.committed_offset == 0;
 
+        // Recovery can already have established a replacement before this
+        // pass opens the file. Its eventual sweep needs the same sibling
+        // reconciliation as a rewrite discovered by the tailer mid-pass.
+        if batch.transition == Transition::Initial
+            && self.active_generation > 0
+            && self.source_generation != self.active_generation
+        {
+            deltas.generations_restarted += 1;
+        }
+
         if batch.transition.starts_new_generation()
             && !matches!(batch.transition, Transition::Initial)
         {
