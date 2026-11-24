@@ -753,6 +753,19 @@ pub fn pending_session_ids(conn: &Connection) -> Result<BTreeSet<String>, StoreE
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Sessions whose content cursor and public readiness may have been committed
+/// on opposite sides of an interrupted live pass.
+pub fn unfinished_runtime_sessions(
+    conn: &Connection,
+    runtime_id: &str,
+) -> Result<BTreeSet<String>, StoreError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id FROM session WHERE runtime_id = ?1 AND stream_state IN ('pending', 'streaming')",
+    )?;
+    let rows = stmt.query_map([runtime_id], |row| row.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// The whole metadata surface, for warming the hot tier's mirror. These are
 /// full-table scans by design — the mirror is fully resident.
 pub fn all_sessions(conn: &Connection) -> Result<Vec<SessionRow>, StoreError> {

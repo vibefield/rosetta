@@ -331,6 +331,37 @@ fn startup_catch_up_forces_one_silent_cursor_relative_poll() {
 }
 
 #[test]
+fn startup_catch_up_settles_quiet_sources_after_an_interrupted_readiness_write() {
+    use rosetta_core::rows::StreamState;
+
+    let mut h = backfilled_harness();
+    let pending = h.files[0].session_id.clone();
+    let streaming = h.files[1].session_id.clone();
+    assert_ne!(pending, streaming);
+    h.store
+        .set_session_stream_state(&pending, StreamState::Pending)
+        .unwrap();
+    h.store
+        .set_session_stream_state(&streaming, StreamState::Streaming)
+        .unwrap();
+    let mut runner = resumed_runner(
+        &h,
+        &ClaudeCodeAdapter,
+        ScriptedEvents::default(),
+        hot_live(),
+    );
+    runner.catch_up(&mut h.store, &h.instrument).unwrap();
+    for id in [pending, streaming] {
+        assert_eq!(
+            queries::session_stream_state(h.store.conn(), &id).unwrap(),
+            Some(StreamState::Indexed)
+        );
+    }
+    assert_eq!(runner.report().stream.stats.messages_inserted, 0);
+    assert_eq!(runner.report().stream.stats.messages_updated, 0);
+}
+
+#[test]
 fn startup_catch_up_replays_a_stale_normalizer_projection() {
     let adapter = &ClaudeCodeAdapter;
     let mut h = backfilled_harness();

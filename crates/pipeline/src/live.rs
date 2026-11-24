@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{Ledger, SourceEvent, SourceEvents};
 use rosetta_core::rows::RuntimeRow;
-use rosetta_store::Store;
+use rosetta_store::{Store, queries};
 
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
@@ -421,8 +421,8 @@ impl<'a> LiveRunner<'a> {
     /// gap between the preceding bounded skim/backfill and the ordinary live
     /// cadence, including writes that landed while the daemon was offline or
     /// while a private cold projection was being published. Rotating audits
-    /// remain on normal poll ticks; startup catch-up reads only files with
-    /// changed cursor-relative evidence.
+    /// remain on normal poll ticks; startup catch-up considers changed evidence
+    /// and sessions whose readiness still needs settling.
     pub fn catch_up(
         &mut self,
         store: &mut Store,
@@ -442,6 +442,20 @@ impl<'a> LiveRunner<'a> {
     ) -> Result<bool, PipelineError> {
         self.report.ticks += 1;
         let mut changed: BTreeSet<String> = BTreeSet::new();
+        if force_poll {
+            // A live batch commits its file checkpoints before it settles
+            // session readiness. A killed worker may leave a fully consumed
+            // file Pending, with no stat change to nominate it next time.
+            // Re-evaluate all admitted sibling sources from their cursors so
+            // an incomplete tail can still keep the session Streaming.
+            let unfinished = queries::unfinished_runtime_sessions(store.conn(), &self.runtime.id)?;
+            changed.extend(
+                self.files
+                    .iter()
+                    .filter(|file| unfinished.contains(&file.session_id))
+                    .map(|file| file.relative_path.clone()),
+            );
+        }
         // Older callers can hand over only the admitted roster. Bootstrap
         // its withheld dependencies once before any policy-protected capture.
         let mut needs_admission =
