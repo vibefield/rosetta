@@ -1421,6 +1421,7 @@ fn run_resumed_fresh_serve(
         instrument,
         health,
         control,
+        stop,
         Some(withheld),
     )?;
     for (project, session_id) in &done {
@@ -1632,6 +1633,7 @@ fn run_fresh_fast_serve(
         instrument,
         health,
         control,
+        stop,
         None,
     )?;
     hub.reveal_pending(store.conn())
@@ -1951,12 +1953,20 @@ fn publish_fresh_ram_projection(
     instrument: &Instrument,
     health: &DaemonHealth,
     control: &ColdControl,
+    stop: &Arc<AtomicBool>,
     withheld: Option<resume::WithheldReadiness>,
 ) -> Result<Store, String> {
     health.ingest_phase(rosetta_server::IngestPhase::Finalizing);
-    instrument
-        .finish_bulk_load(&mut store)
-        .map_err(|error| format!("finalizing canonical RAM projection: {error}"))?;
+    // Large rollups and CREATE INDEX run inside a single SQLite statement.
+    // Only the private writer gets this hook. Its transaction may roll back
+    // on shutdown while the staged ledger remains the recovery source.
+    let shutdown = Arc::clone(stop);
+    store
+        .conn()
+        .progress_handler(16_384, Some(move || shutdown.load(Ordering::Relaxed)));
+    let finalized = instrument.finish_bulk_load(&mut store);
+    store.conn().progress_handler(0, None::<fn() -> bool>);
+    finalized.map_err(|error| format!("finalizing canonical RAM projection: {error}"))?;
     control.publishing()?;
     // A resumed build's rows are final only now (finalization neither reads
     // nor writes readiness). Past the publication fence no pause can keep
@@ -1966,8 +1976,10 @@ fn publish_fresh_ram_projection(
     }
     health.ingest_phase(rosetta_server::IngestPhase::Publishing);
     instrument.time(Metric::PublishNanos, || {
-        crate::publication::stage_ram_projection(store.conn(), &temp)
-            .map_err(|error| format!("backing up canonical RAM projection: {error}"))?;
+        crate::publication::stage_ram_projection(store.conn(), &temp, || {
+            stop.load(Ordering::SeqCst)
+        })
+        .map_err(|error| format!("backing up canonical RAM projection: {error}"))?;
         let finished = rusqlite::Connection::open(&*temp)
             .map_err(|error| format!("opening staged durable projection: {error}"))?;
         make_single_file(&finished, "staged durable projection")?;
@@ -1976,6 +1988,11 @@ fn publish_fresh_ram_projection(
             .and_then(|file| file.sync_all())
             .map_err(|error| format!("syncing staged durable projection: {error}"))?;
 
+        // Past the first rename the publication must finish as a unit. Until
+        // then a stop can leave the durable ledger for the next launch.
+        if stop.load(Ordering::SeqCst) {
+            return Err("private projection installation interrupted by shutdown".into());
+        }
         ledger_stage.publish()?;
         install_rebuilt_projection(db, temp.as_ref())?;
         let _installed = temp.keep();

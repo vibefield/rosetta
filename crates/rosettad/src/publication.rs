@@ -50,13 +50,23 @@ const STEP_PAGES: i32 = 1024;
 /// place, so the copy needs neither a rollback journal nor syncs of its own:
 /// an interrupted copy leaves a staging file that is never installed. The
 /// pages are the ones the default backup writes.
-pub(crate) fn stage_ram_projection(source: &Connection, staging: &Path) -> Result<(), String> {
+pub(crate) fn stage_ram_projection(
+    source: &Connection,
+    staging: &Path,
+    should_stop: impl Fn() -> bool,
+) -> Result<(), String> {
     let mut destination = Connection::open(staging).map_err(|error| error.to_string())?;
     destination
         .execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;")
         .map_err(|error| error.to_string())?;
     let backup = Backup::new(source, &mut destination).map_err(|error| error.to_string())?;
     loop {
+        // The destination is still private. A shutdown here keeps the staged
+        // ledger for recovery and avoids spending the host's grace period on
+        // pages that can be reconstructed from that ledger on restart.
+        if should_stop() {
+            return Err("private projection copy interrupted by shutdown".into());
+        }
         // sqlite3_backup_step returns its own result code. Until backup_finish,
         // the destination handle can still describe SQLITE_OK ("not an error").
         let step = backup.step(STEP_PAGES).map_err(|error| match &error {
@@ -124,7 +134,17 @@ mod tests {
 
         let staged = dir.path().join("staged.sqlite");
         std::fs::File::create(&staged).unwrap();
-        stage_ram_projection(&source, &staged).unwrap();
+        let steps = std::cell::Cell::new(0);
+        let error = stage_ram_projection(&source, &staged, || {
+            steps.set(steps.get() + 1);
+            steps.get() == 2
+        })
+        .unwrap_err();
+        assert!(error.contains("interrupted by shutdown"));
+        assert_eq!(steps.get(), 2);
+        // Recreate the private copy the way a new writer does on restart.
+        std::fs::File::create(&staged).unwrap();
+        stage_ram_projection(&source, &staged, || false).unwrap();
         let reference = dir.path().join("reference.sqlite");
         source
             .backup(rusqlite::DatabaseName::Main, &reference, None)
