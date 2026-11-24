@@ -231,10 +231,6 @@ impl IngestPass {
         let mut ctx = NormalizeCtx::new(runtime.id.as_str(), file.session_id.as_str());
         ctx.native_session_id = Some(file.native_session_id.clone());
         ctx.agent_version = file.agent_version.clone();
-        ctx.state = match &resumed {
-            Some((_, _)) => None,
-            None => adapter.restore_state(None).map_err(PipelineError::Config)?,
-        };
         ctx.src_cursor = Some(cursor_id);
         ctx.source_identity = Some(file.relative_path.clone());
         let mut source_generation = highest_generation
@@ -243,16 +239,25 @@ impl IngestPass {
         let mut next_source_sequence = 0_u64;
         let mut generation_clean = true;
         if let Some((checkpoint, state)) = resumed {
-            ctx.next_ordinal = checkpoint.next_ordinal;
-            if let Some(last) = checkpoint.cumulative {
-                ctx.cumulative = CumulativeUsage::resume(last);
+            // Ledger replay restores a logical cursor but has no native tail.
+            // A read from byte zero must start the normalizer at byte zero too.
+            // A later batch of that re-read has its own tail and adapter state.
+            if tail.is_some() {
+                ctx.next_ordinal = checkpoint.next_ordinal;
+                if let Some(last) = checkpoint.cumulative {
+                    ctx.cumulative = CumulativeUsage::resume(last);
+                }
+                ctx.state = state;
+            } else {
+                ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
             }
-            ctx.state = state;
             if checkpoint.source_generation > 0 {
                 source_generation = checkpoint.source_generation;
             }
             next_source_sequence = checkpoint.next_source_sequence;
             generation_clean = checkpoint.generation_clean;
+        } else {
+            ctx.state = adapter.restore_state(None).map_err(PipelineError::Config)?;
         }
 
         // A starter budget applies only where pausing cannot regress what a

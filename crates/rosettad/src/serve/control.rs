@@ -153,12 +153,7 @@ pub(super) fn run_fresh(
                 target.census.streamable_bytes,
             );
         }
-        let temp = tempfile::Builder::new()
-            .prefix(".rosetta-backfill-")
-            .suffix(".sqlite")
-            .tempfile_in(projection_parent(db))
-            .map_err(|e| e.to_string())?
-            .into_temp_path();
+        let temp = crate::publication::cold_copy(db)?;
         let uri = format!(
             "file:rosetta-resume-{}-{}-{attempt}?mode=memory&cache=shared",
             std::process::id(),

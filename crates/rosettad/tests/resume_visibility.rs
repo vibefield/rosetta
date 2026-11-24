@@ -499,11 +499,6 @@ fn a_finished_runtime_catch_up_stays_pending_until_the_resume_publishes() {
     serve_once(&home, &clean_db, BOTH);
     let resumed = canonical_rows(&db);
     for (table, rows) in canonical_rows(&clean_db) {
-        // Known and older than readiness withholding: any resume of a staged
-        // Codex generation, paused or not, doubles its usage samples.
-        if matches!(table.as_str(), "session_usage" | "usage_bucket") {
-            continue;
-        }
         assert_eq!(resumed[&table], rows, "{table}");
     }
 }
@@ -658,5 +653,70 @@ fn a_resumed_start_tolerates_an_interrupted_source_that_vanished() {
     rebuilt.get_mut("session").unwrap().sort();
     for (table, rows) in resumed {
         assert_eq!(rebuilt[&table], rows, "{table}");
+    }
+}
+
+#[test]
+fn codex_catch_up_after_ledger_replay_counts_each_request_once() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let root = expand_data_root(&CodexAdapter.layout().data_root, &home);
+    generate(&CorpusSpec::new(Agent::Codex, 4, 1200, 118), &root).unwrap();
+    let db = temp.path().join("archive/rosetta.db");
+    serve_once(&home, &db, &["codex"]);
+    let rows = canonical_rows(&db);
+    assert!(!rows["session_usage"].is_empty());
+    let positions = "SELECT path || '/' || json_extract(checkpoint, '$.next_ordinal') FROM ingest_cursor ORDER BY path";
+    let ordinals = column(&db, positions);
+
+    stage_ledger(&db, &[("codex", &root)]);
+    let daemon = Daemon::spawn(&home, &db, &["codex"]);
+    let published = daemon.wait("restored import counters", |status| {
+        status["daemon"]["ingest"]["phase"] == "live" && status["canonical_ready"] == true
+    });
+    let row = &published["daemon"]["ingest"]["runtimes"][0];
+    assert_eq!(
+        row["records"], 1200,
+        "the import sign includes the verified source prefix"
+    );
+    assert!(row["bytes_streamed"].as_u64().unwrap() > 0);
+    drop(daemon);
+    assert_eq!(ordinals, column(&db, positions));
+    let raw_count = scan_ledger(&db.with_extension("ledger").join("codex"))
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter(|entry| matches!(entry, LedgerEntry::Raw { .. }))
+        .count();
+    assert_eq!(raw_count, 1200, "resume re-appended sealed raw records");
+    let resumed = canonical_rows(&db);
+    for (table, expected) in rows {
+        assert_eq!(resumed[&table], expected, "{table}");
+    }
+}
+
+#[test]
+fn a_transcript_shortened_while_stopped_replaces_its_replayed_generation() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let root = expand_data_root(&CodexAdapter.layout().data_root, &home);
+    generate(&CorpusSpec::new(Agent::Codex, 2, 400, 118), &root).unwrap();
+    let db = temp.path().join("archive/rosetta.db");
+    serve_once(&home, &db, &["codex"]);
+    let file = root.join(&column(&db, "SELECT path FROM ingest_cursor ORDER BY path LIMIT 1")[0]);
+    stage_ledger(&db, &[("codex", &root)]);
+    let data = std::fs::read(&file).unwrap();
+    let start = data
+        .iter()
+        .take(data.len() / 2)
+        .rposition(|b| *b == b'\n')
+        .unwrap();
+    std::fs::write(file, &data[..=start]).unwrap();
+    let clean = temp.path().join("clean/rosetta.db");
+    serve_once(&home, &clean, &["codex"]);
+    serve_once(&home, &db, &["codex"]);
+    let resumed = canonical_rows(&db);
+    for (table, expected) in canonical_rows(&clean) {
+        assert_eq!(resumed[&table], expected, "{table}");
     }
 }

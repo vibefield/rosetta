@@ -60,7 +60,7 @@ use crate::runtime_ledger::{is_layout_root, ledger_dir, open_runtime_ledger};
 use crate::{
     AppliedColdRuntime, ColdCaptureRequest, Flags, identity_name, install_rebuilt_projection,
     ledger_root, load_enrollment, make_single_file, open_progressive_backfill, parse_flags,
-    projection_lock, projection_parent, record_fresh_failures, selected,
+    projection_lock, record_fresh_failures, selected,
 };
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
@@ -324,15 +324,7 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
     // because its purpose is to leave that durable intermediate inspectable.
     let fresh_fast = !db.exists() && !flags.stop_after_meta;
     let (mut store, cold_temp, projection_reader) = if fresh_fast {
-        let parent = projection_parent(&db);
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("creating {}: {error}", parent.display()))?;
-        let named = tempfile::Builder::new()
-            .prefix(".rosetta-backfill-")
-            .suffix(".sqlite")
-            .tempfile_in(parent)
-            .map_err(|error| format!("creating private projection: {error}"))?;
-        let temp = named.into_temp_path();
+        let temp = crate::publication::cold_copy(&db)?;
         let uri = format!(
             "file:rosetta-cold-{}-{}?mode=memory&cache=shared",
             std::process::id(),
@@ -1214,7 +1206,7 @@ fn run_resumed_fresh_serve(
         health.ingest_stream(&runtime.id, counter_source(instrument, baseline));
         health.ingest_phase(rosetta_server::IngestPhase::Restoring);
 
-        let unsealed = if has_ledger_segments(&ledger_dir)? {
+        let (unsealed, restored_prefixes) = if has_ledger_segments(&ledger_dir)? {
             let report = rebuild_runtime_with_options(
                 adapter,
                 &runtime,
@@ -1254,9 +1246,9 @@ fn run_resumed_fresh_serve(
                     report.segments
                 );
             }
-            report.unsealed_sources
+            (report.unsealed_sources, report.restored_prefixes)
         } else {
-            BTreeMap::new()
+            Default::default()
         };
 
         // Current bounded metadata settles the roster after replay; each
@@ -1321,6 +1313,17 @@ fn run_resumed_fresh_serve(
             &runtime.id,
             counter_source(instrument, instrument.snapshot()),
         );
+        let verified = restored_prefixes
+            .bind(
+                adapter,
+                &runtime,
+                &target.root,
+                &roster,
+                &mut store,
+                &observed_opts,
+                instrument,
+            )
+            .map_err(|error| format!("{name} verifying restored source positions: {error}"))?;
         let mut stream = stream_backfill_withholding_health(
             adapter,
             &runtime,
@@ -1362,7 +1365,11 @@ fn run_resumed_fresh_serve(
                 .into_iter()
                 .map(|id| (ownership.get(&id).cloned().flatten(), id)),
         );
-        health.ingest_done(&runtime.id, stream.payload_bytes, stream.records);
+        health.ingest_done(
+            &runtime.id,
+            verified.payload_bytes + stream.payload_bytes,
+            verified.records + stream.records,
+        );
         events.insert(runtime.id.clone(), watcher);
         applied.push(AppliedColdRuntime {
             adapter,

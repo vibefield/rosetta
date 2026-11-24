@@ -5,6 +5,41 @@ use std::path::Path;
 use rusqlite::Connection;
 use rusqlite::backup::{Backup, StepResult};
 
+/// The writer holds this projection's exclusive lock. A killed backup can
+/// leave part of a database on disk; replace just this projection's private
+/// scratch files on the next attempt. A pause/resume uses the same name, so
+/// the footprint sampler continues to measure the current backup.
+pub(crate) fn cold_copy(db: &Path) -> Result<tempfile::TempPath, String> {
+    let name = db.file_name().ok_or("projection needs a file name")?;
+    let key = blake3::hash(name.as_encoded_bytes()).to_hex();
+    let basename = format!(".rosetta-backfill-{key}.tmp");
+    let parent = crate::projection_parent(db);
+    let copy = parent.join(&basename);
+    for path in [
+        crate::sidecar(&copy, "-wal"),
+        crate::sidecar(&copy, "-shm"),
+        crate::sidecar(&copy, "-journal"),
+        copy,
+    ] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(format!(
+                    "clearing private projection {}: {e}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    tempfile::Builder::new()
+        .prefix(&basename)
+        .rand_bytes(0)
+        .tempfile_in(parent)
+        .map(|file| file.into_temp_path())
+        .map_err(|e| format!("creating private projection for {}: {e}", db.display()))
+}
+
 /// Pages copied per backup step. A step holds the source's shared-cache lock,
 /// so readers of the RAM projection wait at most one step; steps this large
 /// cost nothing measurable over a single whole-database step.
@@ -22,7 +57,13 @@ pub(crate) fn stage_ram_projection(source: &Connection, staging: &Path) -> Resul
         .map_err(|error| error.to_string())?;
     let backup = Backup::new(source, &mut destination).map_err(|error| error.to_string())?;
     loop {
-        match backup.step(STEP_PAGES).map_err(|error| error.to_string())? {
+        // sqlite3_backup_step returns its own result code. Until backup_finish,
+        // the destination handle can still describe SQLITE_OK ("not an error").
+        let step = backup.step(STEP_PAGES).map_err(|error| match &error {
+            rusqlite::Error::SqliteFailure(code, _) => code.to_string(),
+            _ => error.to_string(),
+        })?;
+        match step {
             StepResult::More => {}
             StepResult::Done => return Ok(()),
             blocked => return Err(format!("backup step returned {blocked:?}")),
@@ -37,6 +78,23 @@ mod tests {
     fn quick_check(conn: &Connection) -> String {
         conn.query_row("PRAGMA quick_check", [], |row| row.get(0))
             .unwrap()
+    }
+
+    #[test]
+    fn restarting_replaces_only_this_projections_staging_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("first.sqlite");
+        let other = super::cold_copy(&dir.path().join("second.sqlite")).unwrap();
+        std::fs::write(&other, b"other writer").unwrap();
+        let partial = super::cold_copy(&db).unwrap().keep().unwrap();
+        std::fs::write(&partial, b"incomplete backup").unwrap();
+        let journal = crate::sidecar(&partial, "-journal");
+        std::fs::write(&journal, b"partial journal").unwrap();
+        let restarted = super::cold_copy(&db).unwrap();
+        assert_eq!(&*restarted, partial);
+        assert_eq!(std::fs::metadata(&restarted).unwrap().len(), 0);
+        assert!(!journal.exists());
+        assert_eq!(std::fs::read(&other).unwrap(), b"other writer");
     }
 
     #[test]

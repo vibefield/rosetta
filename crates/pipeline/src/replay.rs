@@ -32,6 +32,8 @@ use crate::stream::{merge_stats, over_projection_limit, quarantined_record};
 
 mod admission;
 use admission::{AdmissionScan, ReplayAdmission};
+mod resume_prefix;
+pub use resume_prefix::RestoredPrefixes;
 mod stopped;
 pub use stopped::{StoppedSource, activate_stopped_source};
 
@@ -374,6 +376,8 @@ where
 
 #[derive(Debug, Default)]
 pub struct RebuildReport {
+    /// In-memory native verification for cold catch-up after a staged ledger replay.
+    pub restored_prefixes: RestoredPrefixes,
     pub segments: usize,
     pub torn_segments: usize,
     pub meta_batches: u64,
@@ -892,6 +896,14 @@ pub fn rebuild_runtime_with_options(
                     instrument,
                 ) {
                     return Ok(());
+                }
+                if options.allow_unsealed_sources {
+                    report.restored_prefixes.record(
+                        &source.relative_path,
+                        file.generation,
+                        start_offset,
+                        &payload,
+                    );
                 }
                 if file.ops.len() >= options.chunk_ops {
                     let mode = if file.activated {
