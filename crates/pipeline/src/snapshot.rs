@@ -24,6 +24,31 @@ use crate::{IngestOptions, PipelineError};
 
 const CHUNK_OPS: usize = 512;
 
+/// Native snapshot readers and ledger replay must hash exactly the same
+/// sequence of serialized rows, including the empty snapshot.
+#[derive(Default)]
+pub(crate) struct SnapshotRevision(blake3::Hasher);
+
+impl SnapshotRevision {
+    pub(crate) fn for_stream(adapter: &dyn AgentAdapter, stream: &str) -> Option<Box<Self>> {
+        use rosetta_adapter_support::StreamDriver::{DocumentSnapshot, SqliteSnapshot};
+        matches!(
+            adapter.stream_driver(stream),
+            Some(DocumentSnapshot | SqliteSnapshot)
+        )
+        .then(Box::default)
+    }
+
+    pub(crate) fn push(&mut self, record: &[u8]) {
+        self.0.update(record);
+        self.0.update(b"\n");
+    }
+
+    pub(crate) fn digest(&self) -> String {
+        self.0.finalize().to_hex().to_string()
+    }
+}
+
 /// The database path of a virtual source, if it is one.
 pub(crate) fn virtual_db_path(relative_path: &str) -> Option<&str> {
     relative_path.split_once('#').map(|(db, _)| db)
@@ -266,14 +291,15 @@ pub(crate) fn apply_snapshot_records(
     instrument: &Instrument,
     report: &mut StreamReport,
 ) -> Result<bool, PipelineError> {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = SnapshotRevision::default();
+    let mut payload_bytes = 0;
     for record in records {
         opts.check_cancelled()?;
-        hasher.update(record);
-        hasher.update(b"\n");
+        hasher.push(record);
+        payload_bytes += record.len() as u64;
         instrument.add(Metric::BytesRead, record.len() as u64 + 1);
     }
-    let revision = hasher.finalize().to_hex().to_string();
+    let revision = hasher.digest();
 
     let checkpoint = PipeCheckpoint::decode(&cursor.checkpoint).filter(|checkpoint| {
         checkpoint.session_id == file.session_id && checkpoint.stream_id == file.stream_id
@@ -310,6 +336,17 @@ pub(crate) fn apply_snapshot_records(
                 Ok(stats) => {
                     merge_stats(&mut report.stats, &stats);
                     report.batches += 1;
+                    // Replay has a content revision but no physical stamp.
+                    // Credit it once, after the native revision matched.
+                    if previous.snapshot_stamp.is_none() {
+                        report.records += records.len() as u64;
+                        report.payload_bytes += payload_bytes;
+                        instrument.add(Metric::RecordsFramed, records.len() as u64);
+                        instrument.add(Metric::PayloadBytes, payload_bytes);
+                        if let Some(progress) = &opts.progress {
+                            progress.source_bytes(file, payload_bytes);
+                        }
+                    }
                 }
                 Err(StoreError::CheckpointConflict { .. }) => {
                     report.conflicts += 1;

@@ -499,11 +499,6 @@ fn a_finished_runtime_catch_up_stays_pending_until_the_resume_publishes() {
     serve_once(&home, &clean_db, BOTH);
     let resumed = canonical_rows(&db);
     for (table, rows) in canonical_rows(&clean_db) {
-        // Known and older than readiness withholding: any resume of a staged
-        // Codex generation, paused or not, doubles its usage samples.
-        if matches!(table.as_str(), "session_usage" | "usage_bucket") {
-            continue;
-        }
         assert_eq!(resumed[&table], rows, "{table}");
     }
 }
@@ -536,19 +531,31 @@ fn a_resumed_start_tolerates_an_interrupted_source_that_vanished() {
     let claude = claude_home(&home);
     let db = temp.path().join("archive/rosetta.db");
     serve_once(&home, &db, CLAUDE);
+    let runtime = column(&db, "SELECT DISTINCT runtime_id FROM session")
+        .pop()
+        .unwrap();
     let staged = stage_ledger(&db, &[("claude-code", &claude)]);
-    let long = long_transcript(&claude);
-
-    // Interrupt the resumed build while it reads the long transcript, then
-    // quit: the staged ledger holds part of it, unsealed.
-    let daemon = Daemon::spawn(&home, &db, CLAUDE);
-    daemon.pause_while_catching_up();
-    drop(daemon);
-    let relative = long
-        .strip_prefix(&claude)
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
+    // Persist exactly the first of two native records, at the same durable
+    // boundary as a process killed before the generation seal. Polling a
+    // progress counter can race the seal on a fast disk.
+    let relative = format!("{TOOL_PROJECT}/{LONG_SESSION}.jsonl");
+    let first = message("prefix", "captured").replace("heal-session", LONG_SESSION);
+    let second = message("suffix", "still unread").replace("heal-session", LONG_SESSION);
+    let long = write_fixture(&claude, &relative, &(first.clone() + &second));
+    let source = rosetta_capture::SourceDef {
+        relative_path: relative.clone(),
+        stream_id: "transcript".into(),
+        session_id: rosetta_core::ids::session_id(&runtime, LONG_SESSION),
+        native_session_id: LONG_SESSION.into(),
+        agent_version: Some("2.1.241".into()),
+        ledger_only: false,
+    };
+    let mut ledger = rosetta_capture::Ledger::open(&staged.join("claude-code")).unwrap();
+    ledger
+        .append_raw(&source, 1, [(0, first.trim_end())])
+        .unwrap();
+    ledger.flush().unwrap();
+    drop(ledger);
     let entries = scan_ledger(&staged.join("claude-code")).unwrap().entries;
     let generations = entries
         .iter()
@@ -572,14 +579,9 @@ fn a_resumed_start_tolerates_an_interrupted_source_that_vanished() {
     );
     std::fs::remove_file(&long).unwrap();
 
-    let daemon = Daemon::spawn(&home, &db, CLAUDE);
-    let paused = daemon.get("/api/status");
-    assert_eq!(run(&paused)["state"], "paused", "{paused}");
-    daemon.resume_to_publication(&paused, 3);
-    let stdout = daemon.stdout();
-    drop(daemon);
+    let stdout = serve_once(&home, &db, CLAUDE);
     let tolerated = stdout
-        .iter()
+        .lines()
         .filter(|line| line.contains("tolerated per-file imperfections"))
         .collect::<Vec<_>>();
     assert_eq!(tolerated.len(), 1, "{stdout:?}");
@@ -597,7 +599,7 @@ fn a_resumed_start_tolerates_an_interrupted_source_that_vanished() {
     )[0]
     .parse()
     .unwrap();
-    assert!(messages > 0, "the staged prefix is published");
+    assert_eq!(messages, 1, "only the staged prefix is published");
     assert_eq!(
         column(
             &db,
@@ -658,5 +660,521 @@ fn a_resumed_start_tolerates_an_interrupted_source_that_vanished() {
     rebuilt.get_mut("session").unwrap().sort();
     for (table, rows) in resumed {
         assert_eq!(rebuilt[&table], rows, "{table}");
+    }
+}
+
+#[test]
+fn codex_catch_up_after_ledger_replay_counts_each_request_once() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let root = expand_data_root(&CodexAdapter.layout().data_root, &home);
+    generate(&CorpusSpec::new(Agent::Codex, 4, 1200, 118), &root).unwrap();
+    let db = temp.path().join("archive/rosetta.db");
+    serve_once(&home, &db, &["codex"]);
+    let rows = canonical_rows(&db);
+    assert!(!rows["session_usage"].is_empty());
+    let positions = "SELECT path || '/' || json_extract(checkpoint, '$.next_ordinal') FROM ingest_cursor ORDER BY path";
+    let ordinals = column(&db, positions);
+
+    stage_ledger(&db, &[("codex", &root)]);
+    let daemon = Daemon::spawn(&home, &db, &["codex"]);
+    let published = daemon.wait("restored import counters", |status| {
+        status["daemon"]["ingest"]["phase"] == "live" && status["canonical_ready"] == true
+    });
+    let row = &published["daemon"]["ingest"]["runtimes"][0];
+    assert_eq!(
+        row["records"], 1200,
+        "the import sign includes the verified source prefix"
+    );
+    assert!(row["bytes_streamed"].as_u64().unwrap() > 0);
+    drop(daemon);
+    assert_eq!(ordinals, column(&db, positions));
+    let raw_count = scan_ledger(&db.with_extension("ledger").join("codex"))
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter(|entry| matches!(entry, LedgerEntry::Raw { .. }))
+        .count();
+    assert_eq!(raw_count, 1200, "resume re-appended sealed raw records");
+    let resumed = canonical_rows(&db);
+    for (table, expected) in rows {
+        assert_eq!(resumed[&table], expected, "{table}");
+    }
+}
+
+#[test]
+fn a_transcript_shortened_while_stopped_replaces_its_replayed_generation() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let root = expand_data_root(&CodexAdapter.layout().data_root, &home);
+    generate(&CorpusSpec::new(Agent::Codex, 2, 400, 118), &root).unwrap();
+    let db = temp.path().join("archive/rosetta.db");
+    serve_once(&home, &db, &["codex"]);
+    let file = root.join(&column(&db, "SELECT path FROM ingest_cursor ORDER BY path LIMIT 1")[0]);
+    stage_ledger(&db, &[("codex", &root)]);
+    let data = std::fs::read(&file).unwrap();
+    let start = data
+        .iter()
+        .take(data.len() / 2)
+        .rposition(|b| *b == b'\n')
+        .unwrap();
+    std::fs::write(file, &data[..=start]).unwrap();
+    let clean = temp.path().join("clean/rosetta.db");
+    serve_once(&home, &clean, &["codex"]);
+    serve_once(&home, &db, &["codex"]);
+    let resumed = canonical_rows(&db);
+    for (table, expected) in canonical_rows(&clean) {
+        assert_eq!(resumed[&table], expected, "{table}");
+    }
+}
+
+fn message(id: &str, content: &str) -> String {
+    format!(
+        "{}\n",
+        json!({
+            "type":"user","isSidechain":false,"parentUuid":null,"userType":"external",
+            "cwd":"/w/recovery","sessionId":"heal-session","version":"2.1.241","gitBranch":"main",
+            "timestamp":"2026-08-25T02:35:19.054Z","uuid":id,"message":{"role":"user","content":content}
+        })
+    )
+}
+
+fn write_fixture(root: &Path, path: &str, contents: &str) -> PathBuf {
+    let file = root.join(path);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, contents).unwrap();
+    file
+}
+
+const MESSAGES: &str = "SELECT coalesce(content, '') FROM message ORDER BY content";
+const GENERATIONS: &str =
+    "SELECT active_generation || '/' || highest_generation FROM ingest_cursor";
+
+#[cfg(unix)]
+#[test]
+fn quit_during_a_large_live_append_stops_at_a_committed_batch_and_resumes() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let db = temp.path().join("archive/rosetta.db");
+    let file = write_fixture(
+        &home.join(".claude"),
+        "projects/a/heal-session.jsonl",
+        &message("0", "0"),
+    );
+    serve_once(&home, &db, CLAUDE);
+    let total = 25_000;
+    {
+        let mut writer =
+            std::io::BufWriter::new(std::fs::OpenOptions::new().append(true).open(file).unwrap());
+        for i in 1..total {
+            let id = i.to_string();
+            writer.write_all(message(&id, &id).as_bytes()).unwrap();
+        }
+        writer.flush().unwrap();
+    }
+    let count = |conn: &rusqlite::Connection| {
+        conn.query_row("SELECT COUNT(*) FROM message", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    };
+    let reader =
+        rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let mut daemon = Daemon::spawn(&home, &db, CLAUDE);
+    let deadline = Instant::now() + Duration::from_secs(45);
+    while count(&reader) == 1 {
+        assert!(
+            Instant::now() < deadline,
+            "waiting for the first append commit"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        Command::new("kill")
+            .args(["-INT", &daemon.child.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while daemon.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the app would have forced this daemon to quit"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(daemon.child.wait().unwrap().success());
+    assert!(
+        count(&reader) < total,
+        "Quit drained the entire native append"
+    );
+    drop(daemon);
+    drop(reader);
+    serve_once(&home, &db, CLAUDE);
+    let rebuilt = temp.path().join("rebuilt/rosetta.db");
+    rebuild(&db, &rebuilt);
+    for projection in [&db, &rebuilt] {
+        assert_eq!(
+            count(&rusqlite::Connection::open(projection).unwrap()),
+            total
+        );
+        assert_eq!(
+            column(
+                projection,
+                "SELECT CAST(COUNT(DISTINCT content) AS TEXT) FROM message"
+            ),
+            [total.to_string()]
+        );
+    }
+}
+
+#[test]
+fn a_replacement_restores_a_shared_message_from_its_remaining_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".claude");
+    for name in ["original", "copy"] {
+        write_fixture(
+            &root,
+            &format!("projects/{name}/heal-session.jsonl"),
+            &(message(name, name) + &message("shared", "shared")),
+        );
+    }
+    let db = temp.path().join("archive/rosetta.db");
+    serve_once(&home, &db, CLAUDE);
+    let owner = column(&db,"SELECT c.path FROM message m JOIN ingest_cursor c ON c.id=m.src_cursor WHERE m.content='shared'").pop().unwrap();
+    let name = Path::new(&owner)
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    stage_ledger(&db, &[("claude-code", &root)]);
+    write_fixture(
+        &root,
+        &owner,
+        &(message(name, name) + &message("new", "new")),
+    );
+    let clean = temp.path().join("clean/rosetta.db");
+    serve_once(&home, &clean, CLAUDE);
+    let owners = "SELECT m.content || ':' || c.path FROM message m JOIN ingest_cursor c ON c.id=m.src_cursor ORDER BY m.content";
+    assert_eq!(
+        column(&clean, MESSAGES),
+        ["copy", "new", "original", "shared"]
+    );
+    for _ in 0..2 {
+        serve_once(&home, &db, CLAUDE);
+        assert_eq!(column(&db, owners), column(&clean, owners));
+    }
+    let rebuilt = temp.path().join("rebuilt/rosetta.db");
+    rebuild(&db, &rebuilt);
+    assert_eq!(column(&rebuilt, owners), column(&clean, owners));
+}
+
+#[test]
+fn conflicting_sibling_messages_keep_the_fresh_imports_owner_and_value() {
+    for changed in ["a", "b", "both", "new-a"] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let root = home.join(".claude");
+        let db = temp.path().join("archive/rosetta.db");
+        let put = |name: &str, value: &str| {
+            write_fixture(
+                &root,
+                &format!("projects/{name}/heal-session.jsonl"),
+                &(message(name, name) + &message("shared", value)),
+            );
+        };
+        if changed != "new-a" {
+            put("a", "a-old");
+        }
+        put("b", "b-old");
+        serve_once(&home, &db, CLAUDE);
+        stage_ledger(&db, &[("claude-code", &root)]);
+        if matches!(changed, "a" | "both" | "new-a") {
+            put("a", "a-new");
+        }
+        if matches!(changed, "b" | "both") {
+            put("b", "b-new");
+        }
+        let clean = temp.path().join("clean/rosetta.db");
+        let rebuilt = temp.path().join("rebuilt/rosetta.db");
+        serve_once(&home, &db, CLAUDE);
+        serve_once(&home, &clean, CLAUDE);
+        rebuild(&db, &rebuilt);
+        let owners = "SELECT m.content || ':' || c.path FROM message m JOIN ingest_cursor c ON c.id=m.src_cursor ORDER BY m.content";
+        assert_eq!(column(&db, owners), column(&clean, owners), "{changed}");
+        assert_eq!(
+            column(&rebuilt, owners),
+            column(&clean, owners),
+            "{changed} archive"
+        );
+    }
+}
+
+#[test]
+fn a_corrected_source_uses_a_generation_above_the_rejected_seal() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".claude");
+    let db = temp.path().join("archive/rosetta.db");
+    for (i, text) in ["A", "B", "C"].into_iter().enumerate() {
+        if i > 0 {
+            stage_ledger(&db, &[("claude-code", &root)]);
+        }
+        let mut contents = message("header", "header") + &message(text, text);
+        if i == 1 {
+            contents.push_str("{bad-record}\n");
+        }
+        write_fixture(&root, "projects/a/heal-session.jsonl", &contents);
+        serve_once(&home, &db, CLAUDE);
+        let generation = i + 1;
+        assert_eq!(
+            column(&db, GENERATIONS),
+            [format!("{generation}/{generation}")]
+        );
+        assert_eq!(column(&db, MESSAGES), [text, "header"]);
+        assert_eq!(
+            column(&db, "SELECT stream_state FROM session"),
+            [if i == 1 { "streaming" } else { "indexed" }]
+        );
+    }
+    let rebuilt = temp.path().join("rebuilt/rosetta.db");
+    rebuild(&db, &rebuilt);
+    assert_eq!(column(&rebuilt, MESSAGES), ["C", "header"]);
+    assert_eq!(column(&rebuilt, GENERATIONS), ["3/3"]);
+}
+
+#[test]
+fn rebuild_recognizes_a_clean_restart_of_a_legacy_reused_generation() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".claude");
+    let db = temp.path().join("archive/rosetta.db");
+    write_fixture(&root, "projects/a/heal-session.jsonl", &message("A", "A"));
+    serve_once(&home, &db, CLAUDE);
+    let path = db.with_extension("ledger").join("claude-code");
+    let (source, version) = scan_ledger(&path)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find_map(|entry| match entry {
+            LedgerEntry::GenerationComplete {
+                source,
+                normalizer_version,
+                ..
+            } => Some((source, normalizer_version)),
+            _ => None,
+        })
+        .unwrap();
+    let mut ledger = rosetta_capture::Ledger::open(&path).unwrap();
+    let b = message("B", "B");
+    ledger
+        .append_raw(
+            &source,
+            2,
+            [(0, b.trim_end()), (b.len() as u64, "{broken}")],
+        )
+        .unwrap();
+    ledger
+        .complete_generation(&source, 2, version, false)
+        .unwrap();
+    // A second crash can leave a prefix under the same reused number.
+    ledger
+        .append_raw(
+            &source,
+            2,
+            [(0, message("abandoned", "abandoned").trim_end())],
+        )
+        .unwrap();
+    ledger
+        .append_raw(&source, 2, [(0, message("C", "C").trim_end())])
+        .unwrap();
+    ledger
+        .complete_generation(&source, 2, version, true)
+        .unwrap();
+    ledger.flush().unwrap();
+    drop(ledger);
+    let rebuilt = temp.path().join("rebuilt/rosetta.db");
+    rebuild(&db, &rebuilt);
+    assert_eq!(column(&rebuilt, MESSAGES), ["C"]);
+    assert_eq!(column(&rebuilt, GENERATIONS), ["2/2"]);
+}
+
+#[test]
+fn a_missing_unfinished_journal_holds_readiness_until_it_returns() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".claude");
+    let db = temp.path().join("archive/rosetta.db");
+    let transcript = write_fixture(
+        &root,
+        "projects/a/heal-session.jsonl",
+        &message("m", "hello"),
+    );
+    let journal = write_fixture(
+        &root,
+        "projects/a/heal-session/subagents/workflows/wf_heal/journal.jsonl",
+        "{\"type\":\"started\",\"key\":\"worker\",\"agentId\":\"agent-1\"}\n",
+    );
+    let state = || {
+        column(
+            &db,
+            "SELECT stream_state FROM session WHERE native_session_id='heal-session'",
+        )
+    };
+    serve_once(&home, &db, CLAUDE);
+    assert_eq!(state(), ["indexed"]);
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&journal)
+        .unwrap();
+    file.write_all(br#"{"type":"result","key":"worker""#)
+        .unwrap();
+    drop(file);
+    serve_once(&home, &db, CLAUDE);
+    assert_eq!(state(), ["streaming"]);
+    let offline = temp.path().join("offline");
+    std::fs::rename(&journal, &offline).unwrap();
+    std::fs::write(
+        &transcript,
+        message("m", "hello") + &message("n", "changed sibling"),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        serve_once(&home, &db, CLAUDE);
+        assert_eq!(state(), ["streaming"]);
+        assert_eq!(column(&db, MESSAGES), ["changed sibling", "hello"]);
+    }
+    std::fs::rename(offline, &journal).unwrap();
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(journal)
+            .unwrap(),
+        ",\"result\":{{\"ok\":true}}}}"
+    )
+    .unwrap();
+    serve_once(&home, &db, CLAUDE);
+    assert_eq!(state(), ["indexed"]);
+}
+
+#[test]
+fn restoring_unchanged_sqlite_snapshots_preserves_raw_records_and_import_progress() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".local/share/opencode");
+    std::fs::create_dir_all(&root).unwrap();
+    let native = root.join("opencode.db");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../groundtruth/opencode/fixtures/1.18.22/tool-use/opencode-home/opencode.db"),
+        &native,
+    )
+    .unwrap();
+    let db = temp.path().join("archive/rosetta.db");
+    let entries = || {
+        scan_ledger(&db.with_extension("ledger").join("opencode"))
+            .unwrap()
+            .entries
+    };
+    serve_once(&home, &db, &["opencode"]);
+    let original = column(&db, MESSAGES);
+    assert_eq!(original.len(), 3);
+    let raw = entries()
+        .into_iter()
+        .filter_map(|entry| match entry {
+            LedgerEntry::Raw { payload, .. } => Some(payload),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(raw.len(), 7);
+    for _ in 0..2 {
+        stage_ledger(&db, &[("opencode", &root)]);
+        let daemon = Daemon::spawn(&home, &db, &["opencode"]);
+        let published = daemon.wait("restored snapshot", |s| {
+            s["canonical_ready"] == true && s["daemon"]["ingest"]["phase"] == "live"
+        });
+        let status = &published["daemon"]["ingest"]["runtimes"][0];
+        assert_eq!(status["records"], raw.len());
+        assert_eq!(
+            status["bytes_streamed"],
+            raw.iter().map(Vec::len).sum::<usize>()
+        );
+        drop(daemon);
+        assert_eq!(column(&db, MESSAGES), original);
+        assert_eq!(column(&db, GENERATIONS), ["1/1"]);
+        assert_eq!(
+            entries()
+                .into_iter()
+                .filter(|e| matches!(e, LedgerEntry::Raw { .. }))
+                .count(),
+            raw.len()
+        );
+    }
+    let native = rusqlite::Connection::open(&native).unwrap();
+    let changed = native.execute("UPDATE part SET data=json_set(data,'$.text','snapshot edit') WHERE json_extract(data,'$.type')='text'", []).unwrap();
+    assert!(changed > 0);
+    drop(native);
+    stage_ledger(&db, &[("opencode", &root)]);
+    serve_once(&home, &db, &["opencode"]);
+    assert_eq!(column(&db, GENERATIONS), ["2/2"]);
+    let clean = temp.path().join("clean/rosetta.db");
+    let rebuilt = temp.path().join("rebuilt/rosetta.db");
+    serve_once(&home, &clean, &["opencode"]);
+    rebuild(&db, &rebuilt);
+    assert_ne!(original, column(&db, MESSAGES));
+    assert_eq!(column(&db, MESSAGES), column(&clean, MESSAGES));
+    assert_eq!(column(&db, MESSAGES), column(&rebuilt, MESSAGES));
+}
+
+#[test]
+fn restores_document_snapshots_including_a_seal_with_no_records() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".claude");
+    let db = temp.path().join("archive/rosetta.db");
+    write_fixture(
+        &root,
+        "projects/a/heal-session.jsonl",
+        &message("main", "main"),
+    );
+    write_fixture(
+        &root,
+        "projects/a/heal-session/subagents/agent-child.meta.json",
+        r#"{"agentType":"Explore"}"#,
+    );
+    write_fixture(
+        &root,
+        "projects/a/heal-session/workflows/wf_review.json",
+        r#"{"runId":"wf_review","workflowName":"Review","status":"completed","summary":"done"}"#,
+    );
+    serve_once(&home, &db, CLAUDE);
+    let generations = "SELECT stream || ':' || active_generation FROM ingest_cursor WHERE stream IN ('subagent-metadata','workflow-run') ORDER BY stream";
+    let expected = ["subagent-metadata:1", "workflow-run:1"];
+    assert_eq!(column(&db, generations), expected);
+    let capture = || {
+        scan_ledger(&db.with_extension("ledger").join("claude-code"))
+            .unwrap()
+            .entries
+            .into_iter()
+            .filter_map(|e| match e {
+                LedgerEntry::Raw { source, .. }
+                    if source.stream_id == "subagent-metadata"
+                        || source.stream_id == "workflow-run" =>
+                {
+                    Some(source.stream_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(capture(), ["workflow-run"]);
+    for _ in 0..2 {
+        stage_ledger(&db, &[("claude-code", &root)]);
+        serve_once(&home, &db, CLAUDE);
+        assert_eq!(column(&db, generations), expected);
+        assert_eq!(capture(), ["workflow-run"]);
     }
 }

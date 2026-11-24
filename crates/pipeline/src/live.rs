@@ -18,12 +18,12 @@ use std::time::{Duration, Instant};
 use rosetta_adapter_support::AgentAdapter;
 use rosetta_capture::{Ledger, SourceEvent, SourceEvents};
 use rosetta_core::rows::RuntimeRow;
-use rosetta_store::Store;
+use rosetta_store::{Store, queries};
 
 use crate::checkpoint::PipeCheckpoint;
 use crate::instrument::{Instrument, Metric};
 use crate::meta::{AdmissionSources, SessionFile, meta_ingest_into};
-use crate::stream::{StreamReport, stream_backfill_into};
+use crate::stream::{Readiness, StreamReport, stream_backfill_inner};
 use crate::{IngestOptions, PipelineError};
 
 #[derive(Debug, Clone)]
@@ -183,6 +183,9 @@ pub struct PollEvidence {
     normalizer_version: Option<u32>,
     /// `None` before the first framed batch, and without a usable checkpoint.
     observed_len: Option<u64>,
+    /// The previous batch stopped before the end of the readable records.
+    /// A lone unterminated suffix can safely wait for another change.
+    has_backlog: bool,
     input_stamp: Option<[u8; 32]>,
 }
 
@@ -195,14 +198,16 @@ impl PollEvidence {
     /// The evidence of one cursor checkpoint as [`PipeCheckpoint::decode`]
     /// yields it; `None` is an absent or expired checkpoint.
     pub fn of(checkpoint: Option<&PipeCheckpoint>) -> Self {
+        let tail = checkpoint.and_then(PipeCheckpoint::tail_checkpoint);
         Self {
             input_stamp: Self::stamp(
                 checkpoint.and_then(|checkpoint| checkpoint.snapshot_stamp.as_deref()),
             ),
             normalizer_version: checkpoint.map(|checkpoint| checkpoint.normalizer_version),
-            observed_len: checkpoint
-                .and_then(PipeCheckpoint::tail_checkpoint)
-                .map(|tail| tail.observed_len),
+            has_backlog: tail
+                .as_ref()
+                .is_some_and(|tail| tail.unread_len > tail.incomplete_suffix_len),
+            observed_len: tail.map(|tail| tail.observed_len),
         }
     }
 
@@ -275,6 +280,7 @@ pub struct LiveRunner<'a> {
     /// runner streams that source; it is forgotten just before, and the next
     /// poll reads whatever actually committed.
     evidence: HashMap<String, PollEvidence>,
+    unfinished_sources: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl<'a> LiveRunner<'a> {
@@ -355,6 +361,7 @@ impl<'a> LiveRunner<'a> {
             report: LiveReport::default(),
             physical_seen: BTreeMap::new(),
             evidence: HashMap::new(),
+            unfinished_sources: BTreeMap::new(),
         }
     }
 
@@ -421,8 +428,8 @@ impl<'a> LiveRunner<'a> {
     /// gap between the preceding bounded skim/backfill and the ordinary live
     /// cadence, including writes that landed while the daemon was offline or
     /// while a private cold projection was being published. Rotating audits
-    /// remain on normal poll ticks; startup catch-up reads only files with
-    /// changed cursor-relative evidence.
+    /// remain on normal poll ticks; startup catch-up considers changed evidence
+    /// and sessions whose readiness still needs settling.
     pub fn catch_up(
         &mut self,
         store: &mut Store,
@@ -441,7 +448,57 @@ impl<'a> LiveRunner<'a> {
         run_audit: bool,
     ) -> Result<bool, PipelineError> {
         self.report.ticks += 1;
+        self.opts.check_cancelled()?;
         let mut changed: BTreeSet<String> = BTreeSet::new();
+        if force_poll {
+            // A live batch commits its file checkpoints before it settles
+            // session readiness. A killed worker may leave a fully consumed
+            // file Pending, with no stat change to nominate it next time.
+            // Re-evaluate all admitted sibling sources from their cursors so
+            // an incomplete tail can still keep the session Streaming.
+            let unfinished = queries::unfinished_runtime_sessions(store.conn(), &self.runtime.id)?;
+            if !unfinished.is_empty() {
+                changed.extend(
+                    self.files
+                        .iter()
+                        .filter(|file| unfinished.contains(&file.session_id))
+                        .map(|file| file.relative_path.clone()),
+                );
+                for (session, path) in
+                    queries::unfinished_session_sources(store.conn(), &self.runtime.id)?
+                {
+                    self.opts.check_cancelled()?;
+                    if changed.contains(&path) {
+                        continue;
+                    }
+                    // A complete archived source can stay offline. A partial
+                    // or unbound cursor still owns a share of readiness until
+                    // that source returns and an ordinary pass completes it.
+                    let Some(cursor) =
+                        queries::cursor_state(store.conn(), &self.runtime.id, &path)?
+                    else {
+                        continue;
+                    };
+                    let complete =
+                        PipeCheckpoint::decode(&cursor.checkpoint).is_some_and(|checkpoint| {
+                            cursor.active_generation > 0
+                                && cursor.active_generation == cursor.highest_generation
+                                && checkpoint.source_generation == cursor.active_generation
+                                && checkpoint.generation_clean
+                                && (checkpoint.snapshot_revision.is_some()
+                                    || checkpoint
+                                        .tail_checkpoint()
+                                        .is_some_and(|tail| tail.unread_len == 0))
+                        });
+                    if !complete {
+                        self.unfinished_sources
+                            .entry(session)
+                            .or_default()
+                            .insert(path);
+                    }
+                }
+            }
+        }
         // Older callers can hand over only the admitted roster. Bootstrap
         // its withheld dependencies once before any policy-protected capture.
         let mut needs_admission =
@@ -648,7 +705,7 @@ impl<'a> LiveRunner<'a> {
             self.evidence.remove(&file.relative_path);
         }
         let outcome = instrument.time(Metric::LiveStreamNanos, || {
-            stream_backfill_into(
+            stream_backfill_inner(
                 self.adapter,
                 &self.runtime,
                 &self.root,
@@ -657,6 +714,7 @@ impl<'a> LiveRunner<'a> {
                 opts,
                 instrument,
                 self.ledger.as_mut(),
+                Readiness::Live(&mut self.unfinished_sources),
             )
         })?;
         self.report.stream.merge_from(&outcome);
@@ -736,6 +794,7 @@ impl<'a> LiveRunner<'a> {
         }
         let normalizer_version = self.adapter.normalizer_version();
         for walked in &walk.files {
+            self.opts.check_cancelled()?;
             match by_path.get(&walked.relative_path).copied() {
                 Some(index) => {
                     let evidence = instrument.time(Metric::LivePollCheckpointNanos, || {
@@ -743,16 +802,17 @@ impl<'a> LiveRunner<'a> {
                     })?;
                     let known = &mut self.files[index];
                     let touched = known.modified_ms != walked.modified_ms;
-                    let behind = if let Some(input) = &known.input {
-                        if input.segments.is_empty() && (touched || known.size != walked.size) {
-                            *needs_admission = true;
-                        }
-                        evidence.normalizer_version != Some(normalizer_version)
-                            || evidence.input_stamp
-                                != PollEvidence::stamp(input.stamp(&self.root)?.as_deref())
-                    } else {
-                        evidence.behind(normalizer_version, walked.size) || touched
-                    };
+                    let behind = evidence.has_backlog
+                        || if let Some(input) = &known.input {
+                            if input.segments.is_empty() && (touched || known.size != walked.size) {
+                                *needs_admission = true;
+                            }
+                            evidence.normalizer_version != Some(normalizer_version)
+                                || evidence.input_stamp
+                                    != PollEvidence::stamp(input.stamp(&self.root)?.as_deref())
+                        } else {
+                            evidence.behind(normalizer_version, walked.size) || touched
+                        };
                     if behind {
                         known.size = walked.size;
                         known.modified_ms = walked.modified_ms;
@@ -837,6 +897,7 @@ impl<'a> LiveRunner<'a> {
         )?;
         self.admission_sources = meta.admission_sources;
         for file in &fresh {
+            self.opts.check_cancelled()?;
             let known = self
                 .files
                 .iter()

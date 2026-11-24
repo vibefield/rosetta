@@ -39,9 +39,9 @@ mod resume;
 #[cfg(test)]
 mod resume_kill_tests;
 use rosetta_pipeline::{
-    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, RebuildOptions,
-    SessionFile, SliceBudget, StreamReport, meta_ingest_inventory_into,
-    rebuild_runtime_with_options, stream_backfill_withholding_health,
+    IngestOptions, Instrument, InstrumentSnapshot, LiveOptions, LiveRunner, Metric, PipelineError,
+    RebuildOptions, SessionFile, SliceBudget, StreamReport, meta_ingest_inventory_into,
+    rebuild_runtime_with_options,
 };
 use rosetta_search::{Fts5SearchWorker, Fts5SidecarSearch, SearchBackend, SearchReadiness};
 use rosetta_server::{
@@ -60,7 +60,7 @@ use crate::runtime_ledger::{is_layout_root, ledger_dir, open_runtime_ledger};
 use crate::{
     AppliedColdRuntime, ColdCaptureRequest, Flags, identity_name, install_rebuilt_projection,
     ledger_root, load_enrollment, make_single_file, open_progressive_backfill, parse_flags,
-    projection_lock, projection_parent, record_fresh_failures, selected,
+    projection_lock, record_fresh_failures, selected,
 };
 
 const DEFAULT_ADDR: &str = "127.0.0.1:4640";
@@ -324,15 +324,7 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
     // because its purpose is to leave that durable intermediate inspectable.
     let fresh_fast = !db.exists() && !flags.stop_after_meta;
     let (mut store, cold_temp, projection_reader) = if fresh_fast {
-        let parent = projection_parent(&db);
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("creating {}: {error}", parent.display()))?;
-        let named = tempfile::Builder::new()
-            .prefix(".rosetta-backfill-")
-            .suffix(".sqlite")
-            .tempfile_in(parent)
-            .map_err(|error| format!("creating private projection: {error}"))?;
-        let temp = named.into_temp_path();
+        let temp = crate::publication::cold_copy(&db)?;
         let uri = format!(
             "file:rosetta-cold-{}-{}?mode=memory&cache=shared",
             std::process::id(),
@@ -363,6 +355,10 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
     // mirror warms from the standing projection so the room is instantly
     // whole; a fresh install serves empty lists and honest meters.
     let stop = Arc::new(AtomicBool::new(false));
+    let live_opts = IngestOptions {
+        cancel: Some(stop.clone()),
+        ..opts.clone()
+    };
     let control = if flags.stop_after_meta {
         None
     } else {
@@ -413,8 +409,7 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     {
-        // First ctrl-c stops gracefully (the backfill finishes its current
-        // file; the live loop exits on its next tick); a second forces.
+        // The first ctrl-c lets the writer finish its current commit.
         let stop = stop.clone();
         let cancel = control.as_ref().map(|control| control.cancel());
         tokio_runtime.spawn(async move {
@@ -423,7 +418,7 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
                 if let Some(cancel) = &cancel {
                     cancel.store(true, Ordering::SeqCst);
                 }
-                eprintln!("stopping — finishing the current file; ctrl-c again to force quit");
+                eprintln!("stopping — finishing the current commit; ctrl-c again to force quit");
             }
             if tokio::signal::ctrl_c().await.is_ok() {
                 std::process::exit(130);
@@ -731,7 +726,7 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
             &targets,
             &consented,
             &generation_consented,
-            &opts,
+            &live_opts,
             &live,
             &instrument,
             store,
@@ -786,7 +781,7 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
             &flags,
             &targets,
             &consented,
-            &opts,
+            &live_opts,
             &live,
             &instrument,
             store,
@@ -1055,7 +1050,7 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
                 entry.root,
                 Box::new(entry.events),
                 entry.roster,
-                opts.clone(),
+                live_opts.clone(),
                 live.clone(),
                 Some(ledger),
             )
@@ -1085,8 +1080,7 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
                 if stop.load(Ordering::SeqCst) {
                     break;
                 }
-                more_hints |= runner
-                    .tick_ready(&mut store, &instrument)
+                more_hints |= live_step(runner.tick_ready(&mut store, &instrument), &stop)
                     .map_err(|error| error.to_string())?;
                 update_live_health(&health, identity, runner);
                 absorbed += absorb_effects(&mut store, &hub)? as u64;
@@ -1214,7 +1208,7 @@ fn run_resumed_fresh_serve(
         health.ingest_stream(&runtime.id, counter_source(instrument, baseline));
         health.ingest_phase(rosetta_server::IngestPhase::Restoring);
 
-        let unsealed = if has_ledger_segments(&ledger_dir)? {
+        let (unsealed, restored_prefixes) = if has_ledger_segments(&ledger_dir)? {
             let report = rebuild_runtime_with_options(
                 adapter,
                 &runtime,
@@ -1254,9 +1248,9 @@ fn run_resumed_fresh_serve(
                     report.segments
                 );
             }
-            report.unsealed_sources
+            (report.unsealed_sources, report.restored_prefixes)
         } else {
-            BTreeMap::new()
+            Default::default()
         };
 
         // Current bounded metadata settles the roster after replay; each
@@ -1269,7 +1263,7 @@ fn run_resumed_fresh_serve(
             &runtime.id,
             counter_source(instrument, instrument.snapshot()),
         );
-        let (meta, roster) = meta_ingest_inventory_into(
+        let (meta, mut roster) = meta_ingest_inventory_into(
             adapter,
             &runtime,
             &target.root,
@@ -1321,18 +1315,19 @@ fn run_resumed_fresh_serve(
             &runtime.id,
             counter_source(instrument, instrument.snapshot()),
         );
-        let mut stream = stream_backfill_withholding_health(
-            adapter,
-            &runtime,
-            &target.root,
-            &mut store,
-            &roster,
-            &observed_opts,
-            instrument,
-            Some(&mut ledger),
-            withheld.caught_up(),
-        )
-        .map_err(|error| format!("{name} resume source catch-up: {error}"))?;
+        let mut stream = restored_prefixes
+            .catch_up(
+                adapter,
+                &runtime,
+                &target.root,
+                &mut roster,
+                &mut store,
+                &observed_opts,
+                instrument,
+                &mut ledger,
+                withheld.caught_up(),
+            )
+            .map_err(|error| format!("{name} resume source catch-up: {error}"))?;
         stream.files_missing += missing;
         let refused = failures.len();
         let tolerated = record_fresh_failures(
@@ -1414,6 +1409,7 @@ fn run_resumed_fresh_serve(
         instrument,
         health,
         control,
+        stop,
         Some(withheld),
     )?;
     for (project, session_id) in &done {
@@ -1625,6 +1621,7 @@ fn run_fresh_fast_serve(
         instrument,
         health,
         control,
+        stop,
         None,
     )?;
     hub.reveal_pending(store.conn())
@@ -1726,7 +1723,7 @@ fn run_warm_live_serve(
             .map_err(|error| error.to_string())?;
         let runtime = target.enabled_runtime();
         let mut ledger = open_runtime_ledger(public_ledgers, &runtime)?;
-        let (meta, roster) = meta_ingest_inventory_into(
+        let (meta, roster) = match meta_ingest_inventory_into(
             adapter,
             &runtime,
             &target.root,
@@ -1736,8 +1733,11 @@ fn run_warm_live_serve(
             opts,
             instrument,
             Some(&mut ledger),
-        )
-        .map_err(|error| format!("{name} warm metadata catch-up: {error}"))?;
+        ) {
+            Ok(result) => result,
+            Err(PipelineError::Cancelled) if stop.load(Ordering::SeqCst) => return Ok((store, 0)),
+            Err(error) => return Err(format!("{name} warm metadata catch-up: {error}")),
+        };
         if meta.walk_truncated
             || meta.files_unidentified > 0
             || meta.files_unfinished > 0
@@ -1827,9 +1827,11 @@ fn drive_live_runners(
         }
         let catch_up_started = Instant::now();
         let catch_up_before = instrument.snapshot();
-        runner
-            .catch_up(store, instrument)
+        live_step(runner.catch_up(store, instrument), stop)
             .map_err(|error| format!("{} startup catch-up: {error}", identity_name(identity)))?;
+        if stop.load(Ordering::SeqCst) {
+            return Ok(absorbed);
+        }
         if flags.json && flags.profile {
             crate::bench::emit_command_stage_profile(
                 "serve",
@@ -1893,8 +1895,7 @@ fn drive_live_runners(
             if stop.load(Ordering::SeqCst) {
                 break;
             }
-            more_hints |= runner
-                .tick_ready(store, instrument)
+            more_hints |= live_step(runner.tick_ready(store, instrument), stop)
                 .map_err(|error| error.to_string())?;
             update_live_health(health, identity, runner);
             // Publish this runtime's commits before doing work for the next.
@@ -1916,6 +1917,18 @@ fn drive_live_runners(
         );
     }
     Ok(absorbed)
+}
+
+/// Live ingestion stops between durable batches. Its published database and
+/// ledger must take the normal orderly-close path when the host requests it.
+fn live_step<T: Default>(
+    result: Result<T, PipelineError>,
+    stop: &AtomicBool,
+) -> Result<T, PipelineError> {
+    match result {
+        Err(PipelineError::Cancelled) if stop.load(Ordering::SeqCst) => Ok(T::default()),
+        other => other,
+    }
 }
 
 fn update_live_health(health: &DaemonHealth, identity: &RuntimeIdentity, runner: &LiveRunner<'_>) {
@@ -1944,12 +1957,20 @@ fn publish_fresh_ram_projection(
     instrument: &Instrument,
     health: &DaemonHealth,
     control: &ColdControl,
+    stop: &Arc<AtomicBool>,
     withheld: Option<resume::WithheldReadiness>,
 ) -> Result<Store, String> {
     health.ingest_phase(rosetta_server::IngestPhase::Finalizing);
-    instrument
-        .finish_bulk_load(&mut store)
-        .map_err(|error| format!("finalizing canonical RAM projection: {error}"))?;
+    // Large rollups and CREATE INDEX run inside a single SQLite statement.
+    // Only the private writer gets this hook. Its transaction may roll back
+    // on shutdown while the staged ledger remains the recovery source.
+    let shutdown = Arc::clone(stop);
+    store
+        .conn()
+        .progress_handler(16_384, Some(move || shutdown.load(Ordering::Relaxed)));
+    let finalized = instrument.finish_bulk_load(&mut store);
+    store.conn().progress_handler(0, None::<fn() -> bool>);
+    finalized.map_err(|error| format!("finalizing canonical RAM projection: {error}"))?;
     control.publishing()?;
     // A resumed build's rows are final only now (finalization neither reads
     // nor writes readiness). Past the publication fence no pause can keep
@@ -1959,8 +1980,10 @@ fn publish_fresh_ram_projection(
     }
     health.ingest_phase(rosetta_server::IngestPhase::Publishing);
     instrument.time(Metric::PublishNanos, || {
-        crate::publication::stage_ram_projection(store.conn(), &temp)
-            .map_err(|error| format!("backing up canonical RAM projection: {error}"))?;
+        crate::publication::stage_ram_projection(store.conn(), &temp, || {
+            stop.load(Ordering::SeqCst)
+        })
+        .map_err(|error| format!("backing up canonical RAM projection: {error}"))?;
         let finished = rusqlite::Connection::open(&*temp)
             .map_err(|error| format!("opening staged durable projection: {error}"))?;
         make_single_file(&finished, "staged durable projection")?;
@@ -1969,6 +1992,11 @@ fn publish_fresh_ram_projection(
             .and_then(|file| file.sync_all())
             .map_err(|error| format!("syncing staged durable projection: {error}"))?;
 
+        // Past the first rename the publication must finish as a unit. Until
+        // then a stop can leave the durable ledger for the next launch.
+        if stop.load(Ordering::SeqCst) {
+            return Err("private projection installation interrupted by shutdown".into());
+        }
         ledger_stage.publish()?;
         install_rebuilt_projection(db, temp.as_ref())?;
         let _installed = temp.keep();

@@ -25,10 +25,19 @@ impl AdmissionScan {
         start_offset: u64,
         payload: &[u8],
     ) {
-        if start_offset != 0
-            || adapter.stream_driver(&source.stream_id) != Some(StreamDriver::JsonLines)
-        {
-            return;
+        if start_offset == 0 && Self::opening_excludes(adapter, source, payload) {
+            self.excluded_generations
+                .insert((source.relative_path.clone(), generation));
+        }
+    }
+
+    pub(super) fn opening_excludes(
+        adapter: &dyn AgentAdapter,
+        source: &SourceDef,
+        payload: &[u8],
+    ) -> bool {
+        if adapter.stream_driver(&source.stream_id) != Some(StreamDriver::JsonLines) {
+            return false;
         }
         // A ledger frame holds one complete native record, without requiring
         // the original file or a second parser for its native provenance.
@@ -42,10 +51,15 @@ impl AdmissionScan {
             payload,
             &[],
         );
-        if skim.ledger_only && skim.session_id.as_deref() == Some(source.native_session_id.as_str())
-        {
-            self.excluded_generations
-                .insert((source.relative_path.clone(), generation));
+        skim.ledger_only && skim.session_id.as_deref() == Some(source.native_session_id.as_str())
+    }
+
+    pub(super) fn replace_opening(&mut self, source: &SourceDef, generation: u64, excluded: bool) {
+        let key = (source.relative_path.clone(), generation);
+        if excluded {
+            self.excluded_generations.insert(key);
+        } else {
+            self.excluded_generations.remove(&key);
         }
     }
 

@@ -30,6 +30,16 @@ mod pass;
 
 pub(crate) use pass::{IngestPass, PassOutput, PassStep, RawOut, ReportDelta};
 
+pub(crate) enum Readiness<'a> {
+    Commit,
+    Withhold {
+        decisions: &'a mut BTreeMap<String, StreamState>,
+        replay_sessions: &'a BTreeSet<String>,
+    },
+    /// Unfinished source paths by session, retained across live subsets.
+    Live(&'a mut BTreeMap<String, BTreeSet<String>>),
+}
+
 #[derive(Debug, Default)]
 pub struct StreamReport {
     /// File PASSES, not distinct files: a budgeted source contributes one
@@ -132,7 +142,15 @@ pub fn stream_backfill_into(
     ledger: Option<&mut rosetta_capture::Ledger>,
 ) -> Result<StreamReport, PipelineError> {
     stream_backfill_inner(
-        adapter, runtime, root, store, files, opts, instrument, ledger, None,
+        adapter,
+        runtime,
+        root,
+        store,
+        files,
+        opts,
+        instrument,
+        ledger,
+        Readiness::Commit,
     )
 }
 
@@ -164,12 +182,15 @@ pub fn stream_backfill_withholding_health(
         opts,
         instrument,
         ledger,
-        Some(withheld),
+        Readiness::Withhold {
+            decisions: withheld,
+            replay_sessions: &BTreeSet::new(),
+        },
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn stream_backfill_inner(
+pub(crate) fn stream_backfill_inner(
     adapter: &dyn AgentAdapter,
     runtime: &RuntimeRow,
     root: &Path,
@@ -178,7 +199,7 @@ fn stream_backfill_inner(
     opts: &IngestOptions,
     instrument: &Instrument,
     mut ledger: Option<&mut rosetta_capture::Ledger>,
-    mut withheld: Option<&mut BTreeMap<String, StreamState>>,
+    mut readiness: Readiness<'_>,
 ) -> Result<StreamReport, PipelineError> {
     let tailer = Tailer::new(opts.tail.clone())?;
     // Snapshot-driven virtual sources take their own path: no tailing, and
@@ -218,7 +239,10 @@ fn stream_backfill_inner(
         // the file re-appended to the ledger — only when the chain actually
         // mismatches. The old audit forced that replay unconditionally,
         // paying all of it for every quiet file on every rotation, forever.
-        let mode = if audit_set.contains(file.relative_path.as_str()) {
+        let ordered_replay = matches!(&readiness, Readiness::Withhold { replay_sessions, .. } if replay_sessions.contains(&file.session_id));
+        let mode = if ordered_replay {
+            PassMode::ForceHeal
+        } else if audit_set.contains(file.relative_path.as_str()) {
             PassMode::Audit
         } else {
             PassMode::Normal
@@ -236,7 +260,7 @@ fn stream_backfill_inner(
             mode,
             ledger.as_deref_mut(),
         )?;
-        if report.generations_restarted > restarts_before {
+        if !ordered_replay && report.generations_restarted > restarts_before {
             restarted_sessions.insert(file.session_id.clone());
             restarted_files.insert(file.relative_path.clone());
         }
@@ -346,14 +370,34 @@ fn stream_backfill_inner(
     // A session is complete only when every admitted source file completed a
     // clean generation. This can both promote and downgrade: a torn append or
     // hard parse error must never leave a stale Indexed badge behind.
+    if let Readiness::Live(unfinished) = &mut readiness {
+        for file in files {
+            if file_health.get(&file.relative_path) == Some(&true) {
+                if let Some(paths) = unfinished.get_mut(&file.session_id) {
+                    paths.remove(&file.relative_path);
+                    if paths.is_empty() {
+                        unfinished.remove(&file.session_id);
+                    }
+                }
+            } else {
+                unfinished
+                    .entry(file.session_id.clone())
+                    .or_default()
+                    .insert(file.relative_path.clone());
+            }
+        }
+        for (session, complete) in &mut session_health {
+            *complete &= !unfinished.contains_key(session);
+        }
+    }
     for (session_id, complete) in session_health {
         let next = if complete {
             StreamState::Indexed
         } else {
             StreamState::Streaming
         };
-        if let Some(withheld) = withheld.as_deref_mut() {
-            withheld.insert(session_id, next);
+        if let Readiness::Withhold { decisions, .. } = &mut readiness {
+            decisions.insert(session_id, next);
         } else if store.set_session_stream_state(&session_id, next)? && complete {
             report.sessions_indexed += 1;
         }

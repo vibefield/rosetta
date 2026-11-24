@@ -2343,7 +2343,7 @@ fn publish_private_projection(
     after_finalize(&store)?;
     instrument.time(Metric::PublishNanos, || {
         if store.is_transient_memory() {
-            publication::stage_ram_projection(store.conn(), &temp)
+            publication::stage_ram_projection(store.conn(), &temp, || false)
                 .map_err(|error| format!("backing up in-memory projection: {error}"))?;
         }
         drop(store);

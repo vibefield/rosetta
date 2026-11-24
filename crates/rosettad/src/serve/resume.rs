@@ -209,7 +209,8 @@ mod tests {
             withheld
                 .caught_up()
                 .insert(session.clone(), StreamState::Indexed);
-            let control = ColdControl::open(&db, &ledger, false, Arc::new(AtomicBool::new(false)))
+            let stop = Arc::new(AtomicBool::new(false));
+            let control = ColdControl::open(&db, &ledger, false, stop.clone())
                 .unwrap()
                 .unwrap();
             if paused {
@@ -242,6 +243,7 @@ mod tests {
                 &Instrument::new(),
                 &rosetta_server::DaemonHealth::new(crate::engine::now_ms()),
                 &control,
+                &stop,
                 Some(withheld),
             );
             let state = |conn: &rusqlite::Connection| -> String {

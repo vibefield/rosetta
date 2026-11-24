@@ -73,10 +73,9 @@ impl CwdExclusions {
     }
 }
 
-/// Preserve the generation fence for a retired, interrupted capture without
-/// leaving a staged projection or reading more native bytes. Its checkpoint
-/// cannot resume (the reserved epoch is not active); re-admission starts above
-/// the archived prefix, so offset zero can never collide with old raw frames.
+/// Reserve a number already used by a rejected seal or an interrupted,
+/// retired capture. Keep the elected projection visible and start the next
+/// native replacement above every archived frame for the path.
 pub fn reserve_retired_generation(
     adapter: &dyn rosetta_adapter_support::AgentAdapter,
     runtime: &rosetta_core::rows::RuntimeRow,

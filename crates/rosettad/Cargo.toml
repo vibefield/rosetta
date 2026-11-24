@@ -23,7 +23,7 @@ rosetta-server = { path = "../server" }
 rosetta-store = { path = "../store" }
 axum.workspace = true
 blake3.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, features = ["hooks"] }
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

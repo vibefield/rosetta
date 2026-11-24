@@ -126,7 +126,7 @@ fn reference_poll(runner: &LiveRunner<'_>, store: &Store) -> (BTreeSet<String>, 
                 });
                 let ingested_len = checkpoint
                     .and_then(|checkpoint| checkpoint.tail_checkpoint())
-                    .map(|tail| tail.observed_len);
+                    .map(|tail| tail.committed_offset + tail.incomplete_suffix_len);
                 let behind_cursor = ingested_len != Some(walked.size);
                 let touched = known.modified_ms != walked.modified_ms;
                 if normalizer_stale || behind_cursor || touched {

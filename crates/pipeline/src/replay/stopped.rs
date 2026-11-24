@@ -225,6 +225,9 @@ pub(super) fn project_raw(
         return false;
     }
     file.last_offset = Some(start_offset);
+    if let Some(snapshot) = &mut file.snapshot {
+        snapshot.push(payload);
+    }
     file.ctx.agent_version = source.agent_version.clone();
 
     report.raw_records += 1;
