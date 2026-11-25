@@ -125,7 +125,9 @@ test("status polls twice per second through search, preserves progress on failur
   assert.equal(hook.render().ingest.phase, "live");
   assert.equal(hook.render().connectionError, "connection lost");
   clock.tick(1_000); assert.equal(requests.length, 4);
-  requests[3].resolve({ ...status, canonical_ready: true, search: { readiness: "ready" } });
+  // Both ready AND the phase live: an import over a published archive keeps the brisk cadence (below).
+  requests[3].resolve({ ...status, canonical_ready: true, search: { readiness: "ready" },
+    daemon: { ...status.daemon, ingest: { ...status.daemon.ingest, phase: "live" } } });
   await microtasks(); assert.equal(hook.render().connectionError, null);
   clock.tick(29_999); assert.equal(requests.length, 4);
   clock.tick(1); assert.equal(requests.length, 5);
@@ -196,6 +198,51 @@ test("a refresh's brisk re-asks beat a complete archive and stop after 50", asyn
   clock.tick(100); assert.equal(requests.length, 52, "after 50 brisk re-asks the room stops asking every 100 ms");
   clock.tick(29_899); assert.equal(requests.length, 52);
   clock.tick(1); assert.equal(requests.length, 53, "and falls back to its ordinary cadence");
+});
+
+test("an import over a published archive is asked twice a second until it is live again", async (t) => {
+  const clock = fakeClock(t);
+  const oldWindow = globalThis.window;
+  globalThis.window = globalThis;
+  const requests = [];
+  const client = { onConnectionChange: () => () => {}, status(signal) {
+    const request = { signal, ...deferred() }; requests.push(request); return request.promise;
+  } };
+  const hook = dataHooks(client)("useDaemonStatus");
+  t.after(async () => {
+    hook.close(); await microtasks();
+    if (oldWindow === undefined) delete globalThis.window; else globalThis.window = oldWindow;
+  });
+  // An agent brought in after the first import: canonical and search stay
+  // ready while the index looks for it and reads it.
+  const at = (phase) => ({ canonical_ready: true, search: { readiness: "ready", progress: null },
+    daemon: { started_at: 1, uptime_ms: 1_000, ingest: { ...feed().ingest, phase } } });
+  hook.render();
+  requests[0].resolve(at("discovering")); await microtasks(); hook.render();
+  clock.tick(500); assert.equal(requests.length, 2, "looking for the new agent is not a finished index");
+  requests[1].resolve(at("backfilling")); await microtasks();
+  assert.equal(hook.render().ingest.phase, "backfilling");
+  clock.tick(500); assert.equal(requests.length, 3, "nor is reading it");
+  requests[2].resolve(at("live")); await microtasks(); hook.render();
+  clock.tick(29_999); assert.equal(requests.length, 3);
+  clock.tick(1); assert.equal(requests.length, 4, "live again: the finished index's cadence");
+});
+
+test("an agent brought in after the first import reads as an import over what already stands", () => {
+  const standing = runtime({ kind: "codex", state: "done", bytes_total: 0, bytes_streamed: 0 });
+  const added = runtime({ kind: "claude-code", bytes_total: 0, bytes_streamed: 120_000_000 });
+  const reading = activityPhase(feed({ canonicalReady: true, searchReadiness: "ready",
+    ingest: { phase: "backfilling", projects: [], runtimes: [standing, added] } }));
+  assert.equal(reading.key, "reading");
+  assert.equal(reading.step, 2);
+  assert.equal(reading.active, true);
+  assert.deepEqual(reading.unsized, ["Claude Code"], "the standing agent is neither read nor unsized");
+  const looking = activityPhase(feed({ canonicalReady: true, searchReadiness: "ready",
+    ingest: { phase: "discovering", projects: [], runtimes: [] } }));
+  assert.equal(looking.key, "discovering");
+  const over = activityPhase(feed({ canonicalReady: true, searchReadiness: "ready",
+    ingest: { phase: "live", projects: [], runtimes: [standing, { ...added, state: "done" }] } }));
+  assert.equal(over.key, "ready");
 });
 
 test("a stalled status request is aborted and retries instead of freezing indefinitely", async (t) => {

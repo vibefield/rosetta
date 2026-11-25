@@ -181,7 +181,12 @@ export function useDaemonStatus(catalog: CatalogPort, asked = 0): DaemonStatusFe
         // intentional pauses; an unanswered first request retries promptly.
         const paused = status.ingest?.run?.state === "paused" || status.ingest?.run?.state === "failed" ||
           phase === "metadata_ready" || phase === "awaiting_consent";
-        const complete = status.canonicalReady && status.searchReadiness === "ready";
+        // An import can run over a published archive (an agent brought in
+        // after the first import): canonical and search are ready throughout
+        // it, and it is not complete until its phase is live again.
+        const importing = phase !== undefined && phase !== "live" &&
+          phase !== "awaiting_consent" && phase !== "metadata_ready";
+        const complete = status.canonicalReady && status.searchReadiness === "ready" && !importing;
         // An unshown grant comes first: a daemon awaiting consent may still
         // report a complete archive from before, and must not wait 30 s.
         delay = unshown ? 100 : complete ? 30_000 : paused ? 2_500 : 500;
