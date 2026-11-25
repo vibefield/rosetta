@@ -27,7 +27,12 @@ export interface DiffBodyProps {
   readonly name: string;
 }
 
-/** Matches `--ah-code-line`; the virtualizer scrolls by it. */
+/** One visual row's minimum and unmeasured estimate, in CSS px. Matches
+ * `--ah-code-line`. A line longer than the pane wraps (the stylesheet's
+ * `pre-wrap`), so a row is as tall as its text: the virtualizer measures each
+ * drawn row from its DOM box and places the rows after it by that, as the
+ * code view does. A row held to this height would spill a long line over its
+ * neighbours. */
 const LINE_HEIGHT = 19;
 const OVERSCAN = 24;
 
@@ -132,8 +137,10 @@ export function DiffBody({ unified, name }: DiffBodyProps) {
             <div
               className="ah-code__line"
               key={item.key}
+              data-index={item.index}
               data-diff={row.kind === "line" ? row.line.kind : "hunk"}
-              style={{ height: LINE_HEIGHT, transform: `translateY(${item.start}px)` }}
+              ref={virtualizer.measureElement}
+              style={{ transform: `translateY(${item.start}px)` }}
             >
               {row.kind === "hunk" ? (
                 <span className="ah-diff__hunk">

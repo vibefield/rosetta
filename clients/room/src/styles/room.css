@@ -652,7 +652,13 @@
    Files take 70% of the area below the tabs and worktrees take 30%, including
    their heading. Both scroll independently; expanding a folder never moves
    the divider. With no sibling worktrees, files take the whole area. */
-.ah-railbody { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
+/* One column that is exactly the rail's width. Left to size itself, the
+   column grows to its widest row (a long branch name), and the rail then
+   cuts every row's right edge: the size, the head's sum. */
+.ah-railbody {
+  flex: 1; min-height: 0; display: grid;
+  grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr);
+}
 .ah-railbody[data-split] { grid-template-rows: minmax(0, 7fr) minmax(0, 3fr); }
 .ah-railtree { height: 100%; min-height: 0; padding: 6px 6px 0; }
 .ah-railtree[data-mille-theme] [role="tree"] {
@@ -663,21 +669,101 @@
 /* the engine lags a project switch: the old tree dims rather than lies */
 .ah-railtree[data-stale] { opacity: 0.45; transition: opacity 160ms; }
 /* Keep the worktree heading fixed above its scrollable list. */
-.ah-railfoot { display: flex; flex-direction: column; min-height: 0; }
+.ah-railfoot { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .ah-railfoot__list {
   flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin;
   padding: 0 6px var(--ah-scroll-foot, 32px);
   scroll-padding-bottom: var(--ah-scroll-foot, 32px);
 }
-.ah-railfoot__list:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
-.ah-railsplit { flex: none; margin: 12px 12px 6px; padding-top: 12px; border-top: 1px solid var(--vf-hairline); }
-.ah-worktree {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  width: 100%; padding: 7px 9px; border: 0; border-radius: 9px; background: transparent;
-  color: var(--vf-text-secondary); font-size: 11.5px; text-align: left;
+.ah-railsplit {
+  flex: none; margin: 12px 12px 4px; padding-top: 12px; border-top: 1px solid var(--vf-hairline);
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0;
 }
-.ah-worktree code { font-size: 10px; color: var(--vf-text-faint); font-variant-numeric: tabular-nums; }
-.ah-worktree code[data-dirty] { color: var(--vf-cyan); }
+.ah-railsplit .ah-eyebrow { flex: 0 1 auto; min-width: 0; }
+.ah-railsplit__sum {
+  flex: none; color: var(--vf-text-faint); font-family: var(--vf-font-mono); font-size: 10px;
+  white-space: nowrap;
+}
+
+/* The worktree ledger. A row is a name with its size at the edge, over a bar
+   as wide as the row: every bar starts and ends on the same two lines, so
+   their lengths compare, and every size ends on the same edge. The bar is
+   neutral — hue says which project or which state (DESIGN.md §8), and a share
+   of disk is neither. The row is a button: a press copies its name. */
+.ah-worktree {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline;
+  column-gap: 12px; row-gap: 5px;
+  width: 100%; padding: 6px 9px 7px; border: 0; border-radius: 9px; background: transparent;
+  color: var(--vf-text-secondary); font: inherit; font-size: 11.5px; line-height: 15px;
+  text-align: left; cursor: pointer;
+}
+.ah-worktree:hover { background: var(--vf-fill); }
+.ah-worktree:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
+.ah-worktree[data-open] { color: var(--vf-text-primary); }
+.ah-worktree[data-gone] { color: var(--vf-text-faint); }
+.ah-worktree__name { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.ah-worktree__label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the open one's mark: the room's own dot, before the name */
+.ah-worktree[data-open] .ah-worktree__label::before {
+  content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 6px 1px 0;
+  border-radius: 50%; background: var(--vf-select); vertical-align: middle;
+}
+.ah-worktree code {
+  flex: none; font-family: var(--vf-font-mono); font-size: 10px; color: var(--vf-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.ah-worktree__copy {
+  flex: none; align-self: center; display: grid; place-items: center; width: 11px; height: 11px;
+  color: var(--vf-text-faint); opacity: 0;
+}
+.ah-worktree__copy svg { width: 11px; height: 11px; display: block; }
+.ah-worktree:hover .ah-worktree__copy,
+.ah-worktree:focus-visible .ah-worktree__copy { opacity: 1; }
+.ah-worktree__size {
+  justify-self: end; font-family: var(--vf-font-mono); font-size: 10.5px;
+  color: var(--vf-text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ah-worktree[data-open] .ah-worktree__size { color: var(--vf-text-secondary); }
+.ah-worktree[data-gone] .ah-worktree__size { color: var(--vf-text-faint); }
+.ah-worktree__bar {
+  grid-column: 1 / -1; display: block; height: 3px; border-radius: 2px; overflow: hidden;
+  background: var(--vf-fill);
+}
+.ah-worktree:hover .ah-worktree__bar { background: var(--vf-hairline-strong); }
+.ah-worktree__bar > span {
+  display: block; height: 100%; border-radius: 2px; background: var(--vf-text-tertiary);
+  transition: width 240ms var(--vf-ease-island);
+}
+.ah-worktree[data-open] .ah-worktree__bar > span { background: var(--vf-text-secondary); }
+
+/* Being weighed: the bar's track and the size's place carry a slow sheen, so
+   a row that is owed a figure says so. Never a blank, and never a spinner per
+   row: thirty of those in a column is noise. */
+.ah-worktree__wait {
+  display: block; width: 34px; height: 7px; border-radius: 4px; background: var(--vf-fill);
+}
+.ah-worktree[data-weighing] .ah-worktree__bar,
+.ah-worktree[data-weighing] .ah-worktree__wait {
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--vf-text-primary) 16%, transparent) 50%,
+      transparent 100%
+    )
+    0 0 / 45% 100% no-repeat,
+    var(--vf-fill);
+  animation: ah-weigh 1.5s ease-in-out infinite;
+}
+@keyframes ah-weigh {
+  from { background-position: -45% 0, 0 0; }
+  to { background-position: 145% 0, 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ah-worktree[data-weighing] .ah-worktree__bar,
+  .ah-worktree[data-weighing] .ah-worktree__wait { animation: none; background: var(--vf-hairline-strong); }
+  .ah-worktree__bar > span { transition: none; }
+}
 
 /* a receipt, so a copy or an act is never silent */
 .ah-receipt {
@@ -1267,8 +1353,10 @@
 
 /* A diff's rows are as wide as the column, not as wide as their longest
    line: the ground behind an added line says "this whole line is new", and a
-   ground that stops at the text says it about the text only. The code itself
-   still scrolls sideways inside the row. */
+   ground that stops at the text says it about the text only. A line longer
+   than the column wraps inside its row, as the code view's does, and the row
+   grows with it (DiffBody.tsx measures each row), so the ground covers every
+   visual line of it. */
 .ah-diff .ah-code__sizer { width: 100%; }
 .ah-diff .ah-code__line { width: 100%; }
 .ah-diff .ah-code__line code { flex: 1; min-width: 0; }
@@ -1295,7 +1383,9 @@
   flex: none; width: 16px; text-align: center; user-select: none;
   color: var(--vf-text-faint);
 }
-.ah-diff .ah-code__line { align-items: center; }
+/* The gutters and the mark sit on a wrapped line's FIRST visual line: a row
+   stretches its children (the code view's own alignment), it does not centre
+   them. Centred, a wrapped line's numbers would float beside its middle. */
 .ah-diff .ah-code__line[data-diff="add"] { background: color-mix(in srgb, var(--vf-green) 11%, transparent); }
 .ah-diff .ah-code__line[data-diff="del"] { background: color-mix(in srgb, var(--vf-red) 11%, transparent); }
 .ah-diff .ah-code__line[data-diff="add"] .ah-diff__mark { color: var(--vf-green); }

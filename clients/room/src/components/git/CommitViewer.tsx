@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DiffBody } from "../file-viewer";
 import { AgentMark } from "../../lib/agents";
 import { clockShort, dayLabel } from "../../lib/format";
+import { useCopyText } from "../../room-context";
 import { CopyGlyph, CloseGlyph } from "../../lib/icons";
 import { DialogShell } from "../ui";
 import { ChangeTree } from "./ChangeTree";
@@ -47,6 +48,7 @@ export function CommitViewer({
   onClose,
   onReceipt,
 }: CommitViewerProps) {
+  const copy = useCopyText();
   const rows = useMemo(
     () => buildPathTree((files ?? []).map((file) => file.path)),
     [files],
@@ -111,8 +113,7 @@ export function CommitViewer({
             title="Copy the full sha"
             aria-label="Copy the full sha"
             onClick={() => {
-              void navigator.clipboard
-                .writeText(commit.sha)
+              void copy(commit.sha)
                 .then(() => onReceipt("sha copied"))
                 .catch(() => onReceipt("the clipboard refused"));
             }}

@@ -9,6 +9,7 @@
 // resumption, the anchor keeps HH:MM:SS. Time decomposes — day, sitting,
 // second — and no level repeats another's fact.
 import { clock } from "../../lib/format";
+import { useCopyText } from "../../room-context";
 
 export interface AnchorProps {
   readonly at: number | null;
@@ -19,6 +20,7 @@ export interface AnchorProps {
 }
 
 export function Anchor({ at, sessionId, timelineId, onReceipt }: AnchorProps) {
+  const copy = useCopyText();
   if (at === null) return null;
   const stamp = clock(at);
   return (
@@ -27,8 +29,7 @@ export function Anchor({ at, sessionId, timelineId, onReceipt }: AnchorProps) {
       className="tr-anchor"
       title="Copy an anchor to this message"
       onClick={() => {
-        navigator.clipboard
-          .writeText(`${sessionId}#${timelineId}`)
+        copy(`${sessionId}#${timelineId}`)
           .then(() => onReceipt(`Anchor copied · ${stamp}`))
           .catch(() => onReceipt("The clipboard refused the anchor"));
       }}

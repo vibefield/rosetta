@@ -1,7 +1,7 @@
 // §03 G — generated continuation context belongs to the system marker.
 import { useEffect, useState } from "react";
 import type { CanonicalText } from "@vibefield/rosetta-protocol";
-import { useReadingSession, useRoom } from "../../room-context";
+import { useCopyText, useReadingSession, useRoom } from "../../room-context";
 import { MessagePreview } from "./MessagePreview";
 import { LineChevron } from "./glyphs";
 import { useRowDisclosure } from "./disclosure-state";
@@ -22,6 +22,7 @@ function SummaryBody({
   const [loaded, setLoaded] = useState<{ text: string | null; error: string | null } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const { sessions } = useRoom();
+  const copy = useCopyText();
   const readingSession = useReadingSession();
   useEffect(() => {
     if (canonical.type === "inline") return;
@@ -52,7 +53,7 @@ function SummaryBody({
         <span>Agent-generated context for continuing this session.</span>
         {text !== null && (
           <button type="button" onClick={() => {
-            navigator.clipboard.writeText(text)
+            copy(text)
               .then(() => onReceipt("Copied summary"))
               .catch(() => onReceipt("The clipboard refused it"));
           }}>

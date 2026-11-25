@@ -45,6 +45,7 @@ export function hostPortOver(bridge: DesktopHost): HostPort {
     worktree: {
       open: (root) => bridge.openWorktree(root),
       gitFacts: (root, generation) => bridge.gitFacts(root, generation),
+      worktreeSizes: (root, generation, paths) => bridge.worktreeSizes(root, generation, [...paths]),
       fileAction: (request) => bridge.worktreeFileAction(request),
       ports: worktreePorts,
     },

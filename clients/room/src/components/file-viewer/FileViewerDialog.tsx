@@ -23,6 +23,7 @@ import { FileViewerHeader } from "./FileViewerHeader";
 import type { HeaderAction } from "./FileViewerHeader";
 import type { FileHandle, FileSource, ViewerActionId, ViewBodyProps } from "./types";
 import { fmtBytes } from "../../lib/format";
+import { useCopyText } from "../../room-context";
 
 export interface FileViewerDialogProps {
   readonly renderMarkdown?: ViewBodyProps["renderMarkdown"];
@@ -67,6 +68,7 @@ export function FileViewerDialog({
   renderMarkdown,
   gallery,
 }: FileViewerDialogProps) {
+  const copy = useCopyText();
   const [attempt, setAttempt] = useState(0);
   const content = useFileContent(handle, source, asDiff, attempt, Boolean(gallery));
   const retry = () => { gallery?.onRetry(); setAttempt(value => value + 1); };
@@ -106,8 +108,7 @@ export function FileViewerDialog({
         label: "Copy path",
         glyph: "copy",
         run: () => {
-          void navigator.clipboard
-            .writeText(path)
+          void copy(path)
             .then(() => onReceipt?.("path copied"))
             .catch(() => onReceipt?.("the clipboard refused"));
         },

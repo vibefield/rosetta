@@ -25,7 +25,9 @@
     "test:activity-fold": "electron test/activity-fold.electron.mjs",
     "test:history-window": "electron test/history-window.electron.mjs",
     "test:worktree-actions": "electron test/worktree-actions.electron.mjs",
+    "test:worktree-ledger": "electron test/worktree-ledger.electron.mjs",
     "test:file-viewer-browsers": "electron test/file-viewer-browsers.electron.mjs",
+    "test:diff-wrap": "electron test/diff-wrap.electron.mjs",
     "test:artifacts": "electron test/artifacts.electron.mjs",
     "test:ingestion": "electron test/ingestion.electron.mjs",
     "test:activity-chart": "electron test/activity-chart.electron.mjs",
@@ -44,8 +46,8 @@
     "@vibecook/mille-ui": "^0.3.4",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "@vibefield/rosetta-protocol": "^0.1.10",
-    "@vibefield/rosetta-room": "^0.1.10"
+    "@vibefield/rosetta-protocol": "^0.1.11",
+    "@vibefield/rosetta-room": "^0.1.11"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",

@@ -40,6 +40,7 @@ import { createInstalledBrowserService } from "./installed-browsers.mjs";
 import { installedBrowserIcon } from "./browser-icons.mjs";
 import { createFaviconService } from "./favicon-service.mjs";
 import { createWorktreeFileActionHandler } from "./worktree-file-actions.mjs";
+import { createTreeSizes, TREE_SIZE_ASK_MAX } from "./tree-size.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const historyWindows = new Set();
@@ -278,6 +279,18 @@ function git(root, args) {
   });
 }
 
+// What worktree folders hold on disk, kept beside the app's other state so
+// that opening a repository's ledger again walks nothing (tree-size.mjs).
+let treeSizes = createTreeSizes();
+app.whenReady().then(() => {
+  treeSizes.dispose();
+  treeSizes = createTreeSizes({ file: path.join(app.getPath("userData"), "worktree-sizes.json") });
+});
+app.on("will-quit", () => treeSizes.dispose());
+/** The worktrees the open root's repository was last read to have, whose
+ * folders may be walked: an ask for sizes names only these. */
+let walkable = { root: null, paths: new Set() };
+
 /** Read-only git facts for the open worktree root: branch, dirty count, and the
  * repository's worktrees. Absence is honest — a folder without git answers
  * with nulls, never an error. */
@@ -286,18 +299,29 @@ async function gitFacts(root) {
   const status = await git(root, ["status", "--porcelain"]);
   const dirty = status === null ? null : status.split("\n").filter((l) => l !== "").length;
   const worktrees = [];
-  const listed = await git(root, ["worktree", "list", "--porcelain"]);
-  if (listed !== null) {
-    for (const block of listed.split("\n\n")) {
+  const listed = new Set();
+  const porcelain = await git(root, ["worktree", "list", "--porcelain"]);
+  if (porcelain !== null) {
+    for (const block of porcelain.split("\n\n")) {
       const lines = block.split("\n");
       const p = lines.find((l) => l.startsWith("worktree "))?.slice(9);
       const b = lines
         .find((l) => l.startsWith("branch "))
         ?.slice(7)
         .replace("refs/heads/", "");
-      if (p) worktrees.push({ path: p, branch: b ?? null });
+      if (!p) continue;
+      const gone = lines.some((l) => l === "prunable" || l.startsWith("prunable "));
+      const head = lines.find((l) => l.startsWith("HEAD "))?.slice(5) ?? null;
+      const entry = { path: p, branch: b ?? null, head, gone };
+      // The ledger's figure, where one is already held. Git facts start no
+      // walk: a figure is measured only when the room asks for a row by name.
+      const measurable = !gone && !lines.includes("bare");
+      if (measurable) listed.add(p);
+      const sizeBytes = measurable ? treeSizes.peek(p) : undefined;
+      worktrees.push(sizeBytes === undefined ? entry : { ...entry, sizeBytes });
     }
   }
+  walkable = { root, paths: listed };
   return { branch, dirty, worktrees };
 }
 
@@ -429,6 +453,29 @@ app.whenReady().then(async () => {
       return null;
     }
     return gitFacts(raw);
+  });
+
+  // What the named worktrees of the open root hold on disk. Only a path git
+  // listed for that root is ever walked; any other answers with no figure.
+  ipcMain.handle("ah-worktree-sizes", (_event, raw, generation, paths) => {
+    if (
+      typeof raw !== "string" ||
+      raw !== worktreeRoot ||
+      raw !== walkable.root ||
+      !Number.isSafeInteger(generation) ||
+      fxSession === null ||
+      generation !== fxSession.generation ||
+      !Array.isArray(paths)
+    ) {
+      return [];
+    }
+    const asked = [...new Set(paths.filter((p) => typeof p === "string"))].slice(0, TREE_SIZE_ASK_MAX);
+    const allowed = asked.filter((p) => walkable.paths.has(p));
+    const figures = treeSizes.ask(allowed);
+    return asked.map((p) => {
+      const sizeBytes = allowed.includes(p) ? figures[allowed.indexOf(p)] : undefined;
+      return sizeBytes === undefined ? { path: p } : { path: p, sizeBytes };
+    });
   });
 
   ipcMain.handle("ah-worktree-file-action", createWorktreeFileActionHandler({

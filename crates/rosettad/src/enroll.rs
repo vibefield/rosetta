@@ -495,6 +495,37 @@ pub(crate) fn resolve_targets(
     Ok(targets)
 }
 
+/// Whether the file names a runtime this published projection has never
+/// honoured: a kind whose native root exists with no enabled row of its own,
+/// or an enrolled root with none. Such a start is warm and still has an
+/// import to make, so it must not say live before it has looked.
+///
+/// Stats only, before discovery's census: a kind whose root is absent can
+/// never be read and is not new consent on any start.
+pub(crate) fn names_unread_consent(
+    enrollment: &Enrollment,
+    adapters: &[&'static dyn AgentAdapter],
+    home: &Path,
+    persisted: &[RuntimeRow],
+) -> bool {
+    let standing = |id: &str| persisted.iter().any(|row| row.enabled && row.id == id);
+    let kinds = enrollment.enabled_kinds.iter().any(|kind| {
+        adapters
+            .iter()
+            .find(|adapter| adapter.kind() == kind)
+            .is_some_and(|adapter| {
+                let data_root = &adapter.layout().data_root;
+                !standing(&ids::runtime_id(adapter.kind(), data_root))
+                    && expand_data_root(data_root, home).is_dir()
+            })
+    });
+    kinds
+        || enrollment
+            .runtimes
+            .iter()
+            .any(|enrolled| !standing(&enrolled.runtime.id) && enrolled.root.is_dir())
+}
+
 /// The discovered target of each kind, for mapping kind-granular consent
 /// (persisted flags, the roll call's grant, `--agent`) onto runtime ids.
 pub(crate) fn discovered_by_kind(targets: &[RuntimeTarget]) -> BTreeMap<&str, &RuntimeTarget> {
