@@ -669,15 +669,59 @@
   padding: 0 6px var(--ah-scroll-foot, 32px);
   scroll-padding-bottom: var(--ah-scroll-foot, 32px);
 }
-.ah-railfoot__list:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
-.ah-railsplit { flex: none; margin: 12px 12px 6px; padding-top: 12px; border-top: 1px solid var(--vf-hairline); }
-.ah-worktree {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  width: 100%; padding: 7px 9px; border: 0; border-radius: 9px; background: transparent;
-  color: var(--vf-text-secondary); font-size: 11.5px; text-align: left;
+.ah-railsplit {
+  flex: none; margin: 12px 12px 6px; padding-top: 12px; border-top: 1px solid var(--vf-hairline);
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
 }
-.ah-worktree code { font-size: 10px; color: var(--vf-text-faint); font-variant-numeric: tabular-nums; }
-.ah-worktree code[data-dirty] { color: var(--vf-cyan); }
+.ah-railsplit__sum {
+  flex: none; color: var(--vf-text-faint); font-family: var(--vf-font-mono); font-size: 10px;
+}
+
+/* The worktree ledger: a name over its bar, the size at the edge. The bar is
+   neutral — hue says which project or which state (DESIGN.md §8), and a share
+   of disk is neither. The row is a button: a press copies its name. */
+.ah-worktree {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; padding: 7px 9px; border: 0; border-radius: 9px; background: transparent;
+  color: var(--vf-text-secondary); font: inherit; font-size: 11.5px; text-align: left;
+  cursor: pointer;
+}
+.ah-worktree:hover { background: var(--vf-fill); }
+.ah-worktree:focus-visible { outline: 2px solid var(--vf-select); outline-offset: -2px; }
+.ah-worktree[data-open] { color: var(--vf-text-primary); }
+.ah-worktree[data-gone] { color: var(--vf-text-faint); }
+.ah-worktree__who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.ah-worktree__name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ah-worktree__label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the open one's mark: the room's own dot, before the name */
+.ah-worktree[data-open] .ah-worktree__label::before {
+  content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 6px 1px 0;
+  border-radius: 50%; background: var(--vf-select); vertical-align: middle;
+}
+.ah-worktree code {
+  flex: none; font-family: var(--vf-font-mono); font-size: 10px; color: var(--vf-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.ah-worktree__copy {
+  flex: none; display: grid; place-items: center; width: 11px; height: 11px;
+  color: var(--vf-text-faint); opacity: 0;
+}
+.ah-worktree__copy svg { width: 11px; height: 11px; display: block; }
+.ah-worktree:hover .ah-worktree__copy,
+.ah-worktree:focus-visible .ah-worktree__copy { opacity: 1; }
+.ah-worktree__bar {
+  display: block; height: 3px; border-radius: 2px; overflow: hidden;
+  background: var(--vf-fill);
+}
+.ah-worktree:hover .ah-worktree__bar { background: var(--vf-hairline-strong); }
+.ah-worktree__bar > span {
+  display: block; height: 100%; border-radius: 2px; background: var(--vf-text-tertiary);
+}
+.ah-worktree__size {
+  flex: none; font-family: var(--vf-font-mono); font-size: 10.5px; color: var(--vf-text-tertiary);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ah-worktree[data-gone] .ah-worktree__size { color: var(--vf-text-faint); }
 
 /* a receipt, so a copy or an act is never silent */
 .ah-receipt {

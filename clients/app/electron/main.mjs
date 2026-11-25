@@ -40,6 +40,7 @@ import { createInstalledBrowserService } from "./installed-browsers.mjs";
 import { installedBrowserIcon } from "./browser-icons.mjs";
 import { createFaviconService } from "./favicon-service.mjs";
 import { createWorktreeFileActionHandler } from "./worktree-file-actions.mjs";
+import { createTreeSizes } from "./tree-size.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const historyWindows = new Set();
@@ -278,6 +279,9 @@ function git(root, args) {
   });
 }
 
+const treeSizes = createTreeSizes();
+app.on("will-quit", () => treeSizes.dispose());
+
 /** Read-only git facts for the open worktree root: branch, dirty count, and the
  * repository's worktrees. Absence is honest — a folder without git answers
  * with nulls, never an error. */
@@ -295,7 +299,14 @@ async function gitFacts(root) {
         .find((l) => l.startsWith("branch "))
         ?.slice(7)
         .replace("refs/heads/", "");
-      if (p) worktrees.push({ path: p, branch: b ?? null });
+      if (!p) continue;
+      const gone = lines.some((l) => l === "prunable" || l.startsWith("prunable "));
+      const head = lines.find((l) => l.startsWith("HEAD "))?.slice(5) ?? null;
+      const entry = { path: p, branch: b ?? null, head, gone };
+      // The ledger's figure: answered from what was measured, and measured in
+      // the background for the room's next poll (tree-size.mjs).
+      const sizeBytes = gone || lines.includes("bare") ? undefined : treeSizes.read(p);
+      worktrees.push(sizeBytes === undefined ? entry : { ...entry, sizeBytes });
     }
   }
   return { branch, dirty, worktrees };

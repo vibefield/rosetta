@@ -287,7 +287,12 @@ export function WorktreeColumn({
               }}
             />
             {hasSiblingWorktrees && (
-              <WorktreeList facts={facts} openRoot={shownRoot} homeDirectory={homeDirectory} />
+              <WorktreeList
+                facts={facts}
+                openRoot={shownRoot}
+                homeDirectory={homeDirectory}
+                onReceipt={onReceipt}
+              />
             )}
           </div>
         )

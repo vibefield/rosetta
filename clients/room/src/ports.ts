@@ -172,6 +172,19 @@ export interface GitWorktree {
   readonly path: string;
   /** Absent on a detached HEAD. */
   readonly branch: string | null;
+  /** The commit it has checked out, as git names it (a hex object id). What
+   * a checkout with no branch is told apart by. Absent: the host does not
+   * say; null: git named none (an unborn branch). */
+  readonly head?: string | null | undefined;
+  /** git still lists it, and its folder is gone (`prunable`). */
+  readonly gone?: boolean | undefined;
+  /** What the folder holds on disk, as a walk of it counts: everything under
+   * it, ignored files and build output included. It is NOT what removing the
+   * worktree would free (files cloned from a package store share their
+   * blocks), and a linked folder is not followed. null: the host measures and
+   * has no figure yet, and a later answer carries it. Absent: this host does
+   * not measure. */
+  readonly sizeBytes?: number | null | undefined;
 }
 
 /** Read-only git facts for one root. Every field is nullable because a folder
