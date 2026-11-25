@@ -728,6 +728,78 @@ fn second_start_is_live_for_both_runtimes_with_labels_and_the_roll_call_stays_na
     assert!(!discoveries.to_string().contains("agents/roots"));
 }
 
+/// Consent that arrives AFTER the first import. The projection is published,
+/// so the start is warm and the kind's whole history is read by the live
+/// lane. That reading is an import and the board says so: the kind is read
+/// (`streaming`) and then `done` with what it read, and the runtime that
+/// already stood is `done` from the start, never left `queued`. A third
+/// start owes nothing and reports no reading.
+#[test]
+fn a_kind_consented_after_the_first_import_is_read_as_an_import_and_then_done() {
+    let bench = Bench::new();
+    bench.write_enrollment(&[], true);
+    assert_success(&bench.serve_once(&[]));
+    assert!(bench.has_session(KIM_SESSION));
+    assert!(!bench.has_session(NATIVE_SESSION));
+
+    bench.write_enrollment(&["claude-code"], true);
+    let (child, origin) = spawn_serve(&bench);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        let status = http_get(&origin, "/api/status");
+        let ingest = &status["daemon"]["ingest"];
+        let phase = ingest["phase"].as_str().unwrap_or("");
+        // Whatever this poll catches, a standing runtime is never waiting.
+        if let Some(kim) = ingest["runtimes"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["runtime_id"] == bench.kim_id()))
+            && (phase == "backfilling" || phase == "live")
+        {
+            assert_ne!(kim["state"], "queued", "{status}");
+        }
+        // A warm start says live until its inventory is taken, so the end is
+        // the newly consented runtime done, not the first live reading.
+        let read = ingest["runtimes"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|row| row["runtime_id"] == bench.native_id() && row["state"] == "done")
+        });
+        if phase == "live" && read {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "first reading timed out: {status}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let rows = status["daemon"]["ingest"]["runtimes"].as_array().unwrap();
+    let native = rows
+        .iter()
+        .find(|row| row["runtime_id"] == bench.native_id())
+        .unwrap_or_else(|| panic!("{status}"));
+    assert_eq!(native["state"], "done", "{status}");
+    assert!(native["records"].as_u64().unwrap() > 0, "{status}");
+    assert!(native["bytes_streamed"].as_u64().unwrap() > 0, "{status}");
+    assert!(native["sessions_total"].as_u64().unwrap() > 0, "{status}");
+    let kim = rows
+        .iter()
+        .find(|row| row["runtime_id"] == bench.kim_id())
+        .unwrap_or_else(|| panic!("{status}"));
+    assert_eq!(kim["state"], "done", "{status}");
+    assert_eq!(kim["bytes_streamed"], 0, "{status}");
+    drop(child);
+    assert_eq!(bench.session_runtime(NATIVE_SESSION), bench.native_id());
+    let read: i64 = rusqlite::Connection::open(&bench.db)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM session WHERE native_session_id = ?1 AND stream_state = 'indexed'",
+            [NATIVE_SESSION],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(read, 1, "the newly consented kind's session is readable");
+
+    let first = assert_success(&bench.serve_once(&["--ticks", "1"]));
+    assert!(!first.contains("first reading"), "{first}");
+}
+
 /// Witness (c): the ledger alone reproduces both runtimes — the stamp is
 /// what carries an enrolled runtime's identity and root.
 #[test]

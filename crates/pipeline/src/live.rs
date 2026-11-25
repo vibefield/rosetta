@@ -281,6 +281,8 @@ pub struct LiveRunner<'a> {
     /// poll reads whatever actually committed.
     evidence: HashMap<String, PollEvidence>,
     unfinished_sources: BTreeMap<String, BTreeSet<String>>,
+    /// Tree roots [`LiveRunner::first_reading_step`] has offered once.
+    first_reading_offered: BTreeSet<String>,
 }
 
 impl<'a> LiveRunner<'a> {
@@ -362,6 +364,7 @@ impl<'a> LiveRunner<'a> {
             physical_seen: BTreeMap::new(),
             evidence: HashMap::new(),
             unfinished_sources: BTreeMap::new(),
+            first_reading_offered: BTreeSet::new(),
         }
     }
 
@@ -437,6 +440,67 @@ impl<'a> LiveRunner<'a> {
     ) -> Result<(), PipelineError> {
         self.tick_inner(store, instrument, Duration::ZERO, true, false)
             .map(|_| ())
+    }
+
+    /// One bounded piece of a first reading: the sources of sessions nothing
+    /// has read yet (`pending`), whole trees at a time, newest first, until
+    /// `budget_bytes` of them are nominated. Each call commits and settles
+    /// what it read, so those conversations open before the next piece starts
+    /// and no call holds more than its budget's worth of a history.
+    ///
+    /// Returns whether it read anything. A tree is offered once per runner:
+    /// one whose readiness waits on something outside its own sources is left
+    /// to [`LiveRunner::catch_up`], which the caller runs when this answers
+    /// false and which re-evaluates every unfinished session as before.
+    pub fn first_reading_step(
+        &mut self,
+        store: &mut Store,
+        instrument: &Instrument,
+        budget_bytes: u64,
+    ) -> Result<bool, PipelineError> {
+        self.opts.check_cancelled()?;
+        let pending = queries::pending_runtime_sessions(store.conn(), &self.runtime.id)?;
+        if pending.is_empty() {
+            return Ok(false);
+        }
+        // A tree is its root's sources and every session filed under it.
+        let mut trees: BTreeMap<&str, (i64, u64, Vec<&SessionFile>)> = BTreeMap::new();
+        // A ledger-only source (it admits no session of its own) rides with
+        // the parent it names.
+        for file in &self.files {
+            let root = file.tree_parent.as_deref().unwrap_or(&file.session_id);
+            let tree = trees.entry(root).or_default();
+            tree.0 = tree.0.max(file.modified_ms);
+            tree.1 = tree.1.saturating_add(file.read_len());
+            tree.2.push(file);
+        }
+        let mut owed: Vec<(&str, i64, u64, Vec<&SessionFile>)> = trees
+            .into_iter()
+            .filter(|(root, (_, _, files))| {
+                !self.first_reading_offered.contains(*root)
+                    && files.iter().any(|file| pending.contains(&file.session_id))
+            })
+            .map(|(root, (newest, bytes, files))| (root, newest, bytes, files))
+            .collect();
+        if owed.is_empty() {
+            return Ok(false);
+        }
+        owed.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let mut changed = BTreeSet::new();
+        let mut offered = Vec::new();
+        let mut taken = 0u64;
+        for (root, _, bytes, files) in owed {
+            if !changed.is_empty() && taken.saturating_add(bytes) > budget_bytes {
+                break;
+            }
+            taken = taken.saturating_add(bytes);
+            offered.push(root.to_owned());
+            changed.extend(files.iter().map(|file| file.relative_path.clone()));
+        }
+        self.first_reading_offered.extend(offered);
+        self.report.ticks += 1;
+        self.settle(store, changed, false, false, instrument)?;
+        Ok(true)
     }
 
     fn tick_inner(

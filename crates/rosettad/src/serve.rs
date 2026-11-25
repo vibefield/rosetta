@@ -380,7 +380,24 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
         // The standing canonical projection is already valid and readable.
         // Offline catch-up is live maintenance, not another cold backfill, so
         // returning users must never see their room veiled as stale.
-        health.ingest_live();
+        //
+        // Consent this projection has never honoured is the exception: the
+        // runtime it names has still to be found and read. Saying live before
+        // that tells a reader who just asked for it that nothing is coming,
+        // and a host that polls a finished index slowly would not look again
+        // for a long while. The phase stays discovering until the warm serve
+        // has taken its inventory and says what it owes.
+        let unread = match &enrollment {
+            Some(enrollment) => {
+                let persisted = rosetta_store::queries::all_runtimes(store.conn())
+                    .map_err(|error| format!("reading enrolled runtimes: {error:?}"))?;
+                crate::enroll::names_unread_consent(enrollment, &adapters, &flags.home, &persisted)
+            }
+            None => false,
+        };
+        if !unread {
+            health.ingest_live();
+        }
     }
     let hub = Arc::new(Hub::new(HubConfig::default(), now_ms() as u64));
     hub.set_hide_pending(fresh_fast);
@@ -1702,6 +1719,7 @@ fn run_warm_live_serve(
     let wake = SourceWake::default();
     let mut runners = Vec::new();
     let mut metadata_complete = true;
+    let mut first_readings = BTreeSet::new();
     for target in consented_targets(targets, consented) {
         let adapter = target.adapter;
         let name = target.name();
@@ -1751,6 +1769,17 @@ fn run_warm_live_serve(
                 meta.files_vanished
             );
         }
+        // The board says what this start found of the runtime. What stands
+        // is readable, so it is done; a runtime whose history nothing has
+        // read is an import this start owes, and says so below.
+        health.ingest_skim_done(&runtime.id, meta.sessions as u64, meta.files_skimmed as u64);
+        health.ingest_stream_total(&runtime.id, 0);
+        if first_reading_owed(&store, &runtime.id, &roster)? {
+            first_readings.insert(runtime.id.clone());
+            health.ingest_runtime_stage(&runtime.id, rosetta_server::BackfillState::Streaming);
+        } else {
+            health.ingest_done(&runtime.id, 0, 0);
+        }
         let runner = LiveRunner::resume_from_roster(
             adapter,
             runtime,
@@ -1767,10 +1796,76 @@ fn run_warm_live_serve(
 
     // Warm starts already serve a complete projection, but the first current
     // inventory pass has its own process-local boundary. Publish its metadata
-    // before recording it, without reopening a cold phase or a progress meter.
+    // before recording it. A start that owes no first reading reopens no cold
+    // phase and no progress meter.
     let metadata_absorbed = absorb_effects(&mut store, hub)? as u64;
     if metadata_complete {
         health.ingest_metadata_ready(now_ms());
+    }
+
+    // A FIRST READING ON A WARM START. Consent for a runtime can arrive after
+    // the first import (the app's roll call, a persona enrolled later): the
+    // projection is published, so this start is warm, and the runtime's whole
+    // history is read by its startup catch-up. That is an import, however it
+    // is carried, and the board reports it as one: the phase is backfilling,
+    // the runtime streams with its own counters and is then done, and the
+    // phase returns to live when the last of them is. Before this the board
+    // stayed live with every runtime queued, and a reader saw nothing happen
+    // for as long as the reading took.
+    let mut first_absorbed = 0;
+    if !first_readings.is_empty() && !stop.load(Ordering::SeqCst) {
+        // Metadata effects only: each session's readiness reaches the hub as
+        // it settles. The rows themselves are not fanned out hot, which
+        // would hold a whole history's rows in memory for nobody.
+        store.observe_meta_effects();
+        health.ingest_phase(rosetta_server::IngestPhase::Backfilling);
+        search_worker.wake();
+        for (identity, runner) in runners
+            .iter_mut()
+            .filter(|(identity, _)| first_readings.contains(&identity.id))
+        {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            let name = identity_name(identity);
+            let before = instrument.snapshot();
+            health.ingest_stream(&identity.id, counter_source(instrument, instrument.snapshot()));
+            println!("{name}: first reading on a warm start");
+            // Newest trees first, a bounded piece at a time: each piece's
+            // conversations open, and reach the hub, before the next starts.
+            // The catch-up that enters live mode settles whatever is left.
+            loop {
+                let read = live_step(
+                    runner.first_reading_step(&mut store, instrument, FIRST_READING_STEP_BYTES),
+                    stop,
+                )
+                .map_err(|error| format!("{name} first reading: {error}"))?;
+                if !read || stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                update_live_health(health, identity, runner);
+                search_worker.wake();
+                first_absorbed += absorb_effects(&mut store, hub)? as u64;
+            }
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            live_step(runner.catch_up(&mut store, instrument), stop)
+                .map_err(|error| format!("{name} first reading: {error}"))?;
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            let read = instrument.snapshot().delta_since(&before);
+            health.ingest_done(
+                &identity.id,
+                read.get(Metric::PayloadBytes),
+                read.get(Metric::RecordsFramed),
+            );
+            update_live_health(health, identity, runner);
+            search_worker.wake();
+            acknowledge_search(&mut store, search_worker)?;
+            first_absorbed += absorb_effects(&mut store, hub)? as u64;
+        }
     }
 
     let absorbed = drive_live_runners(
@@ -1786,7 +1881,43 @@ fn run_warm_live_serve(
         search,
         stop,
     )?;
-    Ok((store, metadata_absorbed + absorbed))
+    Ok((store, metadata_absorbed + first_absorbed + absorbed))
+}
+
+/// A startup catch-up shorter than this is routine repair, not an import
+/// worth a sign, unless nothing of the runtime has been read at all.
+const FIRST_READING_MIN_BYTES: u64 = 256 * 1024 * 1024;
+
+/// A first reading commits, settles and publishes this much of the sources
+/// at a time (one tree at least), so its conversations open as it goes.
+const FIRST_READING_STEP_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Whether this warm start owes the runtime a first reading: sessions its
+/// roster names that nothing has read yet. All of them (consent that arrived
+/// after the first import), or enough of them to take time (a first reading
+/// that was interrupted, or long growth while the daemon was down). A session
+/// no source rosters stays pending and is owed nothing here.
+fn first_reading_owed(
+    store: &Store,
+    runtime_id: &str,
+    roster: &[SessionFile],
+) -> Result<bool, String> {
+    let pending = queries::pending_runtime_sessions(store.conn(), runtime_id)
+        .map_err(|error| format!("reading pending sessions: {error:?}"))?;
+    if pending.is_empty() {
+        return Ok(false);
+    }
+    let mut rostered = BTreeSet::new();
+    let mut owed = BTreeSet::new();
+    let mut owed_bytes = 0u64;
+    for file in roster.iter().filter(|file| !file.ledger_only) {
+        rostered.insert(file.session_id.as_str());
+        if pending.contains(&file.session_id) {
+            owed.insert(file.session_id.as_str());
+            owed_bytes = owed_bytes.saturating_add(file.read_len());
+        }
+    }
+    Ok(!owed.is_empty() && (owed.len() == rostered.len() || owed_bytes >= FIRST_READING_MIN_BYTES))
 }
 
 // @atlas step live.tick
