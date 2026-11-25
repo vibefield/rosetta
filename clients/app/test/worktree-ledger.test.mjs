@@ -3,10 +3,10 @@ import { describe, it } from "node:test";
 import { ledgerOf, settleOrder } from "../../room/src/components/worktree/worktree-ledger.ts";
 
 const GB = 1024 ** 3;
-const scratch = "/private/tmp/claude-501/-Users-a-Projects-field/b3dfe562-aa76-4ad0-8b46-e6516b1a780a/scratchpad";
+const scratch = "/private/tmp/claude-501/-Users-a-Projects-field/00000000-0000-4000-8000-000000000000/scratchpad";
 const listed = [
-  { path: "/Users/a/field", branch: "main", head: "4082d6c9a1b2c3d4e5f60718293a4b5c6d7e8f90", gone: false, sizeBytes: 2 * GB },
-  { path: "/Users/a/stack", branch: "co/items-186-187-stack-v2", head: "aaaaaaa1", gone: false, sizeBytes: 6 * GB },
+  { path: "/Users/a/field", branch: "main", head: "1a2b3c49a1b2c3d4e5f60718293a4b5c6d7e8f90", gone: false, sizeBytes: 2 * GB },
+  { path: "/Users/a/stack", branch: "co/parts-186-187-stack-v2", head: "aaaaaaa1", gone: false, sizeBytes: 6 * GB },
   { path: `${scratch}/wt-10bfix`, branch: null, head: "0e4919fff0000000000000000000000000000000", gone: false, sizeBytes: null },
   { path: `${scratch}/wt-11a-green/`, branch: null, head: "8436ffab40000000000000000000000000000000", gone: false, sizeBytes: 1 * GB },
   { path: `${scratch}/wt-09-probe`, branch: null, head: "22fdbadc00000000000000000000000000000000", gone: true },
@@ -16,7 +16,7 @@ describe("the worktree ledger", () => {
   it("stands measured rows heaviest first, then the unmeasured, then the gone", () => {
     const ledger = ledgerOf(listed, "/Users/a/field");
     assert.deepEqual(ledger.rows.map((row) => row.name), [
-      "co/items-186-187-stack-v2", "main", "wt-11a-green", "wt-10bfix", "wt-09-probe",
+      "co/parts-186-187-stack-v2", "main", "wt-11a-green", "wt-10bfix", "wt-09-probe",
     ]);
     assert.deepEqual(ledger.rows.map((row) => row.share), [1, 2 / 6, 1 / 6, null, null]);
     assert.deepEqual(ledger.rows.map((row) => row.open), [false, true, false, false, false]);
@@ -28,7 +28,7 @@ describe("the worktree ledger", () => {
     const rows = ledgerOf(listed, null).rows;
     const named = Object.fromEntries(rows.map((row) => [row.name, row.commit]));
     assert.deepEqual(named, {
-      "co/items-186-187-stack-v2": null,
+      "co/parts-186-187-stack-v2": null,
       main: null,
       "wt-11a-green": "8436ffa",
       "wt-10bfix": "0e4919f",
@@ -60,7 +60,7 @@ describe("the worktree ledger", () => {
     const answers = new Map([[listed[2].path, 12 * GB], [listed[0].path, null]]);
     const ledger = ledgerOf(listed, null, (w) => (answers.has(w.path) ? answers.get(w.path) : w.sizeBytes));
     assert.deepEqual(ledger.rows.map((row) => [row.name, row.sizeBytes === null ? "owed" : row.sizeBytes]), [
-      ["wt-10bfix", 12 * GB], ["co/items-186-187-stack-v2", 6 * GB], ["wt-11a-green", 1 * GB], ["main", "owed"], ["wt-09-probe", undefined],
+      ["wt-10bfix", 12 * GB], ["co/parts-186-187-stack-v2", 6 * GB], ["wt-11a-green", 1 * GB], ["main", "owed"], ["wt-09-probe", undefined],
     ]);
     assert.equal(ledger.totalBytes, 19 * GB);
     assert.equal(ledger.partial, true);

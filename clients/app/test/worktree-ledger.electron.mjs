@@ -120,7 +120,7 @@ async function run() {
     const first = await check(measure);
     assertLaidOut(first, "first");
     assert.deepEqual(first.rows.slice(0, 4).map(row => [row.name.slice(0, 26), row.commit, row.size, row.weighing]), [
-      ["co/items-186-187-stack-v2-", null, "6.00 GB", false],
+      ["co/parts-186-187-stack-v2-", null, "6.00 GB", false],
       ["main", null, "2.00 GB", false],
       ["wt-10bfix", first.rows[2].commit, "", true],
       ["wt-11a-green", first.rows[3].commit, "", true],
@@ -158,7 +158,7 @@ async function run() {
     const second = await check(measure);
     assertLaidOut(second, "second");
     assert.deepEqual(second.rows.slice(0, 4).map(row => [row.name.slice(0, 12), row.size]), [
-      ["wt-10bfix", "8.79 GB"], ["co/items-186", "6.00 GB"], ["main", "2.00 GB"], ["wt-11a-green", "300 MB"],
+      ["wt-10bfix", "8.79 GB"], ["co/parts-186", "6.00 GB"], ["main", "2.00 GB"], ["wt-11a-green", "300 MB"],
     ]);
     assert.ok(Math.abs(second.rows[1].share - 6144 / 9000) < 0.02);
 
@@ -226,7 +226,7 @@ async function run() {
     const plain = await check(measure);
     assertLaidOut(plain, "plain");
     assert.equal(plain.rows.filter(row => row.weighing).length, 0);
-    assert.deepEqual(plain.rows.slice(0, 3).map(row => [row.name.slice(0, 12), row.size]), [["co/items-186", "6.00 GB"], ["main", "2.00 GB"], ["wt-10bfix", ""]]);
+    assert.deepEqual(plain.rows.slice(0, 3).map(row => [row.name.slice(0, 12), row.size]), [["co/parts-186", "6.00 GB"], ["main", "2.00 GB"], ["wt-10bfix", ""]]);
     assert.equal(plain.sum, "60 · 8.00 GB");
     assert.equal((await check(() => window.asks)).length, quiet, "a host that measures nothing was asked");
 

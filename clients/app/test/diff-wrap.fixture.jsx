@@ -53,7 +53,7 @@ const files = [
   { path: "docs/LANDED.md", original: null, status: "M", added: 40, deleted: 40 },
 ];
 const commit = {
-  sha: "4082d6c9a0000000000000000000000000000000", short: "4082d6c",
+  sha: "1a2b3c49a0000000000000000000000000000000", short: "1a2b3c4",
   subject: "docs: a table row is one line, however long it is",
   author: "A Reader", timestampMs: Date.UTC(2026, 10, 24, 11, 47), merge: false,
   coAuthors: [], pushed: null, added: 42, deleted: 41, files: 2,

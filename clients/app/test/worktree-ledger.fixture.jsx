@@ -13,12 +13,12 @@ import "../renderer/src/styles/app.css";
 import "../../room/src/styles/room.css";
 
 const MB = 1024 ** 2;
-const scratch = "/private/tmp/claude-501/-Users-test-Projects-project100-vibe-field/b3dfe562-aa76-4ad0-8b46-e6516b1a780a/scratchpad";
+const scratch = "/private/tmp/claude-501/-Users-test-Projects-field/00000000-0000-4000-8000-000000000000/scratchpad";
 const head = (at) => `${(at * 2654435761 >>> 0).toString(16).padStart(8, "0")}00000000000000000000000000000000`;
 const worktrees = [
   // the host already holds these two (kept from an earlier walk)
   { path: "/Users/test/Projects/field", branch: "main", head: head(1), gone: false, sizeBytes: 2048 * MB },
-  { path: "/Users/test/Projects/stack", branch: "co/items-186-187-stack-v2-with-a-name-far-longer-than-the-column-is-wide", head: head(2), gone: false, sizeBytes: 6144 * MB },
+  { path: "/Users/test/Projects/stack", branch: "co/parts-186-187-stack-v2-with-a-name-far-longer-than-the-column-is-wide", head: head(2), gone: false, sizeBytes: 6144 * MB },
   { path: `${scratch}/wt-10bfix`, branch: null, head: head(3), gone: false },
   { path: `${scratch}/wt-11a-green`, branch: null, head: head(4), gone: false },
   { path: `${scratch}/wt-09-probe`, branch: null, head: head(5), gone: true },
