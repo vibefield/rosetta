@@ -730,6 +730,17 @@ pub(crate) fn serve(flags: Flags, started: Instant) -> Result<(), String> {
                 target.census.streamable_count as u64,
                 target.census.streamable_bytes,
             );
+            // On a warm start a runtime this projection already honoured is
+            // readable now, whatever else this start has still to find: the
+            // board never says it is waiting for a scan.
+            if warm_live
+                && persisted_rows
+                    .iter()
+                    .any(|row| row.enabled && row.id == target.id())
+            {
+                health.ingest_stream_total(target.id(), 0);
+                health.ingest_done(target.id(), 0, 0);
+            }
         }
     }
 
