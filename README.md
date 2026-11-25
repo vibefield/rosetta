@@ -2,14 +2,14 @@
   <a href="https://github.com/vibefield/rosetta/releases/latest">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset=".github/readme/hero-dark.svg">
-      <img src=".github/readme/hero-light.svg" alt="rosetta: nine agents, one history, on your machine. Three planes stacked: the nine stores that coding agents write, the ledger where every record is kept, and the one history you read." width="100%">
+      <img src=".github/readme/hero-light.svg" alt="rosetta: many agents, one history, on your machine. Three planes stacked: the stores that coding agents write, the ledger where every record is kept, and the one history you read." width="100%">
     </picture>
   </a>
 </p>
 
 <p align="center">
-  <b>rosetta reads the history your coding agents already keep on disk, and serves it as one.</b><br>
-  One local daemon reads nine agents' session stores and answers over localhost:<br>
+  <b>rosetta is a multi-agent history data ingestion engine.</b><br>
+  One local daemon reads the session stores your coding agents already keep on disk, and answers over localhost:<br>
   search across all of them, any conversation as one timeline, and every change as it happens.
 </p>
 
@@ -75,16 +75,16 @@ const live = client.subscribeSession(sessions[0].id, {
 });
 ```
 
-## Nine agents, one vocabulary
+## Many agents, one vocabulary
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/readme/roster-dark.svg">
-    <img src=".github/readme/roster-light.svg" alt="Nine agents and where each keeps its history: antigravity in ~/.gemini/antigravity-cli, claude-code in ~/.claude, codex in ~/.codex, copilot in ~/.copilot, grok in ~/.grok, hermes in ~/.hermes, kimi-code in ~/.kimi-code, opencode in ~/.local/share/opencode and pi in ~/.pi, as JSON Lines, SQLite or both. Each is read by its own adapter. Their lines meet in rosettad and leave as one table, TimelineEntry, with seven kinds: user, agent, thinking, tool_use, collaboration, notice and summary." width="100%">
+    <img src=".github/readme/roster-light.svg" alt="The agents read today and where each keeps its history: antigravity in ~/.gemini/antigravity-cli, claude-code in ~/.claude, codex in ~/.codex, copilot in ~/.copilot, grok in ~/.grok, hermes in ~/.hermes, kimi-code in ~/.kimi-code, opencode in ~/.local/share/opencode and pi in ~/.pi, as JSON Lines, SQLite or both. A dotted row marks the next agent: one more adapter. Each is read by its own adapter. Their lines meet in rosettad and leave as one table, TimelineEntry, with seven kinds: user, agent, thinking, tool_use, collaboration, notice and summary." width="100%">
   </picture>
 </p>
 
-Each agent has one adapter, and everything rosetta knows about that agent's files lives in it and in its evidence under [`groundtruth/`](groundtruth). What comes out is the same for all nine: projects, sessions, and timeline entries of seven kinds. A tool call is read as one of 28 actions (a file read, a shell command, a web search, a delegation), so a client draws "Ran 2 commands" without knowing which agent ran them.
+Nine agents are read today, and the list is meant to grow. Each agent has one adapter, and everything rosetta knows about that agent's files lives in it and in its evidence under [`groundtruth/`](groundtruth), so adding an agent changes nothing for a client. What comes out is the same for every agent: projects, sessions, and timeline entries of seven kinds. A tool call is read as one of 28 actions (a file read, a shell command, a web search, a delegation), so a client draws "Ran 2 commands" without knowing which agent ran them.
 
 ## What you get
 
@@ -157,7 +157,7 @@ The room reads `--vf-*` design tokens that the host defines; rosetta's own set i
 
 - **Pre-1.0.** The wire protocol carries its own version, sent on every response, and a mismatch fails with a clear error.
 - **Search covers prompts and replies.** Nothing else is indexed yet.
-- **Nine agents.** Cursor has no adapter yet: its CLI cannot be pointed at a mock model, so its formats have not been captured. A dedicated metrics stream is planned, not built.
+- **Nine agents so far.** Cursor has no adapter yet: its CLI cannot be pointed at a mock model, so its formats have not been captured. A dedicated metrics stream is planned, not built.
 - **Plain `serve` trusts the machine.** Any local process can read it unless you start it with `--token-file`.
 - **macOS and Linux.** The macOS binaries are unsigned command-line tools, not notarized. There is no Windows build.
 - **No published benchmarks yet.** The repo has the harnesses; this page claims no numbers.
