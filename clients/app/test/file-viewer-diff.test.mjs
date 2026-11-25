@@ -37,4 +37,18 @@ describe("file viewer diff parser", () => {
       ],
     );
   });
+
+  it("does not read the text's final newline as a line of the last hunk", () => {
+    const hunk = "--- a/notes.md\n+++ b/notes.md\n@@ -4,3 +4,3 @@\n kept\n-old\n+new\n";
+    const lines = (text) => parseDiff(text).hunks.at(-1).lines.map((line) => [line.kind, line.oldNumber, line.newNumber]);
+    const expected = [
+      ["context", 4, 4],
+      ["del", 5, null],
+      ["add", null, 5],
+    ];
+    assert.deepEqual(lines(hunk), expected);
+    // A blank context line whose space git dropped is still a line, before the end.
+    assert.deepEqual(lines(`${hunk}\n`), [...expected, ["context", 6, 6]]);
+    assert.deepEqual(lines(`${hunk}\n kept too\n`), [...expected, ["context", 6, 6], ["context", 7, 7]]);
+  });
 });

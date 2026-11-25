@@ -42,6 +42,12 @@ export function parseDiff(text: string): ParsedDiff {
   if (text.trim() === "") return EMPTY;
 
   const lines = text.split("\n");
+  // git ends its output with a newline, so the split's last piece is the end
+  // of the text, not a line of it. Left in, it reads below as a blank context
+  // line git dropped the space of: one phantom row under every diff, numbered
+  // one past its last hunk. A blank line that IS in the hunk comes before it
+  // and stays.
+  if (lines[lines.length - 1] === "") lines.pop();
   const hunks: DiffHunk[] = [];
   let oldPath: string | null = null;
   let newPath: string | null = null;
