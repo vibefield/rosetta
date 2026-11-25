@@ -14,11 +14,14 @@
 //  · A figure is kept, on disk (`file`), and stands for a day. Opening the
 //    list again reads the file and walks nothing. `peek` answers a standing
 //    figure however old, and queues nothing.
-//  · A walk runs in the background and rests: on macOS through `taskpolicy -b`
-//    (background quality of service: the efficiency cores, throttled disk),
-//    elsewhere at the lowest priority; and after each walk the queue rests
-//    twice as long as the walk took, so the walker never holds more than a
-//    third of one core however long the queue.
+//  · A walk runs below the person's own work and rests: at the lowest
+//    priority, on macOS clamped to utility quality of service
+//    (`taskpolicy -c utility`); and after each walk the queue rests as long
+//    as the walk took, so the walker never holds more than half of one core
+//    however long the queue. (The first cut of this point used background
+//    quality of service and twice the rest. Background throttles the disk:
+//    a cold 0.87 GB checkout walked in 32 s there and in 0.9 s unclamped,
+//    and the list showed one figure every half minute.)
 //
 // `du` does the walking: it is on every Mac and Linux, counts a hard-linked
 // file once, and with `-x` never leaves the filesystem it started on. Two
@@ -45,26 +48,26 @@ export const TREE_SIZE_TIMEOUT_MS = 60_000;
 /** Folders one ask may name, and so the longest the queue gets. */
 export const TREE_SIZE_ASK_MAX = 32;
 /** After a walk the queue rests this many times the walk's own time… */
-export const TREE_SIZE_REST_FACTOR = 2;
+export const TREE_SIZE_REST_FACTOR = 1;
 /** …and this long at least. */
-export const TREE_SIZE_REST_MIN_MS = 200;
+export const TREE_SIZE_REST_MIN_MS = 100;
 /** Paths remembered; the oldest go first. */
 const KEPT = 4096;
 /** How long new figures wait to be written together. */
 const SAVE_DELAY_MS = 2_000;
-/** macOS's door to background quality of service; absent elsewhere. */
+/** macOS's door to a quality of service clamp; absent elsewhere. */
 const TASKPOLICY = "/usr/sbin/taskpolicy";
 
 /** `du -skx -- <folder>`: kilobytes allocated, in bytes; null when it could
  * not be read or ran out of time. `du` exits non-zero when one folder below
  * refused it and still prints the sum of the rest, which is kept. */
-export function measureWithDu(folder, { timeoutMs = TREE_SIZE_TIMEOUT_MS, onChild, background } = {}) {
-  const quiet = background ?? (process.platform === "darwin" && existsSync(TASKPOLICY));
+export function measureWithDu(folder, { timeoutMs = TREE_SIZE_TIMEOUT_MS, onChild, clamp } = {}) {
+  const quiet = clamp ?? (process.platform === "darwin" && existsSync(TASKPOLICY));
   const du = ["-skx", "--", folder];
   return new Promise((resolve) => {
     const child = execFile(
       quiet ? TASKPOLICY : "du",
-      quiet ? ["-b", "du", ...du] : du,
+      quiet ? ["-c", "utility", "du", ...du] : du,
       {
         timeout: timeoutMs,
         maxBuffer: 64 * 1024,

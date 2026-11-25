@@ -150,7 +150,7 @@ describe("tree sizes", () => {
     assert.deepEqual(gate.walked, []);
   });
 
-  it("reads a real folder with du, in the background where the platform has one", { skip: process.platform === "win32" }, async (t) => {
+  it("reads a real folder with du, under the utility clamp where the platform has one", { skip: process.platform === "win32" }, async (t) => {
     const dir = mkdtempSync(path.join(tmpdir(), "rosetta-tree-size-"));
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     mkdirSync(path.join(dir, ".git"));
@@ -158,7 +158,7 @@ describe("tree sizes", () => {
     writeFileSync(path.join(dir, "deep", "er", "blob"), Buffer.alloc(300_000, 7));
     const bytes = await measureWithDu(dir);
     assert.ok(bytes >= 300_000 && bytes < 2_000_000, `du said ${bytes}`);
-    assert.equal(await measureWithDu(dir, { background: false }), bytes);
+    assert.equal(await measureWithDu(dir, { clamp: false }), bytes);
     assert.equal(await measureWithDu(path.join(dir, "absent")), null);
     const sizes = createTreeSizes();
     t.after(() => sizes.dispose());
