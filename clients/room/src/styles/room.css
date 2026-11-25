@@ -1267,8 +1267,10 @@
 
 /* A diff's rows are as wide as the column, not as wide as their longest
    line: the ground behind an added line says "this whole line is new", and a
-   ground that stops at the text says it about the text only. The code itself
-   still scrolls sideways inside the row. */
+   ground that stops at the text says it about the text only. A line longer
+   than the column wraps inside its row, as the code view's does, and the row
+   grows with it (DiffBody.tsx measures each row), so the ground covers every
+   visual line of it. */
 .ah-diff .ah-code__sizer { width: 100%; }
 .ah-diff .ah-code__line { width: 100%; }
 .ah-diff .ah-code__line code { flex: 1; min-width: 0; }
@@ -1295,7 +1297,9 @@
   flex: none; width: 16px; text-align: center; user-select: none;
   color: var(--vf-text-faint);
 }
-.ah-diff .ah-code__line { align-items: center; }
+/* The gutters and the mark sit on a wrapped line's FIRST visual line: a row
+   stretches its children (the code view's own alignment), it does not centre
+   them. Centred, a wrapped line's numbers would float beside its middle. */
 .ah-diff .ah-code__line[data-diff="add"] { background: color-mix(in srgb, var(--vf-green) 11%, transparent); }
 .ah-diff .ah-code__line[data-diff="del"] { background: color-mix(in srgb, var(--vf-red) 11%, transparent); }
 .ah-diff .ah-code__line[data-diff="add"] .ah-diff__mark { color: var(--vf-green); }
