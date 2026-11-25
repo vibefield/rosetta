@@ -19,6 +19,7 @@
 import type { GitFacts } from "../../ports";
 import { fmtBytes, tildePath } from "../../lib/format";
 import { CopyGlyph } from "../../lib/icons";
+import { useCopyText } from "../../room-context";
 import { ledgerOf } from "./worktree-ledger";
 
 export interface WorktreeListProps {
@@ -32,6 +33,7 @@ export interface WorktreeListProps {
 
 export function WorktreeList({ facts, openRoot, homeDirectory, onReceipt }: WorktreeListProps) {
   const ledger = ledgerOf(facts.worktrees, openRoot);
+  const copy = useCopyText();
   // `ah-rail*` is the design record's name for this column; room.css is a
   // port of the proto and keeps its vocabulary.
   return (
@@ -66,8 +68,7 @@ export function WorktreeList({ facts, openRoot, homeDirectory, onReceipt }: Work
                 data-open={row.open ? "" : undefined}
                 data-gone={row.gone ? "" : undefined}
                 onClick={() => {
-                  void navigator.clipboard
-                    .writeText(row.name)
+                  void copy(row.name)
                     .then(() => onReceipt("worktree name copied"))
                     .catch(() => onReceipt("the clipboard refused"));
                 }}

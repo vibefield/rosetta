@@ -271,6 +271,12 @@ export interface HostPort {
   artifactThumbnail?(html: string): Promise<string | null>;
   /** Re-read installed browsers. Absent on hosts with only a default action. */
   browsers?(): Promise<readonly InstalledBrowser[]>;
+  /** Put words on the system clipboard through the desktop's own copy door.
+   * A host whose page may not write the clipboard itself (a shell that grants
+   * its window no clipboard permission) gives this, and every copy the room
+   * makes goes through it; it rejects when the copy is refused. Absent: the
+   * room writes the page's clipboard, as a browser tab does. */
+  copyText?(text: string): Promise<void>;
   /** One site's own icon as an image URL, or null for every honest no — a
    * refused host, no icon, a timeout. The room draws the globe for all. */
   favicon(host: string): Promise<string | null>;

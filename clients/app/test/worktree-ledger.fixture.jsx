@@ -4,6 +4,8 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { WorktreeList } from "../../room/src/components/worktree/WorktreeList";
+import { RoomProvider } from "../../room/src/room-context";
+import { ports } from "./support/room-ports.mjs";
 import "../renderer/src/styles/tokens.css";
 import "../renderer/src/styles/app.css";
 import "../../room/src/styles/room.css";
@@ -21,16 +23,26 @@ const worktrees = [
 function Fixture() {
   const [listed, setListed] = useState(worktrees);
   const [receipt, setReceipt] = useState("");
+  // A host with a copy door of its own (a shell whose page may not write the
+  // clipboard): the room's copies go through it, and it may refuse.
+  const [hosted, setHosted] = useState(false);
   window.ledgerFixture = {
+    hosted: (value) => flushSync(() => setHosted(value)),
     measured: (path, sizeBytes) => flushSync(() => setListed((now) => now.map((w) => (w.path === path ? { ...w, sizeBytes } : w)))),
     unmeasured: () => flushSync(() => setListed(worktrees.map(({ sizeBytes: _, ...rest }) => rest))),
   };
+  const list = <WorktreeList facts={{ branch: "main", dirty: 3, worktrees: listed }} openRoot="/Users/test/Projects/field"
+    homeDirectory="/Users/test" onReceipt={setReceipt} />;
   return <main className="ah-frame" style={{ height: "100%", padding: 24 }}>
     <div role="status">{receipt}</div>
     <div className="ah-col ah-col--rail" data-rail style={{ width: 280, height: 320, display: "flex", flexDirection: "column", background: "var(--vf-chrome-solid)" }}>
-      <WorktreeList facts={{ branch: "main", dirty: 3, worktrees: listed }} openRoot="/Users/test/Projects/field"
-        homeDirectory="/Users/test" onReceipt={setReceipt} />
+      {hosted ? <RoomProvider ports={hostedPorts}>{list}</RoomProvider> : list}
     </div>
   </main>;
 }
+window.hostCopied = [];
+const hostedPorts = { ...ports, host: {
+  homeDir: "/Users/test", platform: "darwin", openInBrowser: async () => false, favicon: async () => null,
+  copyText: async (text) => { if (window.hostRefuses) throw new Error("Not copied"); window.hostCopied.push(text); },
+} };
 createRoot(document.getElementById("root")).render(<Fixture />);

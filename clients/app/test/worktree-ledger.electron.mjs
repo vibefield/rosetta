@@ -131,6 +131,17 @@ async function run() {
     assert.equal(await check(() => window.copied.length), 2);
     assert.equal(await check(() => { const row = document.querySelectorAll(".ah-worktree")[3]; row.focus(); return document.activeElement === row && row.tagName; }), "BUTTON", "a row takes the keyboard");
 
+    // A host with a copy door: the copy goes through it, never the page's own
+    // clipboard (which such a host denies), and its refusal is said too.
+    await check(() => { window.refuse = false; window.ledgerFixture.hosted(true); });
+    await check(() => document.querySelectorAll(".ah-worktree")[1].click());
+    await until(() => window.hostCopied.length === 1 && document.querySelector("[role=status]").textContent === "worktree name copied", "The host's copy door was not used");
+    assert.deepEqual(await check(() => [window.hostCopied, window.copied.length]), [["wt-10bfix"], 2], "the page's clipboard was written beside the host's door");
+    await check(() => { window.hostRefuses = true; document.querySelectorAll(".ah-worktree")[2].click(); });
+    await until(() => document.querySelector("[role=status]").textContent === "the clipboard refused", "The host's refusal was silent");
+    assert.deepEqual(await check(() => [window.hostCopied.length, window.copied.length]), [1, 2]);
+    await check(() => window.ledgerFixture.hosted(false));
+
     // A host that measures nothing: git's order, no bars, no sum of bytes.
     await check(() => window.ledgerFixture.unmeasured());
     const plain = await check(measure);
@@ -145,7 +156,7 @@ async function run() {
     await shot("light");
 
     assert.deepEqual(errors, [], "Renderer errors");
-    console.log(JSON.stringify({ result: "PASS", screenshots, checked: ["order by weight", "bars to scale", "one-line names", "size inside the column", "a figure arriving", "press copies the name", "refused copy says so", "a host that measures nothing"] }, null, 2));
+    console.log(JSON.stringify({ result: "PASS", screenshots, checked: ["order by weight", "bars to scale", "one-line names", "size inside the column", "a figure arriving", "press copies the name", "refused copy says so", "a host's copy door", "a host that measures nothing"] }, null, 2));
   } catch (error) { failed = true; console.error(error); if (errors.length) console.error(errors); if (screenshots.length) console.error(screenshots); }
   finally {
     clearInterval(pulse); clearTimeout(deadline);

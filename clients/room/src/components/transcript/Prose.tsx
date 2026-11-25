@@ -19,6 +19,7 @@ import { parseMarkdown } from "../file-viewer/markdown";
 import type { Block } from "../file-viewer/markdown";
 import { MarkdownBlocks } from "../file-viewer/markdown/render";
 import { highlight, languageFor, PLAIN_TEXT } from "../file-viewer/syntax";
+import { useCopyText } from "../../room-context";
 import { markTerms, useMatchTerms } from "./reader-context";
 
 /** The hover acts. Today the room has exactly one honest act on a segment —
@@ -31,14 +32,14 @@ export function SegmentActs({
   readonly text: string;
   readonly onReceipt: (message: string) => void;
 }) {
+  const copy = useCopyText();
   if (text.trim() === "") return null;
   return (
     <div className="tr-acts">
       <button
         type="button"
         onClick={() => {
-          navigator.clipboard
-            .writeText(text)
+          copy(text)
             .then(() => onReceipt("Copied"))
             .catch(() => onReceipt("The clipboard refused it"));
         }}
@@ -61,6 +62,7 @@ function CodeBar({
   readonly excerpt?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const copy = useCopyText();
   const lines = useMemo(() => {
     const resolved = language === null ? PLAIN_TEXT : (languageFor(`x.${language}`) ?? PLAIN_TEXT);
     return highlight(text, resolved);
@@ -72,8 +74,7 @@ function CodeBar({
         {!excerpt && <button
           type="button"
           onClick={() => {
-            navigator.clipboard
-              .writeText(text)
+            copy(text)
               .then(() => {
                 setCopied(true);
                 onReceipt("Copied");

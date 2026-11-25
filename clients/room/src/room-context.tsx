@@ -1,6 +1,6 @@
 // The ports, as the room's parts read them. `HistoryRoom` provides them; a
 // harness that mounts one column on its own wraps it in `RoomProvider`.
-import { createContext, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import type { AssetSource, CatalogPort, HostPort, RoomPorts } from "./ports";
 import { createSessionLeases } from "./lib/session-leases";
@@ -141,6 +141,19 @@ export function useRoomOverlay(open: boolean): void {
 export function useRoomOverlayOpen(): boolean {
   const { overlays } = useRoom();
   return useSyncExternalStore(overlays.subscribe, () => overlays.count() > 0, () => false);
+}
+
+/** The room's one way to put words on the system clipboard: the host's copy
+ * door when it has one, else the page's own clipboard. It rejects when either
+ * refuses, and the part that asked says so in its receipt. A part mounted
+ * outside any room (a harness) writes the page's clipboard. */
+export function useCopyText(): (text: string) => Promise<void> {
+  const host = useContext(RoomContext)?.host ?? null;
+  return useCallback(
+    (text: string) =>
+      host?.copyText !== undefined ? host.copyText(text) : navigator.clipboard.writeText(text),
+    [host],
+  );
 }
 
 /** Where the room portals its dialogs: the host's container, or the body. */
