@@ -15,6 +15,7 @@ import type {
   WorktreeFileActionRequest,
   WorktreeFileActionResult,
   WorktreeOpenResult,
+  WorktreeSize,
 } from "@vibefield/rosetta-room";
 
 export interface DesktopDaemonState {
@@ -36,6 +37,12 @@ export interface DesktopHost {
   /** Branch · dirty count · worktrees for the open root, or null when the
    * folder is not a repository. */
   gitFacts(root: string, generation: number): Promise<GitFacts | null>;
+  /** What these worktrees of the open root hold on disk; the rows on screen only. */
+  worktreeSizes(
+    root: string,
+    generation: number,
+    paths: readonly string[],
+  ): Promise<readonly WorktreeSize[]>;
   /** Copy absolute path text or reveal one entry in the native file manager. */
   worktreeFileAction(request: WorktreeFileActionRequest): Promise<WorktreeFileActionResult>;
   /**

@@ -41,6 +41,9 @@ contextBridge.exposeInMainWorld("agentHistoryHost", {
   /** Branch · dirty count · worktrees for the open worktree root, or null. */
   gitFacts: (root, generation) =>
     ipcRenderer.invoke("ah-worktree-git-facts", root, generation),
+  /** What these worktrees of the open root hold on disk: the rows on screen only. */
+  worktreeSizes: (root, generation, paths) =>
+    ipcRenderer.invoke("ah-worktree-sizes", root, generation, paths),
   worktreeFileAction: (request) => ipcRenderer.invoke("ah-worktree-file-action", request),
   /** Installed browsers, with their native icons and no executable paths. */
   browsers: () => ipcRenderer.invoke("ah-file-browsers"),

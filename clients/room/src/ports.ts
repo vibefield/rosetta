@@ -181,9 +181,17 @@ export interface GitWorktree {
   /** What the folder holds on disk, as a walk of it counts: everything under
    * it, ignored files and build output included. It is NOT what removing the
    * worktree would free (files cloned from a package store share their
-   * blocks), and a linked folder is not followed. null: the host measures and
-   * has no figure yet, and a later answer carries it. Absent: this host does
-   * not measure. */
+   * blocks), and a linked folder is not followed. Here it is the figure the
+   * host ALREADY holds (kept from an earlier walk); git facts start no walk.
+   * A figure the host does not hold is asked for by name, for the rows on
+   * screen only (`WorktreeHostPort.worktreeSizes`). */
+  readonly sizeBytes?: number | null | undefined;
+}
+
+/** One asked worktree's figure: bytes; null while the host is walking the
+ * folder (ask again shortly); absent when no figure can be had. */
+export interface WorktreeSize {
+  readonly path: string;
   readonly sizeBytes?: number | null | undefined;
 }
 
@@ -241,6 +249,17 @@ export interface WorktreeHostPort {
   /** Branch · dirty count · worktrees for the open root, or null when the
    * folder is not a repository. */
   gitFacts(root: string, generation: number): Promise<GitFacts | null>;
+  /** What these worktrees of the open root's repository hold on disk, in the
+   * order asked. Asking is what makes a host walk a folder, and a walk is
+   * work: the room names only the rows it is showing, each ask REPLACES what
+   * the last one was owed, and a host keeps what it measured so that the next
+   * opening walks nothing. Absent: this host measures nothing, and the list
+   * draws no figure it was not given. */
+  worktreeSizes?(
+    root: string,
+    generation: number,
+    paths: readonly string[],
+  ): Promise<readonly WorktreeSize[]>;
   /** Copy absolute path text or reveal one entry in the native file manager. */
   fileAction(request: WorktreeFileActionRequest): Promise<WorktreeFileActionResult>;
   /** The engine's events. A host replays what arrived before the room

@@ -76,6 +76,7 @@ export type {
   WorktreeHostEvent,
   WorktreeHostPort,
   WorktreeOpenResult,
+  WorktreeSize,
 } from "./ports";
 export type { SummaryTab } from "./room-context";
 export type { ProjectStats } from "./lib/model";

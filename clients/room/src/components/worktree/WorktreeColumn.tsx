@@ -119,6 +119,18 @@ export function WorktreeColumn({
   );
 
   const host = useRoom().host;
+  // The ledger's figures: asked of the host for the rows on screen, for this
+  // exact root and generation. A new root is a new asker, and the list starts
+  // its answers over.
+  const measureRoot = live?.root ?? null;
+  const measureGeneration = live?.generation ?? null;
+  const measure = useMemo(() => {
+    const worktree = host?.worktree;
+    if (worktree?.worktreeSizes === undefined || measureRoot === null || measureGeneration === null)
+      return undefined;
+    return (paths: readonly string[]) =>
+      worktree.worktreeSizes?.(measureRoot, measureGeneration, paths) ?? Promise.resolve([]);
+  }, [host, measureRoot, measureGeneration]);
   const hasShell = host?.worktree !== undefined;
   const listBrowsers = useMemo(() => host?.browsers?.bind(host), [host]);
   const openInBrowser = useMemo(
@@ -292,6 +304,7 @@ export function WorktreeColumn({
                 openRoot={shownRoot}
                 homeDirectory={homeDirectory}
                 onReceipt={onReceipt}
+                measure={measure}
               />
             )}
           </div>

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { ledgerOf } from "../../room/src/components/worktree/worktree-ledger.ts";
+import { ledgerOf, settleOrder } from "../../room/src/components/worktree/worktree-ledger.ts";
 
 const GB = 1024 ** 3;
 const scratch = "/private/tmp/claude-501/-Users-a-Projects-field/b3dfe562-aa76-4ad0-8b46-e6516b1a780a/scratchpad";
@@ -54,6 +54,26 @@ describe("the worktree ledger", () => {
     assert.deepEqual(ledger.rows.map((row) => row.sizeBytes), [undefined, undefined, undefined]);
     assert.equal(ledger.totalBytes, null);
     assert.equal(ledger.partial, false);
+  });
+
+  it("takes each row's figure from what the list knows now, not only from what git facts carried", () => {
+    const answers = new Map([[listed[2].path, 12 * GB], [listed[0].path, null]]);
+    const ledger = ledgerOf(listed, null, (w) => (answers.has(w.path) ? answers.get(w.path) : w.sizeBytes));
+    assert.deepEqual(ledger.rows.map((row) => [row.name, row.sizeBytes === null ? "owed" : row.sizeBytes]), [
+      ["wt-10bfix", 12 * GB], ["co/items-186-187-stack-v2", 6 * GB], ["wt-11a-green", 1 * GB], ["main", "owed"], ["wt-09-probe", undefined],
+    ]);
+    assert.equal(ledger.totalBytes, 19 * GB);
+    assert.equal(ledger.partial, true);
+  });
+
+  it("draws the ledger's order at rest, and keeps every row's place while the list is being read", () => {
+    const ranked = ["heavy", "middle", "light", "owed"];
+    assert.deepEqual(settleOrder([], ranked, false), ranked, "a first drawing is the ledger's order");
+    assert.deepEqual(settleOrder(["owed", "light", "middle", "heavy"], ranked, true), ranked);
+    assert.deepEqual(settleOrder(["owed", "light", "middle", "heavy"], ranked, false), ["owed", "light", "middle", "heavy"],
+      "a figure arriving moves nothing under the reader");
+    assert.deepEqual(settleOrder(["owed", "gone-since", "light"], ranked, false), ["owed", "light", "heavy", "middle"],
+      "a row no longer listed goes, and new rows follow in the ledger's order");
   });
 
   it("keeps git's order between equal figures and draws an empty folder's bar at nothing", () => {
