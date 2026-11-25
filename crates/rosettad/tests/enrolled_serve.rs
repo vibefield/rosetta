@@ -766,7 +766,10 @@ fn a_kind_consented_after_the_first_import_is_read_as_an_import_and_then_done() 
         if phase == "live" && read {
             break status;
         }
-        assert!(Instant::now() < deadline, "first reading timed out: {status}");
+        assert!(
+            Instant::now() < deadline,
+            "first reading timed out: {status}"
+        );
         std::thread::sleep(Duration::from_millis(20));
     };
     let rows = status["daemon"]["ingest"]["runtimes"].as_array().unwrap();

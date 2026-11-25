@@ -1840,7 +1840,10 @@ fn run_warm_live_serve(
             }
             let name = identity_name(identity);
             let before = instrument.snapshot();
-            health.ingest_stream(&identity.id, counter_source(instrument, instrument.snapshot()));
+            health.ingest_stream(
+                &identity.id,
+                counter_source(instrument, instrument.snapshot()),
+            );
             println!("{name}: first reading on a warm start");
             // Newest trees first, a bounded piece at a time: each piece's
             // conversations open, and reach the hub, before the next starts.
